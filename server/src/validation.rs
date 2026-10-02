@@ -150,6 +150,9 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     if !local_secret_scan(config).0.is_empty() {
         reasons.insert("device secrets".into());
     }
+    if !lua_transforms(config).is_empty() {
+        reasons.insert(LUA_ON_DEVICES.into());
+    }
     if let Some(sources) = config["sources"].as_object() {
         for source in sources.values() {
             let component = source["type"].as_str().unwrap_or("");
@@ -624,6 +627,49 @@ pub const WORKER_PROTOCOL: u64 = 2;
 /// quotes it describes the placeholder, not the device's real value.
 pub const PLACEHOLDER: &str = "vectory-placeholder";
 
+/// The `deferred_reasons` value for a draft with a `lua` transform. Lua can run
+/// any program (`os.execute`, `io.popen`), and Vector runs a transform's Lua
+/// when it builds the transform, which `vector test` does. User Lua therefore
+/// never runs in the validator: a device checks it, and a device in full mode
+/// runs it.
+pub const LUA_ON_DEVICES: &str = "Lua runs on devices";
+
+/// Why a `lua` step is replaced by a stand-in; the note reads "This step ...".
+const LUA_STAND_IN: &str = "runs Lua code, so only a device checks it";
+
+/// The IDs of the transforms that are Lua in the copy Vector would read, that
+/// is, once references are replaced the way `static_candidate` replaces them:
+/// a type written `${KIND:-lua}` is Lua.
+pub fn lua_transforms(config: &Value) -> Vec<String> {
+    let is_lua = |kind: &Value| {
+        kind.as_str().is_some_and(|text| {
+            substitute_references(text, "type", &mut BTreeSet::new())
+                .as_deref()
+                .unwrap_or(text)
+                == "lua"
+        })
+    };
+    config["transforms"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, transform)| is_lua(&transform["type"]))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// The finding for tests the server does not run because the draft has a Lua
+/// step. A device runs them; the check on devices can include them.
+pub fn lua_tests_diagnostic() -> Diagnostic {
+    Diagnostic {
+        section: Some("tests".into()),
+        code: Some("lua_on_devices".into()),
+        ..Diagnostic::error(
+            "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests.",
+        )
+    }
+}
+
 /// A copy of a draft prepared for `vector validate --no-environment` in the
 /// isolated worker. It never contains resolved secrets: native references are
 /// replaced by typed placeholders, secret backends and configuration
@@ -800,7 +846,12 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
         };
         for (id, component) in components.iter_mut() {
             let kind = component["type"].as_str().unwrap_or("").to_owned();
-            let reason = if known_component(section, &kind) && !available(section, &kind) {
+            // Whatever its form (inline source, hooks, timers, modules, either
+            // version), a Lua step is never built here: its code runs when
+            // Vector builds it, which is any program its author wrote.
+            let reason = if section == "transforms" && kind == "lua" {
+                Some(LUA_STAND_IN.to_owned())
+            } else if known_component(section, &kind) && !available(section, &kind) {
                 Some(format!(
                     "`{kind}` isn't included in this server's Vector build; each device checks it"
                 ))
@@ -809,11 +860,6 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
                 && (!component["file"].is_null() || !component["files"].is_null())
             {
                 Some("loads its VRL program from a file on each device".to_owned())
-            } else if section == "transforms"
-                && kind == "lua"
-                && !component["search_dirs"].is_null()
-            {
-                Some("loads Lua modules from each device".to_owned())
             } else if calls_file_function(component) {
                 // Compiling these reads the file, and the worker's answer would
                 // describe the worker's files, not the device's.
@@ -1110,6 +1156,7 @@ fn reason_phrase(reasons: &[String]) -> String {
                 "secrets".into()
             }
             "VRL access to device resources" => "VRL that reads device resources".into(),
+            LUA_ON_DEVICES => "Lua code".into(),
             "native configuration provider" => "the configuration provider".into(),
             "device enrichment data" => "enrichment data files".into(),
             "device-local paths or external code files" => "local files and paths".into(),
@@ -1345,7 +1392,10 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
             "Vector rejected the configuration without a specific message.",
         ));
     }
-    if !stubbed.is_empty()
+    // A Lua step's stand-in is explained by its own reason; any other stand-in
+    // is a device-local file or component.
+    let lua = lua_transforms(config);
+    if stubbed.iter().any(|id| !lua.contains(id))
         && !reasons
             .iter()
             .any(|r| r.contains("platform") || r.contains("paths"))
@@ -2104,6 +2154,12 @@ pub(crate) async fn run_pipeline_tests(
             vec![],
             vec![],
         );
+        return Ok(finish(result, vec![], false, false));
+    }
+    // Lua can run any program, and Vector runs it when it builds the step for a
+    // test. The worker is not asked: the tests run on devices.
+    if !lua_transforms(config).is_empty() {
+        let result = check_result(vec![lua_tests_diagnostic()], false, false, reasons, vec![]);
         return Ok(finish(result, vec![], false, false));
     }
     let _permit = s
@@ -3547,6 +3603,127 @@ mod tests {
         // No section is created where the draft had none.
         let bare = static_candidate(&json!({"sources":{}}), |_, _| true);
         assert!(bare.config.get("transforms").is_none());
+    }
+
+    /// A `lua` step in every form the transform takes.
+    fn lua_pipeline() -> Value {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {
+                "chunk": {"type": "lua", "version": "2", "inputs": ["in"],
+                    "source": "os.execute('touch /x')\nfunction process(e, emit) emit(e) end",
+                    "hooks": {"process": "process"}},
+                "hooks": {"type": "lua", "version": "2", "inputs": ["chunk"],
+                    "source": "function init() io.popen('id') end",
+                    "hooks": {"init": "init"}, "timers": [{"interval_seconds": 1, "handler": "tick"}]},
+                "v1": {"type": "lua", "version": "1", "inputs": ["hooks"], "source": "os.execute('id')"},
+                "modules": {"type": "lua", "version": "2", "inputs": ["v1"],
+                    "search_dirs": ["/device/lua"], "source": "require('m')"},
+                "named": {"type": "lua", "inputs": ["modules"], "source": "x"},
+                "plain": {"type": "remap", "inputs": ["named"], "source": "."}
+            },
+            "sinks": {"out": {"type": "blackhole", "inputs": ["plain"]}},
+        })
+    }
+
+    #[test]
+    fn a_lua_step_is_never_built_here_in_any_form() {
+        let config = lua_pipeline();
+        let candidate = static_candidate(&config, |_, _| true);
+        for id in ["chunk", "hooks", "v1", "modules", "named"] {
+            assert_eq!(
+                candidate.stubbed.get(id).map(String::as_str),
+                Some(LUA_STAND_IN),
+                "{id}"
+            );
+            let step = &candidate.config["transforms"][id];
+            assert_eq!(step["type"], "remap", "{id}");
+            assert_eq!(step["source"], ".", "{id}");
+        }
+        assert!(!candidate.stubbed.contains_key("plain"));
+        // The stand-ins keep the topology, and no Lua text reaches Vector.
+        assert_eq!(
+            candidate.config["transforms"]["v1"]["inputs"],
+            json!(["hooks"])
+        );
+        let text = candidate.config.to_string();
+        for code in [
+            "os.execute",
+            "io.popen",
+            "require",
+            "search_dirs",
+            "\"lua\"",
+        ] {
+            assert!(
+                !text.contains(code),
+                "{code} reached the checked copy: {text}"
+            );
+        }
+        // Even where this worker's Vector build has no `lua` at all.
+        let without = static_candidate(&config, |_, kind| kind != "lua");
+        assert_eq!(without.stubbed["chunk"], LUA_STAND_IN);
+        assert_eq!(lua_transforms(&config).len(), 5);
+    }
+
+    #[test]
+    fn lua_is_found_the_way_vector_would_read_the_checked_copy() {
+        // A default in the type decides what Vector reads, so it counts.
+        let disguised = json!({"transforms": {"x": {"type": "${KIND:-lua}", "inputs": ["in"], "source": "os.execute('id')"}}});
+        assert_eq!(lua_transforms(&disguised), vec!["x".to_owned()]);
+        let candidate = static_candidate(&disguised, |_, _| true);
+        assert_eq!(candidate.stubbed["x"], LUA_STAND_IN);
+        assert!(!candidate.config.to_string().contains("os.execute"));
+        // The word elsewhere is not a Lua step.
+        for config in [
+            json!({"transforms": {"lua": {"type": "remap", "inputs": ["in"], "source": "."}}}),
+            json!({"transforms": {"x": {"type": "remap", "inputs": ["in"], "source": ".kind = \"lua\""}}}),
+            json!({"transforms": {"x": {"type": "${KIND}", "inputs": ["in"]}}}),
+            json!({"transforms": {"x": {"type": "Lua", "inputs": ["in"]}}}),
+            json!({"sources": {"lua": {"type": "demo_logs"}}, "sinks": {"lua": {"type": "blackhole"}}}),
+            json!({"transforms": []}),
+            json!({}),
+        ] {
+            assert!(lua_transforms(&config).is_empty(), "{config}");
+            assert!(
+                !device_context_reasons(&config).contains(&LUA_ON_DEVICES.to_owned()),
+                "{config}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lua_step_defers_to_devices_with_a_sentence_not_a_token() {
+        let config = json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"probe": {"type": "lua", "version": "2", "inputs": ["in"],
+                "source": "function process(e, emit) emit(e) end", "hooks": {"process": "process"}}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["probe"]}},
+        });
+        // Only its own reason: no local path is involved.
+        assert_eq!(
+            device_context_reasons(&config),
+            vec![LUA_ON_DEVICES.to_owned()]
+        );
+        assert_eq!(reason_phrase(&[LUA_ON_DEVICES.to_owned()]), "Lua code");
+        let result = check_result(vec![], true, true, device_context_reasons(&config), vec![]);
+        assert_eq!(result["deferred"], true);
+        assert_eq!(result["vector_validated"], false);
+        assert_eq!(result["deferred_reasons"], json!([LUA_ON_DEVICES]));
+        assert_eq!(
+            result["warnings"],
+            json!(["Each device checks Lua code before applying this version."])
+        );
+        let diagnostic = lua_tests_diagnostic();
+        assert_eq!(diagnostic.severity, "error");
+        assert_eq!(diagnostic.section.as_deref(), Some("tests"));
+        assert_eq!(diagnostic.code.as_deref(), Some("lua_on_devices"));
+        assert_eq!(
+            diagnostic.message,
+            "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests."
+        );
+        // It survives the API's re-check of a worker reply.
+        let clean = crate::vector_diagnostics::sanitize(&config, &json!([diagnostic.to_json()]));
+        assert_eq!(clean.unwrap()[0]["code"], "lua_on_devices");
     }
 
     #[test]

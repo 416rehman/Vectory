@@ -969,3 +969,525 @@ async fn worker_never_reads_files_an_author_named() {
     assert_eq!(plain["valid"], true, "{plain}");
     child.kill().await.ok();
 }
+
+/// A pipeline whose source and sink are the components under test, with one
+/// trivial unit test so `vector test` has something to run.
+#[cfg(target_os = "linux")]
+fn pipeline(
+    source: serde_json::Value,
+    mut sink: serde_json::Value,
+    data_dir: &std::path::Path,
+) -> serde_json::Value {
+    sink["inputs"] = json!(["t"]);
+    json!({
+        "data_dir": data_dir,
+        "sources": {"s": source},
+        "transforms": {"t": {"type": "remap", "inputs": ["s"], "source": "."}},
+        "sinks": {"k": sink},
+        "tests": [{"name": "t",
+            "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+    })
+}
+
+/// Run pinned Vector with an empty environment and wait for it to end, with
+/// `stdin` held open so a source that reads it has something to read.
+#[cfg(target_os = "linux")]
+async fn vector_ends(
+    vector: &str,
+    args: &[&str],
+    config: &std::path::Path,
+    stdin: Option<&str>,
+) -> (Option<i32>, String) {
+    use tokio::io::AsyncWriteExt;
+    let mut command = tokio::process::Command::new(vector);
+    command
+        .args(args)
+        .arg(config)
+        .current_dir(config.parent().unwrap())
+        .env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    if let Some(text) = stdin {
+        input.write_all(text.as_bytes()).await.unwrap();
+    }
+    let mut out = child.stdout.take().unwrap();
+    let mut err = child.stderr.take().unwrap();
+    let read = async {
+        use tokio::io::AsyncReadExt;
+        let (mut stdout, mut stderr) = (String::new(), String::new());
+        let _ = tokio::join!(
+            out.read_to_string(&mut stdout),
+            err.read_to_string(&mut stderr)
+        );
+        stdout + &stderr
+    };
+    let status = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let (status, text) = tokio::join!(child.wait(), read);
+        (status.unwrap().code(), text)
+    })
+    .await
+    .expect("vector did not end");
+    drop(input);
+    status
+}
+
+/// Run pinned Vector as it runs a pipeline for real, until `marker` appears
+/// (or ten seconds pass), then stop it. Whether the marker appeared.
+#[cfg(target_os = "linux")]
+async fn vector_runs_until(
+    vector: &str,
+    config: &std::path::Path,
+    stdin: Option<&str>,
+    marker: &std::path::Path,
+) -> bool {
+    use tokio::io::AsyncWriteExt;
+    let mut command = tokio::process::Command::new(vector);
+    command
+        .arg("--config-json")
+        .arg(config)
+        .current_dir(config.parent().unwrap())
+        .env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command.spawn().unwrap();
+    // Held open: Vector drops the events still in flight when stdin ends.
+    let mut input = child.stdin.take().unwrap();
+    if let Some(text) = stdin {
+        input.write_all(text.as_bytes()).await.unwrap();
+    }
+    let mut seen = false;
+    for _ in 0..100 {
+        if marker.exists() {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    child.kill().await.ok();
+    seen
+}
+
+/// Components that run a program, read what started Vector, or write a file all
+/// act when Vector runs a pipeline. `vector validate --no-environment` and
+/// `vector test`, the only two commands the worker uses on a draft, start none
+/// of them: each marker below appears under a normal run and never under those
+/// two commands, and never through the worker.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn components_that_act_when_vector_runs_never_start_under_validate_or_test() {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; component start guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let marker = |name: &str| dir.path().join(format!("ran-{name}"));
+    // A stand-in for `journalctl` that only leaves its marker.
+    let journalctl = dir.path().join("journalctl");
+    std::fs::write(
+        &journalctl,
+        format!(
+            "#!/bin/sh\ntouch {}\nsleep 30\n",
+            marker("journald").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&journalctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let blackhole = json!({"type": "blackhole"});
+    let to_file =
+        |name: &str| json!({"type": "file", "path": marker(name), "encoding": {"codec": "json"}});
+    let cases = [
+        (
+            "exec",
+            json!({"type": "exec", "command": ["touch", marker("exec")], "mode": "scheduled",
+                "scheduled": {"exec_interval_secs": 1}}),
+            blackhole.clone(),
+            None,
+        ),
+        (
+            "journald",
+            json!({"type": "journald", "journalctl_path": journalctl}),
+            blackhole.clone(),
+            None,
+        ),
+        (
+            "file",
+            json!({"type": "demo_logs", "format": "json"}),
+            to_file("file"),
+            None,
+        ),
+        (
+            "stdin",
+            json!({"type": "stdin"}),
+            to_file("stdin"),
+            Some("hello\n"),
+        ),
+        (
+            "fd",
+            json!({"type": "file_descriptor", "fd": 0}),
+            to_file("fd"),
+            Some("hello\n"),
+        ),
+    ];
+    let (mut child, url, client) = start_worker(&vector).await;
+    for (name, source, sink, stdin) in cases {
+        let config = pipeline(source, sink, dir.path());
+        let path = dir.path().join(format!("{name}.json"));
+        std::fs::write(&path, config.to_string()).unwrap();
+        let marker = marker(name);
+
+        // The two commands the worker uses, on the draft as written.
+        for args in [
+            &["validate", "--no-environment"][..],
+            &["test", "--config-json"][..],
+        ] {
+            let (code, text) = vector_ends(&vector, args, &path, stdin).await;
+            assert_eq!(code, Some(0), "{name}: {args:?} did not accept it: {text}");
+            assert!(!marker.exists(), "{name} started under {args:?}");
+        }
+        // The worker, which hands Vector a copy with stand-ins.
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        let tested = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tested["tests_run"], true, "{name}: {tested}");
+        assert_eq!(tested["tests"][0]["passed"], true, "{name}: {tested}");
+        assert!(!marker.exists(), "{name} started through the worker");
+
+        // Control: the same pipeline under a normal run does leave its marker.
+        assert!(
+            vector_runs_until(&vector, &path, stdin, &marker).await,
+            "{name}: the marker never appeared under a normal run, so this test proves nothing"
+        );
+    }
+
+    // A secret backend of type `exec` runs a program when a configuration uses
+    // one of its secrets. The worker removes every backend, and replaces every
+    // reference with a placeholder, before Vector sees the draft.
+    let backend = marker("secret");
+    let secret = json!({
+        "data_dir": dir.path(),
+        "secret": {"vault": {"type": "exec", "command": ["touch", backend]}},
+        "sources": {"s": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"t": {"type": "remap", "inputs": ["s"], "source": ".token = \"SECRET[vault.token]\""}},
+        "sinks": {"k": {"type": "blackhole", "inputs": ["t"]}},
+        "tests": [{"name": "t",
+            "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+    });
+    let checked = post(&client, &url, "validate", json!({"config": secret})).await;
+    assert_eq!(checked["valid"], true, "{checked}");
+    let tested = post(&client, &url, "tests", json!({"config": secret})).await;
+    assert_eq!(tested["tests_run"], true, "{tested}");
+    assert!(
+        !backend.exists(),
+        "the secret backend ran through the worker"
+    );
+    let path = dir.path().join("secret.json");
+    std::fs::write(&path, secret.to_string()).unwrap();
+    assert!(
+        vector_runs_until(&vector, &path, None, &backend).await,
+        "the marker never appeared under a normal run, so this test proves nothing"
+    );
+    child.kill().await.ok();
+}
+
+/// Signed-in people for the API in front of a worker.
+struct Session {
+    cookie: String,
+    csrf: String,
+}
+
+async fn session(state: &vectory_server::State, role: &str) -> Session {
+    let id = vectory_server::db::id();
+    let token = vectory_server::auth::random_secret();
+    let csrf = vectory_server::auth::random_secret();
+    sqlx::query(
+        "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
+    )
+    .bind(&id)
+    .bind(format!("{id}@example.test"))
+    .bind(format!("Test {role}"))
+    .bind(role)
+    .bind("unused-test-login")
+    .bind(vectory_server::db::now())
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO sessions VALUES(?,?,?,?)")
+        .bind(vectory_server::db::hash(&token))
+        .bind(&id)
+        .bind(&csrf)
+        .bind("2099-01-01T00:00:00Z")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    Session {
+        cookie: format!("vectory_session={token}"),
+        csrf,
+    }
+}
+
+async fn api(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+    who: &Session,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("cookie", &who.cookie)
+        .header("x-csrf-token", &who.csrf)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+/// One `lua` transform per form the transform takes, each running a program
+/// that leaves its own marker file. A marker that appears names the form that
+/// ran.
+#[cfg(unix)]
+fn lua_forms(dir: &std::path::Path) -> (serde_json::Value, Vec<std::path::PathBuf>) {
+    let marker = |name: &str| dir.join(format!("ran-{name}"));
+    let touch = |name: &str| format!("os.execute('touch {}')", marker(name).display());
+    let popen = |name: &str| {
+        format!(
+            "local p = io.popen('touch {}'); p:close()",
+            marker(name).display()
+        )
+    };
+    let modules = dir.join("modules");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::write(
+        modules.join("evil.lua"),
+        format!("{}\nreturn {{}}\n", touch("module")),
+    )
+    .unwrap();
+    let forms = json!({
+        "lua_chunk": {"type":"lua","version":"2","inputs":["in"],
+            "source": format!("{}\nfunction process(e, emit) emit(e) end", touch("chunk")),
+            "hooks":{"process":"process"}},
+        "lua_hooks": {"type":"lua","version":"2","inputs":["in"],
+            "source": format!(
+                "function init(emit) {} end\nfunction process(e, emit) {} {} emit(e) end\nfunction tick(emit) {} end\nfunction shutdown(emit) {} end",
+                popen("init"), touch("process"), popen("popen"), touch("timer"), touch("shutdown")
+            ),
+            "hooks":{"init":"init","process":"process","shutdown":"shutdown"},
+            "timers":[{"interval_seconds":1,"handler":"tick"}]},
+        "lua_v1": {"type":"lua","version":"1","inputs":["in"], "source": touch("v1")},
+        "lua_modules": {"type":"lua","version":"2","inputs":["in"],
+            "search_dirs":[modules.to_string_lossy()],
+            "source":"local evil = require('evil')\nfunction process(e, emit) emit(e) end",
+            "hooks":{"process":"process"}},
+    });
+    let ids: Vec<String> = forms.as_object().unwrap().keys().cloned().collect();
+    let tests: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            json!({"name": format!("{id} runs"),
+            "inputs":[{"insert_at":id,"type":"log","log_fields":{"message":"x"}}],
+            "outputs":[{"extract_from":id,"conditions":[{"type":"vrl","source":"true"}]}]})
+        })
+        .collect();
+    let config = json!({
+        "sources":{"in":{"type":"demo_logs","format":"json"}},
+        "transforms": forms,
+        "sinks":{"out":{"type":"blackhole","inputs":ids}},
+        "tests": tests,
+    });
+    let markers = [
+        "chunk", "init", "process", "popen", "timer", "shutdown", "v1", "module",
+    ]
+    .iter()
+    .map(|name| marker(name))
+    .collect();
+    (config, markers)
+}
+
+/// Lua can run any program: `os.execute` and `io.popen` fire when Vector builds
+/// the transform, which `vector test` does. User Lua runs on devices only, so
+/// neither the worker nor the API in front of it may hand a `lua` transform to
+/// Vector, in any form, from any route.
+#[cfg(unix)]
+#[tokio::test]
+async fn lua_never_runs_in_the_validator() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; Lua guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (config, markers) = lua_forms(dir.path());
+    let ran = || -> Vec<String> {
+        markers
+            .iter()
+            .filter(|marker| marker.exists())
+            .map(|marker| marker.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    };
+    let none = Vec::<String>::new();
+    let (mut child, url, client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let operator = session(&state, "operator").await;
+
+    // The worker's own routes never build the transform.
+    let tests = post(&client, &url, "tests", json!({"config": config})).await;
+    assert_eq!(ran(), none, "the worker's /tests ran Lua: {tests}");
+    assert_eq!(tests["tests_run"], false, "{tests}");
+    let checked = post(&client, &url, "validate", json!({"config": config})).await;
+    assert_eq!(ran(), none, "the worker's /validate ran Lua: {checked}");
+    assert_eq!(checked["valid"], true, "{checked}");
+    let mut stubbed: Vec<&str> = checked["stubbed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|id| id.as_str())
+        .collect();
+    stubbed.sort();
+    assert_eq!(
+        stubbed,
+        vec!["lua_chunk", "lua_hooks", "lua_modules", "lua_v1"],
+        "{checked}"
+    );
+    let sample = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({"transform": config["transforms"]["lua_chunk"], "samples": [{"message": "x"}]}),
+    )
+    .await;
+    assert_eq!(ran(), none, "the sample runner ran Lua: {sample}");
+    assert_eq!(sample["compiled"], false, "{sample}");
+
+    // The API: the test route, the validate route and the publish gate.
+    let (status, run) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config": config}),
+        &editor,
+    )
+    .await;
+    assert_eq!(ran(), none, "POST /configurations/test ran Lua: {run}");
+    assert_eq!(status, axum::http::StatusCode::OK, "{run}");
+    assert_eq!(run["tests_run"], false, "{run}");
+    assert_eq!(run["deferred"], true, "{run}");
+    assert_eq!(run["tests"], json!([]), "{run}");
+    assert!(
+        run["deferred_reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Lua runs on devices")),
+        "{run}"
+    );
+    assert!(
+        run["errors"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Lua can run any program, so tests that include it run only on devices."),
+        "{run}"
+    );
+
+    let (status, created) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Lua","description":"","config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}},"graph":{"nodes":[],"edges":[]}}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let (status, saved) = api(
+        &app,
+        "PUT",
+        &format!("/api/v1/configurations/{id}/draft"),
+        json!({"revision":created["revision"],"config":config,"graph":created["graph"],"name":"Lua","description":""}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{saved}");
+    let (status, validated) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/validate"),
+        json!({"config": config}),
+        &editor,
+    )
+    .await;
+    assert_eq!(
+        ran(),
+        none,
+        "POST /configurations/{{id}}/validate ran Lua: {validated}"
+    );
+    assert_eq!(status, axum::http::StatusCode::OK, "{validated}");
+    assert_eq!(validated["valid"], true, "{validated}");
+    assert_eq!(validated["deferred"], true, "{validated}");
+    assert_eq!(validated["vector_validated"], false, "{validated}");
+    // The module form also names a device directory, which is its own reason.
+    assert_eq!(
+        validated["deferred_reasons"],
+        json!([
+            "Lua runs on devices",
+            "device-local paths or external code files"
+        ]),
+        "{validated}"
+    );
+    let notes: Vec<&str> = validated["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "device_check" && d["severity"] == "warning")
+        .filter_map(|d| d["component"].as_str())
+        .collect();
+    assert_eq!(
+        notes.len(),
+        4,
+        "each Lua step says a device checks it: {validated}"
+    );
+
+    // Publishing: the draft is valid, its tests did not run, and the existing
+    // acknowledgement is what lets it through.
+    let publish = json!({"revision":saved["revision"],"message":""});
+    let (status, refusal) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/publish"),
+        publish.clone(),
+        &operator,
+    )
+    .await;
+    assert_eq!(ran(), none, "publishing ran Lua: {refusal}");
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["error"]["code"], "TESTS_FAILED", "{refusal}");
+    assert_eq!(refusal["tests_run"], false, "{refusal}");
+    assert_eq!(refusal["counts"]["not_run"], 4, "{refusal}");
+    let mut acknowledged = publish;
+    acknowledged["acknowledge_test_failures"] = json!(true);
+    let (status, version) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/publish"),
+        acknowledged,
+        &operator,
+    )
+    .await;
+    assert_eq!(ran(), none, "an acknowledged publish ran Lua: {version}");
+    assert_eq!(status, axum::http::StatusCode::OK, "{version}");
+    child.kill().await.ok();
+}
