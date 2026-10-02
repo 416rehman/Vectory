@@ -139,13 +139,19 @@ describe("upgrading an enrolled agent", () => {
   it("runs the verified installer again with no token, mode or name", () => {
     expect(upgradeCommand(install, host)).toBe(
       [
-        `printf '%s\\n' '${caPem.trimEnd()}' > vectory-ca.pem &&`,
-        "curl -fsSL --cacert vectory-ca.pem \\",
-        "  -o vectory-install.sh \\",
-        "  https://vectory.example.test:8443/agent/v1/install.sh &&",
-        `echo '${install.installer!.sha256}  vectory-install.sh' \\`,
-        "  | sha256sum -c - &&",
-        "sudo sh vectory-install.sh",
+        "(",
+        "  set -e",
+        "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+        `  trap 'rm -rf "$dir"' EXIT`,
+        `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
+        `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,
+        `    --cacert "$dir/vectory-ca.pem" \\`,
+        `    -o "$dir/vectory-install.sh" \\`,
+        "    https://vectory.example.test:8443/agent/v1/install.sh",
+        `  echo '${install.installer!.sha256}  vectory-install.sh' \\`,
+        `    | (cd "$dir" && sha256sum -c -)`,
+        `  sudo sh "$dir/vectory-install.sh"`,
+        ")",
       ].join("\n"),
     );
   });
@@ -156,10 +162,11 @@ describe("upgrading an enrolled agent", () => {
       state_dir: "/srv/vectory state",
       service_manager: "none",
     })!;
-    expect(command.split("\n").slice(-3)).toEqual([
-      "sudo sh vectory-install.sh \\",
-      "  --state-dir '/srv/vectory state' \\",
-      "  --service none",
+    expect(command.split("\n").slice(-4)).toEqual([
+      `  sudo sh "$dir/vectory-install.sh" \\`,
+      "    --state-dir '/srv/vectory state' \\",
+      "    --service none",
+      ")",
     ]);
     const mac = upgradeCommand(install, {
       ...host,
@@ -167,8 +174,17 @@ describe("upgrading an enrolled agent", () => {
       state_dir: "/Library/Application Support/Vectory/agent",
       service_manager: "launchd",
     })!;
-    expect(mac).toContain("| shasum -a 256 -c - &&");
-    expect(mac.endsWith("sudo sh vectory-install.sh")).toBe(true);
+    expect(mac).toContain(`| (cd "$dir" && shasum -a 256 -c -)`);
+    expect(mac.endsWith(`  sudo sh "$dir/vectory-install.sh"\n)`)).toBe(true);
+  });
+
+  it("offers no command for a state directory the device reports with a control character", () => {
+    expect(
+      upgradeCommand(install, { ...host, state_dir: "/srv/a\nb" }),
+    ).toBeNull();
+    expect(
+      upgradeCommand(install, { ...host, state_dir: "/srv/a\u202eb" }),
+    ).toBeNull();
   });
 
   it("checks the download with the host's certificate store for a public certificate", () => {
@@ -177,9 +193,13 @@ describe("upgrading an enrolled agent", () => {
       certificate: { ...install.certificate, publicly_trusted: true },
     });
     const command = upgradeCommand(publicServer, host)!;
-    expect(command.startsWith("curl -fsSL \\")).toBe(true);
+    expect(command).toContain(
+      "\n  curl -fsSL --proto '=https' --proto-redir '=https' \\\n",
+    );
     expect(
-      command.endsWith("sudo sh vectory-install.sh \\\n  --ca-file="),
+      command.endsWith(
+        `  sudo sh "$dir/vectory-install.sh" \\\n    --ca-file=\n)`,
+      ),
     ).toBe(true);
   });
 

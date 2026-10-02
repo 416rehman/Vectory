@@ -55,6 +55,8 @@ The file replaces all three lists, so keep every entry the device still needs. `
 
 Before you remove an allowance, deploy a pipeline that no longer needs it. At startup, the agent refuses a configuration whose resources are no longer allowed.
 
+No allowance covers Vector's `api` block, which has no authentication. A restricted device refuses a pipeline that sets it, and at startup refuses a configuration that already has one. Deploy a version without the block, or [switch the device to full mode](#switch-between-restricted-and-full-mode).
+
 A changed allowance lets the device try a version it rejected earlier. It doesn't resume a paused device or turn on full mode.
 
 ### Switch between restricted and full mode

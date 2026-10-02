@@ -49,6 +49,8 @@ Within those components, restricted mode also:
 
 **Full Vector** mode accepts anything the host's Vector build supports. Only the host can enable it, with `vectory install --allow-full-vector-config`; the dashboard shows the mode and blocks deployments that need full mode on restricted devices. Allowances don't apply in full mode.
 
+**Both modes** refuse a component ID that could be a path: one with a `/`, a `\` or a control character, or one that starts with a drive letter and a colon (like `C:`). Vector uses an ID as a directory name under its `data_dir` for disk buffers and checkpoints, so an ID such as `/tmp/x` would make it create files outside the agent's state directory. The agent refuses such a version before Vector sees it and reports `INVALID_COMPONENT_ID`, naming the component. A restricted device refuses an `api` block the same way and reports `LOCAL_API_DENIED`: no allowance covers it, so the version needs a full-mode device. Both findings, and what to do about them, are in [A pipeline is rejected or rolled back](troubleshooting.md#a-pipeline-is-rejected-or-rolled-back).
+
 > [!NOTE]
 > Allowances limit what a pipeline asks Vector to do. They are not an operating-system sandbox. Use host permissions, a dedicated service account and network controls where you need stronger isolation.
 
