@@ -728,11 +728,21 @@ try {
         new RegExp(`#/deployments/${ids.deployment}$`),
       );
       await expect(dialog("Pause rollout")).toBeVisible();
-      await page.keyboard.press("Escape");
+      // The review opens on the choice that changes nothing: an Enter pressed
+      // again right after the palette's own does not confirm it.
+      const keepState = (name) =>
+        dialog(name).getByRole("button", {
+          name: "Keep current state",
+          exact: true,
+        });
+      await expect(keepState("Pause rollout")).toBeFocused();
+      await page.keyboard.press("Enter");
       await expect(dialog("Pause rollout")).toHaveCount(0);
+      expect(mutations()).toEqual([]);
       // Already on that page, the verb runs in place.
       await pick("cancel");
       await expect(dialog("Cancel rollout")).toBeVisible();
+      await expect(keepState("Cancel rollout")).toBeFocused();
       await page.keyboard.press("Escape");
       await pick("rollback");
       await expect(dialog("Review rollback")).toBeVisible();
@@ -960,6 +970,32 @@ try {
           expect(scan.violations).toEqual([]);
           await page.screenshot({
             path: resolve(output, `command-palette-${width}-${theme}.png`),
+          });
+          // The same palette with a verb among its results.
+          await search().fill("pause palette");
+          const verbRow = palette().getByRole("option", {
+            name: "Pause Synthetic palette pipeline v2",
+            exact: true,
+          });
+          await expect(verbRow).toBeVisible();
+          const verbScan = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+            .analyze();
+          accessibility.push({
+            width,
+            theme,
+            view: "verbs",
+            violations: verbScan.violations.map((v) => ({
+              id: v.id,
+              targets: v.nodes.map((node) => node.target),
+            })),
+          });
+          expect(verbScan.violations).toEqual([]);
+          await page.screenshot({
+            path: resolve(
+              output,
+              `command-palette-verbs-${width}-${theme}.png`,
+            ),
           });
           await search().press("Escape");
           await expect(palette()).toHaveCount(0);
