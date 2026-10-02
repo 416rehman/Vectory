@@ -79,6 +79,28 @@ test("bash declared on a Windows step is checked", () => {
   assert.equal(checkWorkflow(text, "t.yml").length, 1);
 });
 
+test("grep -q at the end of a pipeline under pipefail is found", () => {
+  const text = workflow(
+    [
+      "      - run: |",
+      "          set -euo pipefail",
+      "          dpkg-deb -c x.deb | grep -q usr/bin/vectory",
+    ].join("\n"),
+  );
+  const problems = checkWorkflow(text, "t.yml");
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /grep -q at the end of a pipeline under pipefail/);
+  const counted = workflow(
+    [
+      "      - run: |",
+      "          set -euo pipefail",
+      '          [ "$(dpkg-deb -c x.deb | grep -c usr/bin/vectory)" -ge 1 ]',
+      "      - run: ls | grep -q x",
+    ].join("\n"),
+  );
+  assert.deepEqual(checkWorkflow(counted, "t.yml"), []);
+});
+
 test("every bash step of the repository's workflows parses", () => {
   const dir = path.resolve(import.meta.dirname, "../.github/workflows");
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".yml")))
