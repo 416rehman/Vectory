@@ -1,7 +1,9 @@
+/* --toast-lift is set from script while a bar or a dialog's buttons are at the
+   bottom of the screen, so notifications rest above them, never over them. */
 .toast {
   position: fixed;
   right: var(--space-6);
-  bottom: var(--space-6);
+  bottom: calc(var(--space-6) + var(--toast-lift, 0px));
   z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
@@ -85,7 +87,9 @@
   .toast {
     right: var(--space-3);
     left: var(--space-3);
-    bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+    bottom: calc(
+      var(--space-3) + env(safe-area-inset-bottom) + var(--toast-lift, 0px)
+    );
     width: auto;
   }
 }
