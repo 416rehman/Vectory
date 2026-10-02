@@ -47,6 +47,33 @@ When restricted devices must first approve a destination, listener or file root 
 
 The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
 
+## Check on devices
+
+Before you deploy, ask the target devices to check the version on their own hosts. **Check on devices** runs the validation an apply would run, with each device's own values, [secrets](resources.md#keep-credentials-on-the-device) and allowances. It starts and changes nothing. Operators and administrators can use it. Agent settings have nothing to check.
+
+<!-- steps -->
+1. Choose **Review deployment**.
+2. Choose **Check on devices**. Turn on **Also run the pipeline's tests** to run the version's tests on each host too. It takes longer.
+3. Watch the answers arrive. Each device answers at its next check-in, within seconds when it keeps a request open for changes. A check expires after 10 minutes.
+4. Fix what a row reports, then choose **Check again** on it. A device that didn't answer has **Retry**, and **Retry 2 unanswered** asks every device that was offline or didn't answer. Each retry asks only the devices you named.
+
+You should see a summary that is always true, for example **Checked 3 of 4 devices: 2 pass, 1 needs a secret, 1 offline.** It counts the devices that answered, then names every other result.
+
+| Result | What it means | What to do |
+| --- | --- | --- |
+| **Passes here** | Vector on that host found no error, and the tests passed when you asked for them. | Nothing. It isn't evidence that the version is applied or healthy. |
+| **Needs a fix** | Vector or the host's allowances refused something. The row leads with the first finding: its step, its field, what's wrong and the fix. It opens to the other findings and the tests. | Fix the pipeline or the host, then check again. |
+| **Needs a secret** | The version uses a device secret the host hasn't bound: **Secret API_KEY isn't bound on this device**. | Run the commands on the row on that host (**Copy** takes them), then check again. The value stays on the device. |
+| **Offline: not checked** | The device hasn't checked in for three of its own intervals, so it wasn't asked. | Bring it online, then **Retry**. |
+| **No answer in time** | It didn't answer within 10 minutes, or a newer check for the same device replaced this one. | Check that its agent runs, then **Retry**. |
+| **Older agent: can't check** | Its agent doesn't know checks. | Choose **Upgrade agent** on its device page, then **Retry**. |
+
+The results are advice. A check never blocks **Deploy** and never changes a deployment, a device or an assignment, and the review says so beside them: **Results are advisory.** You can send the deployment while a check runs.
+
+A check belongs to the review it was asked on. When the version or the devices change, the results read **These results are for the previous selection** and wait for **Check on devices** again. Going back to the selection clears them.
+
+A check asks the first 50 devices by name and says so ("Checked the first 50 devices by name. The other 7 weren't checked."). You can ask for six checks a minute, and when you ask too soon the button says when to try again. Only the person who asked, and administrators, can read the results, which Vectory keeps for 24 hours. When something doesn't work, see [A device check fails or doesn't answer](troubleshooting.md#a-device-check-fails-or-doesnt-answer).
+
 ## Edit a group
 
 [**Devices → Groups**](/#/groups) lists each group with its description and how many devices it holds. The list doesn't load the members; open a group and choose **Edit members** to see them.
