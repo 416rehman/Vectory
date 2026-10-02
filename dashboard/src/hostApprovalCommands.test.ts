@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { powerShellScript } from "./powershellText.test-support";
 import {
   allowArguments,
   hostApprovalCommands,
@@ -100,6 +101,95 @@ describe("host approval commands", () => {
         "& 'C:\\Program Files\\Vectory\\vectory.exe' service-start",
       ].join("\n"),
     );
+  });
+
+  // A pipeline's paths, addresses and destinations, and the state directory a
+  // device reports, are text someone else wrote. On a Windows host a curly quote
+  // in one must not close its string in the elevated shell the operator pastes
+  // the commands into.
+  describe("hostile values on a Windows host", () => {
+    const windowsHost = {
+      ...host,
+      os: "windows",
+      state_dir: "D:\\Vectory\\agent",
+      service_manager: "windows" as const,
+    };
+    const hostile = (character: string) => `/x${character}; calc; ${character}`;
+
+    it.each(["\u2018", "\u2019", "\u201A", "\u201B", "'"])(
+      "keeps %s inside its string in every value",
+      (character) => {
+        const value = hostile(character);
+        const commands = hostCommands(
+          {
+            destinations: [`a${character};calc;b:443`],
+            listeners: [value],
+            fileRoots: [value],
+          },
+          { ...windowsHost, state_dir: `D:\\${value}` },
+        );
+        const lines = powerShellScript(commands);
+        expect(lines).toHaveLength(3);
+        expect(lines[0]).toEqual([
+          "&",
+          "C:\\Program Files\\Vectory\\vectory.exe",
+          "service-stop",
+        ]);
+        expect(lines[1]).toEqual([
+          "&",
+          "C:\\Program Files\\Vectory\\vectory.exe",
+          "allow",
+          "--state-dir",
+          `D:\\${value}`,
+          "--network",
+          `a${character};calc;b:443`,
+          "--listener",
+          value,
+          "--file-root",
+          value,
+        ]);
+        expect(lines.flat()).not.toContain("calc");
+      },
+    );
+
+    it("writes no command for a value with a control character, and says why", () => {
+      for (const approvals of [
+        { destinations: [], listeners: [], fileRoots: ["/var/log/a\nb"] },
+        { destinations: [], listeners: ["0.0.0.0:514\u202e"], fileRoots: [] },
+      ])
+        for (const device of [host, windowsHost]) {
+          const commands = hostCommands(approvals, device);
+          const lines = commands.split("\n");
+          expect(lines.every((line) => line.startsWith("#"))).toBe(true);
+          expect(commands).toContain("control character");
+          expect(commands).not.toMatch(/\bvectory allow\b.*--/);
+        }
+      expect(
+        hostCommands(approvals, { ...host, state_dir: "/srv/a\tb" }),
+      ).toContain("control character");
+    });
+
+    it("refuses a double quote on Windows, where it would split the arguments", () => {
+      const commands = hostCommands(
+        {
+          destinations: [],
+          listeners: ['x" --file-root "C:\\'],
+          fileRoots: [],
+        },
+        windowsHost,
+      );
+      expect(commands.split("\n").every((line) => line.startsWith("#"))).toBe(
+        true,
+      );
+      expect(commands).toContain("double quote");
+      // A POSIX shell keeps it inside its quotes.
+      expect(
+        hostCommands(
+          { destinations: [], listeners: ['x" y'], fileRoots: [] },
+          host,
+        ),
+      ).toContain(`--listener 'x" y'`);
+    });
   });
 
   it("group devices that need the same commands", () => {

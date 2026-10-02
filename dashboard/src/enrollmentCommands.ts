@@ -85,12 +85,84 @@ export const accountPatterns: Record<Exclude<HostOS, "windows">, RegExp> = {
   darwin: /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/,
 };
 
-/** Quote one argument for a POSIX shell or PowerShell, only when needed. */
+/**
+ * A value no command can carry: it would make the pasted command differ from
+ * what the page shows, or split its arguments. The builders return no command
+ * for it, and the page refuses it where it is typed (commandValueProblem).
+ */
+export class CommandValueError extends Error {
+  constructor(readonly reason: "control" | "double-quote") {
+    super(
+      reason === "control"
+        ? "A value contains a control character."
+        : "A value contains a double quote.",
+    );
+    this.name = "CommandValueError";
+  }
+}
+
+// Control characters (C0, DEL and C1), line and paragraph separators, and the
+// bidirectional overrides that reorder what a line shows.
+const invisibleControl = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]/u;
+// PowerShell reads the ASCII apostrophe and U+2018 to U+201B as single quotes.
+// Inside a single-quoted string each one is doubled, as the apostrophe is.
+const powerShellQuote = /['\u2018\u2019\u201A\u201B]/g;
+// A word that needs no quotes. zsh looks up a word that starts with `=` as a
+// command. PowerShell reads a comma, `@` and `%` as syntax, and a word that
+// starts with a dash as a parameter. A value like that is quoted there.
+const plainWord = {
+  posix: /^[A-Za-z0-9_./:@%+,-][A-Za-z0-9_./:=@%+,-]*$/,
+  windows: /^[A-Za-z0-9_./:=+][A-Za-z0-9_./:=+-]*$/,
+};
+
+/** What makes a value unfit for any command on `os`, or null. */
+function unfit(value: string, os: HostOS): CommandValueError["reason"] | null {
+  if (invisibleControl.test(value)) return "control";
+  // Windows PowerShell hands a double quote to the program unescaped, where it
+  // splits the arguments. No Windows path, name or address contains one.
+  if (os === "windows" && value.includes('"')) return "double-quote";
+  return null;
+}
+
+/**
+ * Quote one argument for a POSIX shell or PowerShell, only when needed. Throws
+ * CommandValueError for a value no command can carry.
+ */
 export function quote(value: string, os: HostOS) {
-  if (/^[A-Za-z0-9_./:=@%+,-]+$/.test(value)) return value;
+  const reason = unfit(value, os);
+  if (reason) throw new CommandValueError(reason);
+  if (plainWord[os === "windows" ? "windows" : "posix"].test(value))
+    return value;
   return os === "windows"
-    ? `'${value.replaceAll("'", "''")}'`
+    ? `'${value.replace(powerShellQuote, (character) => character + character)}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+/** The command `build` makes, or null when a value in it can't be quoted. */
+export function unlessUnquotable<T>(build: () => T | null): T | null {
+  try {
+    return build();
+  } catch (error) {
+    if (error instanceof CommandValueError) return null;
+    throw error;
+  }
+}
+
+/**
+ * What stops a typed value from going into a command, said so that it names
+ * the field, or "" when nothing does. It is everything quote() refuses and,
+ * on Windows, the curly quotes: quote() writes those correctly, but one is
+ * nearly always a paste from a document, and PowerShell reads it as a quote.
+ */
+export function commandValueProblem(label: string, value: string, os: HostOS) {
+  const reason = unfit(value, os);
+  if (reason === "control")
+    return `${label} can't contain control characters. Retype it.`;
+  if (reason === "double-quote")
+    return `${label} can't contain a double quote. Remove it.`;
+  return os === "windows" && /[\u2018-\u201B]/.test(value)
+    ? `${label} can't contain curly quotes (‘ ’ ‚ ‛), which PowerShell reads as quotes. Use a plain apostrophe or remove them.`
+    : "";
 }
 
 /** Setup options for the operator's choices, defaults omitted. */
@@ -174,7 +246,7 @@ export function trustArguments(
   }
 }
 
-/** The installer file, and the CA certificate a pinned command writes next to it. */
+/** The installer file, and the CA certificate a pinned command writes beside it. */
 export const installerFile = "vectory-install.sh";
 export const pinnedCAFile = "vectory-ca.pem";
 
@@ -188,25 +260,30 @@ export const pinnedCAFile = "vectory-ca.pem";
  *   refuses a CA it doesn't know unless -k turns the check off.
  * - file: curl and setup trust the CA certificate at the host path.
  * - system: curl and setup trust the host's certificate store.
- * Each step ends in &&, which continues the command in every POSIX shell
- * (sh, dash, bash, zsh), so the installer runs only when the download and
- * the checksum both succeed.
+ * The files live in a directory only the person running the command can
+ * enter, so no other user on the host can swap one between the check and the
+ * run. The whole command is one subshell that stops at the first failing step
+ * in every POSIX shell (sh, dash, bash, zsh): the installer runs only when
+ * the download and the checksum both succeed, and the directory is removed
+ * however the command ends.
  */
 export function installerCommand(
   install: AgentInstall,
   choices: SetupChoices,
 ): string | null {
-  const [mode, ...rest] = pairs(setupArguments(choices));
-  const installDir = choices.installDir?.trim();
-  return installerRun(
-    install,
-    choices,
-    [
-      ...mode,
-      ...(installDir ? ["--install-dir", quote(installDir, choices.os)] : []),
-    ],
-    rest.flat(),
-  );
+  return unlessUnquotable(() => {
+    const [mode, ...rest] = pairs(setupArguments(choices));
+    const installDir = choices.installDir?.trim();
+    return installerRun(
+      install,
+      choices,
+      [
+        ...mode,
+        ...(installDir ? ["--install-dir", quote(installDir, choices.os)] : []),
+      ],
+      rest.flat(),
+    );
+  });
 }
 
 /**
@@ -220,39 +297,52 @@ export function installerRun(
   head: string[],
   tail: string[],
 ): string | null {
-  if (choices.os === "windows" || !install.installer || !install.agent_url)
-    return null;
-  const trust = effectiveTrust(install, choices.trust);
-  const lines: string[] = [];
-  let cacert = "";
-  if (trust === "pinned") {
-    const pem = install.certificate?.ca_pem?.trimEnd();
-    if (!pem) return null;
-    lines.push(`printf '%s\\n' '${pem}' > ${pinnedCAFile} &&`);
-    cacert = ` --cacert ${pinnedCAFile}`;
-  } else if (trust === "file") {
-    const path = choices.caFile?.trim();
-    if (!path) return null;
-    cacert = ` --cacert ${quote(path, choices.os)}`;
-  }
-  const check =
-    choices.os === "darwin" ? "shasum -a 256 -c -" : "sha256sum -c -";
-  const installerTrust =
-    trust === "pinned" ? [] : trustArguments(install, choices)!;
-  lines.push(
-    `curl -fsSL${cacert} \\`,
-    `  -o ${installerFile} \\`,
-    `  ${install.agent_url}/agent/v1/install.sh &&`,
-    // Split at the pipe, so no line hides under the Copy button.
-    `echo '${install.installer.sha256}  ${installerFile}' \\`,
-    `  | ${check} &&`,
-    continued(`sudo sh ${installerFile}`, [
-      ...head,
-      ...installerTrust,
-      ...tail,
-    ]),
-  );
-  return lines.join("\n");
+  const { installer, agent_url: origin } = install;
+  if (choices.os === "windows" || !installer || !origin) return null;
+  return unlessUnquotable(() => {
+    const trust = effectiveTrust(install, choices.trust);
+    const steps: string[] = [
+      "set -e",
+      // The installer's own idiom: BSD mktemp before macOS 10.12 wants -t.
+      "dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+      `trap 'rm -rf "$dir"' EXIT`,
+    ];
+    const cacert: string[] = [];
+    if (trust === "pinned") {
+      const pem = install.certificate?.ca_pem?.trimEnd();
+      if (!pem) return null;
+      steps.push(`printf '%s\\n' '${pem}' > "$dir/${pinnedCAFile}"`);
+      cacert.push(`  --cacert "$dir/${pinnedCAFile}" \\`);
+    } else if (trust === "file") {
+      const path = choices.caFile?.trim();
+      if (!path) return null;
+      cacert.push(`  --cacert ${quote(path, choices.os)} \\`);
+    }
+    const check =
+      choices.os === "darwin" ? "shasum -a 256 -c -" : "sha256sum -c -";
+    const installerTrust =
+      trust === "pinned" ? [] : trustArguments(install, choices)!;
+    steps.push(
+      // --proto and --proto-redir keep every hop, a redirect included, on
+      // https. Quoted, because zsh reads an unquoted =https as a command to
+      // find. One option group to a line, so none is cut off on a phone.
+      `curl -fsSL --proto '=https' --proto-redir '=https' \\`,
+      ...cacert,
+      `  -o "$dir/${installerFile}" \\`,
+      `  ${origin}/agent/v1/install.sh`,
+      // Split at the pipe, so no line hides under the Copy button.
+      `echo '${installer.sha256}  ${installerFile}' \\`,
+      `  | (cd "$dir" && ${check})`,
+      continued(
+        `sudo sh "$dir/${installerFile}"`,
+        [...head, ...installerTrust, ...tail],
+        "    ",
+      ),
+    );
+    // Each step's first line is indented; a certificate's own lines stay as
+    // they are, inside their quotes.
+    return ["(", ...steps.map((step) => `  ${step}`), ")"].join("\n");
+  });
 }
 
 /** ["--mode", "full", "--create-user"] as [["--mode", "full"], ["--create-user"]]. */
@@ -270,24 +360,26 @@ export function setupCommand(
   choices: SetupChoices,
 ): string | null {
   if (!install.agent_url) return null;
-  const trust = trustArguments(install, choices);
-  if (!trust) return null;
-  const args = [
-    "--server",
-    install.agent_url,
-    ...trust,
-    ...setupArguments(choices),
-  ];
-  return choices.os === "windows"
-    ? `.\\vectory.exe setup ${args.join(" ")}`
-    : continued("sudo vectory setup", args);
+  return unlessUnquotable(() => {
+    const trust = trustArguments(install, choices);
+    if (!trust) return null;
+    const args = [
+      "--server",
+      install.agent_url!,
+      ...trust,
+      ...setupArguments(choices),
+    ];
+    return choices.os === "windows"
+      ? `.\\vectory.exe setup ${args.join(" ")}`
+      : continued("sudo vectory setup", args);
+  });
 }
 
 /**
  * The command that keeps the agent running without a service, as setup
  * prints it: the agent where this page's command put it (the installer's
  * directory, or wherever an agent copied to the host is on PATH) and its
- * state directory.
+ * state directory. Empty when a value in it can't be quoted.
  */
 export function runCommand(
   install: Pick<AgentInstall, "default_install_dir">,
@@ -296,16 +388,20 @@ export function runCommand(
 ) {
   const stateDir =
     choices.stateDir.trim() || platformDefaults(choices.os).stateDir;
-  if (choices.os === "windows")
-    return `.\\vectory.exe run --state-dir ${quote(stateDir, "windows")}`;
-  const directory =
-    choices.installDir?.trim() ||
-    install.default_install_dir ||
-    "/usr/local/bin";
-  const agent = installed
-    ? quote(`${directory.replace(/\/+$/, "")}/vectory`, choices.os)
-    : "vectory";
-  return `sudo ${agent} run --state-dir ${quote(stateDir, choices.os)}`;
+  return (
+    unlessUnquotable(() => {
+      if (choices.os === "windows")
+        return `.\\vectory.exe run --state-dir ${quote(stateDir, "windows")}`;
+      const directory =
+        choices.installDir?.trim() ||
+        install.default_install_dir ||
+        "/usr/local/bin";
+      const agent = installed
+        ? quote(`${directory.replace(/\/+$/, "")}/vectory`, choices.os)
+        : "vectory";
+      return `sudo ${agent} run --state-dir ${quote(stateDir, choices.os)}`;
+    }) ?? ""
+  );
 }
 
 /** Windows: verify the downloaded agent, then run setup from an elevated shell. */

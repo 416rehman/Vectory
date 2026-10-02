@@ -44,6 +44,17 @@ func TestHelpAndVersionWorkBeforeTheCompatibilityForm(t *testing.T) {
 	if _, stdout, _ := invoke("help", "setup"); strings.Contains(stdout, "| sudo sh") || !strings.Contains(stdout, "sudo sh vectory-install.sh") {
 		t.Fatalf("setup examples:\n%s", stdout)
 	}
+	// ...in a directory only the person running them can enter, over https only,
+	// so nobody else on the host can swap a file between the check and the run.
+	for _, topic := range []string{"", "setup"} {
+		args := []string{"help"}
+		if topic != "" {
+			args = append(args, topic)
+		}
+		if _, stdout, _ := invoke(args...); !strings.Contains(stdout, `cd "$(mktemp -d)"`) || !strings.Contains(stdout, "--proto '=https' --proto-redir '=https'") {
+			t.Fatalf("%v examples don't keep their files private:\n%s", args, stdout)
+		}
+	}
 }
 
 func TestEveryCommandHasHelpWithPurposeAndHidesCompatibilityFlags(t *testing.T) {

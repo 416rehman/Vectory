@@ -257,7 +257,7 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
       .getByRole("button", { name: "Create install command", exact: true })
       .click();
     await expect(page.locator(".enroll-command pre").first()).toContainText(
-      "sudo sh vectory-install.sh \\\n  --mode restricted",
+      `sudo sh "$dir/vectory-install.sh" \\\n    --mode restricted`,
     );
     await expect(page.locator("body")).not.toContainText(
       "synthetic-unused-enrollment-token",
@@ -439,7 +439,9 @@ try {
         // Pinned: the command carries the CA for curl; setup gets the fingerprint.
         let text = await install();
         expect(text).toContain("-----BEGIN CERTIFICATE-----");
-        expect(text).toContain("curl -fsSL --cacert vectory-ca.pem \\");
+        expect(text).toContain(
+          `curl -fsSL --proto '=https' --proto-redir '=https' \\\n    --cacert "$dir/vectory-ca.pem" \\`,
+        );
         expect(text).not.toContain("--ca-file");
         expect(text).not.toMatch(insecure);
         expect(await setup()).toContain(`--ca-sha256 ${pin}`);
@@ -452,9 +454,9 @@ try {
           .fill("/etc/vectory/server-ca.pem");
         text = await install();
         expect(text).toContain(
-          "curl -fsSL --cacert /etc/vectory/server-ca.pem \\",
+          "curl -fsSL --proto '=https' --proto-redir '=https' \\\n    --cacert /etc/vectory/server-ca.pem \\",
         );
-        expect(text).toContain("  --ca-file /etc/vectory/server-ca.pem \\");
+        expect(text).toContain("    --ca-file /etc/vectory/server-ca.pem \\");
         expect(text).not.toContain("BEGIN CERTIFICATE");
         expect(text).not.toMatch(insecure);
         let manual = await setup();
@@ -468,8 +470,10 @@ try {
           .getByRole("radio", { name: /^The host's trusted certificates/ })
           .check();
         text = await install();
-        expect(text).toMatch(/^curl -fsSL \\\n/);
-        expect(text).toContain("  --ca-file= \\");
+        expect(text).toMatch(
+          /\n {2}curl -fsSL --proto '=https' --proto-redir '=https' \\\n/,
+        );
+        expect(text).toContain("    --ca-file= \\");
         expect(text).not.toMatch(insecure);
         manual = await setup();
         expect(manual).toContain("  --ca-file= \\");
@@ -488,6 +492,81 @@ try {
         expect(f.state.posts).toBe(1);
       } finally {
         await f.close();
+      }
+    },
+  );
+  await check(
+    "A path no command can carry is refused by field name, and a plain apostrophe is quoted for PowerShell",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.page.locator(".enroll-advanced > summary").click();
+        await f.page.getByRole("radio", { name: /^Restricted/ }).check();
+        await f.page
+          .getByRole("radio", { name: "Windows", exact: true })
+          .check();
+        const stateDir = f.page.getByLabel("Agent state directory", {
+          exact: true,
+        });
+        const managedConfig = f.page.getByLabel("Managed configuration file", {
+          exact: true,
+        });
+        const create = f.page.getByRole("button", {
+          name: /^Create (install|setup) command$/,
+        });
+        // Curly quotes close a string in PowerShell: refused, naming the field.
+        for (const character of ["\u2018", "\u2019", "\u201A", "\u201B"]) {
+          await stateDir.fill(`C:\\Owner${character}s`);
+          await expect(stateDir).toHaveAttribute("aria-invalid", "true");
+          await expect(f.page.locator("body")).toContainText(
+            "Agent state directory can't contain curly quotes",
+          );
+          await expect(create).toBeDisabled();
+        }
+        // So are control characters and double quotes, in any path field.
+        await stateDir.fill("C:\\Owner\u007fs");
+        await expect(f.page.locator("body")).toContainText(
+          "Agent state directory can't contain control characters.",
+        );
+        await expect(create).toBeDisabled();
+        await managedConfig.fill('C:\\a"b\\vector.json');
+        await expect(f.page.locator("body")).toContainText(
+          "Managed configuration file can't contain a double quote.",
+        );
+        await managedConfig.fill("");
+        expect(f.state.posts).toBe(0);
+        // The plain apostrophe is a legal character: PowerShell gets it doubled.
+        await stateDir.fill("C:\\Owner's Data");
+        await expect(stateDir).not.toHaveAttribute("aria-invalid", "true");
+        await expect(create).toBeEnabled();
+        await create.click();
+        // The request is made after the click returns, so wait for it before
+        // reading the command the page then shows.
+        await expect.poll(() => f.state.posts).toBe(1);
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
+        ).toContainText("--state-dir 'C:\\Owner''s Data'");
+      } finally {
+        await f.close();
+      }
+      // A POSIX shell doesn't read a curly quote as a quote: it stays legal.
+      const g = await fixture();
+      try {
+        await g.page.locator(".enroll-advanced > summary").click();
+        await g.page.getByRole("radio", { name: /^Restricted/ }).check();
+        await g.page.getByRole("radio", { name: "Linux", exact: true }).check();
+        const stateDir = g.page.getByLabel("Agent state directory", {
+          exact: true,
+        });
+        await stateDir.fill("/srv/o\u2019s");
+        await expect(stateDir).not.toHaveAttribute("aria-invalid", "true");
+        await stateDir.fill("/srv/a\u007fb");
+        await expect(stateDir).toHaveAttribute("aria-invalid", "true");
+        await expect(g.page.locator("body")).toContainText(
+          "Agent state directory can't contain control characters.",
+        );
+      } finally {
+        await g.close();
       }
     },
   );

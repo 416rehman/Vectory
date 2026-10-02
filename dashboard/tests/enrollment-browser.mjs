@@ -438,15 +438,21 @@ try {
         // certificate check off.
         expect(text).toBe(
           [
-            `printf '%s\\n' '${caPem.trimEnd()}' > vectory-ca.pem &&`,
-            "curl -fsSL --cacert vectory-ca.pem \\",
-            "  -o vectory-install.sh \\",
-            "  https://vectory.example.test:8443/agent/v1/install.sh &&",
-            `echo '${installerSha}  vectory-install.sh' \\`,
-            "  | sha256sum -c - &&",
-            "sudo sh vectory-install.sh \\",
-            "  --mode restricted \\",
-            "  --create-user",
+            "(",
+            "  set -e",
+            "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+            `  trap 'rm -rf "$dir"' EXIT`,
+            `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
+            `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,
+            `    --cacert "$dir/vectory-ca.pem" \\`,
+            `    -o "$dir/vectory-install.sh" \\`,
+            "    https://vectory.example.test:8443/agent/v1/install.sh",
+            `  echo '${installerSha}  vectory-install.sh' \\`,
+            `    | (cd "$dir" && sha256sum -c -)`,
+            `  sudo sh "$dir/vectory-install.sh" \\`,
+            "    --mode restricted \\",
+            "    --create-user",
+            ")",
           ].join("\n"),
         );
         expect(text).not.toMatch(/(^|\s)-[A-Za-z]*k[A-Za-z]*(\s|$)|--insecure/);
@@ -470,7 +476,7 @@ try {
           .getByLabel("Run the agent as a systemd service", { exact: true })
           .uncheck();
         expect(await commandText(f.page)).toContain(
-          "sudo sh vectory-install.sh \\\n  --mode full \\\n  --name edge-42 \\\n  --service none",
+          `  sudo sh "$dir/vectory-install.sh" \\\n    --mode full \\\n    --name edge-42 \\\n    --service none`,
         );
         expect(f.state.posts).toBe(1);
         await f.page
@@ -576,7 +582,7 @@ try {
           expect(measured.copyLeft).toBeGreaterThanOrEqual(measured.preRight);
         }
         expect(await commandText(f.page)).toContain(
-          "curl -fsSL --cacert /etc/vectory/server-ca.pem \\",
+          "    --cacert /etc/vectory/server-ca.pem \\",
         );
       } finally {
         await f.context.close();
@@ -694,7 +700,7 @@ try {
         ).toBeChecked();
         await f.createCommand();
         expect(await commandText(f.page)).toContain(
-          "  | shasum -a 256 -c - &&\nsudo sh vectory-install.sh \\\n  --mode restricted \\\n  --create-user",
+          `    | (cd "$dir" && shasum -a 256 -c -)\n  sudo sh "$dir/vectory-install.sh" \\\n    --mode restricted \\\n    --create-user\n)`,
         );
         await f.page
           .getByRole("radio", { name: "Windows", exact: true })
@@ -796,7 +802,7 @@ try {
       try {
         await f.createCommand();
         expect(await commandText(f.page)).toMatch(
-          /^curl -fsSL \\\n {2}-o vectory-install\.sh \\\n {2}https:\/\/vectory\.example\.test:8443\/agent/,
+          /\n {2}curl -fsSL --proto '=https' --proto-redir '=https' \\\n {4}-o "\$dir\/vectory-install\.sh" \\\n {4}https:\/\/vectory\.example\.test:8443\/agent/,
         );
         await expect(f.page.getByRole("definition").nth(1)).toContainText(
           "publicly trusted",
