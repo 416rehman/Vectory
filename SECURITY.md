@@ -1,6 +1,15 @@
 # Security policy
 
-Vectory is pre-release software. No version currently carries a production security-support promise. Before a public release, maintainers must publish a supported-version schedule and response targets.
+Vectory 0.1 is a developer preview. It carries no production security-support promise: run it where a defect in a control plane would not hurt you, and read the [known limits](docs/user/whats-new.md#known-limits) and the [open findings](docs/security/OPEN-FINDINGS.md) first.
+
+## Supported versions
+
+| Version | Security fixes |
+| --- | --- |
+| 0.1.x (developer preview) | The latest 0.1 release only |
+| Earlier development builds | None |
+
+Response targets, best effort for a volunteer project: acknowledge a private report within 7 days, give a first assessment within 14 days, and fix or mitigate critical and high issues in the next patch release. Reporters who want credit get it in the changelog.
 
 ## Report a vulnerability
 
