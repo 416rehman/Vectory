@@ -530,9 +530,79 @@ fn kind(v: &Value) -> &str {
     }
 }
 
+// How restricted mode reads an AWS credential. No host allowance permits a
+// credentials file (it can name a program that Vector runs) or an AWS-signing
+// sink that borrows the host's own identity, so a version with either needs a
+// full-mode device. The agent's `credentialsFileKey`, `awsExplicitKeys` and
+// `awsAmbientKeys` (agent/internal/agent/policy.go) are the other copy of these
+// three keys. The capability table's `explicit` list says one key is enough;
+// the agent demands both, and it is what enforces.
+const CREDENTIALS_FILE_KEY: &str = "credentials_file";
+const AWS_EXPLICIT_KEYS: [&str; 2] = ["access_key_id", "secret_access_key"];
+const AWS_AMBIENT_KEYS: [&str; 3] = ["assume_role", "imds", "profile"];
+// Where each restricted-mode sink that takes an AWS credential reads it once
+// `auth.strategy` is `aws`: Elasticsearch flattens the credential into `auth`,
+// and the shared HTTP authentication of the others nests it as `auth.auth`. The
+// agent's `awsCredentialPath` is the other copy, and
+// tests/security/test_capability_lists.py fails when the two, the dashboard's
+// copy and the capability table drift.
+const AWS_CREDENTIAL_PATHS: [(&str, &[&str]); 4] = [
+    ("elasticsearch", &["auth"]),
+    ("http", &["auth", "auth"]),
+    ("loki", &["auth", "auth"]),
+    ("prometheus_exporter", &["auth", "auth"]),
+];
+
+/// Whether a `credentials_file` key stands anywhere below an `auth` key, however
+/// deep, in an object or a list, with either name in any case.
+fn credentials_file_below_auth(value: &Value, below_auth: bool) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().any(|(key, value)| {
+            let key = key.to_ascii_lowercase();
+            (below_auth && key == CREDENTIALS_FILE_KEY)
+                || credentials_file_below_auth(value, below_auth || key == "auth")
+        }),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| credentials_file_below_auth(item, below_auth)),
+        _ => false,
+    }
+}
+
+/// Whether an AWS credential names its own keys and borrows nothing from the
+/// host: both keys are non-blank strings, and no role to assume, metadata
+/// client setting or profile is set (null and false mean not set). Anything
+/// that is not an object reads as empty.
+fn explicit_aws_credential(credential: &Value) -> bool {
+    AWS_EXPLICIT_KEYS.iter().all(|key| {
+        credential[*key]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty())
+    }) && credential.as_object().is_none_or(|fields| {
+        fields.iter().all(|(key, value)| {
+            !AWS_AMBIENT_KEYS.contains(&key.to_ascii_lowercase().as_str())
+                || matches!(value, Value::Null | Value::Bool(false))
+        })
+    })
+}
+
+/// Whether a sink signs with the AWS strategy and its credential, in the object
+/// where that sink reads it, is not explicit: it would sign with the host's own
+/// identity. Keys anywhere else make nothing explicit.
+fn signs_with_host_identity(typ: &str, component: &Value) -> bool {
+    let Some((_, path)) = AWS_CREDENTIAL_PATHS.iter().find(|(sink, _)| *sink == typ) else {
+        return false;
+    };
+    component["auth"]["strategy"]
+        .as_str()
+        .is_some_and(|strategy| strategy.eq_ignore_ascii_case("aws"))
+        && !explicit_aws_credential(path.iter().fold(component, |value, key| &value[*key]))
+}
+
 // This is only the portion of the local policy that can be known from a
 // published document. File roots, network destinations, platform resources,
-// credentials and actual Vector validation remain the device's decision.
+// device secret values and actual Vector validation remain the device's
+// decision.
 fn requires_full_mode(config: &Value) -> bool {
     if !config.is_object() {
         // Legacy test/import records may lack the original configuration.
@@ -586,6 +656,10 @@ fn requires_full_mode(config: &Value) -> bool {
                     || (typ == "console" && component["target"] != "stderr")
                     // `remap.file` loads a VRL program from the device's disk.
                     || (typ == "remap" && !component["file"].is_null())
+                    // No host allowance permits an AWS credentials file or the
+                    // host's own AWS identity.
+                    || credentials_file_below_auth(component, false)
+                    || signs_with_host_identity(typ, component)
                 {
                     return true;
                 }
@@ -3242,5 +3316,331 @@ mod tests {
             assert!(requires_full_mode(&config), "{api}");
         }
         assert!(!requires_full_mode(&remap(".x = 1")));
+    }
+
+    /// The restricted-mode sinks that take an AWS credential, and whether each
+    /// nests it in `auth.auth` (the shared HTTP authentication) instead of
+    /// flattening it into `auth` (Elasticsearch).
+    const AWS_SINKS: [(&str, bool); 4] = [
+        ("elasticsearch", false),
+        ("http", true),
+        ("loki", true),
+        ("prometheus_exporter", true),
+    ];
+
+    /// A pipeline of one sink, with `auth` unless it is null.
+    fn sink(typ: &str, auth: serde_json::Value) -> serde_json::Value {
+        let mut config = json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "sinks": {"out": {"type": typ, "inputs": ["in"]}},
+        });
+        if !auth.is_null() {
+            config["sinks"]["out"]["auth"] = auth;
+        }
+        config
+    }
+
+    /// The `auth` block with the credential where the sink reads it.
+    fn aws_auth(nested: bool, strategy: &str, credential: serde_json::Value) -> serde_json::Value {
+        if nested {
+            json!({"strategy": strategy, "service": "es", "auth": credential})
+        } else {
+            let mut auth = credential;
+            auth["strategy"] = json!(strategy);
+            auth
+        }
+    }
+
+    fn keys() -> serde_json::Value {
+        json!({"access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"})
+    }
+
+    fn keys_with(extra: serde_json::Value) -> serde_json::Value {
+        let mut credential = keys();
+        credential
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        credential
+    }
+
+    #[test]
+    fn an_aws_sink_that_borrows_the_hosts_identity_asks_for_full_mode() {
+        let role = "arn:aws:iam::123456789012:role/vector";
+        let ambient = [
+            ("no keys", json!({})),
+            ("only a region", json!({"region": "us-east-1"})),
+            (
+                "only the access key ID",
+                json!({"access_key_id": "AKIAIOSFODNN7EXAMPLE"}),
+            ),
+            (
+                "only the secret access key",
+                json!({"secret_access_key": "wJalrXUtnFEMI"}),
+            ),
+            (
+                "empty keys",
+                json!({"access_key_id": "", "secret_access_key": ""}),
+            ),
+            (
+                "an empty secret access key",
+                keys_with(json!({"secret_access_key": ""})),
+            ),
+            (
+                "a blank secret access key",
+                keys_with(json!({"secret_access_key": " \t\n\u{a0}\u{85}\u{3000}"})),
+            ),
+            (
+                "keys that are not strings",
+                json!({"access_key_id": 1, "secret_access_key": true}),
+            ),
+            (
+                "null keys",
+                json!({"access_key_id": null, "secret_access_key": null}),
+            ),
+            ("only a role to assume", json!({"assume_role": role})),
+            (
+                "a role beside the keys",
+                keys_with(json!({"assume_role": role})),
+            ),
+            (
+                "only the metadata client",
+                json!({"imds": {"max_attempts": 2}}),
+            ),
+            (
+                "the metadata client beside keys",
+                keys_with(json!({"imds": {"max_attempts": 2}})),
+            ),
+            ("only a profile", json!({"profile": "default"})),
+            (
+                "a profile beside the keys",
+                keys_with(json!({"profile": "vector"})),
+            ),
+            // A value is set unless it is null or false.
+            ("an empty profile", keys_with(json!({"profile": ""}))),
+            ("an empty metadata client", keys_with(json!({"imds": {}}))),
+            ("a role of zero", keys_with(json!({"assume_role": 0}))),
+            (
+                "a role spelled in capitals",
+                keys_with(json!({"ASSUME_ROLE": role})),
+            ),
+            ("only a session token", json!({"session_token": "token"})),
+            // Vector reads the key names as written; so does the agent.
+            (
+                "keys under a spelling Vector refuses",
+                json!({"Access_Key_Id": "AKIA", "Secret_Access_Key": "x"}),
+            ),
+        ];
+        let explicit = [
+            ("both keys", keys()),
+            (
+                "keys and a session token",
+                keys_with(json!({"session_token": "AQoDYXdz"})),
+            ),
+            (
+                "keys and a region",
+                keys_with(json!({"region": "eu-west-1"})),
+            ),
+            (
+                "a role that is not set",
+                keys_with(json!({"assume_role": null})),
+            ),
+            (
+                "no metadata client or profile",
+                keys_with(json!({"imds": false, "profile": null})),
+            ),
+            (
+                "device secrets",
+                json!({"access_key_id": "vectory-secret:AWS_KEY_ID", "secret_access_key": "vectory-secret:AWS_SECRET_KEY"}),
+            ),
+            // Space is what `trim` removes, and a byte-order mark is not.
+            (
+                "a byte-order mark for a key",
+                keys_with(json!({"secret_access_key": "\u{feff}"})),
+            ),
+        ];
+        for (typ, nested) in AWS_SINKS {
+            for (name, credential) in &ambient {
+                let config = sink(typ, aws_auth(nested, "aws", credential.clone()));
+                assert!(requires_full_mode(&config), "{typ}, {name}");
+            }
+            for (name, credential) in &explicit {
+                let config = sink(typ, aws_auth(nested, "aws", credential.clone()));
+                assert!(!requires_full_mode(&config), "{typ}, {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_aws_strategy_is_read_the_way_the_agent_reads_it() {
+        for (typ, nested) in AWS_SINKS {
+            // The agent compares the strategy ignoring case.
+            for strategy in ["aws", "AWS", "Aws", "aWs"] {
+                let ambient = sink(typ, aws_auth(nested, strategy, json!({})));
+                assert!(requires_full_mode(&ambient), "{typ}, {strategy}");
+                let explicit = sink(typ, aws_auth(nested, strategy, keys()));
+                assert!(!requires_full_mode(&explicit), "{typ}, {strategy}");
+            }
+            // Any other strategy is not the AWS one, with keys or without.
+            for strategy in ["basic", "bearer", "custom", "", "aws "] {
+                let config = sink(typ, aws_auth(nested, strategy, json!({})));
+                assert!(!requires_full_mode(&config), "{typ}, {strategy:?}");
+            }
+            // An auth that is not a block, or names no strategy, is not the AWS
+            // one either, and neither is a strategy that is not a string.
+            for auth in [
+                json!("aws"),
+                json!(["aws"]),
+                json!(1),
+                json!(true),
+                json!({}),
+            ] {
+                assert!(
+                    !requires_full_mode(&sink(typ, auth.clone())),
+                    "{typ}, {auth}"
+                );
+            }
+            assert!(!requires_full_mode(&sink(typ, json!(null))), "{typ}");
+            let mut number = sink(typ, aws_auth(nested, "aws", json!({})));
+            number["sinks"]["out"]["auth"]["strategy"] = json!(1);
+            assert!(!requires_full_mode(&number), "{typ}");
+            // `auth` and `strategy` are read as written, as Vector reads them.
+            let mut renamed = sink(typ, json!(null));
+            renamed["sinks"]["out"]["Auth"] = aws_auth(nested, "aws", json!({}));
+            assert!(!requires_full_mode(&renamed), "{typ}, Auth");
+            let mut shouted = sink(typ, aws_auth(nested, "aws", json!({})));
+            shouted["sinks"]["out"]["auth"]["STRATEGY"] = json!("aws");
+            shouted["sinks"]["out"]["auth"]
+                .as_object_mut()
+                .unwrap()
+                .remove("strategy");
+            assert!(!requires_full_mode(&shouted), "{typ}, STRATEGY");
+        }
+        // Only the four sinks that take the credential are judged by it.
+        for typ in ["blackhole", "console"] {
+            let mut config = sink(typ, json!({"strategy": "aws"}));
+            config["sinks"]["out"]["target"] = json!("stderr");
+            assert!(!requires_full_mode(&config), "{typ}");
+        }
+    }
+
+    #[test]
+    fn an_aws_credential_counts_where_the_sink_reads_it() {
+        // Elasticsearch reads the keys in auth, so keys in auth.auth are decoys.
+        let decoy = json!({"strategy": "aws", "auth": keys()});
+        assert!(requires_full_mode(&sink("elasticsearch", decoy)));
+        for typ in ["http", "loki", "prometheus_exporter"] {
+            // The others read them in auth.auth, so keys in auth are decoys.
+            let mut flat = keys();
+            flat["strategy"] = json!("aws");
+            assert!(requires_full_mode(&sink(typ, flat)), "{typ}");
+            // A missing block, and one that is not an object, read as empty.
+            for block in [
+                None,
+                Some(json!(null)),
+                Some(json!("aws")),
+                Some(json!([keys()])),
+                Some(json!(7)),
+            ] {
+                let mut auth = json!({"strategy": "aws", "service": "es"});
+                if let Some(block) = &block {
+                    auth["auth"] = block.clone();
+                }
+                assert!(requires_full_mode(&sink(typ, auth)), "{typ}, {block:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_credentials_file_below_auth_asks_for_full_mode() {
+        let file = json!({"credentials_file": "/srv/aws/credentials"});
+        for (typ, nested) in AWS_SINKS {
+            let credentials = [
+                (
+                    "with a profile",
+                    keys_with(
+                        json!({"credentials_file": "/srv/aws/credentials", "profile": "vector"}),
+                    ),
+                ),
+                ("alone", file.clone()),
+                ("beside both keys", keys_with(file.clone())),
+                ("an empty value", keys_with(json!({"credentials_file": ""}))),
+                ("a null value", keys_with(json!({"credentials_file": null}))),
+                ("not a path", keys_with(json!({"credentials_file": 7}))),
+                (
+                    "spelled in capitals",
+                    keys_with(json!({"CREDENTIALS_FILE": "/srv/aws"})),
+                ),
+                (
+                    "spelled in mixed case",
+                    keys_with(json!({"Credentials_File": "/srv/aws"})),
+                ),
+                (
+                    "deeper",
+                    keys_with(json!({"a": {"b": {"c": file.clone()}}})),
+                ),
+                ("in a list", keys_with(json!({"a": [{"b": file.clone()}]}))),
+                (
+                    "in a list in a list",
+                    keys_with(json!({"a": [[file.clone()]]})),
+                ),
+            ];
+            for (name, credential) in credentials {
+                let config = sink(typ, aws_auth(nested, "aws", credential));
+                assert!(requires_full_mode(&config), "{typ}, {name}");
+            }
+        }
+        // Wherever it stands below auth, with any strategy and in any component.
+        for strategy in ["basic", "aws", ""] {
+            let mut config = sink("blackhole", json!({"strategy": strategy}));
+            config["sinks"]["out"]["auth"]["credentials_file"] = json!("/srv/aws");
+            assert!(requires_full_mode(&config), "{strategy:?}");
+        }
+        // An auth that is a list holds what is below it.
+        let listed = sink("blackhole", json!([file.clone()]));
+        assert!(requires_full_mode(&listed), "an auth that is a list");
+        let mut source = remap(".x = 1");
+        source["sources"]["in"]["auth"] = file.clone();
+        assert!(requires_full_mode(&source), "a source");
+        let mut transform = remap(".x = 1");
+        transform["transforms"]["t"]["auth"] = file.clone();
+        assert!(requires_full_mode(&transform), "a transform");
+        // The key and the block, in any case, at the root of the component.
+        let mut mixed = remap(".x = 1");
+        mixed["sinks"]["out"]["Auth"] = json!({"Credentials_File": "/srv/aws"});
+        assert!(requires_full_mode(&mixed), "mixed case");
+    }
+
+    #[test]
+    fn a_key_named_credentials_file_elsewhere_is_data() {
+        // A label, a tag, another block and a field in a program are not the
+        // credentials file of an auth block.
+        let mut label = sink("loki", json!(null));
+        label["sinks"]["out"]["labels"] = json!({"credentials_file": "app"});
+        let mut tag = sink("blackhole", json!(null));
+        tag["sinks"]["out"]["tags"] = json!({"credentials_file": "app"});
+        let mut other = sink("blackhole", json!(null));
+        other["sinks"]["out"]["encoding"] = json!({"credentials_file": "app"});
+        // Only keys at or below an auth block count. One above it is a path
+        // like any other, which a host's file roots allow or refuse.
+        let mut root = sink("blackhole", json!(null));
+        root["sinks"]["out"]["credentials_file"] = json!("/srv/aws/credentials");
+        let mut above = sink("blackhole", json!(null));
+        above["sinks"]["out"]["credentials_file"] = json!({"auth": {}});
+        for (name, config) in [
+            ("a label", label),
+            ("a tag", tag),
+            ("another block", other),
+            ("the root of a component", root),
+            ("above an auth block", above),
+            ("a field in a program", remap(".credentials_file = \"x\"")),
+        ] {
+            assert!(!requires_full_mode(&config), "{name}");
+        }
+        // Unit tests are data: only their programs matter.
+        let mut tested = remap(".x = 1");
+        tested["tests"] = json!([{"name": "t", "inputs": [{"insert_at": "t", "type": "log",
+            "log_fields": {"auth": {"credentials_file": "/x"}}}], "outputs": []}]);
+        assert!(!requires_full_mode(&tested));
     }
 }
