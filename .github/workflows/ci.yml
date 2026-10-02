@@ -789,6 +789,7 @@ jobs:
             and (.services.validator.cpus | tonumber) == 1
             and (.services.validator.pids_limit | tonumber) == 64
             and .services.server.depends_on.validator.condition == "service_healthy"
+            and .services.server.environment.VECTORY_HTTP_ALLOWED_PEERS == "proxy"
           ' "$RUNNER_TEMP/compose.json"
       # 30 minutes, not 10: a cold release build (thin LTO, one codegen unit,
       # SQLite at -O3) of the server, plus the agents, on a small runner.
@@ -859,6 +860,43 @@ jobs:
             exit 1
           fi
           echo "PASS: the validator can neither connect to 1.1.1.1:443 nor resolve github.com."
+      # The validator shares a network with the server and runs untrusted
+      # pipeline code. The server's HTTP listener closes a connection from
+      # anything but the proxy, so from the validator it answers nothing.
+      - name: The validator gets no answer from the dashboard listener, and the proxy still does
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          # What a TCP client gets from the listener: the first line of an answer, or
+          # nothing. $1 is the host and $2 the port. Bash alone (no HTTP client).
+          probe='
+            if ! exec 3<>"/dev/tcp/$1/$2"; then printf "(could not connect)"; exit 0; fi
+            printf "GET /api/v1/status HTTP/1.0\r\nHost: probe\r\n\r\n" >&3 || true
+            IFS= read -r -t 5 -n 120 first <&3 || true
+            printf "%s" "$first"
+          '
+          # Controls first: a probe that cannot see an answer proves nothing.
+          # Loopback in the server's own container and the proxy are allowed peers.
+          saw=$(docker compose exec -T server timeout 20 bash -c "$probe" probe 127.0.0.1 8080)
+          echo "From the server's own container, 127.0.0.1:8080 returned: ${saw:-nothing}"
+          if ! grep -q '^HTTP/1' <<<"$saw"; then
+            echo "::error::The probe saw no answer from the listener on loopback, so it proves nothing."
+            exit 1
+          fi
+          saw=$(docker compose exec -T proxy wget -q -T 5 -O - http://server:8080/api/v1/status)
+          echo "From the proxy container, server:8080 returned: $saw"
+          jq -e '.initialized == true' <<<"$saw" > /dev/null
+          # The check itself.
+          saw=$(docker compose exec -T validator timeout 20 bash -c "$probe" probe server 8080 || true)
+          echo "From the validator, server:8080 returned: ${saw:-nothing}"
+          if grep -q 'HTTP/' <<<"$saw"; then
+            echo "::error::The validator got an HTTP answer from server:8080."
+            exit 1
+          fi
+          # The path people and the installer use still answers.
+          curl -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | jq -e '.initialized == true'
+          echo "PASS: the validator got no answer from server:8080; loopback, the proxy and the proxy path still do."
       # The uploaded artifact holds the full logs; this puts the state and the
       # recent lines of each service where the failed run is read.
       - name: Show the services' state and recent logs after a failure
