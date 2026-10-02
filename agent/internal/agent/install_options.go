@@ -35,6 +35,19 @@ type InstallOptions struct {
 	AddAllowances *CapabilityPolicy
 }
 
+// fileRoots lists the file roots this call adds or replaces: roots it leaves
+// alone are not judged again, so an installation that allowed one earlier can
+// still change anything else.
+func (options InstallOptions) fileRoots() []string {
+	switch {
+	case options.CapabilityPolicy != nil:
+		return options.CapabilityPolicy.AllowedFileRoots
+	case options.AddAllowances != nil:
+		return options.AddAllowances.AllowedFileRoots
+	}
+	return nil
+}
+
 // mergeAllowances adds each entry that isn't there yet, in order.
 func mergeAllowances(current, add []string) []string {
 	out := slices.Clone(current)
@@ -97,6 +110,12 @@ func validateInstallPolicy(policy CapabilityPolicy) error {
 	for _, root := range policy.AllowedFileRoots {
 		if !filepath.IsAbs(root) || strings.ContainsAny(root, "*?[") {
 			return errors.New("capability file roots must be absolute paths without wildcard patterns")
+		}
+		// A filesystem or volume root covers every file. What a root may not
+		// overlap (the agent's own directories, a bound secret file) needs the
+		// installation: checkFileRoots judges that where it is known.
+		if problem := fileRootProblem(hostPathStyle(), root, nil); problem != "" {
+			return errors.New(problem)
 		}
 	}
 	for _, value := range append(slices.Clone(policy.AllowedNetworkHosts), policy.AllowedListenAddresses...) {
@@ -257,6 +276,9 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 			return err
 		}
 		s := options.compose(Settings{VectorBinary: binary, ManagedConfig: config, Adopted: true, ValidationSeconds: 30, StartupSeconds: 20})
+		if err = checkFileRoots(options.fileRoots(), dir, s.ManagedConfig, s.SecretFiles); err != nil {
+			return err
+		}
 		if s.VectorVersion, err = probe(ctx, s); err != nil {
 			if found := InspectVector(ctx, binary); found.Version != "" && !SupportedVectorVersion(found.Version) {
 				return fmt.Errorf("found Vector %s at %s; this agent requires %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, VectorSeries)
@@ -295,6 +317,9 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 		}
 		next := options.compose(doc.value)
 		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if err = checkFileRoots(options.fileRoots(), dir, next.ManagedConfig, next.SecretFiles); err != nil {
 			return err
 		}
 		policy := next.CapabilityPolicy

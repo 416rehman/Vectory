@@ -106,6 +106,12 @@ func capabilityDiagnostic(reason string) ConfigurationDiagnostic {
 	case "capability denied: Vector's local API has no authentication":
 		d.Reason = "LOCAL_API_DENIED"
 		d.NextAction = "Remove the api block from the pipeline, or deploy it to a device in full mode, which only the host operator can choose. No allowance on a restricted host can permit it."
+	case "capability denied: an AWS credentials file can run a program":
+		d.Reason = "CREDENTIALS_FILE_DENIED"
+		d.NextAction = "Remove the credentials file from the pipeline and give the sink its access keys as device secrets, or deploy it to a device in full mode, which only the host operator can choose. No allowance on a restricted host can permit it."
+	case "capability denied: ambient AWS credentials":
+		d.Reason = "AMBIENT_CREDENTIALS_DENIED"
+		d.NextAction = "Give the sink explicit access keys as device secrets, or deploy it to a device in full mode, which only the host operator can choose. A restricted host never signs with its own AWS identity, and no allowance can permit it."
 	case "component ID must be a plain name":
 		d.Reason = "INVALID_COMPONENT_ID"
 		d.NextAction = "Rename the component and the inputs that name it: an ID can't contain a slash, a backslash or a control character, or start with a drive letter and a colon (like C:), because Vector uses it as a directory name in its data directory. This applies in every mode."
@@ -137,13 +143,19 @@ func applyNextAction(state State) string {
 	}
 	switch state.Error.Code {
 	case "CAPABILITY_DENIED":
-		// Two refusals no host allowance can lift: say so instead of sending the
+		// Refusals no host allowance can lift: say so instead of sending the
 		// operator to look for one.
 		if diagnostic(state.Error, "INVALID_COMPONENT_ID") != nil {
 			return "Rename the component and the inputs that name it, then deploy again. No setting on this host can allow an ID that is a path." + keeps
 		}
 		if diagnostic(state.Error, "LOCAL_API_DENIED") != nil {
 			return "Remove the api block and deploy again, or run this host in full mode, which only its operator can choose. No allowance can permit it." + keeps
+		}
+		if diagnostic(state.Error, "CREDENTIALS_FILE_DENIED") != nil {
+			return "Remove the credentials file, give the sink its access keys as device secrets and deploy again, or run this host in full mode, which only its operator can choose. No allowance can permit it." + keeps
+		}
+		if diagnostic(state.Error, "AMBIENT_CREDENTIALS_DENIED") != nil {
+			return "Give the sink explicit access keys as device secrets and deploy again, or run this host in full mode, which only its operator can choose. No allowance can permit it." + keeps
 		}
 		return "Allow what the problem names on this host, or change the pipeline and deploy again." + keeps
 	case "VALIDATION_FAILED":
