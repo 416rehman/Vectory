@@ -104,7 +104,9 @@ jobs:
             vectory setup --help > /dev/null
             test "$(stat -c %a /usr/bin/vectory)" = 755
             test -f /usr/lib/systemd/system/vectory.service
-            test -f /usr/share/doc/vectory/LICENSE
+            # The slim image's dpkg configuration leaves /usr/share/doc out of an installed
+            # system, so the licence is checked in the package itself.
+            dpkg-deb -c /packages/vectory_*_amd64.deb | grep -q " ./usr/share/doc/vectory/LICENSE$"
             test ! -e /var/lib/vectory-agent
             if getent passwd vectory; then echo "installing created an account"; exit 1; fi
             status=0; vectory run --state-dir /tmp/absent || status=$?; test "$status" = 78
