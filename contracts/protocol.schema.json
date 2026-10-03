@@ -6578,7 +6578,7 @@
             ],
             "additionalProperties": false
           },
-          "description": "Recorded apply-state changes after release, oldest first. Heartbeats can skip states."
+          "description": "Recorded apply-state changes after this target's own release and before the next deployment's release on the device, in audit order, up to its verification, oldest first. A target with no release event is read by time. Heartbeats can skip states."
         },
         "wake": {
           "type": "object",
