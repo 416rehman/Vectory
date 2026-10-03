@@ -38,14 +38,15 @@ const expectedCapabilityMask = Object.values(CAPABILITIES).reduce(
   0n,
 );
 
-// The agent is installed where only root can write, all the way up the path. A
-// hosted runner's /usr/local/bin and /opt are writable by everyone, and a host
-// installed under either rightly can't take updates (UNTRUSTED_LOCATION), so the
-// phases use a directory of their own under a place that is root's.
+// The agent is installed where only root can write, all the way up the path, and
+// that no package manager owns. A hosted runner's /usr/local/bin and /opt are
+// writable by everyone, and a host installed under either rightly can't take
+// updates (UNTRUSTED_LOCATION); /usr/lib is a package directory (PACKAGE_MANAGED).
+// So the phases use a directory of their own under a place that is root's.
 const INSTALL_DIR_CANDIDATES = [
-  "/usr/lib/vectory-native/bin",
   "/srv/vectory-native/bin",
   "/usr/share/vectory-native/bin",
+  "/usr/local/share/vectory-native/bin",
 ];
 
 /** What keeps a directory from being root's alone: another owner, or write for group or others. */
