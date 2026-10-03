@@ -9,6 +9,7 @@
 // devices run (none unless it lists versions). Test data only; nothing here
 // says a device runs anything.
 import { pipelineTelemetry } from "./telemetry-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 
 const BUCKETS = [
   "applied",
@@ -180,8 +181,10 @@ const runsDesired = (row) =>
  * @param {() => number} [source.now]
  * @param {boolean} [source.groupById] Answer `GET /groups/{id}` too. A harness
  *   that scripts that read itself (failures, holds) turns it off.
- * @param {() => boolean} [source.agentUpdates] Whether agent updates are on:
- *   while they are off the `agent_update` filter answers 404 AGENT_UPDATES_OFF.
+ * @param {() => boolean} [source.agentUpdates] Whether agent updates are on
+ *   (default: off, as on a server nobody turned them on). While they are off,
+ *   `GET /agent-updates` says so and the `agent_update` filter answers 404
+ *   AGENT_UPDATES_OFF; while they are on, a harness answers those itself.
  */
 export function fleetReplies({
   devices,
@@ -189,7 +192,7 @@ export function fleetReplies({
   versions = [],
   now = () => Date.now(),
   groupById = true,
-  agentUpdates = () => true,
+  agentUpdates = () => false,
 }) {
   const deviceRows = () =>
     typeof devices === "function" ? devices() : devices;
@@ -460,6 +463,8 @@ export function fleetReplies({
       if (method !== "GET") return null;
       const path = url.pathname.replace(/^\/api\/v1/, "");
       const params = [...url.searchParams];
+      if (path === "/agent-updates" && !agentUpdates())
+        return reply(updatesOff());
       if (path === "/devices/inventory") {
         const { values, error } = options(params, INVENTORY);
         if (error) return error;
