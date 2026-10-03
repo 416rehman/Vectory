@@ -49,8 +49,6 @@ const (
 
 	maxReleaseArtifacts = 8
 	maxReleaseSigners   = 4
-	// releaseBuildLimit is the contract's bound on one agent build, 128 MiB.
-	releaseBuildLimit = 128 * 1024 * 1024
 	// maxReleaseValidity is the longest a manifest may live, and
 	// releaseFutureIssue how far ahead of a host's clock its issue time may be.
 	maxReleaseValidity = 400 * 24 * time.Hour
@@ -716,8 +714,8 @@ func artifactFromValue(item releaseValue, version string) (ReleaseArtifact, erro
 	if err != nil {
 		return ReleaseArtifact{}, err
 	}
-	if size < 1 || size > releaseBuildLimit {
-		return ReleaseArtifact{}, fmt.Errorf("the size of %s is %d bytes, and a build is from 1 byte to %d", artifact.File, size, releaseBuildLimit)
+	if size < 1 || size > MaxAgentBuild {
+		return ReleaseArtifact{}, fmt.Errorf("the size of %s is %d bytes, and a build is from 1 byte to %d", artifact.File, size, MaxAgentBuild)
 	}
 	artifact.Size = int64(size)
 	if artifact.SHA256, err = hexMember(item.members, "sha256"); err != nil {
