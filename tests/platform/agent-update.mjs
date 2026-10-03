@@ -38,6 +38,7 @@
 // system is in update-hosts.mjs: Linux (systemd) and macOS (launchd).
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { adapterFor, agentProcesses, describeProcesses } from "./adapters.mjs";
@@ -117,6 +118,35 @@ function assertEqual(actual, expected, what) {
     throw new Error(
       `${what}: expected ${written(expected)}, found ${written(actual)}.`,
     );
+}
+
+/**
+ * What a failed phase prints about the host: the step's status, journal and counters,
+ * its log, and the service manager's view, each cut to its last 6 KB. The evidence
+ * artifact holds the same files, but the run's page is where a failure is read.
+ */
+function hostDiagnostics(host) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vectory-diagnostics-"));
+  try {
+    host.collect(dir);
+    return fs
+      .readdirSync(dir)
+      .sort()
+      .filter((name) =>
+        /^(journal-|step-(status|journal|counters)|step\.log|launchctl-print)/.test(
+          name,
+        ),
+      )
+      .map(
+        (name) =>
+          `--- ${name}\n${fs.readFileSync(path.join(dir, name), "utf8").slice(-6000)}`,
+      )
+      .join("\n");
+  } catch (error) {
+    return `(the host's diagnostics couldn't be read: ${error.message})`;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** A file the product pins, from the agent's test data. */
@@ -1108,6 +1138,10 @@ async function update(evidence) {
     "the device is updated, as the server counts it: a check-in of the new build that reports the commit",
     ended,
   );
+  if (done.state !== "verified")
+    throw new Error(
+      `The target ended as ${done.state} (${done.code ?? "no code"}), not verified.\n${hostDiagnostics(host)}`,
+    );
   assertEqual(
     [done.state, done.from_version, done.to_version],
     ["verified", "0.1.0", "0.1.1"],
