@@ -82,7 +82,12 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 		}
 		return status
 	}
-	fork := &RolloverConflict{From: viewPolicy(t, UpdateConsentAuto).Keys[0].Key.Fingerprint(), To: [2]string{strings.Repeat("2", 64), strings.Repeat("3", 64)}}
+	teamFingerprint := viewPolicy(t, UpdateConsentAuto).Keys[0].Key.Fingerprint()
+	fork := &RolloverConflict{From: teamFingerprint, To: [2]string{strings.Repeat("2", 64), strings.Repeat("3", 64)}}
+	// What installs the update step again, for the host at /var/lib/vectory-agent: setup
+	// with the key the host pins, as an administrator runs it on this system. The Upgrade
+	// agent command of a host that agreed carries no update flag, and leaves the step alone.
+	repin := asAdmin(CommandFor("/var/lib/vectory-agent", "vectory setup --update-key-sha256 "+teamFingerprint))
 	type verdict struct{ status, detail, fix string }
 	for _, tc := range []struct {
 		name  string
@@ -119,12 +124,12 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 		{
 			name: "a step that has never run",
 			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), Eligibility: "HELPER_NOT_RUNNING"},
-			want: map[string]verdict{"updates-step": {"fail", "It hasn't run on this host: it has written no status.", "Run the Upgrade agent command from the dashboard again; it installs the update step."}},
+			want: map[string]verdict{"updates-step": {"fail", "It hasn't run on this host: it has written no status.", "Run " + repin + ": it installs the update step."}},
 		},
 		{
 			name: "a step that stopped",
 			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), Status: step(func(s *UpdateStatus) { s.RunAt = now.Add(-10 * time.Minute) }), Eligibility: "HELPER_NOT_RUNNING"},
-			want: map[string]verdict{"updates-step": {"fail", "Not running: it last ran 10 min ago, and it runs every 30 seconds.", "Run the Upgrade agent command from the dashboard again if it doesn't start by itself"}},
+			want: map[string]verdict{"updates-step": {"fail", "Not running: it last ran 10 min ago, and it runs every 30 seconds.", "If it doesn't start by itself, run " + repin + ": it installs the update step again."}},
 		},
 		{
 			name: "a step whose status can't be trusted",
@@ -225,8 +230,11 @@ func TestTheDoctorIncludesTheUpdateChecks(t *testing.T) {
 	if got := checkByID(report.Checks, "updates-step"); got == nil || got.Status != "fail" {
 		t.Fatalf("the step check is %+v\n%s", got, RenderDoctor(report))
 	}
-	if !report.Failed() || !strings.Contains(RenderDoctor(report), "Fix: Run the Upgrade agent command from the dashboard again; it installs the update step.") {
-		t.Fatalf("%s", RenderDoctor(report))
+	// What it says to do is what installs the step on a host that agreed: setup with the
+	// key the host pins, which carries no --server on an enrolled host.
+	fix := "Fix: Run " + asAdmin("vectory setup --update-key-sha256 "+viewPolicy(t, UpdateConsentAsk).Keys[0].Key.Fingerprint()+" --state-dir "+ShellQuote(dir)) + ": it installs the update step."
+	if !report.Failed() || !strings.Contains(RenderDoctor(report), fix) {
+		t.Fatalf("%s\nwant %s", RenderDoctor(report), fix)
 	}
 	document, err := json.Marshal(DoctorJSON(report))
 	if err != nil || !strings.Contains(string(document), `"id":"updates-step"`) {

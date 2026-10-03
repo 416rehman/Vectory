@@ -17,6 +17,7 @@ func updateChecks(v UpdateView) []DoctorCheck {
 		checks = append(checks, DoctorCheck{ID: id, Status: status, Title: title, Detail: detail, Fix: fix})
 	}
 	upgrade := "Run the Upgrade agent command from the dashboard again" // it carries the update flags
+	repin := repinCommand(v.StateDir, v.Policy)
 
 	switch {
 	case v.PolicyProblem != "":
@@ -38,9 +39,9 @@ func updateChecks(v UpdateView) []DoctorCheck {
 	case v.StatusProblem != "":
 		add("updates-step", "fail", "Update step", "Its status can't be read: "+v.StatusProblem+".", "Make every directory on its path root's alone.")
 	case v.Status == nil:
-		add("updates-step", "fail", "Update step", "It hasn't run on this host: it has written no status.", upgrade+"; it installs the update step.")
+		add("updates-step", "fail", "Update step", "It hasn't run on this host: it has written no status.", "Run "+repin+": it installs the update step.")
 	case !v.StepRunning:
-		add("updates-step", "fail", "Update step", "Not running: it last ran "+ago(v.ReadAt, v.Status.RunAt)+", and it runs every 30 seconds.", upgrade+" if it doesn't start by itself; it installs the update step again.")
+		add("updates-step", "fail", "Update step", "Not running: it last ran "+ago(v.ReadAt, v.Status.RunAt)+", and it runs every 30 seconds.", "If it doesn't start by itself, run "+repin+": it installs the update step again.")
 	default:
 		add("updates-step", "ok", "Update step", "running · last ran "+ago(v.ReadAt, v.Status.RunAt)+" · service definition "+strconv.Itoa(v.Status.ServiceDefinition), "")
 	}
@@ -51,7 +52,7 @@ func updateChecks(v UpdateView) []DoctorCheck {
 		if v.Eligibility == "PLATFORM_NOT_IN_RELEASE" {
 			status = "info"
 		}
-		add("updates-host", status, "Update host", updateEligibilityWords(v.Eligibility)+" ("+v.Eligibility+").", updateEligibilityFix(v.StateDir, v.Eligibility))
+		add("updates-host", status, "Update host", updateEligibilityWords(v.Eligibility)+" ("+v.Eligibility+").", updateEligibilityFix(v))
 	}
 
 	if conflict := v.Conflict(); conflict != nil {
@@ -82,8 +83,9 @@ func updateChecks(v UpdateView) []DoctorCheck {
 
 // updateEligibilityFix says what to do about a code that says why a host can't take
 // an update.
-func updateEligibilityFix(dir, code string) string {
-	switch code {
+func updateEligibilityFix(v UpdateView) string {
+	dir := v.StateDir
+	switch v.Eligibility {
 	case "PACKAGE_MANAGED":
 		return "Update the agent with its package manager. Agent updates from the dashboard need an agent that the Add device command installed."
 	case "NO_SERVICE":
@@ -93,11 +95,24 @@ func updateEligibilityFix(dir, code string) string {
 	case "READ_ONLY":
 		return "Install the agent in a directory the update step can write (--install-dir), or make the install directory writable by it."
 	case "HELPER_NOT_RUNNING":
-		return "Run the Upgrade agent command from the dashboard again; it installs the update step."
+		return "Run " + repinCommand(dir, v.Policy) + ": it installs the update step again."
 	case "SERVICE_DEFINITION_OUTDATED":
 		return "Run the Upgrade agent command from the dashboard again: it writes the newer service definition."
 	}
 	return ""
+}
+
+// repinCommand is the command that installs the update step again and changes
+// nothing else the host agreed to: setup with the key or keys the host pins now,
+// which its own policy names. On an enrolled host it needs no --server. A command
+// that carries no update flag leaves the step alone, so the Upgrade agent command
+// of a host that already agreed, which carries none, can't do this.
+func repinCommand(dir string, policy UpdatePolicy) string {
+	words := "vectory setup"
+	for _, fingerprint := range policy.Fingerprints() {
+		words += " --update-key-sha256 " + fingerprint
+	}
+	return AdminCommandFor(dir, words)
 }
 
 // lowerFirst makes the first letter of a sentence lower case, to continue it.
