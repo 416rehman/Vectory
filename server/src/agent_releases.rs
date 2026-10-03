@@ -458,6 +458,16 @@ fn copy_verified(
     Ok(())
 }
 
+/// Whether the release store holds each of these files (SHA-256 and size) as it
+/// was copied. A release withdrawn between the copy and the registration that
+/// named one of the same digests had it removed, with the writer held.
+pub fn store_holds(s: &State, files: &[(String, u64)]) -> bool {
+    files.iter().all(|(sha256, size)| {
+        std::fs::metadata(store_path(s, sha256))
+            .is_ok_and(|meta| meta.is_file() && meta.len() == *size)
+    })
+}
+
 /// What the store holds, as the database counts it: the bytes of every file a
 /// release that still has its files names, each file once.
 async fn stored_bytes(conn: &mut SqliteConnection) -> Result<(u64, HashSet<String>)> {
@@ -607,6 +617,11 @@ pub async fn prepare(
     let actor = auth::authorize_in(&mut tx, &h, &["admin"], true).await?;
     let setting = agent_updates::require_on(&mut tx).await?;
     room_for(&s, &mut tx, &version, &wanted).await?;
+    if !store_holds(&s, &wanted) {
+        return Err(ApiError::conflict(
+            "A build in the release store changed while the release was prepared. Try again.",
+        ));
+    }
     let key = agent_release_keys::current(&mut tx)
         .await?
         .ok_or_else(agent_release_keys::custody_required)?;
@@ -629,6 +644,8 @@ pub async fn prepare(
             sha256: &build.sha256,
         })
         .collect();
+    // The catalog names no oldest agent that may take a build, so the manifest
+    // carries no `min_from` and the column the review reads it from stays empty.
     let manifest = agent_release::build_manifest(
         &version,
         u64::try_from(counter).unwrap_or(0),
