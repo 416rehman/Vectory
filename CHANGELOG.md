@@ -98,6 +98,7 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 
 Agents built before these fixes behave differently. Rebuild agents from this revision.
 
+- **A fix the agent prints can't run a second command.** The `vectory allow` line that a refused version names (and every other command the agent tells an operator to run) quoted a path, address or host from the pipeline with a rule that left `;`, `&`, `|`, `<` and `>` bare, so a crafted pipeline path could end the command an operator pastes. Every printed command now quotes anything but plain characters. The agent's note in `vectory logs` also refuses to follow a link at its fallback open.
 - **Enrollment preflight:** an unreadable CA file or invalid local option is rejected before connection settings are saved or an enrollment request is created. Earlier builds could save the connection settings first.
 - **Combined `install` options** are validated together before anything is saved. Earlier builds could save one option and then reject the next.
 - **Credential fields:** plain text in any field Vector marks as a credential is refused at save and publish, with the fix. Earlier builds took `vectory-secret:NAME` only in the `auth` fields of `http`, `loki` and `elasticsearch` sinks, so other credentials were stored in the pipeline. Published versions are unchanged.

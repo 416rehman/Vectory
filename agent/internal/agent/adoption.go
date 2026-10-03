@@ -215,7 +215,7 @@ func stopAdvice(running []RunningVector, goos string) string {
 		case "linux":
 			return "stop it (for example: sudo systemctl disable --now " + v.Service + ")"
 		case "windows":
-			name := quoteArg(v.Service)
+			name := ShellQuote(v.Service)
 			return "stop it (for example, in an elevated PowerShell: Stop-Service -Name " + name + "; Set-Service -Name " + name + " -StartupType Disabled)"
 		}
 	}

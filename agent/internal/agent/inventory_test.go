@@ -396,7 +396,7 @@ func TestInventoryHidesCredentialsInArguments(t *testing.T) {
 	if strings.Contains(joined, "hunter2") || !strings.Contains(joined, "https://***@config.example.invalid/vector.yaml") {
 		t.Fatalf("%q", joined)
 	}
-	if got := displayCommand([]string{"/usr/bin/vector", "--label", "two words", "esc\x1b[31m"}); got != "/usr/bin/vector --label "+displayArg("two words")+" esc?[31m" {
+	if got := displayCommand([]string{"/usr/bin/vector", "--label", "two words", "esc\x1b[31m"}); got != "/usr/bin/vector --label "+displayArg("two words")+" "+displayArg("esc\x1b[31m") {
 		t.Fatalf("%q", got)
 	}
 }

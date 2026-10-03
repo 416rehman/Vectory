@@ -409,7 +409,7 @@ func TestSetupRefusesToRebindAPossiblyDeliveredEnrollment(t *testing.T) {
 	// The Next line names this agent's absolute path, never whatever
 	// `vectory` PATH finds. (The path is quoted where it needs it: always on
 	// Windows, where it has backslashes.)
-	if server.heartbeats.Load() != 1 || stepStatus(result, "checkin") != "ok" || stepStatus(result, "service") != "" || result.NeedsAttention || !strings.Contains(result.Next, " run --state-dir "+quoteArg(dir)) || !filepath.IsAbs(strings.Trim(strings.Fields(strings.TrimPrefix(result.Next, "Keep the agent running under your supervisor: "))[0], "'")) {
+	if server.heartbeats.Load() != 1 || stepStatus(result, "checkin") != "ok" || stepStatus(result, "service") != "" || result.NeedsAttention || !strings.Contains(result.Next, " run --state-dir "+ShellQuote(dir)) || !filepath.IsAbs(strings.Trim(strings.Fields(strings.TrimPrefix(result.Next, "Keep the agent running under your supervisor: "))[0], "'")) {
 		t.Fatalf("check-in not performed: %+v %q", result.Steps, result.Next)
 	}
 	if state, _ := LoadState(dir); state.LastHeartbeat == nil || state.DeviceID == "" {

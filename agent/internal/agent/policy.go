@@ -182,7 +182,7 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 	// `vectory allow` adds to the host's allowances and keeps the rest.
 	flag := map[string]string{"allowed_network_hosts": "--network", "allowed_listen_addresses": "--listener", "allowed_file_roots": "--file-root"}[e.Allowance]
 	grant := func(entry string) string {
-		return hintWithCommand("Allow it on the host, with the agent stopped: ", e.StateDir, "vectory allow "+flag+" "+quoteArg(entry), ". Or deploy to a full-mode device.")
+		return hintWithCommand("Allow it on the host, with the agent stopped: ", e.StateDir, "vectory allow "+flag+" "+ShellQuote(entry), ". Or deploy to a full-mode device.")
 	}
 	subject := e.subject()
 	switch {

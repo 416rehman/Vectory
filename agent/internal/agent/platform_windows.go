@@ -15,6 +15,9 @@ import (
 	"unsafe"
 )
 
+// openNoFollow is not available on Windows; SafePath refuses a link before the open.
+const openNoFollow = 0
+
 func protect(path string, dir bool) error {
 	t, e := windows.OpenCurrentProcessToken()
 	if e != nil {

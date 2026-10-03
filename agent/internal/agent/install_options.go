@@ -224,7 +224,7 @@ func capabilityChanged(before, after CapabilityPolicy) bool {
 func vectorMissing(ctx context.Context, binary string) error {
 	message := "Vector isn't at " + binary + "."
 	if found, _ := FindVector(ctx); found != nil {
-		return fmt.Errorf("%s Found Vector %s at %s: use --vector-binary %s", message, found.Version, found.Path, quoteArg(found.Path))
+		return fmt.Errorf("%s Found Vector %s at %s: use --vector-binary %s", message, found.Version, found.Path, ShellQuote(found.Path))
 	}
 	return errors.New(message + " Install Vector " + VectorSeries + " (https://vector.dev/download/) or pass the right --vector-binary")
 }
