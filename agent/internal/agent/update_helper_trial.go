@@ -314,6 +314,9 @@ func (s *updateStep) watch(ctx context.Context, j *updateJournal, spec watchSpec
 		if judged {
 			if baseline < 0 {
 				baseline = state.Restarts
+				if state.CountsFromStart {
+					baseline = 0
+				}
 			}
 			if state.Restarts < baseline {
 				s.logf("the service manager counts %d start(s) of the agent's service after it counted %d: it was loaded again, so the restarts are counted from here", state.Restarts, baseline)

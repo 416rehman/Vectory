@@ -590,3 +590,57 @@ func TestARestartCountThatOnlyGoesUpIsNeverReportedAsHavingGoneDown(t *testing.T
 		t.Errorf("the step's log says the service was loaded again:\n%s", log)
 	}
 }
+
+// ---------------------------------------------------------------- a crash loop no look sees
+
+// unseenCrashLoopHost reports the agent's service as the Windows host reads it when the
+// build crashes as it starts: every look finds it stopped after a crash, never running,
+// and the count is the watch's own. It is armed when the new build is started and
+// disarmed when the rollback has stopped it, so the previous build runs as the fake host
+// says.
+type unseenCrashLoopHost struct {
+	*fakeHost
+	watch serviceWatch
+	armed bool
+}
+
+func (h *unseenCrashLoopHost) ServiceState(ctx context.Context) (updateServiceState, error) {
+	state, err := h.fakeHost.ServiceState(ctx)
+	if err != nil || !h.armed {
+		return state, err
+	}
+	return h.watch.observe(watchCrashed(), h.fakeHost.clock.Now()), nil
+}
+
+// A build that crashes as it starts is never seen running, and its crashes happen between
+// two looks, so the looks find one crash and a service that stays stopped. The trial
+// reads the restarts the manager has made from the time that passes, and takes the build
+// back when they reach three, within a minute and not at the deadline of five.
+func TestABuildThatCrashesAsItStartsAndIsNeverSeenRunningIsTakenBackWithinAMinute(t *testing.T) {
+	f := newStepFixture(t)
+	host := &unseenCrashLoopHost{fakeHost: f.host}
+	updateHostOverride = host
+	updateFault = func(point string) {
+		switch point {
+		case "started":
+			host.watch.begin(0)
+			host.armed = true
+		case "rollback:stopped":
+			host.armed = false
+		}
+	}
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.2", "crash", releaseOptions{})
+	f.stage(release)
+	began := f.clock.Now()
+
+	log := captureStepLog(t, f.mustRun)
+
+	f.requireTakenBack(oldDigest, release, "START_FAILED")
+	if elapsed := f.clock.Now().Sub(began); elapsed > time.Minute {
+		t.Errorf("the trial took %s of the five minutes", elapsed)
+	}
+	if want := "after 3 restart(s) since the watch began"; !strings.Contains(log, want) {
+		t.Errorf("the step's log doesn't say %q:\n%s", want, log)
+	}
+}
