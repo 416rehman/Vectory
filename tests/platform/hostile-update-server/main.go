@@ -188,8 +188,19 @@ type server struct {
 	total      int
 	downloads  []string
 	bundleHits int
+	nudges     int
 	wake       chan struct{}
 	stop       chan struct{}
+}
+
+// wakeAll answers every wait the agent holds with "changed", which has it check
+// in at once.
+func (s *server) wakeAll() {
+	s.mu.Lock()
+	old := s.wake
+	s.wake = make(chan struct{})
+	s.mu.Unlock()
+	close(old)
 }
 
 func serve(cfg *config) error {
@@ -341,6 +352,15 @@ func (s *server) heartbeat(w http.ResponseWriter, r *http.Request) {
 		s.beats = s.beats[len(s.beats)-50:]
 	}
 	s.total++
+	// What an agent reports in a check-in is what it made of the answer to the one
+	// before, so a verdict on an offer arrives in the check-in after the one that
+	// carried it. The agent is asked to check in again a few seconds after each of
+	// the first two answers with an offer, so that a verdict doesn't wait for its
+	// interval.
+	if chosen != nil && s.nudges > 0 {
+		s.nudges--
+		time.AfterFunc(3*time.Second, s.wakeAll)
+	}
 	s.mu.Unlock()
 
 	body, err := json.Marshal(payload)
@@ -436,11 +456,9 @@ func (s *server) controlHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.scenario = body.Name
-		s.beats, s.downloads = nil, nil
-		old := s.wake
-		s.wake = make(chan struct{})
+		s.beats, s.downloads, s.nudges = nil, nil, 2
 		s.mu.Unlock()
-		close(old)
+		s.wakeAll()
 		reply(http.StatusOK, map[string]string{"scenario": body.Name})
 	case r.Method == http.MethodPost && r.URL.Path == "/bundle":
 		var body struct {
