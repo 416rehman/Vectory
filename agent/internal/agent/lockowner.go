@@ -84,6 +84,22 @@ func lockHeld(dir string) *LockHeldError {
 	return e
 }
 
+// AlreadyRunning is what a second `vectory run` is told: an agent holds the
+// state directory, so another can't start on it.
+func (e *LockHeldError) AlreadyRunning() string {
+	pid := ""
+	if e.Owner != nil {
+		pid = ", pid " + strconv.Itoa(e.Owner.PID)
+	}
+	switch {
+	case e.Service != "":
+		return fmt.Sprintf("An agent already runs on this state directory (%s%s). Stop it before starting another, or give this one its own --state-dir.", e.Service, pid)
+	case e.Owner != nil && (e.Owner.Command == "run" || e.Owner.Command == "service"):
+		return fmt.Sprintf("An agent already runs on this state directory (vectory %s%s). Stop it before starting another, or give this one its own --state-dir.", e.Owner.Command, pid)
+	}
+	return e.Error()
+}
+
 func (e *LockHeldError) Error() string {
 	sudo := "sudo "
 	kill := "sudo kill "
