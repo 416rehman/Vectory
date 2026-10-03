@@ -116,6 +116,7 @@ export const auditActions: Record<string, string> = {
   "agent_release.sign": "Agent release signed",
   "agent_release.signature_upload": "Release signature uploaded",
   "agent_release.withdraw": "Agent release withdrawn",
+  "agent_release.expire": "Agent release expired",
   "agent_update_rollout.create": "Agent update rollout started",
   "agent_update_rollout.pause": "Agent update rollout paused",
   "agent_update_rollout.resume": "Agent update rollout resumed",

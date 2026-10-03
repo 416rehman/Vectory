@@ -79,6 +79,17 @@ const samples: [string, string, Record<string, unknown>][] = [
     },
   ],
   [
+    "agent_release.expire",
+    "agent_release",
+    {
+      version: "0.1.1",
+      counter: 7,
+      manifest_sha256: digest("c"),
+      release_id: uuid(3),
+      cancelled_rollouts: 1,
+    },
+  ],
+  [
     "agent_update_rollout.release",
     "agent_update_rollout",
     {
