@@ -1071,15 +1071,18 @@ async function waitForTarget(
     {
       timeoutMs,
       intervalMs: 5000,
+      // What the server says of the target, and what the host says of the step: the
+      // stage it is in and what it last did, the journal and the log, so that a wait
+      // that ends in a timeout says where the update stopped.
       describe: async () =>
-        JSON.stringify(
+        `${JSON.stringify(
           {
             target: await target(s, rollout.id),
             rollout: await s.api(`/agent-update-rollouts/${rollout.id}`),
           },
           null,
           2,
-        ),
+        )}\n${hostDiagnostics(updateHostFor())}`,
     },
   );
 }
