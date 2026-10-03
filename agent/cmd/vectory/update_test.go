@@ -616,6 +616,46 @@ func TestUpdateOffIsRefusedWhileABuildIsBeingTried(t *testing.T) {
 	}
 }
 
+// A command that is refused for what it finds before it changes anything has done nothing, and says
+// no more than the refusal. One that stops after it turned the policy off or deleted the staged build
+// (a run of the update step began between the check and the removal) says what was done, and that
+// running the command again finishes turning updates off.
+func TestUpdateOffThatStopsAfterItChangedThingsSaysWhatWasDoneAndThatRunningItAgainFinishesIt(t *testing.T) {
+	h := newUpdateHost(t)
+	h.withdraw = agent.UpdateWithdrawal{PolicyOff: true, Discarded: true, KeysKept: 1}
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"a run of the step holds its lock": {errors.New("the update step is working now; try again in a minute"),
+			"vectory: the update step is working now; try again in a minute. Done so far: the policy says off, the staged build is deleted. Run the command again to finish turning updates off\n"},
+		"an update that is under way": {&agent.UpdateBusyError{Message: "an update is being tried on this host; it ends by 02:19"},
+			"vectory: an update is being tried on this host; it ends by 02:19. Done so far: the policy says off, the staged build is deleted. Run the command again to finish turning updates off\n"},
+		"a service manager that refuses": {errors.New("systemctl refused"),
+			"vectory: systemctl refused. Done so far: the policy says off, the staged build is deleted. Run the command again to finish turning updates off\n"},
+	} {
+		h.withErr = c.err
+		if code, stdout, stderr := h.run(noTerminalAt, "off"); code != 1 || stdout != "" || stderr != c.want {
+			t.Errorf("%s: %d %q %q", name, code, stdout, stderr)
+		}
+	}
+
+	// A rollback the removal ended before it stopped is part of what was done.
+	h.withdraw = agent.UpdateWithdrawal{PolicyOff: true, RollbackEnded: true}
+	h.withErr = errors.New("systemctl refused")
+	want := "vectory: systemctl refused. Done so far: the policy says off, the rollback that was waiting for the agent's service to start is over. Run the command again to finish turning updates off\n"
+	if code, _, stderr := h.run(noTerminalAt, "off"); code != 1 || stderr != want {
+		t.Errorf("%d %q", code, stderr)
+	}
+
+	// Refused before anything changed: the refusal alone, as it always was.
+	h.withdraw = agent.UpdateWithdrawal{}
+	h.withErr = &agent.UpdateBusyError{Message: "an update is being tried on this host; it ends by 02:19"}
+	if code, _, stderr := h.run(noTerminalAt, "off"); code != 1 || stderr != "vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that\n" {
+		t.Errorf("%d %q", code, stderr)
+	}
+}
+
 func TestUpdateIsAGroupInTheDayToDayList(t *testing.T) {
 	code, stdout, _ := invoke("help")
 	if code != 0 || !strings.Contains(stdout, "  update              Show, apply, pause or turn off agent updates on this host\n") {

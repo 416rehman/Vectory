@@ -319,6 +319,24 @@ func (e updateEnv) definePause(pause bool) func(c *cli) func() int {
 	}
 }
 
+// withdrawalStopped is what `update off` says when it didn't finish. A refusal before anything was
+// changed says what it found, and when the update that is under way is over, to come back. One that
+// came after the policy was turned off or the staged build deleted (a run of the update step began
+// between the check and the removal) says what was done, and that running the command again
+// finishes it: a command that was refused has done nothing, and one that stopped halfway says how
+// far it got.
+func withdrawalStopped(err error, done agent.UpdateWithdrawal) string {
+	message := strings.TrimSuffix(err.Error(), ".")
+	if so := done.DoneSoFar(); so != "" {
+		return message + ". " + so + " Run the command again to finish turning updates off"
+	}
+	var busy *agent.UpdateBusyError
+	if errors.As(err, &busy) {
+		return message + ". Run the command again after that"
+	}
+	return message
+}
+
 func (e updateEnv) defineOff(c *cli) func() int {
 	c.StateDir()
 	c.JSON("Print one JSON document")
@@ -327,12 +345,8 @@ func (e updateEnv) defineOff(c *cli) func() int {
 			return code
 		}
 		done, err := e.withdraw(*c.state)
-		var busy *agent.UpdateBusyError
-		if errors.As(err, &busy) {
-			return c.fail(errors.New(busy.Error() + ". Run the command again after that"))
-		}
 		if err != nil {
-			return c.fail(err)
+			return c.fail(errors.New(withdrawalStopped(err, done)))
 		}
 		if *c.json {
 			// staged_left says the agent's staged files were not deleted, and why: root

@@ -1037,6 +1037,47 @@ func TestSetupOffDryRunSaysWhatItWouldDo(t *testing.T) {
 	}
 }
 
+// Whether turning updates off can go through is looked at before anything changes. A real run looks
+// at a rollback through the step's lock, and waits for the run that is trying to start the previous
+// build; a dry run must change nothing and wait for nothing, so it never takes the lock (taking it
+// makes the file in the step's private directory), and reads the step's files as they are.
+func TestSetupOffDryRunLooksAtARollbackWithoutTakingTheStepsLock(t *testing.T) {
+	f := newConsentFixture(t)
+	f.turnedOn()
+	step, err := ensureRootOwnedDir(f.paths.StepDir, rootReadable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer step.Close()
+	private, err := ensureRootOwnedDir(f.paths.Private, rootPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer private.Close()
+	status := UpdateStatus{RunAt: time.Now().UTC().Truncate(time.Second), Stage: UpdateStageRollingBack, Eligibility: UpdateEligible, ServiceDefinition: 1, Release: strings.Repeat("c", 64), FromVersion: "0.1.0", ToVersion: "0.1.1", Deadline: time.Now().Add(4 * time.Minute).UTC().Truncate(time.Second)}
+	if err := WriteUpdateStatus(step, status); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(f.paths.Private, updateLockFile)
+	f.options.Updates, f.options.UpdateKeys = UpdateConsentOff, nil
+
+	f.options.DryRun = true
+	_, _ = f.run()
+	if _, err := os.Lstat(lock); !os.IsNotExist(err) {
+		t.Errorf("a dry run took the step's lock: %v", err)
+	}
+	if policy, _ := ReadUpdatePolicy(); policy.Consent != UpdateConsentAuto {
+		t.Error("a dry run changed the policy")
+	}
+
+	// A real run takes it, which is what makes the dry run's difference mean something.
+	f.options.DryRun = false
+	_, _ = f.run()
+	if _, err := os.Lstat(lock); err != nil {
+		t.Errorf("a real run didn't take the step's lock, so the test shows nothing: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------- the list of keys
 
 func TestTheListOfKeysIsReadAsTheSharedVectorsSayAndPinsOnlyByComputedFingerprint(t *testing.T) {
@@ -1073,6 +1114,11 @@ func TestTheListOfKeysIsReadAsTheSharedVectorsSayAndPinsOnlyByComputedFingerprin
 }
 
 // ---------------------------------------------------------------- withdrawing
+
+// withdrawUpdates is WithdrawUpdates with a removal of the step that says nothing of a rollback.
+func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, error) {
+	return withdrawUpdatesReporting(dir, func() (bool, error) { return false, removeStep() })
+}
 
 func TestWithdrawingUpdatesFromAnInvalidPolicyWritesOne(t *testing.T) {
 	paths := useUpdateRoots(t)

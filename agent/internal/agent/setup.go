@@ -249,11 +249,13 @@ func (h serviceHost) installUpdateStep(dir, executable string) error {
 	return InstallUpdateHelper(dir, executable)
 }
 
-func (h serviceHost) removeUpdateStep() error {
+// removeUpdateStep takes the update step away, and says whether that ended a rollback that
+// waited for the agent's service to start.
+func (h serviceHost) removeUpdateStep() (endedARollback bool, err error) {
 	if h.removeUpdates != nil {
-		return h.removeUpdates()
+		return false, h.removeUpdates()
 	}
-	return RemoveUpdateHelper()
+	return removeStepReporting(removalUpdateHost())
 }
 
 // transientVector is how long setup waits before it takes a running Vector

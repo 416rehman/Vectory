@@ -199,9 +199,16 @@ type serviceReloader interface {
 type agentLocator interface {
 	// AgentExecutable is the absolute path of the executable the agent's service is
 	// registered to run, read from the registration the way Registered reads it, or an
-	// error when there is none or it isn't the one setup writes.
+	// error when there is none or it isn't the one setup writes. An error that wraps
+	// errAgentNotRegistered says there is no registration at all: the definition, the unit
+	// or the service is gone.
 	AgentExecutable() (string, error)
 }
+
+// errAgentNotRegistered is what a locator wraps when the agent's service has no registration:
+// nothing the step could start, and the one thing that gives it one again is the command that
+// registers the service (`vectory service-install`).
+var errAgentNotRegistered = errors.New("the agent's service isn't registered")
 
 // updateInstall is the install directory and the executable in it, checked once
 // and held. The swap is made relative to the held directory, so that no component

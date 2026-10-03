@@ -391,8 +391,13 @@ func (h *linuxUpdateHost) readAgentUnit() (agentUnit, error) {
 	return unit, nil
 }
 
-// AgentExecutable is the executable the agent's unit runs.
+// AgentExecutable is the executable the agent's unit runs. A unit that isn't there is
+// errAgentNotRegistered.
 func (h *linuxUpdateHost) AgentExecutable() (string, error) {
+	path := filepath.Join(h.unitDir, ServiceName)
+	if _, err := os.Lstat(path); notExist(err) {
+		return "", fmt.Errorf("%w (%s doesn't exist)", errAgentNotRegistered, path)
+	}
 	unit, err := h.readAgentUnit()
 	if err != nil {
 		return "", err
