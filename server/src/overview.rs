@@ -720,7 +720,7 @@ async fn enrich(conn: &mut SqliteConnection, items: &mut [Value]) -> Result<()> 
         .into_iter()
         .collect();
     let mut context: HashMap<String, Value> = HashMap::new();
-    // Devices a rollback returned, for "rolled back r15-demo v3 on edge-02".
+    // Devices a rollback returned, for "rolled back web-demo v3 on edge-02".
     let mut rolled_back_names: HashMap<String, Vec<String>> = HashMap::new();
     if !deployments.is_empty() {
         // A rollback's own pipeline and version are the prior one: lineage

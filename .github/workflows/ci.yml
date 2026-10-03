@@ -218,7 +218,7 @@ jobs:
         run: node tests/staged-login-browser.mjs
         env:
           VECTORY_STAGED_LOGIN_OUTPUT: artifacts/staged-login
-      - name: Check local authenticator QR, recovery handoff and accessibility
+      - name: Check local authenticator QR, recovery codes and accessibility
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/authenticator-setup-browser.mjs
@@ -604,6 +604,14 @@ jobs:
       - name: Check that the packaged systemd unit keeps its sandbox
         timeout-minutes: 10
         run: python packaging/test_systemd_unit.py
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Check the writing rules (no process vocabulary, personal paths or session links)
+        timeout-minutes: 10
+        run: |
+          node --test scripts/check-writing-rules.test.mjs
+          node scripts/check-writing-rules.mjs
       - run: docker compose -f deploy/compose.yaml config --quiet
         env:
           VECTORY_HOSTNAME: localhost
@@ -1196,7 +1204,7 @@ jobs:
         run: node tests/secret-picker-browser.mjs
         env:
           VECTORY_SECRET_PICKER_OUTPUT: artifacts/browsers/secret-picker
-      - name: Check target handoff
+      - name: Check the deploy target review and receipts
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
         run: node tests/target-handoff-browser.mjs

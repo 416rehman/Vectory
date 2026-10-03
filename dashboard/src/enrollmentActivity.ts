@@ -209,7 +209,7 @@ export function supervision(
 }
 
 /**
- * The timeline line for an agent nothing keeps running: "r16-auto checked in
+ * The timeline line for an agent nothing keeps running: "lab-auto checked in
  * once, but nothing keeps its agent running. Start it with …, or use a host
  * with systemd." Without a service by choice (or on Windows, where setup
  * always registers one unless told not to), the operator's supervisor runs it.

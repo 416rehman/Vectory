@@ -8,7 +8,7 @@ A **developer preview**, as the [roadmap](../ROADMAP.md) and the README already 
 
 ## Scope is frozen
 
-Only these may change before the tag: fixes for defects the final review finds, documentation, and release plumbing (versions, changelog, notes). No new features.
+Only these may change before the tag: fixes for defects the pre-release review finds, documentation, and release plumbing (versions, changelog, notes). No new features.
 
 Designed and recorded for the next release, not built now:
 
@@ -30,11 +30,11 @@ Every gate is a command or a check anyone can repeat. A gate is **Done** only wi
 | --- | --- | --- | --- |
 | 1 | CI is green on the head: all nine jobs, including `dashboard-browsers` and the account lifecycle step | The `checks` workflow on the final commit | Open |
 | 2 | The release candidate builds and verifies | `release-candidate.yml` on the final commit; download `unsigned-release-candidate`, `sha256sum -c SHA256SUMS`, `python3 packaging/verify-release.py` | Open |
-| 3 | The final review finds nothing open at P0 or P1 | Reports from the reviewers per area (shell and navigation, sign-in and accounts, agent install and deploy, the editor, documentation, security) on the final binaries; every P2 is fixed or listed under Known limits | Open |
+| 3 | The pre-release review finds nothing open at P0 or P1 | Review reports per area (shell and navigation, sign-in and accounts, agent install and deploy, the editor, documentation, security) on the final binaries; every P2 is fixed or listed under Known limits | Open |
 | 4 | The open security findings are fixed or listed | [OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) has nothing without a fix, an owner or a line in the user-facing known limits and [SECURITY.md](../../SECURITY.md) | Open |
 | 5 | One version everywhere | `node scripts/check-versions.mjs` (it runs in CI) finds `0.1.0` in `agent/internal/agent/types.go`, `server/Cargo.toml` and its lock file, the dashboard and Help center packages and their lock files, `contracts/openapi.json` and the newest changelog heading; the Help center reads its package; `packaging/build-release.py` refuses a mismatch with the agent | Open |
 | 6 | Documentation matches behavior | `node scripts/check-doc-links.mjs`, `check-requirements.mjs`, `check-ci-table.mjs`, the Help center build and its tests; README, `CHANGELOG.md`, `docs/user/whats-new.md` and the known limits say the same thing | Open |
-| 7 | Nothing private is in the tree or the history | A scan of the final tree and of every commit message for names of inspirations, requesters, reviews, work packages, sessions and business context; one squashed commit with only the `Co-Authored-By` trailer | Open |
+| 7 | No private details in the tree or the history | `node scripts/check-writing-rules.mjs` passes; a scan of the final tree and of every commit message for personal paths, links to private pages and internal identifiers; one squashed commit with a single `Co-Authored-By` trailer | Open |
 
 ## Publication (maintainer steps)
 
