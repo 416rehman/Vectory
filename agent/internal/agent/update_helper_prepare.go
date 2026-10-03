@@ -47,9 +47,14 @@ func (s *updateStep) prepare(ctx context.Context, request UpdateRequest) error {
 	case err == nil:
 		return s.stopAndSwap(ctx, &j)
 	case errors.Is(err, errOfferWithdrawn):
+		// Nothing is wrong, and nothing is answered: the agent took the offer back
+		// (or never staged what the request names), and says so itself.
 		s.logf("%v", err)
 		s.cleanUp(&j)
-		return s.dropJournal()
+		if err := s.dropJournal(); err != nil {
+			return err
+		}
+		return s.writeStatus(nil)
 	case errors.As(err, &failed):
 		return s.abort(&j, failed.code, failed.detail)
 	case isDiskFull(err):

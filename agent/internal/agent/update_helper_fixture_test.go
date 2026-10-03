@@ -121,16 +121,19 @@ const fakeBigDisk = 1 << 40
 
 // fakeService is the service manager's state for the agent's service.
 type fakeService struct {
-	State    string   `json:"state"`
-	Restarts int      `json:"restarts"`
-	Started  int64    `json:"started"`
-	Digest   string   `json:"digest"`
-	Version  string   `json:"version"`
-	Behavior string   `json:"behavior"`
-	Boot     string   `json:"boot"`
-	Wrote    bool     `json:"wrote"`
-	Starts   int      `json:"starts"`
-	History  []string `json:"history"`
+	State    string `json:"state"`
+	Restarts int    `json:"restarts"`
+	Started  int64  `json:"started"`
+	Digest   string `json:"digest"`
+	Version  string `json:"version"`
+	Behavior string `json:"behavior"`
+	Boot     string `json:"boot"`
+	Checkins int    `json:"checkins"`
+	// Vector is the state of Vector the running build reports: running unless a
+	// test says otherwise.
+	Vector  string   `json:"vector"`
+	Starts  int      `json:"starts"`
+	History []string `json:"history"`
 }
 
 type fakeHost struct {
@@ -247,11 +250,16 @@ func (h *fakeHost) evolve(s *fakeService, now time.Time) {
 	}
 	s.State = "active"
 	delay := behaviorDelay(s.Behavior)
-	if delay < 0 || s.Wrote || elapsed < delay {
+	if delay < 0 || elapsed < delay {
 		return
 	}
-	s.Wrote = true
-	at := started.Add(delay)
+	// A running agent checks in again every 30 seconds.
+	k := int((elapsed - delay) / (30 * time.Second))
+	if k+1 <= s.Checkins {
+		return
+	}
+	s.Checkins = k + 1
+	at := started.Add(delay + time.Duration(k)*30*time.Second)
 	switch s.Behavior {
 	case "novector":
 		h.writeHealth(*s, at, UpdateVectorStopped)
@@ -264,7 +272,11 @@ func (h *fakeHost) evolve(s *fakeService, now time.Time) {
 	case "future":
 		h.writeHealth(*s, now.Add(time.Hour), UpdateVectorRunning)
 	default:
-		h.writeHealth(*s, at, UpdateVectorRunning)
+		vector := s.Vector
+		if vector == "" {
+			vector = UpdateVectorRunning
+		}
+		h.writeHealth(*s, at, vector)
 	}
 }
 
@@ -308,7 +320,7 @@ func (h *fakeHost) StartService(ctx context.Context) error {
 	version, behavior := classifyFakeBuild(content)
 	s.Starts++
 	s.State, s.Restarts, s.Started = "active", 0, h.clock.Now().UnixNano()
-	s.Digest, s.Version, s.Behavior, s.Wrote = digestOf(content), version, behavior, false
+	s.Digest, s.Version, s.Behavior, s.Checkins, s.Vector = digestOf(content), version, behavior, 0, ""
 	s.Boot = digestOf([]byte("boot-" + strconv.Itoa(s.Starts)))
 	if behavior == "wrongboot" {
 		s.Boot = h.lastBoot()
@@ -366,7 +378,7 @@ func (h *fakeHost) OpenInstall(executable string) (updateInstall, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &fakeInstall{unixInstall: inner, cfg: h.cfg}, nil
+	return &fakeInstall{unixInstall: inner, cfg: &h.cfg}, nil
 }
 
 func (h *fakeHost) InstallUnits(spec updateUnitSpec) error {
@@ -386,7 +398,7 @@ func (h *fakeHost) RemoveUnits() (string, bool, error) {
 // fakeInstall is the real install handle with the disk a test needs it to have.
 type fakeInstall struct {
 	*unixInstall
-	cfg fakeConfig
+	cfg *fakeConfig
 }
 
 func (i *fakeInstall) ReadOnly() bool { return i.cfg.ReadOnly }
@@ -538,7 +550,7 @@ func (f *stepFixture) runningBuild() {
 		f.t.Fatal(err)
 	}
 	version, behavior := classifyFakeBuild(content)
-	s := fakeService{State: "active", Started: f.start.Add(-time.Hour).UnixNano(), Digest: digestOf(content), Version: version, Behavior: behavior, Wrote: true, Starts: 1,
+	s := fakeService{State: "active", Started: f.start.Add(-time.Hour).UnixNano(), Digest: digestOf(content), Version: version, Behavior: behavior, Checkins: 1, Starts: 1,
 		Boot: digestOf([]byte("boot-0")), History: []string{"start " + version}}
 	f.host.saveService(s)
 	f.host.writeHealth(s, f.start.Add(-30*time.Second), UpdateVectorRunning)
@@ -646,6 +658,8 @@ func (f *stepFixture) request(manifest, artifact string, at time.Time) {
 	}
 	f.host.writeAsAccount(UpdateExchangeFor(f.stateDir).Request, data, at)
 }
+
+func bg() context.Context { return context.Background() }
 
 // run is one run of the step as the timer starts it.
 func (f *stepFixture) run() error {

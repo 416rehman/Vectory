@@ -494,11 +494,15 @@ func (s *updateStep) readRequest() (UpdateRequest, time.Time, bool) {
 // consent (a person, or a window), or start the update. Nothing here has changed
 // anything beyond the step's own files yet.
 func (s *updateStep) consider(ctx context.Context, request UpdateRequest, modified time.Time) error {
-	// A request the step has already answered with a result the server keys on
-	// (committed or rolled back) is left for the agent to clear: answering it
-	// again would replace the result before the server has seen it.
-	if last := s.last; last != nil && last.Release == request.ManifestSHA256 &&
-		(last.Outcome == UpdateOutcomeCommitted || last.Outcome == UpdateOutcomeRolledBack) && !modified.After(last.At) {
+	// A request is answered once. One the step already answered, and that nobody
+	// has written since, is left for the agent to clear: answering it again would
+	// replace a result before the server has seen it (a commit the agent is about
+	// to report), and would try again an update that was interrupted, behind the
+	// back of the report that said it was. A request the agent writes again is a
+	// new question.
+	// (A result's time has whole seconds, so a request written in the second it
+	// was answered counts as the one that was.)
+	if last := s.last; last != nil && last.Release == request.ManifestSHA256 && modified.Before(last.At.Add(time.Second)) {
 		return s.writeStatus(nil)
 	}
 	if code, detail := s.consentRefusal(); code != "" {
