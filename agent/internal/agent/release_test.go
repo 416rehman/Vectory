@@ -954,6 +954,10 @@ func TestVerifyReleaseFilesSaysNothingAboutTheHost(t *testing.T) {
 	if verified.Manifest.Counter != 7 || verified.Signer() != public || verified.Artifact.File != "" {
 		t.Errorf("%+v", verified)
 	}
+	// A floor above the counter is not lowered by looking at the files.
+	if verified.Floors[public.Fingerprint()] != 100 {
+		t.Errorf("floors %v: a floor only ever rises", verified.Floors)
+	}
 	// The signature and the manifest still decide.
 	input.Manifest = []byte(strings.Replace(testManifest, `"counter":7`, `"counter":8`, 1))
 	_, err = VerifyReleaseFiles(input)

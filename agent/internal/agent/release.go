@@ -1107,12 +1107,16 @@ type signedRelease struct {
 }
 
 // taken is what a host holds if it takes the release: the pins after the
-// chain, and the floor of every signer raised to the counter.
+// chain, and the floor of every signer raised to the counter. A floor is only
+// ever raised: VerifyRelease has refused a counter at or below a signer's floor
+// by now, but VerifyReleaseFiles has not looked at the floors, so a floor above
+// the counter stays where it is.
 func (s signedRelease) taken() Verified {
 	verified := Verified{Manifest: s.manifest, ManifestSHA256: s.digest, Signers: s.signers, Floors: map[string]uint64{}}
 	floors := maps.Clone(s.floors)
 	for _, signer := range s.signers {
-		floors[signer.Fingerprint()] = s.manifest.Counter
+		fingerprint := signer.Fingerprint()
+		floors[fingerprint] = max(floors[fingerprint], s.manifest.Counter)
 	}
 	for fingerprint, key := range s.pins {
 		verified.Pins = append(verified.Pins, key)
