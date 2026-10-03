@@ -71,6 +71,48 @@ async fn an_update_issue_is_counted_acknowledged_reopened_and_ended_like_the_oth
         (json!(1), json!(1))
     );
     let (id_a, id_b) = (ia["id"].as_str().unwrap(), ib["id"].as_str().unwrap());
+    // Each is titled by its device and version, a search finds them by what
+    // happened, and a group of them says how many devices without naming one.
+    let shown = read(&r.f, id_a).await;
+    assert_eq!(
+        shown["title"],
+        json!(format!(
+            "{} rolled back agent 0.1.1",
+            shown["device_name"].as_str().unwrap()
+        ))
+    );
+    let found = ok(
+        &r.f,
+        "GET",
+        "/api/v1/issues/history?state=all&search=rolled%20back",
+        Value::Null,
+        &r.f.viewer,
+    )
+    .await;
+    assert_eq!(found["total"], 2, "{found}");
+    let none = ok(
+        &r.f,
+        "GET",
+        "/api/v1/issues/history?state=all&search=couldn%27t%20update",
+        Value::Null,
+        &r.f.viewer,
+    )
+    .await;
+    assert_eq!(none["total"], 0, "{none}");
+    let groups = ok(
+        &r.f,
+        "GET",
+        "/api/v1/issues/groups?state=open",
+        Value::Null,
+        &r.f.viewer,
+    )
+    .await;
+    assert_eq!(groups["total"], 1, "{groups}");
+    let group = &groups["items"][0];
+    assert_eq!(group["code"], "AGENT_UPDATE_ROLLED_BACK");
+    assert_eq!(group["device_count"], 2);
+    assert_eq!(group["version_id"], Value::Null);
+    assert_eq!(group["title"], "2 devices rolled back an agent update");
 
     // An operator acknowledges it, as for any issue.
     let acknowledged = ok(
@@ -83,6 +125,23 @@ async fn an_update_issue_is_counted_acknowledged_reopened_and_ended_like_the_oth
     .await;
     assert_eq!(acknowledged["acknowledged"], true);
     assert_eq!(read(&r.f, id_a).await["acknowledged"], true);
+    // The audit trail names the issue by what happened.
+    let trail = ok(
+        &r.f,
+        "GET",
+        "/api/v1/audit/history?action=issue.acknowledge",
+        Value::Null,
+        &r.f.viewer,
+    )
+    .await;
+    assert_eq!(
+        trail["items"][0]["target_name"],
+        json!(format!(
+            "Agent update rolled back on {}",
+            shown["device_name"].as_str().unwrap()
+        )),
+        "{trail}"
+    );
     // Acknowledging keeps it open, and another device's issue is its own.
     assert_eq!(issue(&r.f, &a).await["resolved"], false);
     assert_eq!(read(&r.f, id_b).await["acknowledged"], false);
@@ -188,6 +247,30 @@ async fn an_update_issue_is_counted_acknowledged_reopened_and_ended_like_the_oth
             .iter()
             .all(|issue| issue["resolved"] == false),
         "only its own device's"
+    );
+    // What is left is one device's: its groups are titled by it.
+    let groups = ok(
+        &r.f,
+        "GET",
+        "/api/v1/issues/groups?state=open",
+        Value::Null,
+        &r.f.viewer,
+    )
+    .await;
+    let name = shown["device_name"].as_str().unwrap();
+    let mut titles: Vec<&str> = groups["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|group| group["title"].as_str().unwrap())
+        .collect();
+    titles.sort_unstable();
+    assert_eq!(
+        titles,
+        [
+            format!("{name} couldn't update to agent 0.1.2"),
+            format!("{name} rolled back agent 0.1.1"),
+        ]
     );
     let listening: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM notification_channels WHERE json_extract(data,'$.enabled')=1",

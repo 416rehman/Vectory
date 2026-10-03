@@ -439,8 +439,26 @@ pub(crate) fn title_sql(alias: &str) -> String {
         let title = crate::data_plane::generic_title(code).replace('\'', "''");
         sql.push_str(&format!(" WHEN '{code}' THEN '{title}'"));
     }
+    // An agent update issue is titled by its device and version when it is read;
+    // search and the audit log name it by what happened.
+    for code in AGENT_UPDATE_CODES {
+        sql.push_str(&format!(
+            " WHEN '{code}' THEN '{}'",
+            agent_update_kind(code)
+        ));
+    }
     sql.push_str(" END");
     sql
+}
+/// The codes of the issues an agent update that did not finish opens.
+const AGENT_UPDATE_CODES: [&str; 2] = ["AGENT_UPDATE_ROLLED_BACK", "AGENT_UPDATE_FAILED"];
+/// What happened, as search and the audit log say it.
+fn agent_update_kind(code: &str) -> &'static str {
+    if code == "AGENT_UPDATE_ROLLED_BACK" {
+        "Agent update rolled back"
+    } else {
+        "Agent update failed"
+    }
 }
 const JOINS: &str = " LEFT JOIN devices d ON d.id=json_extract(i.data,'$.device_id') LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(i.data,'$.desired_version_id') LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')";
 
@@ -536,6 +554,18 @@ fn agent_update_title(code: &str, device: &str, version: &str) -> String {
         title
     } else {
         title.chars().take(119).chain(['…']).collect()
+    }
+}
+/// What a group of agent update issues of one code says, whichever releases and
+/// devices it holds: "3 devices rolled back an agent update". None for other
+/// codes.
+fn agent_update_group_title(code: &str, devices: i64) -> Option<String> {
+    match code {
+        "AGENT_UPDATE_ROLLED_BACK" => {
+            Some(format!("{devices} devices rolled back an agent update"))
+        }
+        "AGENT_UPDATE_FAILED" => Some(format!("{devices} devices couldn't update their agent")),
+        _ => None,
     }
 }
 /// A device's first version that stopped Vector says who couldn't start
@@ -798,7 +828,9 @@ pub async fn groups(
         deployments.sort_unstable();
         deployments.dedup();
         let device_count = key.get::<i64, _>("devices");
-        let title = match first_version_title(&code, None, &first, device_count) {
+        let title = match first_version_title(&code, None, &first, device_count)
+            .or_else(|| agent_update_group_title(&code, device_count))
+        {
             Some(title) if device_count > 1 => json!(title),
             _ => first["title"].clone(),
         };
