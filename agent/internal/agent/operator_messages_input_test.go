@@ -87,7 +87,10 @@ func TestSecretBindingMessagesSayWhichPathOrNameIsWrong(t *testing.T) {
 	if _, err := ReadSecretBindings("relative/bindings.json"); err == nil || !IsInputError(err) || !strings.Contains(err.Error(), "--secret-files relative/bindings.json isn't an absolute path") {
 		t.Errorf("a relative path: %v", err)
 	}
-	if _, err := ReadSecretBindings(filepath.Join(t.TempDir(), "missing.json")); err == nil || !strings.Contains(err.Error(), "missing.json can't be read: ") {
+	// The path is echoed as the message does for any path (long ones are cut),
+	// whatever length this host's temporary directory has.
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	if _, err := ReadSecretBindings(missing); err == nil || !strings.Contains(err.Error(), safeText(missing, 120)+" can't be read: ") {
 		t.Errorf("a missing file: %v", err)
 	}
 	for name, test := range map[string]struct {
