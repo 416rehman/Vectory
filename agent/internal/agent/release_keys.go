@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/big"
 	"os"
 	"strings"
@@ -497,11 +498,21 @@ func WriteReleasePrivateKey(path string, key ReleasePrivateKey) error {
 
 // ---------------------------------------------------------------- public key files
 
+// missingFileError is the error for a file that isn't there, in words for
+// people; errors.Is(err, fs.ErrNotExist) holds.
+type missingFileError struct{ path string }
+
+func (e *missingFileError) Error() string        { return e.path + " doesn't exist" }
+func (e *missingFileError) Is(target error) bool { return target == fs.ErrNotExist }
+
 // ReadReleaseFile reads a file an operator names, such as a release.json: a
 // regular file of at most limit bytes. A link is followed (these files are
 // public), and a device file or a pipe is refused rather than waited on.
 func ReadReleaseFile(path string, limit int64) ([]byte, error) {
 	info, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, &missingFileError{path}
+	}
 	if err != nil {
 		return nil, err
 	}
