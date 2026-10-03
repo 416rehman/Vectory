@@ -1342,6 +1342,38 @@ async fn a_revoked_device_ends_what_it_waited_for() {
 }
 
 #[tokio::test]
+async fn a_device_revoked_while_it_updates_is_skipped_and_is_no_failure_of_the_build() {
+    let r = Rig::build(3).await;
+    let refs: Vec<&String> = r.ids.iter().collect();
+    let rollout = r
+        .start(
+            &refs,
+            json!({"canary_size":3,"failure_threshold":0,"observation_seconds":60}),
+        )
+        .await;
+    let at = Utc::now();
+    step(&r.f, at).await;
+    let [applying, restarted, other] = [&r.ids[0], &r.ids[1], &r.ids[2]];
+    r.apply(&rollout, applying).await;
+    r.apply(&rollout, restarted).await;
+    r.new(restarted, &r.about("trial")).await;
+    assert_eq!(r.state(&rollout, restarted).await, "restarted");
+    revoke(&r.f, applying).await;
+    revoke(&r.f, restarted).await;
+    step(&r.f, at + Duration::seconds(5)).await;
+    // Its silence says nothing of the build: nothing is counted against the
+    // threshold of none, no issue opens that nothing could ever resolve, and the
+    // devices still to answer keep the rollout going.
+    for device in [applying, restarted] {
+        assert_eq!(r.state(&rollout, device).await, "skipped");
+        assert_eq!(r.code(&rollout, device).await, None);
+    }
+    assert!(open_issues(&r.f).await.is_empty());
+    assert_eq!(r.status(&rollout).await, "active");
+    assert_eq!(r.state(&rollout, other).await, "offered");
+}
+
+#[tokio::test]
 async fn the_stages_release_only_devices_that_are_checking_in_and_not_paused_on_the_host() {
     let r = Rig::build(4).await;
     let refs: Vec<&String> = r.ids.iter().collect();
