@@ -15,6 +15,14 @@ import (
 // later use goes through the handles, never through a path resolved again, so
 // nothing can change between the check and the use.
 //
+// On Linux and macOS every directory on the path is root's and writable by nobody
+// else. On Windows the access list is the check, and what a component is to the
+// path decides which rights refuse it (rootpath_acl.go): a default installation
+// lets accounts create entries in a drive root and in ProgramData, so those
+// directories are refused only for the rights that change what an existing entry
+// leads to or who controls it, and the update root, what it holds, the install
+// directory and the executable for every right that writes.
+//
 // openPrivateFile (platform_unix.go) is not enough here. It walks from the root
 // without following links, as this does, but it judges only the final file, which
 // is right for a token file that its reader owns and wrong for a path that
