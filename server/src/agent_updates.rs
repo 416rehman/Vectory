@@ -11,7 +11,10 @@
 //! infers a report and never keeps a stale one. A device is counted as updated
 //! only by `agent_update_rollouts`, from its own observation of the new build.
 use crate::{
-    State, auth, db,
+    State,
+    accounts::{reauthenticate, recheck},
+    agent_release::ReleaseKey,
+    agent_release_keys as keys, auth, db,
     error::{ApiError, Result},
     install,
 };
@@ -50,6 +53,12 @@ pub fn off() -> ApiError {
         "AGENT_UPDATES_OFF",
         "Agent updates are off. An Administrator can turn them on in Settings → Agent updates.",
     )
+}
+/// What the agent listener answers while updates are off: what a server that
+/// has no such route answers, so a server with updates off looks like an older
+/// one.
+pub fn off_public() -> ApiError {
+    ApiError::new(StatusCode::NOT_FOUND, "NOT_FOUND", "Route not found")
 }
 pub fn stopped() -> ApiError {
     ApiError::new(
@@ -996,5 +1005,243 @@ pub async fn clear(
     .await?;
     let out = view(&s, &mut tx).await?;
     tx.commit().await?;
+    Ok(Json(out))
+}
+
+// ---------------------------------------------------------------------------
+// Turning updates on and off
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Server,
+    Offline,
+}
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Server => "server",
+            Kind::Offline => "offline",
+        }
+    }
+}
+/// What a settings request asks for.
+struct Put {
+    enabled: bool,
+    custody: Option<(Kind, Option<String>)>,
+    password: String,
+    revision: i64,
+}
+
+fn parse_put(bytes: &Bytes) -> Result<Put> {
+    let request = body(
+        bytes,
+        &["enabled", "custody", "current_password", "revision"],
+    )?;
+    let enabled = request
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ApiError::invalid("enabled must be true or false"))?;
+    let revision = request
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| ApiError::invalid("revision must be a whole number"))?;
+    let password = keys::password_of(&request)?;
+    let custody = match request.get("custody") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(fields)) => {
+            if let Some(unknown) = fields
+                .keys()
+                .find(|key| !matches!(key.as_str(), "kind" | "public_key"))
+            {
+                return Err(ApiError::invalid(format!(
+                    "Unknown custody member {unknown}"
+                )));
+            }
+            let kind = match fields.get("kind").and_then(Value::as_str) {
+                Some("server") => Kind::Server,
+                Some("offline") => Kind::Offline,
+                _ => return Err(ApiError::invalid("custody.kind is server or offline")),
+            };
+            let public_key = match fields.get("public_key") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(line)) if line.len() <= 4096 => Some(line.clone()),
+                Some(_) => return Err(ApiError::invalid("public_key must be a key line")),
+            };
+            Some((kind, public_key))
+        }
+        Some(_) => return Err(ApiError::invalid("custody must be an object")),
+    };
+    if custody.is_some() && !enabled {
+        return Err(ApiError::invalid(
+            "A custody is chosen when updates are turned on",
+        ));
+    }
+    if matches!(custody, Some((Kind::Server, Some(_)))) {
+        return Err(ApiError::invalid(
+            "The server generates a key it holds: send no public_key with kind server",
+        ));
+    }
+    Ok(Put {
+        enabled,
+        custody,
+        password,
+        revision,
+    })
+}
+
+fn rollouts_active() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "AGENT_UPDATE_ROLLOUTS_ACTIVE",
+        "Agent updates can't be turned off while an update rollout is running or paused. Cancel it, or use Stop all updates.",
+    )
+}
+
+/// `PUT /api/v1/agent-updates/settings {enabled,custody?,current_password,revision}`:
+/// an Administrator, with the password, turns updates on (choosing who holds
+/// the release key, once) or off. A request that changes nothing succeeds with
+/// no new revision and no audit row.
+pub async fn put(AppState(s): AppState<State>, h: HeaderMap, bytes: Bytes) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &["admin"], true).await?;
+    let request = parse_put(&bytes)?;
+    // A key line is read before anything is written: it is refused as a key, not
+    // as a request.
+    let offline = match &request.custody {
+        Some((Kind::Offline, Some(line))) => {
+            Some(ReleaseKey::parse(line).map_err(|error| keys::invalid_key(error.reason()))?)
+        }
+        _ => None,
+    };
+    let (_, hash) = reauthenticate(&s, &h, &["admin"], &request.password).await?;
+    let (_guard, mut tx) = db::write_tx(&s).await?;
+    let actor = recheck(&mut tx, &h, &["admin"], &hash).await?;
+    let setting = setting(&mut tx).await?;
+    if setting.revision != request.revision {
+        return Err(stale());
+    }
+    let current = keys::current(&mut tx).await?;
+    let at = instant(Utc::now());
+    let actor_id = actor["id"].as_str().unwrap_or("").to_owned();
+    // A key made for this request: its sealed file stays only once the
+    // transaction has committed.
+    let mut generated: Option<keys::Generated<'_>> = None;
+    let mut retired: Option<String> = None;
+    let mut changed = false;
+    if !request.enabled {
+        if setting.enabled {
+            let active: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM agent_update_rollouts WHERE status IN ('active','paused')",
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            if active > 0 {
+                return Err(rollouts_active());
+            }
+            sqlx::query("UPDATE agent_update_settings SET enabled=0 WHERE id=1")
+                .execute(&mut *tx)
+                .await?;
+            audit(
+                &mut tx,
+                &actor_id,
+                "agent_update.disable",
+                SERVER_TARGET,
+                "success",
+                json!({}),
+            )
+            .await?;
+            changed = true;
+        }
+    } else {
+        // The key this request makes current, with the custody it names, when it
+        // makes one.
+        let mut made: Option<(ReleaseKey, Kind)> = None;
+        let mut new_key = |kind: Kind| -> Result<ReleaseKey> {
+            match kind {
+                Kind::Server => {
+                    let fresh = keys::generate_and_seal(&s)?;
+                    let key = fresh.key.clone();
+                    generated = Some(fresh);
+                    Ok(key)
+                }
+                Kind::Offline => offline.clone().ok_or_else(|| {
+                    ApiError::invalid("custody offline needs the team's public key")
+                }),
+            }
+        };
+        match &current {
+            None => {
+                let (kind, _) = request
+                    .custody
+                    .as_ref()
+                    .ok_or_else(keys::custody_required)?;
+                made = Some((new_key(*kind)?, *kind));
+            }
+            Some(current) => {
+                let keeps = |custody: &(Kind, Option<String>)| {
+                    custody.0.as_str() == current.custody && custody.1.is_none()
+                };
+                if setting.enabled {
+                    // The custody is fixed while updates are on and a key is current.
+                    if request
+                        .custody
+                        .as_ref()
+                        .is_some_and(|custody| !keeps(custody))
+                    {
+                        return Err(keys::custody_locked());
+                    }
+                } else if let Some(custody) =
+                    request.custody.as_ref().filter(|custody| !keeps(custody))
+                {
+                    // Another kind, or a new key of the same: it replaces the old
+                    // key, which hosts that pinned it leave only by upgrading
+                    // their agent, so no statement is made.
+                    made = Some((new_key(custody.0)?, custody.0));
+                    if current.custody == "server" {
+                        retired = Some(current.fingerprint.clone());
+                    }
+                }
+            }
+        }
+        if let Some((key, kind)) = &made {
+            keys::check_unused(&s, &mut tx, key).await?;
+            if let Some(current) = &current {
+                keys::retire(&mut tx, &current.fingerprint, &at).await?;
+            }
+            keys::insert_current(&mut tx, key, kind.as_str(), &actor, &at, None).await?;
+            keys::switch_current(&mut tx, key.fingerprint(), Some(kind.as_str())).await?;
+        }
+        if made.is_some() || !setting.enabled {
+            sqlx::query("UPDATE agent_update_settings SET enabled=1 WHERE id=1")
+                .execute(&mut *tx)
+                .await?;
+            let (custody, fingerprint) = match (&made, &current) {
+                (Some((key, kind)), _) => (kind.as_str().to_owned(), key.fingerprint().to_owned()),
+                (None, Some(current)) => (current.custody.clone(), current.fingerprint.clone()),
+                (None, None) => (String::new(), String::new()),
+            };
+            audit(
+                &mut tx,
+                &actor_id,
+                "agent_update.enable",
+                SERVER_TARGET,
+                "success",
+                json!({"custody":custody,"fingerprint":fingerprint}),
+            )
+            .await?;
+            changed = true;
+        }
+    }
+    if changed {
+        advance(&mut tx).await?;
+    }
+    let out = view(&s, &mut tx).await?;
+    tx.commit().await?;
+    if let Some(fresh) = generated.as_mut() {
+        fresh.keep();
+    }
+    if let Some(old) = retired {
+        keys::wipe_seed(&s, &old);
+    }
     Ok(Json(out))
 }

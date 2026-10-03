@@ -14,8 +14,26 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use vectory_server::{
-    Settings, State, agent_update_rollouts::engine, api, auth, db, device, initialize,
+    Settings, State,
+    agent_release::{self, ReleaseKey, SignatureEntry},
+    agent_update_rollouts::engine,
+    api, auth, db, device, initialize,
 };
+
+/// The password every synthetic person has.
+pub const PASSWORD: &str = "a long passphrase that only the tests know";
+/// Its hash, made once: hashing is slow and every person shares the password.
+fn hashed() -> &'static str {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| {
+        use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+        let salt = SaltString::generate(&mut rand::rngs::OsRng);
+        Argon2::default()
+            .hash_password(PASSWORD.as_bytes(), &salt)
+            .expect("the password hashes")
+            .to_string()
+    })
+}
 
 pub struct Who {
     pub id: String,
@@ -44,7 +62,7 @@ pub async fn user(state: &State, role: &str) -> Who {
     .bind(format!("{id}@example.test"))
     .bind(format!("Synthetic {role}"))
     .bind(role)
-    .bind("unused-test-hash")
+    .bind(hashed())
     .bind(db::now())
     .execute(&state.pool)
     .await
@@ -66,8 +84,12 @@ pub async fn user(state: &State, role: &str) -> Who {
 
 /// A server with updates off (the default).
 pub async fn fixture() -> Fixture {
+    fixture_with(|_| {}).await
+}
+/// ... with settings of its own.
+pub async fn fixture_with(tune: impl FnOnce(&mut Settings)) -> Fixture {
     let temp = tempfile::tempdir().unwrap();
-    let state = initialize(Settings {
+    let mut settings = Settings {
         data_dir: temp.path().join("state"),
         bootstrap_secret: "unused-agent-update-bootstrap-secret".into(),
         cookie_secure: false,
@@ -76,9 +98,9 @@ pub async fn fixture() -> Fixture {
         instance_name: "Synthetic agent update fixture".into(),
         validation_url: None,
         ..Default::default()
-    })
-    .await
-    .unwrap();
+    };
+    tune(&mut settings);
+    let state = initialize(settings).await.unwrap();
     let admin = user(&state, "admin").await;
     let operator = user(&state, "operator").await;
     let editor = user(&state, "editor").await;
@@ -163,6 +185,70 @@ pub async fn introduce(f: &Fixture, to: &str, from: &str) {
         .unwrap();
 }
 
+/// A key the team holds: its seed never reaches the server.
+pub struct Team {
+    pub seed: [u8; 32],
+    pub key: ReleaseKey,
+}
+pub fn team(name: &str) -> Team {
+    let seed = agent_release::generate_seed();
+    let key = ReleaseKey::from_seed(&seed, name).expect("a generated key passes the key rule");
+    Team { seed, key }
+}
+impl Team {
+    pub fn line(&self) -> String {
+        self.key.line()
+    }
+    pub fn fingerprint(&self) -> String {
+        self.key.fingerprint().to_owned()
+    }
+    /// A `release.json.sig` of this key over a manifest.
+    pub fn sign(&self, manifest: &[u8]) -> Vec<u8> {
+        agent_release::build_signature_file(&[SignatureEntry {
+            key: self.fingerprint(),
+            signature: agent_release::sign(&self.seed, manifest).expect("a valid manifest"),
+        }])
+        .expect("a valid signature file")
+    }
+}
+
+/// Turns updates on through the route, with a key the server holds; returns the
+/// setting.
+pub async fn enable_server(f: &Fixture) -> Value {
+    let current = ok(f, "GET", "/api/v1/agent-updates", Value::Null, &f.admin).await;
+    ok(
+        f,
+        "PUT",
+        "/api/v1/agent-updates/settings",
+        json!({"enabled":true,"custody":{"kind":"server"},"current_password":PASSWORD,"revision":current["revision"]}),
+        &f.admin,
+    )
+    .await
+}
+/// ... with the team's key, held offline.
+pub async fn enable_offline(f: &Fixture, team: &Team) -> Value {
+    let current = ok(f, "GET", "/api/v1/agent-updates", Value::Null, &f.admin).await;
+    ok(
+        f,
+        "PUT",
+        "/api/v1/agent-updates/settings",
+        json!({"enabled":true,"custody":{"kind":"offline","public_key":team.line()},"current_password":PASSWORD,"revision":current["revision"]}),
+        &f.admin,
+    )
+    .await
+}
+/// Prepares the release of a version of the catalog through the route.
+pub async fn prepare(f: &Fixture, version: &str) -> Value {
+    ok(
+        f,
+        "POST",
+        "/api/v1/agent-releases",
+        json!({"version":version}),
+        &f.admin,
+    )
+    .await
+}
+
 #[derive(Clone, Debug)]
 pub struct Release {
     pub id: String,
@@ -205,6 +291,14 @@ pub async fn release_with(
     valid_days: i64,
 ) -> Release {
     let id = db::id();
+    // The sequence of counters has handed this one out.
+    sqlx::query(
+        "UPDATE agent_update_settings SET counter_sequence=MAX(counter_sequence,?) WHERE id=1",
+    )
+    .bind(counter)
+    .execute(&f.state.pool)
+    .await
+    .unwrap();
     let issued = Utc::now();
     let expires = issued + chrono::Duration::days(valid_days);
     let artifacts: Vec<(String, String, String)> = platforms
