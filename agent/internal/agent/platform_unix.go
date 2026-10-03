@@ -169,6 +169,32 @@ func ownedLikeParent(path string) error {
 }
 func rejectPlatformLink(path string) error { return nil }
 func replaceFile(from, to string) error    { return os.Rename(from, to) }
+
+// The places the agent makes directories, which Windows makes with an access list
+// of their own (platform_windows.go). Here the mode is the access.
+
+// makeSharedDirectory makes one directory above a private one, searchable by
+// everyone whatever the umask.
+func makeSharedDirectory(dir string) error {
+	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(dir, 0755)
+}
+
+// makePrivateDirectory makes a private directory, and what is missing above it.
+func makePrivateDirectory(path string) error { return os.MkdirAll(path, 0700) }
+
+// makeInstallDirectory makes the directory the agent is installed in, and what is
+// missing above it.
+func makeInstallDirectory(dir string) error { return os.MkdirAll(dir, 0755) }
+
+// createInstallTemp makes the file the new agent is written to before it takes the
+// place of the installed one.
+func createInstallTemp(dir string) (*os.File, error) {
+	return os.CreateTemp(dir, ".vectory-install-*")
+}
+
 func syncDir(path string) error {
 	f, e := os.Open(path)
 	if e != nil {

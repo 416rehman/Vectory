@@ -94,6 +94,7 @@ const WINDOWS_ONLY = [
   "whileTrying",
   "afterCommit",
   "bootGap",
+  "describeLocations",
 ];
 
 // A Windows runner has no Linux directories for the Linux host to look at and no
@@ -163,6 +164,7 @@ test(
       "afterCommit",
       "withLittleRoom",
       "bootGap",
+      "describeLocations",
     ]) {
       assert.ok(
         new RegExp(

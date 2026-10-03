@@ -91,7 +91,7 @@ func (plan *updatePlan) readBase() error {
 	case errors.Is(err, ErrUpdatePolicyInvalid):
 		return inputError("The update policy on this host can't be used (" + invalidPolicyWords(err) + "), so there is nothing to change. " + withKeyWords + ", to write it again.")
 	}
-	return inputError("The update policy on this host can't be read safely (" + untrustedDetail(err) + "), so there is nothing to change. Make it, and every directory above it, writable by " + updateRootWord() + " alone, then run the command again.")
+	return inputError("The update policy on this host can't be read safely (" + untrustedDetail(err) + "), so there is nothing to change. Make " + onTheWay("it, and every directory above it,", "the directory the message names") + " writable by " + updateRootWord() + " alone, then run the command again.")
 }
 
 // leaveOut is what an operator who doesn't want the update step leaves out of the
@@ -215,41 +215,28 @@ func (r *setupRun) preflightUpdates(plan *updatePlan, choice serviceChoice, plat
 	if problem := untrustedDirectory(install); problem != nil {
 		// The fix names the directory the agent is in, whichever directory on its way
 		// failed (the detail says which): making it, and every directory above it,
-		// writable by root alone puts it right.
+		// writable by root alone puts it right. On Windows the detail names the one to
+		// put right, because a drive root and ProgramData are left as they are.
 		root := updateRootWord()
 		return r.refuseUpdates("Agent updates need an install directory that only "+root+" can change. "+untrustedDetail(problem)+".",
-			"Make "+install+", and every directory above it, writable by "+root+" alone, or install the agent in a directory that already is (the installer takes --install-dir for that), then run the command again. Or leave out "+leave+".")
+			"Make "+onTheWay(install+", and every directory above it,", "the directory the message names")+" writable by "+root+" alone, or install the agent in a directory that already is (the installer takes --install-dir for that), then run the command again. Or leave out "+leave+".")
 	}
 	paths := UpdateLocations()
 	for _, dir := range []string{paths.PolicyDir, paths.StepDir} {
 		if problem := untrustedDirectory(dir); problem != nil {
 			return r.refuseUpdates("Agent updates keep what decides an install where only "+updateRootWord()+" can change it. "+untrustedDetail(problem)+".",
-				"Make "+dir+" and every directory above it "+updateRootWord()+"'s alone, then run the command again. Or leave out "+leave+".")
+				"Make "+onTheWay(dir+" and every directory above it", "the directory the message names")+" "+updateRootWord()+"'s alone, then run the command again. Or leave out "+leave+".")
 		}
 	}
 	return nil
 }
 
-// untrustedDirectory says why the nearest directory that exists on the way to
-// path can't be trusted with what decides an install, or nil when it can. A
-// directory that isn't there yet is made by the step that needs it, below one
-// that passed.
+// untrustedDirectory says why the part of path that exists can't be trusted with
+// what decides an install, or nil when it can. A directory that isn't there yet is
+// made by the step that needs it, below one that passed (untrustedPrefix, which each
+// platform's path check has).
 func untrustedDirectory(path string) error {
-	for {
-		held, err := openRootOwned(path, rootOwnedDirectory)
-		if err == nil {
-			_ = held.Close()
-			return nil
-		}
-		if !notExist(err) {
-			return err
-		}
-		parent := filepath.Dir(path)
-		if parent == path {
-			return nil
-		}
-		path = parent
-	}
+	return untrustedPrefix(path)
 }
 
 // untrustedDetail is the sentence part of a path that failed the check, or of

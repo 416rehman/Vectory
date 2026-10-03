@@ -131,7 +131,7 @@ Pinning a key lets whoever holds its private half run code as root on this host.
 - there is no service manager, or you passed `--service none`: the update step restarts the agent through its service manager;
 - the agent is installed from a package, which the package manager owns;
 - the operating system's updates are not in this release (`Hosts of this kind update by hand in this release.`);
-- the install directory, the update policy's directory or the update step's directory can be changed by an account other than root (an Administrator on Windows). The message names the directory that failed. For the install directory it says to make that directory and every directory above it writable by root alone, or to install the agent in one that already is (the installer takes `--install-dir` for that), and to run the command again;
+- the install directory, the update policy's directory or the update step's directory can be changed by an account other than root (an Administrator on Windows). The message names the directory that failed. For the install directory it says to make that directory and every directory above it writable by root alone, or to install the agent in one that already is (the installer takes `--install-dir` for that), and to run the command again. On Windows the fix names only the directory that failed: a drive root and `C:\ProgramData` let other accounts create entries, as a default install does, and are left as they are;
 - the server doesn't offer agent updates: `This server doesn't offer agent updates.` Turn them on in **Settings → Agent updates**, or leave out `--updates`.
 
 `setup` finds the key to pin in the server's list of release keys, which it fetches over the connection it already verified, with no token and no client certificate. It computes the SHA-256 of each key itself and pins the one whose fingerprint is the value you passed. The list's own `fingerprint` member is never used for matching, and one that disagrees with its key makes the whole list invalid (`RELEASE_KEY_INVALID`) with nothing pinned. A fingerprint the server doesn't offer fails with the fingerprints it does, in the rows `--ca-sha256` uses, and nothing changes.
@@ -170,7 +170,7 @@ Any combination applies the parts given. The level, the parts not named and a pa
 vectory setup: This host hasn't agreed to agent updates, so there is nothing to change. Add --updates auto or --updates ask, with --update-key-sha256.
 ```
 
-A policy that can't be used says why (`The update policy on this host can't be used (…), so there is nothing to change.`), and the same command with `--updates` and the key writes it again. A policy that others could replace says `The update policy on this host can't be read safely (…)`: make the file and every directory above it writable by root alone. A consent that is withdrawn while `setup` runs, with `vectory update off`, stays withdrawn.
+A policy that can't be used says why (`The update policy on this host can't be used (…), so there is nothing to change.`), and the same command with `--updates` and the key writes it again. A policy that others could replace says `The update policy on this host can't be read safely (…)`: make the file and every directory above it writable by root alone (on Windows, the directory the message names). A consent that is withdrawn while `setup` runs, with `vectory update off`, stays withdrawn.
 
 The step line says what is now in force and what changed, and `updates` in the JSON result holds what is in force (`consent`, `track`, `windows`, `keys` and `paused`):
 

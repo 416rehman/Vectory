@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   ACCOUNT,
   MASK,
+  describeAcl,
   expectedLayout,
   parseFailureActions,
   parseFailureFlag,
@@ -233,6 +234,46 @@ test("an access list is summarized by who has what, and what only passes on to c
       `deny BUILTIN\\Users:2`,
     ].sort(),
   });
+});
+
+test("an access list is described with its owner, each entry's mask in hexadecimal, what is inherited or only passes on, and the descriptor text", () => {
+  assert.equal(
+    describeAcl("C:\\ProgramData", {
+      owner: ACCOUNT.system,
+      protected: false,
+      sddl: "O:SYG:SYD:PAI(A;OICI;FA;;;SY)",
+      rules: [
+        rule(ACCOUNT.system, 0x1f01ff),
+        rule(ACCOUNT.users, 0x116, { inherited: true }),
+        rule(ACCOUNT.creatorOwner, 0x10000000, { inheritOnly: true }),
+        { ...rule(ACCOUNT.users, 0x2), type: "Deny" },
+        // A generic right is read as a negative number when its top bit is set.
+        rule(ACCOUNT.users, -2147483648, {
+          inherited: true,
+          inheritOnly: true,
+        }),
+      ],
+    }),
+    [
+      "C:\\ProgramData",
+      "  owner NT AUTHORITY\\SYSTEM",
+      "  allow NT AUTHORITY\\SYSTEM 0x1f01ff",
+      "  allow BUILTIN\\Users 0x116 (inherited)",
+      "  allow CREATOR OWNER 0x10000000 (inherit only)",
+      "  deny BUILTIN\\Users 0x2",
+      "  allow BUILTIN\\Users 0x80000000 (inherit only, inherited)",
+      "  O:SYG:SYD:PAI(A;OICI;FA;;;SY)",
+    ].join("\n"),
+  );
+  // Without the descriptor text, and with the list protected, there is no such line.
+  assert.equal(
+    describeAcl("C:\\x", {
+      owner: ACCOUNT.administrators,
+      protected: true,
+      rules: [],
+    }),
+    "C:\\x\n  owner BUILTIN\\Administrators, protected",
+  );
 });
 
 test("a path is root's alone to change unless another account owns it or may write, delete or take it over", () => {
