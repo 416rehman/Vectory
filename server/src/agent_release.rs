@@ -15,6 +15,20 @@
 //! an integer is expected, `null` for an optional member, spaces after the
 //! object and a JSON array where a struct is expected; the byte profile and
 //! the object-only reader below close each of those.
+//!
+//! Where to start:
+//!
+//! - Keys: [`ReleaseKey::parse`] applies the key rule to a key line;
+//!   [`ReleaseKey::from_seed`] and [`generate_seed`] make one; the fingerprint
+//!   is always computed from the 32 bytes. [`bundle_entry_matches`] is what
+//!   setup does with one entry of the public key bundle.
+//! - Reading signed files: [`parse_manifest`], [`parse_signature_file`],
+//!   [`parse_statement`] and [`Rollover::from_base64`].
+//! - Writing them: [`build_manifest`], [`build_signature_file`],
+//!   [`build_statement`], and [`sign`] and [`sign_rollover`] for a key the
+//!   server holds. What the server accepts for an uploaded signature is
+//!   [`check_signature_file`]; for an uploaded rollover, [`Rollover::verify`].
+//! - The decision a host makes about an offered release: [`verify_release`].
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -58,6 +72,8 @@ pub const FUTURE_ISSUE_SECONDS: i64 = 24 * 3600;
 const MAX_KEY_NAME: usize = 64;
 /// The base64 of a statement of `MAX_STATEMENT_BYTES` bytes.
 const MAX_STATEMENT_BASE64: usize = MAX_STATEMENT_BYTES.div_ceil(3) * 4;
+/// The base64 of a signature of 64 bytes.
+const SIGNATURE_BASE64: usize = 64usize.div_ceil(3) * 4;
 const OPERATING_SYSTEMS: [&str; 3] = ["linux", "darwin", "windows"];
 const ARCHITECTURES: [&str; 2] = ["amd64", "arm64"];
 
@@ -186,7 +202,8 @@ impl std::error::Error for KeyError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
     pub code: Code,
-    /// Human text for logs and reviews; never an input to a decision.
+    /// A short technical description for logs and tests. The words a person
+    /// reads belong to the caller, and no decision reads this text.
     pub detail: String,
     /// Present exactly for `KEY_ROLLOVER_CONFLICT`.
     pub conflict: Option<RolloverConflict>,
@@ -1013,8 +1030,8 @@ struct ArtifactOut<'a> {
 
 /// The canonical bytes of a manifest, the ones the server stores, signs and
 /// delivers: one object, the members in the order of the contract's example, no
-/// whitespace and no final line feed. A manifest that `parse_manifest` would
-/// refuse is never built.
+/// whitespace and no final line feed. The artifacts keep the order given. A
+/// manifest that `parse_manifest` would refuse is never built.
 pub fn build_manifest(
     version: &str,
     counter: u64,
@@ -1101,7 +1118,8 @@ struct RawStatement {
 
 /// Reads a rollover statement: at most 1 KiB, the profile of the signed files,
 /// the exact schema, `from` a fingerprint, `to` a key line that passes the key
-/// rule and whose fingerprint is not `from`, and an instant.
+/// rule and whose fingerprint is not `from`, and an instant. The members are
+/// checked in that order, so a statement with two defects reports the first.
 pub fn parse_statement(bytes: &[u8]) -> Result<Statement, RolloverError> {
     let raw: RawStatement = decode(bytes, MAX_STATEMENT_BYTES)
         .map_err(|error| RolloverError::Malformed(error.to_string()))?;
@@ -1116,13 +1134,13 @@ pub fn parse_statement(bytes: &[u8]) -> Result<Statement, RolloverError> {
             "from is a 64-character lowercase hexadecimal fingerprint",
         ));
     }
-    let issued_at =
-        parse_instant(&raw.issued_at).ok_or_else(|| malformed("issued_at is not a UTC instant"))?;
     let to = ReleaseKey::parse(&raw.to)
         .map_err(|error| RolloverError::KeyInvalid(error.reason().to_owned()))?;
     if to.fingerprint() == raw.from {
         return Err(malformed("a key cannot replace itself"));
     }
+    let issued_at =
+        parse_instant(&raw.issued_at).ok_or_else(|| malformed("issued_at is not a UTC instant"))?;
     Ok(Statement {
         from: raw.from,
         to,
@@ -1196,6 +1214,9 @@ impl Rollover {
         let malformed = |reason: &str| RolloverError::Malformed(reason.to_owned());
         if statement.len() > MAX_STATEMENT_BASE64 {
             return Err(malformed("a statement is at most 1 KiB"));
+        }
+        if signature.len() != SIGNATURE_BASE64 {
+            return Err(malformed("a signature is the base64 of 64 bytes"));
         }
         let bytes = strict_base64(statement)
             .ok_or_else(|| malformed("the statement is not canonical base64"))?;
@@ -1407,9 +1428,8 @@ pub struct Verified {
 ///    when the last result names this manifest as rolled back, else
 ///    `COUNTER_REPLAYED`;
 /// 10. the running version: `ALREADY_RUNNING` (equal) or `DOWNGRADE_REFUSED`
-///     (older), and a running version that is not `major.minor.patch` is
-///     `VERSION_NOT_ON_TRACK`, because nothing can be newer than a version no
-///     one can place;
+///     (older); a running version that is not `major.minor.patch` cannot be
+///     compared and is `DOWNGRADE_REFUSED` too, never guessed;
 /// 11. a version off the track: `VERSION_NOT_ON_TRACK`;
 /// 12. a running version below `min_from`: `AGENT_TOO_OLD`;
 /// 13. a service definition newer than the host's: `SERVICE_DEFINITION_OUTDATED`.
@@ -1442,7 +1462,7 @@ pub fn verify_release(input: &VerifyInput<'_>) -> Result<Verified, Refusal> {
     }
     let manifest = parse_manifest(input.manifest)
         .map_err(|error| Refusal::new(Code::ManifestInvalid, error.to_string()))?;
-    if manifest.issued_at - input.now > FUTURE_ISSUE_SECONDS {
+    if manifest.issued_at.saturating_sub(input.now) > FUTURE_ISSUE_SECONDS {
         return Err(Refusal::new(
             Code::ManifestInvalid,
             "the release was issued more than 24 hours after this host's clock",
@@ -1482,8 +1502,8 @@ pub fn verify_release(input: &VerifyInput<'_>) -> Result<Verified, Refusal> {
     }
     let Some(running) = Version::parse(input.running_version) else {
         return Err(Refusal::new(
-            Code::VersionNotOnTrack,
-            "the running version is not major.minor.patch",
+            Code::DowngradeRefused,
+            "the running version is not major.minor.patch, so a newer release cannot be told from an older one",
         ));
     };
     match manifest.version.cmp(&running) {
@@ -1632,7 +1652,7 @@ mod tests {
         floors: BTreeMap<String, u64>,
         last: Option<LastResult>,
         rollovers: Vec<RolloverEnvelope>,
-        running_version: &'static str,
+        running_version: String,
         track: Track,
         service_definition: u64,
         now: i64,
@@ -1645,7 +1665,7 @@ mod tests {
                 floors: BTreeMap::new(),
                 last: None,
                 rollovers: Vec::new(),
-                running_version: "0.1.0",
+                running_version: "0.1.0".to_owned(),
                 track: Track::Patch,
                 service_definition: 1,
                 now: parse_instant("2026-10-04T01:58:10Z").unwrap(),
@@ -1660,7 +1680,7 @@ mod tests {
                 pins: &self.pins,
                 floors: &self.floors,
                 last: self.last.as_ref(),
-                running_version: self.running_version,
+                running_version: &self.running_version,
                 os: "linux",
                 arch: "amd64",
                 track: self.track,
@@ -2418,6 +2438,72 @@ mod tests {
         assert!(parse_manifest(b"{}").is_err());
     }
 
+    /// The byte profile on its own, before any field is validated: what it lets
+    /// through to the typed structs and what it stops.
+    #[test]
+    fn the_profile_stops_every_byte_a_format_does_not_use_before_any_field_is_read() {
+        let accepted = |bytes: &[u8]| profile(bytes, 4096).is_ok();
+        assert!(accepted(
+            br#"{"a":"b","c":[1,{"d":0}],"e":9007199254740991}"#
+        ));
+        assert!(accepted(b"{ \"a\" : [ ] }\n"));
+        assert!(accepted(br#"{"a":"~ !#$%&'()*+,-./:;<=>?@[]^_`{|}"}"#));
+        // A string holds printable ASCII only: no control character (JSON would
+        // refuse those), no DEL and no UTF-8 character (JSON accepts both).
+        for byte in [0x00u8, 0x01, 0x09, 0x0a, 0x0d, 0x1f, 0x7f] {
+            let mut inside = br#"{"a":"xy"}"#.to_vec();
+            inside.insert(7, byte);
+            assert!(!accepted(&inside), "{byte:#x} inside a string");
+        }
+        assert!(!accepted("{\"a\":\"caf\u{e9}\"}".as_bytes()));
+        assert!(!accepted("{\"a\":\"\u{1f600}\"}".as_bytes()));
+        assert!(!accepted(b"{\"a\":\"\xff\"}"));
+        assert!(!accepted("{\"\u{e9}\":1}".as_bytes()));
+        // A backslash is refused wherever it stands, inside a string or not.
+        assert!(!accepted(br#"{"a":"\n"}"#));
+        assert!(!accepted(br#"{"a":"\""}"#));
+        assert!(!accepted(br#"{"a":"\\"}"#));
+        assert!(!accepted(br#"{"a\\":1}"#));
+        // Outside strings only structure, spaces and digits stand.
+        for token in [
+            "null", "true", "false", "-1", "+1", "1.5", "1e5", "0x1", "NaN", "'a'", "/**/", "\t",
+            "\n",
+        ] {
+            let object = format!("{{\"a\":{token}}}");
+            assert!(!accepted(object.as_bytes()), "{token}");
+        }
+        // The same bytes inside a string are text, and the profile lets them by.
+        assert!(accepted(br#"{"a":"null true -1 1e5 0x1 /**/"}"#));
+        // Digit runs: the leading zero, the length and the largest value.
+        for number in ["00", "01", "007", "10000000000000000", "9007199254740992"] {
+            let object = format!("{{\"a\":{number}}}");
+            assert!(!accepted(object.as_bytes()), "{number}");
+        }
+        for number in ["0", "1", "10", "999999999999999", "9007199254740991"] {
+            let object = format!("{{\"a\":{number}}}");
+            assert!(accepted(object.as_bytes()), "{number}");
+        }
+        // Shape: one object, `{` first and `}` last, a single final line feed.
+        for bytes in [
+            &b""[..],
+            b"\n",
+            b"{",
+            b"}",
+            b"{\"a\":1}\n\n",
+            b" {\"a\":1}",
+            b"{\"a\":1} ",
+            b"{\"a\":1}\r\n",
+            b"[{\"a\":1}]",
+            b"{\"a\":\"}",
+            b"{\"a\":1}x",
+        ] {
+            assert!(!accepted(bytes), "{bytes:?}");
+        }
+        assert!(profile(b"{\"a\":1}\n", 8).is_ok());
+        assert!(profile(b"{\"a\":1}\n", 7).is_err());
+        assert_eq!(profile(b"{\"a\":1}\n", 8).unwrap(), b"{\"a\":1}");
+    }
+
     #[test]
     fn members_may_come_in_any_order_and_spaces_may_stand_between_any_tokens() {
         let expected = parse_manifest(example_manifest().as_bytes()).unwrap();
@@ -3027,6 +3113,16 @@ mod tests {
             wrap(&with_to("not a key")),
             Err(RolloverError::KeyInvalid(_))
         ));
+        // A statement with two defects reports the first in the order of its
+        // members: `to` before `issued_at`.
+        let two_defects = String::from_utf8(with_to(small))
+            .unwrap()
+            .replace("2026-11-02T09:00:00Z", "yesterday")
+            .into_bytes();
+        assert!(matches!(
+            wrap(&two_defects),
+            Err(RolloverError::KeyInvalid(_))
+        ));
         let itself = with_to(&team.key.line());
         assert!(matches!(wrap(&itself), Err(RolloverError::Malformed(_))));
         let other_schema = String::from_utf8(statement.clone())
@@ -3067,6 +3163,7 @@ mod tests {
             Rollover::from_base64(good, &BASE64.encode([&signature[..], &[0]].concat())).is_err()
         );
         assert!(Rollover::from_base64(good, "").is_err());
+        assert!(Rollover::from_base64(good, &"A".repeat(1 << 20)).is_err());
         assert!(Rollover::from_base64("", &envelope.signature).is_err());
         assert!(
             Rollover::from_base64(&"A".repeat(MAX_STATEMENT_BASE64 + 4), &envelope.signature)
@@ -3076,12 +3173,19 @@ mod tests {
         // A signature verifies only under the key the statement names, and only
         // for a key that is that one.
         assert!(!rollover.verify(&next.key));
-        let forged = Rollover::from_base64(
-            &envelope.statement,
-            &BASE64.encode(sign_prefixed(&next.seed, ROLLOVER_PREFIX, &statement)),
-        )
-        .unwrap();
+        let forged_signature = sign_prefixed(&next.seed, ROLLOVER_PREFIX, &statement);
+        let forged =
+            Rollover::from_base64(&envelope.statement, &BASE64.encode(forged_signature)).unwrap();
         assert!(!forged.verify(&team.key));
+        // The signature does verify under the key that made it, and that key is
+        // not the one the statement says it replaces.
+        assert!(verify_prefixed(
+            &next.key,
+            ROLLOVER_PREFIX,
+            &statement,
+            &forged_signature
+        ));
+        assert!(!forged.verify(&next.key));
         let release_signature = sign_prefixed(&team.seed, RELEASE_PREFIX, &statement);
         let wrong_prefix =
             Rollover::from_base64(&envelope.statement, &BASE64.encode(release_signature)).unwrap();
@@ -3174,6 +3278,21 @@ mod tests {
         let chain = follow_rollovers(&host.pins, &host.floors, &[ab.clone(), forged]).unwrap();
         assert_eq!(chain.pins.keys().collect::<Vec<_>>(), [&fingerprint(&b)]);
 
+        // A successor that is already pinned keeps the higher of the two floors,
+        // whichever key held it.
+        for (from_floor, to_floor) in [(3, 9), (9, 3), (4, 4)] {
+            let mut both = Host::new(&[&a, &b]);
+            both.floors =
+                BTreeMap::from([(fingerprint(&a), from_floor), (fingerprint(&b), to_floor)]);
+            let chain = follow_rollovers(&both.pins, &both.floors, &[ab.clone()]).unwrap();
+            assert_eq!(chain.pins.keys().collect::<Vec<_>>(), [&fingerprint(&b)]);
+            assert_eq!(
+                chain.floors,
+                BTreeMap::from([(fingerprint(&b), from_floor.max(to_floor))]),
+                "{from_floor} and {to_floor}"
+            );
+        }
+
         // At most eight statements.
         assert!(follow_rollovers(&host.pins, &host.floors, &vec![ab.clone(); 8]).is_ok());
         let refusal = follow_rollovers(&host.pins, &host.floors, &vec![ab; 9]).unwrap_err();
@@ -3219,16 +3338,71 @@ mod tests {
     }
 
     #[test]
+    fn a_clock_at_either_extreme_refuses_and_never_panics() {
+        let team = test_key("team");
+        let manifest = example_manifest().as_bytes();
+        let signatures = signature_file_of(&team, manifest);
+        let mut host = Host::new(&[&team]);
+        host.now = i64::MIN;
+        assert_eq!(
+            host.decide(manifest, &signatures).unwrap_err().code,
+            Code::ManifestInvalid
+        );
+        host.now = i64::MAX;
+        assert_eq!(
+            host.decide(manifest, &signatures).unwrap_err().code,
+            Code::ManifestExpired
+        );
+        // The edges of the window around the example's validity.
+        let issued = instant("2026-10-03T12:00:00Z");
+        let expires = instant("2027-04-01T12:00:00Z");
+        for (now, wanted) in [
+            (
+                issued - FUTURE_ISSUE_SECONDS - 1,
+                Some(Code::ManifestInvalid),
+            ),
+            (issued - FUTURE_ISSUE_SECONDS, None),
+            (expires - 1, None),
+            (expires, Some(Code::ManifestExpired)),
+        ] {
+            host.now = now;
+            let code = host.decide(manifest, &signatures).err().map(|r| r.code);
+            assert_eq!(code, wanted, "{now}");
+        }
+    }
+
+    #[test]
     fn a_running_version_that_is_not_a_release_version_is_never_guessed() {
         let team = test_key("team");
         let manifest = example_manifest().as_bytes();
         let signatures = signature_file_of(&team, manifest);
-        for running in ["0.1.0-dev", "dev", "", "0.1", "0.1.0+build"] {
-            let mut host = Host::new(&[&team]);
-            host.running_version = Box::leak(running.to_owned().into_boxed_str());
-            let refusal = host.decide(manifest, &signatures).unwrap_err();
-            assert_eq!(refusal.code, Code::VersionNotOnTrack, "{running:?}");
+        // A newer release cannot be told from an older one, so it is refused
+        // as a downgrade is, whatever the track says.
+        for running in [
+            "0.1.0-dev",
+            "dev",
+            "",
+            "0.1",
+            "0.1.0+build",
+            "0.1.00",
+            "v0.1.0",
+        ] {
+            for track in [Track::Patch, Track::Minor] {
+                let mut host = Host::new(&[&team]);
+                host.running_version = running.to_owned();
+                host.track = track;
+                let refusal = host.decide(manifest, &signatures).unwrap_err();
+                assert_eq!(refusal.code, Code::DowngradeRefused, "{running:?}");
+            }
         }
+        // The refusal comes after the counter, which needs no version.
+        let mut host = Host::new(&[&team]);
+        host.running_version = "dev".to_owned();
+        host.floors.insert(team.key.fingerprint().to_owned(), 7);
+        assert_eq!(
+            host.decide(manifest, &signatures).unwrap_err().code,
+            Code::CounterReplayed
+        );
     }
 
     #[test]
@@ -3249,7 +3423,7 @@ mod tests {
             (manifest, signatures)
         };
         let mut host = Host::new(&[&team]);
-        host.running_version = "0.1.4";
+        host.running_version = "0.1.4".to_owned();
         for (version, track, wanted) in [
             ("0.1.5", Track::Patch, None),
             ("0.1.99", Track::Patch, None),
@@ -3278,11 +3452,59 @@ mod tests {
             host.decide(&manifest, &signatures).unwrap_err().code,
             Code::AgentTooOld
         );
-        host.service_definition = 0;
+        // The release needs a service definition no newer than the host's: one
+        // generation short refuses, and a host that is ahead takes it.
         let (manifest, signatures) = build("0.1.5", None);
+        for (have, wanted) in [
+            (0, Some(Code::ServiceDefinitionOutdated)),
+            (1, None),
+            (2, None),
+            (1000, None),
+        ] {
+            host.service_definition = have;
+            let code = host.decide(&manifest, &signatures).err().map(|r| r.code);
+            assert_eq!(code, wanted, "a host with definition {have}");
+        }
+    }
+
+    #[test]
+    fn only_floors_above_zero_are_kept_and_only_for_keys_that_are_still_pinned() {
+        let (team, project, next) = (test_key("team"), test_key("project"), test_key("team-next"));
+        let manifest = example_manifest().as_bytes();
+        let signatures = signature_file_of(&project, manifest);
+        let mut host = Host::new(&[&team, &project]);
+        host.floors = BTreeMap::from([
+            // An explicit zero, which a successor inherits as zero.
+            (team.key.fingerprint().to_owned(), 0),
+            (project.key.fingerprint().to_owned(), 3),
+            // A key the host does not pin has no floor after the release.
+            (test_key("outsider").key.fingerprint().to_owned(), 9),
+        ]);
+        host.rollovers = vec![statement_between(&team, &next)];
+        let verified = host.decide(manifest, &signatures).unwrap();
         assert_eq!(
-            host.decide(&manifest, &signatures).unwrap_err().code,
-            Code::ServiceDefinitionOutdated
+            verified.floors_after,
+            BTreeMap::from([(project.key.fingerprint().to_owned(), 7)])
+        );
+        let mut pinned: Vec<&str> = verified
+            .pins_after
+            .iter()
+            .map(ReleaseKey::fingerprint)
+            .collect();
+        let mut expected = [project.key.fingerprint(), next.key.fingerprint()];
+        expected.sort();
+        pinned.sort();
+        assert_eq!(pinned, expected);
+
+        // A floor above zero that a successor inherits stays above zero.
+        host.floors.insert(team.key.fingerprint().to_owned(), 5);
+        let verified = host.decide(manifest, &signatures).unwrap();
+        assert_eq!(
+            verified.floors_after,
+            BTreeMap::from([
+                (project.key.fingerprint().to_owned(), 7),
+                (next.key.fingerprint().to_owned(), 5),
+            ])
         );
     }
 
@@ -3323,11 +3545,23 @@ mod tests {
                 both
             }
         );
-        host.floors.insert(project.key.fingerprint().to_owned(), 7);
-        assert_eq!(
-            host.decide(manifest, &signatures).unwrap_err().code,
-            Code::CounterReplayed
-        );
+        // The floor of either signer refuses the release, the second one in the
+        // file included, and a floor below the counter does not.
+        for (first, second, wanted) in [
+            (7, 0, Some(Code::CounterReplayed)),
+            (0, 7, Some(Code::CounterReplayed)),
+            (7, 7, Some(Code::CounterReplayed)),
+            (9, 3, Some(Code::CounterReplayed)),
+            (3, 9, Some(Code::CounterReplayed)),
+            (6, 6, None),
+        ] {
+            host.floors = BTreeMap::from([
+                (project.key.fingerprint().to_owned(), first),
+                (team.key.fingerprint().to_owned(), second),
+            ]);
+            let code = host.decide(manifest, &signatures).err().map(|r| r.code);
+            assert_eq!(code, wanted, "floors {first} and {second}");
+        }
         // A host that pins one of the two takes the release on that signature.
         let one = Host::new(&[&project]);
         assert_eq!(
