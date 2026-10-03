@@ -326,6 +326,13 @@ try {
         host_key: "host",
       };
       await fixture({ kind: "sources", value: initial });
+      // Both lists hold paths, and both say so: Path 1 and Add path.
+      await expect(
+        page.getByRole("button", { name: "Add path", exact: true }),
+      ).toHaveCount(2);
+      await expect(
+        page.getByRole("button", { name: "Add item", exact: true }),
+      ).toHaveCount(0);
       const scroller = page.locator(".editor-inspector-body");
       expect(
         await scroller.evaluate(

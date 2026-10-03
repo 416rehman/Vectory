@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { VariableDeclaration } from "./api";
 import {
   deviceReach,
   groupChanges,
@@ -123,6 +124,52 @@ describe("publish review", () => {
         (component) => component.change === "added",
       ),
     ).toBe(true);
+  });
+
+  it("says what changed in the variables when nothing else did", () => {
+    const region: VariableDeclaration = {
+      name: "region",
+      path: "/sinks/loki/endpoint",
+      type: "string",
+    };
+    const site: VariableDeclaration = {
+      name: "site",
+      path: "/transforms/parse/site",
+      type: "string",
+    };
+    const review = (
+      before: VariableDeclaration[],
+      after: VariableDeclaration[],
+    ) => reviewChanges(published, published, before, after);
+    // The configuration is identical; only the declarations differ.
+    expect(review([], [region])).toMatchObject({
+      components: [],
+      settings: [],
+      tests: null,
+      variables: ["region added"],
+    });
+    expect(review([region, site], [site])).toMatchObject({
+      variables: ["region removed"],
+    });
+    expect(
+      review([region], [{ ...region, path: "/sinks/loki/other" }]).variables,
+    ).toEqual(["region changed"]);
+    expect(
+      review([region], [{ ...region, type: "integer" }]).variables,
+    ).toEqual(["region changed"]);
+    expect(review([region], [site, region]).variables).toEqual(["site added"]);
+    // The same declarations are no change, however their keys are ordered.
+    expect(
+      review([region], [{ type: "string", path: region.path, name: "region" }])
+        .variables,
+    ).toEqual([]);
+    expect(review([], []).variables).toEqual([]);
+    // A published version from before variables existed declares none.
+    expect(reviewChanges(published, published).variables).toEqual([]);
+    // The same variables in another order still make another version.
+    expect(review([region, site], [site, region]).variables).toEqual([
+      "order changed",
+    ]);
   });
 
   it("diffs programs by line and folds long unchanged runs", () => {

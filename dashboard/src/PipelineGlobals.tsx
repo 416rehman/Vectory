@@ -191,7 +191,14 @@ export default function PipelineGlobals({
           ...root.properties[name],
           _metadata: {
             ...root.properties[name]?._metadata,
-            "docs::hidden": false,
+            // Show what Vector's reference hides because the section has a
+            // page of its own here. An option Vector replaced (`expire_metrics`,
+            // which reads the same as `expire_metrics_secs`) stays hidden
+            // unless this draft still sets it.
+            "docs::hidden":
+              !!root.properties[name]?.deprecated &&
+              !Object.hasOwn(config, name),
+            "vectory::page": section !== "general",
             "vectory::entry_label":
               name === "secret"
                 ? "Backend"

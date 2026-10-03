@@ -1876,6 +1876,62 @@ try {
       }
     },
   );
+
+  await check(
+    "With no enrolled devices the deploy dialog says so and links to Add device",
+    async () => {
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({ devices: [] });
+        f.initial = {};
+        const app = await launch(f, { width, theme });
+        const { page } = app;
+        try {
+          await page.goto(origin + "/__device-check");
+          await page.waitForFunction(() => window.ready);
+          await page.evaluate(
+            ({ version, userId }) =>
+              window.mount({
+                open: true,
+                userId,
+                version,
+                pipelineName: "Synthetic logs",
+              }),
+            { version, userId },
+          );
+          const dialog = page.getByRole("dialog");
+          await expect(dialog).toBeVisible();
+          const picker = dialog.locator(".device-picker");
+          await expect(picker).toContainText(
+            "No enrolled devices to choose from.",
+          );
+          const link = picker.getByRole("link", {
+            name: "Add device",
+            exact: true,
+          });
+          await expect(link).toBeVisible();
+          await expect(link).toHaveAttribute("href", "#/enrollment");
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "no devices to choose from", width, theme);
+          await picker.scrollIntoViewIfNeeded();
+          const file = `no-devices-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          // A search that finds nothing is a different state: no link.
+          await dialog.getByLabel("Find targets").fill("nothing like this");
+          await expect(picker).toContainText("No devices match your search.");
+          await expect(link).toHaveCount(0);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -1884,7 +1940,7 @@ try {
     scope:
       "The real deploy review and its Check on devices section, with intercepted synthetic HTTP. The synthetic server answers when the harness says so: no host validated anything.",
     passed:
-      results.length === 20 &&
+      results.length === 21 &&
       results.every((r) => r.passed) &&
       accessibility.every((s) => !s.violations.length),
     results,

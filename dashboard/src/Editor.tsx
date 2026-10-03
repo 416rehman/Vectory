@@ -167,6 +167,7 @@ import {
   diagnoseConfigurationSource,
   assertValidPipelineSource,
   detectConfigurationFormat,
+  diagnosticCounts,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
   sourceErrorMessage,
@@ -601,6 +602,13 @@ export default function Editor({
     future = useRef<EditorSnapshot[]>([]),
     lastEdit = useRef<{ key: string; at: number } | null>(null),
     latest = useRef({ doc, config, variables, nodes, edges, dirty }),
+    // The draft as it was last loaded or saved, by reference: undoing back to
+    // it leaves nothing unsaved.
+    savedState = useRef<{
+      config: Config;
+      variables: VariableDeclaration[];
+      nodes: any[];
+    } | null>(null),
     pendingSave = useRef<Promise<Configuration | null> | null>(null),
     saveUncertain = useRef(false),
     uncertainSaveRevision = useRef<number | null>(null),
@@ -827,6 +835,7 @@ export default function Editor({
     [],
   );
   latest.current = { doc, config, variables, nodes, edges, dirty };
+  if (!dirty) savedState.current = { config, variables, nodes };
   const editable = can(user, "edit") && !!doc && !doc.archived;
   const checkable =
     (editable || can(user, "operate")) && !!doc && !doc.archived;
@@ -1590,6 +1599,20 @@ export default function Editor({
       to.push({ config, graph: { nodes, edges }, variables });
       lastEdit.current = null;
       replace(item.config, item.graph, false, item.variables);
+      // Back to the draft as saved: nothing is unsaved. A save that failed or
+      // was not confirmed leaves it unknown what the server holds.
+      const saved = savedState.current;
+      if (
+        saved &&
+        item.config === saved.config &&
+        item.variables === saved.variables &&
+        samePositions(item.graph.nodes, saved.nodes) &&
+        !saveUncertain.current &&
+        !saveNeedsReload.current
+      ) {
+        setDirty(false);
+        setSaveStatus("All changes saved");
+      }
     }
   }
 
@@ -5550,18 +5573,7 @@ export default function Editor({
               {currentAnalysis?.diagnostics.length ? (
                 <details>
                   <summary>
-                    {
-                      currentAnalysis.diagnostics.filter(
-                        (item) => item.severity === "error",
-                      ).length
-                    }{" "}
-                    errors ·{" "}
-                    {
-                      currentAnalysis.diagnostics.filter(
-                        (item) => item.severity === "warning",
-                      ).length
-                    }{" "}
-                    warnings
+                    {diagnosticCounts(currentAnalysis.diagnostics)}
                   </summary>
                   <ul>
                     {currentAnalysis.diagnostics.map((item, index) => (
@@ -5935,6 +5947,7 @@ export default function Editor({
           )}
           <PublishReview
             config={config}
+            variables={variables}
             published={publishedVersion}
             reach={publishReach}
             status={status}

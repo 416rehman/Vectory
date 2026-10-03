@@ -226,13 +226,20 @@ export default function PipelineLibrary({
     setFormError("");
     setOpen(true);
   }
+  // What the last attempt said is about what was chosen then. A different
+  // choice makes it stale, unless it is the notice about a saved request.
+  function clearStaleError() {
+    if (!notice) setFormError("");
+  }
   // The name follows what you start from until you type your own.
   function chooseStart(id: string, templateName: string) {
     setTemplate(id);
+    clearStaleError();
     if (!nameEdited) setName(templateName);
   }
   function importStart(value: StartImport | null) {
     setImported(value);
+    clearStaleError();
     if (!nameEdited && value?.config && !value.name.startsWith("Pasted "))
       setName(value.name.replace(/\.(?:ya?ml|json|toml)$/i, ""));
   }

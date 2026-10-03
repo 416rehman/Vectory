@@ -6,7 +6,7 @@ import {
   CircleX,
   LoaderCircle,
 } from "lucide-react";
-import type { Config, Version } from "./api";
+import type { Config, VariableDeclaration, Version } from "./api";
 import { relativeTime } from "./time";
 import { Button, Spinner } from "./ui";
 import ProblemText from "./ProblemText";
@@ -200,6 +200,7 @@ function ProgramDiff({ before, after }: { before: string; after: string }) {
  */
 export default function PublishReview({
   config,
+  variables,
   published,
   reach,
   status,
@@ -213,6 +214,8 @@ export default function PublishReview({
   onGoToProblem,
 }: {
   config: Config;
+  /** The variables the draft declares. */
+  variables: readonly VariableDeclaration[];
   published: Version | null;
   /** "Assigned to 3 devices (v2) · …", or null while loading. */
   reach: string | null;
@@ -229,8 +232,14 @@ export default function PublishReview({
   onGoToProblem: (problem: Problem) => void;
 }) {
   const review = useMemo(
-    () => reviewChanges(published?.config || null, config),
-    [published, config],
+    () =>
+      reviewChanges(
+        published?.config || null,
+        config,
+        published?.variables,
+        variables,
+      ),
+    [published, config, variables],
   );
   const Icon = statusIcons[status];
   const errors = problems.filter((problem) => problem.severity === "error");
@@ -246,7 +255,10 @@ export default function PublishReview({
   const newSecrets = secrets.filter((secret) => secret.added).length;
   const steps = useMemo(() => Object.keys(config.transforms || {}), [config]);
   const empty =
-    !review.components.length && !review.settings.length && !review.tests;
+    !review.components.length &&
+    !review.settings.length &&
+    !review.tests &&
+    !review.variables.length;
   return (
     <div className="publish-review">
       {rejection && (
@@ -403,6 +415,18 @@ export default function PublishReview({
                   </span>
                   <span className="publish-change-detail">
                     Pipeline tests: {review.tests.before} → {review.tests.after}
+                  </span>
+                </div>
+              </li>
+            )}
+            {review.variables.length > 0 && (
+              <li>
+                <div className="publish-change-row">
+                  <span className="publish-change-kind" data-change="changed">
+                    Changed
+                  </span>
+                  <span className="publish-change-detail">
+                    Variables: {review.variables.join(", ")}
                   </span>
                 </div>
               </li>

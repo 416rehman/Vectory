@@ -1377,6 +1377,38 @@ try {
       },
     );
     await check(
+      "undoing back to the saved draft leaves nothing unsaved; redo brings the change back, and undoing a save stays unsaved",
+      async () => {
+        await load();
+        const status = page.locator(".pipeline-save-status");
+        await sample();
+        await rate().fill("13");
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await closeInspector();
+        await button("Undo").click();
+        await expect(status).toContainText("All changes saved");
+        await expect(button("Discard changes")).toHaveCount(0);
+        await expect(saveButton()).toBeDisabled();
+        await button("Redo").click();
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await expect(saveButton()).toBeEnabled();
+        // After a save the draft is what was saved: undoing it is a change.
+        await saveButton().click();
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect(status).toContainText("All changes saved");
+        await button("Undo").click();
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await button("Redo").click();
+        await expect(status).toContainText("All changes saved");
+        await expect(button("Discard changes")).toHaveCount(0);
+        expect(fixture.saveAttempts).toHaveLength(1);
+        assertSaveOnly();
+      },
+    );
+    await check(
       "typed fields and field JSON disable saving, and code that does not parse is refused with its place, without discarding or applying the text",
       async () => {
         for (const kind of ["code", "scalar", "raw"]) {
@@ -1770,7 +1802,7 @@ try {
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(splitSaveFollowup ? 2 : 10);
+    expect(results).toHaveLength(splitSaveFollowup ? 2 : 11);
   } else if (checkStateOnly) {
     const control = () => checkButton();
     const verdict = () => problemsPanel().locator(".problems-verdict");

@@ -352,6 +352,53 @@ try {
     },
   );
   await check(
+    "the create dialog drops an error about the start once that start is fixed",
+    async () => {
+      await page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      const complaint = "Choose a Vector configuration file to import.";
+      const submit = dialog.getByRole("button", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      await dialog.getByLabel("Pipeline name").fill("From a file");
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await submit.click();
+      await expect(dialog).toContainText(complaint);
+      // Choosing another start answers it.
+      await dialog.getByText("Build a pipeline", { exact: true }).click();
+      await expect(dialog).not.toContainText(complaint);
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await submit.click();
+      await expect(dialog).toContainText(complaint);
+      // So does pasting a configuration.
+      await dialog
+        .getByRole("button", { name: "Paste instead", exact: true })
+        .click();
+      await dialog
+        .getByLabel("Vector configuration", { exact: true })
+        .fill(
+          '{"sources":{"a":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["a"]}}}',
+        );
+      await dialog
+        .getByRole("button", { name: "Use this configuration", exact: true })
+        .click();
+      await expect(
+        dialog.locator(".pipeline-start-import-result[role=status]"),
+      ).toContainText("Pasted JSON");
+      await expect(dialog).not.toContainText(complaint);
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      expect(unexpected).toEqual([]);
+    },
+  );
+  await check(
     "real App preserves search, archive filter, sort and page across library remount",
     async () => {
       await page.getByLabel("Search pipelines").fill("blue");
