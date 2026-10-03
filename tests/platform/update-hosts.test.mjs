@@ -15,6 +15,7 @@ import {
   monotonicIntervals,
   quoted,
   rootReaders,
+  runIntervalOf,
 } from "./update-hosts.mjs";
 
 const source = fs.readFileSync(
@@ -232,6 +233,36 @@ test("a timer's intervals are read from every line systemd prints for them", () 
   );
   const none = monotonicIntervals("AccuracyUSec=5s\n");
   assert.deepEqual([none.OnBootUSec, none.OnUnitInactiveUSec], [null, null]);
+});
+
+// The Mac's check of the step's StartInterval reads the number from what launchd
+// prints, and a print that has no such line is no proof of the interval.
+test("the run interval is read from the line launchd prints for it, and a print with none says none", () => {
+  const printed = (extra) =>
+    [
+      "system/io.vectory.update = {",
+      "\tactive count = 0",
+      "\tpath = /Library/LaunchDaemons/io.vectory.update.plist",
+      "\ttype = LaunchDaemon",
+      ...extra,
+      "\tstate = not running",
+      "}",
+      "",
+    ].join("\n");
+  assert.equal(runIntervalOf(printed(["\trun interval = 30 seconds"])), "30");
+  assert.equal(runIntervalOf(printed(["\trun interval = 1 second"])), "1");
+  assert.equal(runIntervalOf(printed(["\trun interval = 300 seconds"])), "300");
+  // Words after it don't hide it.
+  assert.equal(
+    runIntervalOf(printed(["\trun interval = 30 seconds (next in 12 s)"])),
+    "30",
+  );
+  // Nothing about an interval, or something that only looks like one.
+  assert.equal(runIntervalOf(printed([])), undefined);
+  assert.equal(runIntervalOf(printed(["\tinterval = 30 seconds"])), undefined);
+  assert.equal(runIntervalOf(printed(["\trun interval = soon"])), undefined);
+  assert.equal(runIntervalOf(printed(["\trun interval = 30 minutes"])), undefined);
+  assert.equal(runIntervalOf(""), undefined);
 });
 
 test(

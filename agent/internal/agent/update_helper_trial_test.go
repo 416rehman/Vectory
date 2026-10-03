@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"maps"
 	"os"
 	"path/filepath"
@@ -485,5 +486,107 @@ func TestACommitThatCantPlaceTheHelperKeepsTryingAtTheNextRun(t *testing.T) {
 	}
 	if !f.stagingEmpty() {
 		t.Error("the staging directory wasn't emptied once the helper copy was placed")
+	}
+}
+
+// ---------------------------------------------------------------- a restart count that goes down
+
+// recountingHost reports the restarts of the agent's service as a script says, from the
+// first look of the trial on and whatever the service does: a service manager whose count
+// goes down because the service was loaded again and counts from its start.
+type recountingHost struct {
+	*fakeHost
+	// counts is what the first looks report; the last stays for the looks after them.
+	counts []int
+	armed  bool
+	looks  int
+}
+
+func (h *recountingHost) ServiceState(ctx context.Context) (updateServiceState, error) {
+	state, err := h.fakeHost.ServiceState(ctx)
+	if err != nil || !h.armed {
+		return state, err
+	}
+	state.Restarts = h.counts[min(h.looks, len(h.counts)-1)]
+	h.looks++
+	return state, nil
+}
+
+// useRestartCounts makes the service manager report counts at the looks of the trial that
+// begins when the new build is started.
+func (f *stepFixture) useRestartCounts(counts ...int) *recountingHost {
+	f.t.Helper()
+	host := &recountingHost{fakeHost: f.host, counts: counts}
+	updateHostOverride = host
+	updateFault = func(point string) {
+		if point == "started" {
+			host.armed = true
+		}
+	}
+	return host
+}
+
+// A count that goes down says the service was loaded again: the restarts are counted from
+// the lower number, with a line in the log that says so. A build that has been running
+// since, with no restart after it, is as healthy as any other, and is kept.
+func TestARestartCountThatGoesDownIsCountedAgainFromTheLowerNumberAndTheBuildCanBeHealthy(t *testing.T) {
+	f := newStepFixture(t)
+	f.useRestartCounts(2, 0)
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+
+	log := captureStepLog(t, f.mustRun)
+
+	f.requireAnswered(release, UpdateOutcomeCommitted, "")
+	if got := f.executableDigest(); got != release.buildSHA() {
+		t.Errorf("the executable is %s, want the new build %s", got, release.buildSHA())
+	}
+	want := "the service manager counts 0 start(s) of the agent's service after it counted 2: it was loaded again, so the restarts are counted from here"
+	if !strings.Contains(log, want) {
+		t.Errorf("the step's log doesn't say that the count went down:\n%s", log)
+	}
+}
+
+// What is counted after the count went down still ends the trial at three restarts, at
+// once, and not at the deadline: the build that can't start is taken back as it would be
+// had the count never gone down.
+func TestAfterARestartCountWentDownThreeMoreRestartsStillEndTheTrial(t *testing.T) {
+	f := newStepFixture(t)
+	f.useRestartCounts(4, 0, 1, 2, 3)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.2", "crash", releaseOptions{})
+	f.stage(release)
+	began := f.clock.Now()
+
+	log := captureStepLog(t, f.mustRun)
+
+	f.requireTakenBack(oldDigest, release, "START_FAILED")
+	if elapsed := f.clock.Now().Sub(began); elapsed > 30*time.Second {
+		t.Errorf("the rollback took %s of the five minutes", elapsed)
+	}
+	for _, want := range []string{
+		"the service manager counts 0 start(s) of the agent's service after it counted 4",
+		"after 3 restart(s) since the watch began",
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the step's log doesn't say %q:\n%s", want, log)
+		}
+	}
+}
+
+// A count that only goes up is read as it always was: restarts since the first look, three
+// of them end the trial. The line about a count that went down is never written.
+func TestARestartCountThatOnlyGoesUpIsNeverReportedAsHavingGoneDown(t *testing.T) {
+	f := newStepFixture(t)
+	f.useRestartCounts(5, 6, 7, 8)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.2", "crash", releaseOptions{})
+	f.stage(release)
+
+	log := captureStepLog(t, f.mustRun)
+
+	f.requireTakenBack(oldDigest, release, "START_FAILED")
+	if strings.Contains(log, "it was loaded again") {
+		t.Errorf("the step's log says the service was loaded again:\n%s", log)
 	}
 }

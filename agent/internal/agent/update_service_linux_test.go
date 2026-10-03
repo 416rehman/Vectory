@@ -563,6 +563,9 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 	for _, executable := range []string{
 		"/usr/bin/vectory", "/usr/sbin/vectory", "/bin/vectory", "/sbin/vectory", "/usr/lib/vectory/vectory",
 		"/opt/homebrew/bin/vectory", "/usr/local/Cellar/vectory/0.1.0/bin/vectory", "/usr/bin/deeper/still/vectory",
+		// The prefix MacPorts installs into; the list of package directories is one for
+		// every system.
+		"/opt/local/bin/vectory",
 	} {
 		if reason, managed := host.PackageManaged(executable); !managed || reason == "" {
 			t.Errorf("%s isn't taken for a package's", executable)
@@ -570,7 +573,7 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 	}
 	for _, executable := range []string{
 		"/usr/local/bin/vectory", "/opt/vectory/vectory", "/usr/binary/vectory", "/usr/libexec/vectory", "/binary/vectory",
-		"/srv/usr/bin/vectory", "/usr/local/Cellar2/vectory", "/home/you/vectory",
+		"/srv/usr/bin/vectory", "/usr/local/Cellar2/vectory", "/home/you/vectory", "/opt/localbin/vectory", "/opt/local2/bin/vectory",
 	} {
 		if reason, managed := host.PackageManaged(executable); managed {
 			t.Errorf("%s is taken for a package's: %s", executable, reason)

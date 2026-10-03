@@ -65,6 +65,12 @@ func registeredElsewhere() error {
 // definition belongs to another account, executable or state directory,
 // which ServiceInstallFor refuses; setup checks it before it changes anything.
 func serviceRegistrationCheck(exe, dir, account string) error {
+	// A value a definition can't hold as it is would be refused when it is written;
+	// setup says so before it changes anything.
+	plist, err := launchdPlist(exe, dir, account)
+	if err != nil {
+		return err
+	}
 	old, err := os.ReadFile(serviceDefinition)
 	if os.IsNotExist(err) {
 		return nil
@@ -72,7 +78,7 @@ func serviceRegistrationCheck(exe, dir, account string) error {
 	if err != nil {
 		return err
 	}
-	if plistIdentity(string(old)) != plistIdentity(launchdPlist(exe, dir, account)) {
+	if plistIdentity(string(old)) != plistIdentity(plist) {
 		return registeredElsewhere()
 	}
 	return nil
@@ -121,7 +127,10 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 			return "", err
 		}
 	}
-	plist := launchdPlist(exe, dir, account)
+	plist, err := launchdPlist(exe, dir, account)
+	if err != nil {
+		return "", err
+	}
 	registration := ServiceCreated
 	if old, err := os.ReadFile(serviceDefinition); err == nil {
 		switch {

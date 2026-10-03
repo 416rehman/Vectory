@@ -1152,9 +1152,12 @@ async function update(evidence) {
   const stepPidBefore = host.afterCommit ? host.stepService().PID : null;
   // How long launchd takes to unload the agent while Vector drains, and to load it
   // again, if the host has a way to measure it: before the rollout, so the update
-  // starts from an agent that has checked in since.
+  // starts from an agent that has checked in since. This is a check and not a reading: a
+  // Mac whose launchd can't take the agent's job out and bring it back, or whose agent
+  // doesn't come back and check in, can't carry the update that follows, and the phase
+  // ends here with the numbers it has (they are recorded as they come in).
   if (host.measureAgentRestart) {
-    await evidence.softStep(
+    await evidence.step(
       "The agent is stopped and started through the service manager with Vector draining, and the times are recorded",
       async () => {
         await host.measureAgentRestart(evidence);

@@ -176,6 +176,15 @@ export function monotonicIntervals(shown) {
   };
 }
 
+/**
+ * How often launchd says it starts a job, from `launchctl print` of a job with a
+ * StartInterval: the number of seconds on the line `run interval = 30 seconds`, as a
+ * string, or undefined when the text has no such line.
+ */
+export function runIntervalOf(printed) {
+  return /^\s*run interval = (\d+) seconds?\b/m.exec(printed)?.[1];
+}
+
 export function linuxHost() {
   const INSTALL_DIR = rootOnlyInstallDir();
   const stepDir = "/var/lib/vectory-update";
@@ -600,14 +609,15 @@ export function macosHost() {
   const vectorCount = () => agentProcesses().vectors.length;
 
   /**
-   * `launchctl bootstrap system <plist>`, asked again for a few seconds when launchd
-   * answers with an error right after it was told to boot the job out (it may still
-   * be tearing it down), as the product's own start does. What each try said is
-   * returned, so a run that needed more than one shows it.
+   * `launchctl bootstrap system <plist>`, asked again every two seconds, for a minute
+   * at most, when launchd answers with an error right after it was told to boot the
+   * job out (it may still be tearing it down), as the product's own start does
+   * (launchdStartPause and launchdStartBound in agent/internal/agent/update_launchd.go).
+   * What each try said is returned, so a run that needed more than one shows it.
    */
   const bootstrap = (plist, label) => {
     const tries = [];
-    for (let attempt = 1; attempt <= 6; attempt++) {
+    for (let attempt = 1; attempt <= 30; attempt++) {
       const result = sudo("launchctl", ["bootstrap", "system", plist], {
         allowFailure: true,
         quiet: true,
@@ -793,13 +803,17 @@ export function macosHost() {
               printed.text.includes(paths.stateDir),
             `The step's job doesn't run the helper copy for this state directory:\n${printed.text}`,
           );
-          // launchd says how often it starts a job; when it does, it says 30.
-          const interval = /run interval = (\d+) seconds/.exec(
-            printed.text,
-          )?.[1];
+          // launchd says how often it starts a job that has a StartInterval, and the
+          // step's definition has one of 30 seconds. A print with no such line says
+          // nothing about whether launchd took the interval, so it fails: the line's
+          // absence is no proof of the 30 seconds the step's runs are counted by.
+          const interval = runIntervalOf(printed.text);
           evidence.observe("launchd_says_run_interval", interval ?? null);
-          if (interval !== undefined)
-            assertEqual(interval, "30", "the run interval launchd printed");
+          assert(
+            interval !== undefined,
+            `launchd's print of the step's job has no "run interval = N seconds" line, so nothing shows that launchd took the definition's StartInterval of 30 seconds:\n${printed.text}`,
+          );
+          assertEqual(interval, "30", "the run interval launchd printed");
         },
       );
       await evidence.step(
@@ -930,6 +944,14 @@ export function macosHost() {
      * How long launchd takes to unload the agent's job while Vector drains, and to
      * load it again: the two numbers the design lists as not measured. It restarts
      * the agent, so the caller waits for it to check in again.
+     *
+     * `launchctl bootout` returns when launchd has begun to remove the job, not when
+     * it has finished, and `launchctl print` lists the job as running until then.
+     * What the first print after the command says, and how long the removal takes
+     * after the command returned, are recorded: they are what the product's stop
+     * waits out, and what a start that follows at once would meet. The phase fails
+     * when launchd never lets go of the job, never loads it again, or the agent
+     * doesn't come back (the caller waits for Vector and for a check-in).
      */
     async measureAgentRestart(evidence) {
       // Filled in as the numbers come in, so that a run that fails halfway still
@@ -943,12 +965,23 @@ export function macosHost() {
       });
       timings.bootout_command_exit = out.code;
       timings.bootout_command = (Date.now() - began) / 1000;
+      let listedRightAfter = null;
+      let prints = 0;
       await until(
         "launchd no longer knows the agent's job",
-        () => !print(labels.agent).loaded,
+        () => {
+          const loaded = print(labels.agent).loaded;
+          prints += 1;
+          if (listedRightAfter === null) listedRightAfter = loaded;
+          return !loaded;
+        },
         { timeoutMs: 400000, intervalMs: 250 },
       );
       timings.bootout_until_unloaded = (Date.now() - began) / 1000;
+      timings.job_listed_right_after_bootout = listedRightAfter;
+      timings.prints_until_unloaded = prints;
+      timings.unload_after_the_command_returned =
+        timings.bootout_until_unloaded - timings.bootout_command;
       timings.vector_processes_after_stop = vectorCount();
       const started = Date.now();
       timings.bootstrap_tries = bootstrap(paths.agentPlist, labels.agent);

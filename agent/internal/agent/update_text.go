@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -80,6 +81,37 @@ func AdminCommandFor(dir, words string) string {
 		words = "sudo " + words
 	}
 	return CommandFor(dir, words)
+}
+
+// agentServiceLook is the command a person runs to see the agent's service as the
+// service manager of the system shows it.
+func agentServiceLook() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "sudo launchctl print system/" + launchdLabel
+	case "windows":
+		return "sc.exe query Vectory"
+	}
+	return "systemctl status vectory.service"
+}
+
+// updateStepLogWords says where the update step's log is: the journal of its unit on
+// Linux, and the file in its private directory where launchd, or the step's own
+// service on Windows, keeps what the step writes to standard error.
+func updateStepLogWords() string {
+	if runtime.GOOS == "linux" {
+		return "journalctl -u vectory-update.service -n 50"
+	}
+	return filepath.Join(UpdateLocations().Private, updateStepLogFile)
+}
+
+// clearFlagWords names the commands that clear the flags that forbid replacing a file or
+// changing a directory (update_flags.go), as a person runs them on this system.
+func clearFlagWords() string {
+	if runtime.GOOS == "darwin" {
+		return "sudo chflags nouchg, noschg, nouappnd or nosappnd on the path"
+	}
+	return "sudo chattr -i or -a on the path"
 }
 
 // platformName is an operating system as a person names it.
@@ -187,7 +219,7 @@ func updateCodeWords(code string) string {
 	case "UNTRUSTED_LOCATION":
 		return "a directory on its path can be changed by other accounts"
 	case "READ_ONLY":
-		return "the install directory is read-only"
+		return "the install directory can't be written to"
 	case "HELPER_NOT_RUNNING":
 		return "the update step isn't running"
 	case "UPDATES_OFF":
@@ -211,7 +243,7 @@ func updateEligibilityWords(code string) string {
 	case "UNTRUSTED_LOCATION":
 		return "a directory on the path of the agent, the policy or the update step can be changed by other accounts"
 	case "READ_ONLY":
-		return "the update step can't write to the install directory"
+		return "the update step can't write to the install directory: its file system is read-only, or the agent or its directory has a flag that forbids replacing it"
 	case "HELPER_NOT_RUNNING":
 		return "the update step hasn't run in the last two minutes"
 	case "SERVICE_DEFINITION_OUTDATED":

@@ -176,7 +176,11 @@ func newConsentFixture(t *testing.T) *consentFixture {
 			f.events = append(f.events, "install-step")
 			return f.installFails
 		},
-		removeUpdates: func() error { f.events = append(f.events, "remove-step"); return nil },
+		removeUpdates: func() error {
+			f.events = append(f.events, "remove-step")
+			// The step's removal takes its directory away, which is what reports it removed.
+			return os.RemoveAll(f.paths.StepDir)
+		},
 	}
 	return f
 }
