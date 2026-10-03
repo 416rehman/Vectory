@@ -217,36 +217,55 @@ func stopService(s *mgr.Service) error {
 	return stopServiceContext(context.Background(), s)
 }
 
+// serviceController is what stopping a service needs of it: a *mgr.Service, or a
+// test's stand-in.
+type serviceController interface {
+	Query() (svc.Status, error)
+	Control(svc.Cmd) (svc.Status, error)
+}
+
 // stopServiceContext is stopService that gives up waiting when ctx ends, which the
 // update step needs: its own service is stopped while it waits.
 func stopServiceContext(ctx context.Context, s *mgr.Service) error {
-	status, err := s.Query()
-	if err != nil {
-		return err
-	}
-	if status.State == svc.Stopped {
-		return nil
-	}
-	if status.State != svc.StopPending {
-		if status, err = s.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+	return stopController(ctx, s.Name, s, serviceStopLimit, 250*time.Millisecond)
+}
+
+// stopController asks a service to stop, once, and waits until it has, for at most
+// limit, looking every so often. A service that is starting takes no control until it
+// reports that it is running (the manager answers ERROR_INVALID_SERVICE_CONTROL), so a
+// stop that finds one starting waits for that and asks again; one that runs and
+// doesn't accept a stop is an error at once.
+func stopController(ctx context.Context, name string, s serviceController, limit, every time.Duration) error {
+	deadline := time.Now().Add(limit)
+	asked := false
+	for {
+		status, err := s.Query()
+		if err != nil {
 			return err
 		}
-	}
-	deadline := time.Now().Add(serviceStopLimit)
-	for status.State != svc.Stopped {
+		if status.State == svc.Stopped {
+			return nil
+		}
+		if !asked && status.State != svc.StopPending {
+			_, err := s.Control(svc.Stop)
+			switch {
+			case err == nil, errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE):
+				asked = true
+			case errors.Is(err, windows.ERROR_INVALID_SERVICE_CONTROL) && status.State == svc.StartPending:
+				// Not asked yet: the service takes no control while it starts.
+			default:
+				return err
+			}
+		}
 		if time.Now().After(deadline) {
-			return errors.New("the " + s.Name + " service didn't stop in time")
+			return errors.New("the " + name + " service didn't stop in time")
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
-		if status, err = s.Query(); err != nil {
-			return err
+		case <-time.After(every):
 		}
 	}
-	return nil
 }
 
 // ServiceStatus asks the Service Control Manager about the agent service.
