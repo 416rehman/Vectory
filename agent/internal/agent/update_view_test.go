@@ -74,11 +74,11 @@ func TestTheHeadlineSaysWhatNeedsAttentionFirst(t *testing.T) {
 		},
 		"staged, waiting for you": {
 			UpdateView{Policy: viewPolicy(t, UpdateConsentAsk), StepRunning: true, Eligibility: UpdateEligible, Staged: &StagedUpdate{Version: "0.1.1", Complete: true}},
-			"staged 0.1.1, waiting for you: sudo vectory update apply",
+			"staged 0.1.1, waiting for you: " + asAdmin("vectory update apply"),
 		},
 		"staged, waiting for you with a state directory of its own": {
 			UpdateView{StateDir: "/srv/agent state", Policy: viewPolicy(t, UpdateConsentAsk), StepRunning: true, Staged: &StagedUpdate{Version: "0.1.1", Complete: true}},
-			"staged 0.1.1, waiting for you: sudo vectory update apply --state-dir '/srv/agent state'",
+			"staged 0.1.1, waiting for you: " + asAdmin("vectory update apply") + " --state-dir '/srv/agent state'",
 		},
 		"staged, waiting for its window": {
 			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto, "Mon-Fri 02:00-04:00 UTC"), StepRunning: true, Staged: &StagedUpdate{Version: "0.1.1", Complete: true}},
@@ -90,7 +90,7 @@ func TestTheHeadlineSaysWhatNeedsAttentionFirst(t *testing.T) {
 		},
 		"staged, with no step running": {
 			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto), Staged: &StagedUpdate{Version: "0.1.1", Complete: true}},
-			"staged 0.1.1, but the update step isn't running: sudo vectory doctor says why",
+			"staged 0.1.1, but the update step isn't running: " + asAdmin("vectory doctor") + " says why",
 		},
 		"a build that isn't complete is not staged": {
 			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Staged: &StagedUpdate{Version: "0.1.1"}},
@@ -150,11 +150,11 @@ func TestTheHeadlineSaysWhatNeedsAttentionFirst(t *testing.T) {
 		},
 		"paused": {
 			UpdateView{Policy: func() UpdatePolicy { p := viewPolicy(t, UpdateConsentAuto); p.Paused = true; return p }(), StepRunning: true, Staged: &StagedUpdate{Version: "0.1.1", Complete: true}},
-			"automatic · patch releases · any time · key " + teamShortID + " · paused: sudo vectory update resume",
+			"automatic · patch releases · any time · key " + teamShortID + " · paused: " + asAdmin("vectory update resume"),
 		},
 		"paused with vectory pause": {
 			UpdateView{LocalPaused: true, Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true},
-			"automatic · patch releases · any time · key " + teamShortID + " · paused with vectory pause: sudo vectory resume",
+			"automatic · patch releases · any time · key " + teamShortID + " · paused with vectory pause: " + asAdmin("vectory resume"),
 		},
 		"the minor track and two windows": {
 			UpdateView{Policy: func() UpdatePolicy {
@@ -327,7 +327,7 @@ func TestTheViewReadsThePolicyTheStepAndWhatTheAgentStaged(t *testing.T) {
 	if advice := view.Advice(); advice.Refuses() {
 		t.Fatalf("%+v", advice)
 	}
-	if want := "staged 0.1.1, waiting for you: " + CommandFor(dir, "sudo vectory update apply"); view.Headline() != want {
+	if want := "staged 0.1.1, waiting for you: " + asAdmin("vectory update apply") + " --state-dir " + ShellQuote(dir); view.Headline() != want {
 		t.Fatalf("%q want %q", view.Headline(), want)
 	}
 	// The step stopped: its status is old, and the host says so.
