@@ -559,7 +559,7 @@ Create a release key. The private half goes in the file you name, which `keygen`
 | Flag | Meaning |
 | --- | --- |
 | `--out FILE` | Required. The file for the private key. It must not exist, and a link in its place is refused. |
-| `--name NAME` | The display name in the public key line, 1 to 64 printable ASCII characters without a quotation mark or a backslash, and not starting or ending with a space. Default `release`. |
+| `--name NAME` | The display name in the public key line, 1 to 64 printable ASCII characters without a quotation mark or a backslash, and not starting or ending with a space. Default `release-` and the first 8 characters of the fingerprint, the name a key the server makes gets, so a public key line doesn't say who holds the private key. |
 
 ```text
 Wrote the private key to team.key, closed to other accounts.
