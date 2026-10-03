@@ -10,13 +10,13 @@ import (
 )
 
 // The Windows side of the path check, as plain values. rootpath_windows.go reads
-// the owner and the access entries of each handle and hands them to aclProblem,
-// which decides; keeping the decision free of Windows calls lets every case run
-// on every platform.
+// the owning account and the access entries of each handle and hands them to
+// aclProblem, which decides; keeping the decision free of Windows calls lets
+// every case run on every platform.
 //
-// Who counts as root: SYSTEM, the Administrators and TrustedInstaller (the owner
-// of Program Files and the system directories). An access entry that grants any
-// other account a right below, or an owner that is any other account, makes a
+// Who counts as root: SYSTEM, the Administrators and TrustedInstaller (which owns
+// Program Files and the system directories). An access entry that grants any
+// other account a right below, or an owning account that is any other, makes a
 // path untrusted.
 //
 // An access list isn't a set of permission bits, and one difference matters.
@@ -35,8 +35,8 @@ const (
 	sidSystem           = "S-1-5-18"
 	sidAdministrators   = "S-1-5-32-544"
 	sidTrustedInstaller = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
-	// sidCreatorOwner stands for the owner of an object, which the check has
-	// already required to be one of the three above.
+	// sidCreatorOwner stands for whichever account owns the object, which the
+	// check has already required to be one of the three above.
 	sidCreatorOwner = "S-1-3-0"
 )
 
