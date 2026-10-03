@@ -145,6 +145,8 @@ Each channel has its own events and filters, so one channel can page on-call for
 | **Device offline** | A device missed three check-ins and has been silent for the minutes you choose (15 by default, 5 to 1,440). |
 | **Device back online** | A device you were told about checks in twice again. |
 
+A new channel starts with every event except **Rollout rolled back** and **Canary paused**. Turn them on for the channels that should send them.
+
 - **Severity:** **Errors only** sends issues with error severity and failed rollouts. Everything else is a warning.
 - **Pipelines** and **Groups:** send only events about these. A rollout matches the groups it targets and the groups of its devices.
 

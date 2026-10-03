@@ -175,6 +175,7 @@ Agents built before these fixes behave differently. Rebuild agents from this rev
 
 - The Help center was reorganized around tasks: a quickstart, installing the server, connecting a device and deploying a first pipeline come first, followed by a security model and references for the agent CLI, server configuration, `vectory-admin` and ports.
 - Repository copies of the guides became short pointers into the Help center, and internal evidence moved to `docs/internal/`.
+- The Help center uses the dashboard's own labels (**Review scheduled devices**, **Review pause policy…**, **Recent Vector errors**), says that **Rollout rolled back** and **Canary paused** are off in a new channel and that **Reopen issue** needs a reason, and lists under known limits that a deployment needs at least one device when you create it.
 - On phones, wide Help center tables stack into one labelled block per row.
 - The API reference groups operations by resource and explains session authentication.
 - `scripts/capture-screenshots.mjs` captures the product screenshots from the demo fleet.
