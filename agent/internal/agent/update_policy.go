@@ -214,25 +214,42 @@ func MarshalUpdatePolicy(p UpdatePolicy) ([]byte, error) {
 // error that wraps ErrUpdatePolicyInvalid. Callers treat every error as "this
 // host takes no update", and report why.
 func ReadUpdatePolicy() (UpdatePolicy, error) {
-	paths := UpdateLocations()
+	policy, _, err := readUpdatePolicy(UpdateLocations())
+	return policy, err
+}
+
+// readUpdatePolicy also returns what the policy was read from: the SHA-256 of
+// the file, or "" when there was no file. ChangeUpdatePolicy writes only over
+// that.
+func readUpdatePolicy(paths UpdatePaths) (UpdatePolicy, string, error) {
 	r, err := openRootOwned(paths.Policy, rootOwnedFile)
 	if notExist(err) {
-		return DefaultUpdatePolicy(), nil
+		return DefaultUpdatePolicy(), "", nil
 	}
 	if err != nil {
-		return UpdatePolicy{}, err
+		return UpdatePolicy{}, "", err
 	}
 	defer r.Close()
 	data, err := r.ReadFile(maxUpdatePolicy)
 	if err != nil {
-		return UpdatePolicy{}, err
+		return UpdatePolicy{}, "", err
 	}
 	policy, err := ParseUpdatePolicy(data)
 	if err != nil {
-		return UpdatePolicy{}, fmt.Errorf("%s: %w", paths.Policy, err)
+		return UpdatePolicy{}, "", fmt.Errorf("%s: %w", paths.Policy, err)
 	}
-	return policy, nil
+	return policy, Digest(data), nil
 }
+
+// ErrUpdatePolicyChanged is what ChangeUpdatePolicy answers when the policy kept
+// changing under it.
+var ErrUpdatePolicyChanged = errors.New("the update policy changed while it was being edited")
+
+var errUpdatePolicyNeedsRoot = errors.New("the update policy can only be written by root (an Administrator on Windows)")
+
+// changeAttempts is how many times ChangeUpdatePolicy reads and writes before it
+// gives up on a policy that other writers keep changing.
+const changeAttempts = 4
 
 // WriteUpdatePolicy writes the policy, which only root may do: it makes the
 // policy's directory (root's, readable by everyone; on Windows with an access
@@ -241,15 +258,52 @@ func ReadUpdatePolicy() (UpdatePolicy, error) {
 // and only root can change. It refuses to write below a directory that isn't
 // root's alone, and a policy a reader would refuse. UpdatedAt is set to now, and a
 // key with no PinnedAt is pinned now; the policy a caller read keeps the time
-// each key was pinned. Used by setup, `vectory update`, and the privileged step
-// after a rollover (the pins only).
+// each key was pinned. It replaces whatever is there, so it is for a caller that
+// decides the whole policy (setup); a caller that edits what is there uses
+// ChangeUpdatePolicy.
 func WriteUpdatePolicy(p UpdatePolicy) error {
-	return writeUpdatePolicy(UpdateLocations(), p, time.Now())
+	return writeUpdatePolicy(UpdateLocations(), p, time.Now(), nil)
 }
 
-func writeUpdatePolicy(paths UpdatePaths, p UpdatePolicy, now time.Time) error {
+// ChangeUpdatePolicy edits the policy as root: it reads it, calls change on the
+// copy, and writes the result, as WriteUpdatePolicy does, but only over the file
+// it read. If another writer replaced the policy in between (a person running
+// `vectory update` while the privileged step writes the pins of a rollover, say),
+// the edit is made again on what is there now, so that neither writer's change is
+// lost: a lost change could undo a person's `vectory update off`. change may be
+// called more than once and must make the same edit each time; an error from it
+// writes nothing. After four attempts the answer is ErrUpdatePolicyChanged. A
+// host with no policy file is edited from the default policy. Used by `vectory
+// update pause`, `resume` and `off`, and by the privileged step after a rollover
+// (the pins only).
+func ChangeUpdatePolicy(change func(*UpdatePolicy) error) error {
 	if !canWriteRootOwned() {
-		return errors.New("the update policy can only be written by root (an Administrator on Windows)")
+		return errUpdatePolicyNeedsRoot
+	}
+	paths := UpdateLocations()
+	for attempt := 0; attempt < changeAttempts; attempt++ {
+		policy, basis, err := readUpdatePolicy(paths)
+		if err != nil {
+			return err
+		}
+		if err := change(&policy); err != nil {
+			return err
+		}
+		if err := writeUpdatePolicy(paths, policy, time.Now(), &basis); !errors.Is(err, ErrUpdatePolicyChanged) {
+			return err
+		}
+	}
+	return ErrUpdatePolicyChanged
+}
+
+// writeUpdatePolicy writes p at the time now. With a basis, the file that is
+// there must be the one the basis names (its SHA-256, or "" for no file), or
+// nothing is written and the answer is ErrUpdatePolicyChanged; the check and the
+// rename that follows it are two steps, so a writer that doesn't use this
+// function can still slip between them for as long as it takes to rename a file.
+func writeUpdatePolicy(paths UpdatePaths, p UpdatePolicy, now time.Time, basis *string) error {
+	if !canWriteRootOwned() {
+		return errUpdatePolicyNeedsRoot
 	}
 	now = now.UTC().Truncate(time.Second)
 	p.UpdatedAt = now
@@ -268,5 +322,19 @@ func writeUpdatePolicy(paths UpdatePaths, p UpdatePolicy, now time.Time) error {
 		return err
 	}
 	defer dir.Close()
+	if basis != nil {
+		current, err := dir.ReadFileAt(updatePolicyFile, maxUpdatePolicy)
+		digest := ""
+		switch {
+		case notExist(err):
+		case err != nil:
+			return err
+		default:
+			digest = Digest(current)
+		}
+		if digest != *basis {
+			return ErrUpdatePolicyChanged
+		}
+	}
 	return dir.WriteFile(updatePolicyFile, data, rootReadable)
 }
