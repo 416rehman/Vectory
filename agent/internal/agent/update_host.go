@@ -64,6 +64,10 @@ type updateServiceState struct {
 	Restarts int
 	// PID is the main process, 0 when there is none.
 	PID int
+	// CountsFromStart says Restarts counts from the start the step made, so that a
+	// restart seen at the first look is a restart of this watch and not one that came
+	// before it.
+	CountsFromStart bool
 	// Unloaded says the manager has no such service at all (launchd: no such job); State
 	// is "inactive" then. A unit that merely stopped is "inactive" and loaded.
 	Unloaded bool

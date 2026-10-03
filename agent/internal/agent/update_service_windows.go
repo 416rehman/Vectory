@@ -148,7 +148,7 @@ func (h *windowsUpdateHost) ServiceState(ctx context.Context) (updateServiceStat
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.watch.observe(observeStatus(status)), nil
+	return h.watch.observe(observeStatus(status), time.Now()), nil
 }
 
 // StopService stops the agent service, which waits for Vector's graceful drain.

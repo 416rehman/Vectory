@@ -154,7 +154,11 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		_ = service.Delete()
 		return "", err
 	}
-	return ServiceCreated, service.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.ServiceRestart, Delay: 5 * time.Second}, {Type: mgr.ServiceRestart, Delay: 30 * time.Second}, {Type: mgr.ServiceRestart, Delay: time.Minute}}, 24*60*60)
+	actions := make([]mgr.RecoveryAction, len(agentServiceRestartDelays))
+	for i, delay := range agentServiceRestartDelays {
+		actions[i] = mgr.RecoveryAction{Type: mgr.ServiceRestart, Delay: delay}
+	}
+	return ServiceCreated, service.SetRecoveryActions(actions, 24*60*60)
 }
 func ServiceControl(action string) error {
 	m, err := mgr.Connect()
