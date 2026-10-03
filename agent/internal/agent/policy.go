@@ -182,7 +182,7 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 	// `vectory allow` adds to the host's allowances and keeps the rest.
 	flag := map[string]string{"allowed_network_hosts": "--network", "allowed_listen_addresses": "--listener", "allowed_file_roots": "--file-root"}[e.Allowance]
 	grant := func(entry string) string {
-		return "Allow it on the host, with the agent stopped: " + CommandFor(e.StateDir, "vectory allow "+flag+" "+quoteArg(entry)) + ". Or deploy to a full-mode device."
+		return hintWithCommand("Allow it on the host, with the agent stopped: ", e.StateDir, "vectory allow "+flag+" "+quoteArg(entry), ". Or deploy to a full-mode device.")
 	}
 	subject := e.subject()
 	switch {
@@ -194,7 +194,7 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 		d.Hint = grant(e.Suggested)
 	case e.Allowance == "allowed_file_roots" && e.Resource != "" && e.Suggested == "":
 		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
-		d.Hint = "Choose the directory that holds these files and allow it on the host, with the agent stopped: " + CommandFor(e.StateDir, "vectory allow --file-root DIR") + ". Or deploy to a full-mode device."
+		d.Hint = hintWithCommand("Choose the directory that holds these files and allow it on the host, with the agent stopped: ", e.StateDir, "vectory allow --file-root DIR", ". Or deploy to a full-mode device.")
 	case e.Allowance == "allowed_file_roots" && e.Resource != "":
 		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
 		d.Hint = grant(e.Suggested)

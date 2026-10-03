@@ -74,7 +74,7 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	if info, err := os.Stat(dir); err == nil {
 		detail := fmt.Sprintf("%s (%04o%s)", dir, info.Mode().Perm(), ownerSuffix(info))
 		if info.Mode().Perm()&0077 != 0 {
-			report.add("state", "warn", "State directory", detail+" is readable by other accounts", "Restrict it: chmod 700 "+quoteArg(dir))
+			report.add("state", "warn", "State directory", detail+" is readable by other accounts", "Restrict it: chmod 700 "+ShellQuote(dir))
 		} else {
 			report.add("state", "ok", "State directory", detail, "")
 		}
@@ -167,7 +167,7 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	case foreground:
 		report.add("service", "ok", "Service", "none · the agent is running in the foreground", "")
 	case svc.Manager == "":
-		report.add("service", "warn", "Service", "Not registered, and no service manager was detected.", "Run the agent under your supervisor: vectory run --state-dir "+quoteArg(dir))
+		report.add("service", "warn", "Service", "Not registered, and no service manager was detected.", "Run the agent under your supervisor: vectory run --state-dir "+ShellQuote(dir))
 	default:
 		report.add("service", "warn", "Service", "Not registered, and the agent isn't running.", "Register and start it: "+CommandFor(dir, "sudo vectory setup")+" (or "+CommandFor(dir, "vectory service-install")+" and service-start).")
 	}

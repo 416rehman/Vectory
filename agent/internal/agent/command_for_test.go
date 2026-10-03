@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // A command the agent prints for an operator to run acts on the agent the
@@ -81,7 +82,7 @@ func TestStatusNextStepsNameANonDefaultStateDirectory(t *testing.T) {
 // What a refused version tells the operator to run names the agent's state
 // directory, in the issue the agent reports and in the text `vectory status`
 // prints from it, and the report doesn't hide the path.
-func TestRefusalFixNamesTheStateDirectoryAndSurvivesRedaction(t *testing.T) {
+func TestRefusalFixNamesStateDir(t *testing.T) {
 	e, _, _ := fixture(t, newConfig)
 	data := []byte(`{"sources":{"in":{"type":"demo_logs"}},"sinks":{"out":{"type":"http","inputs":["in"],"uri":"http://127.0.0.1:8688/","encoding":{"codec":"json"}}}}`)
 	err := e.Settings.CapabilityPolicy.Check(data)
@@ -104,6 +105,28 @@ func TestRefusalFixNamesTheStateDirectoryAndSurvivesRedaction(t *testing.T) {
 	var refusal *PolicyRefusal
 	if !asPolicyRefusal(err, &refusal) || strings.Contains(refusal.Diagnostic().Hint, "--state-dir") {
 		t.Fatal("a refusal without a directory printed one")
+	}
+}
+
+// A diagnostic is bounded. A state directory that doesn't fit is not cut in the
+// middle, which would send an operator to the wrong place: the hint names the
+// flag, and status prints the whole command.
+func TestAFixWithALongStateDirectoryNeverPrintsAPartialPath(t *testing.T) {
+	long := "/srv/" + strings.Repeat("a-long-directory-name/", 12) + "state"
+	for name, hint := range map[string]string{
+		"allow":       hintWithCommand("Allow it on the host, with the agent stopped: ", long, "vectory allow --network 127.0.0.1:8688", ". Or deploy to a full-mode device."),
+		"binary":      binaryUnavailable(long).Diagnostics[0].Hint,
+		"short allow": hintWithCommand("Allow it on the host, with the agent stopped: ", "/srv/agent", "vectory allow --network 127.0.0.1:8688", ". Or deploy to a full-mode device."),
+	} {
+		if utf8.RuneCountInString(hint) > maxDiagnosticHint || strings.Contains(hint, "…") || strings.Contains(hint, "/srv/a-long") && name != "short allow" {
+			t.Errorf("%s: %q", name, hint)
+		}
+		if name != "short allow" && !strings.Contains(hint, "naming this agent's --state-dir") {
+			t.Errorf("%s doesn't say where the directory goes: %q", name, hint)
+		}
+	}
+	if hint := binaryUnavailable("/srv/agent").Diagnostics[0].Hint; !strings.HasSuffix(hint, "vectory re-adopt --expected-sha256 SHA256 --state-dir /srv/agent.") {
+		t.Errorf("a directory that fits is printed whole: %q", hint)
 	}
 }
 
