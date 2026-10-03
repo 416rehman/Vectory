@@ -24,7 +24,12 @@ import {
   type GroupOperation,
 } from "./groupRequests";
 import { setDifference, toggled, withIds } from "./deviceInventory";
-import { readUnavailableMembers } from "./groupMembership";
+import {
+  conflictSentences,
+  parseMembershipConflicts,
+  readUnavailableMembers,
+  type MembershipConflicts,
+} from "./groupMembership";
 import "./group-editor.css";
 
 /** A group holds this many devices at most; the server refuses more. */
@@ -76,6 +81,10 @@ export default function GroupEditor({
   const [unavailable, setUnavailable] = useState<readonly string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The device and both assignments a refused save collided on.
+  const [conflicts, setConflicts] = useState<MembershipConflicts | null>(null);
+  // Why the preview says this edit can't be saved, or "".
+  const [blockedReason, setBlockedReason] = useState("");
   const [blockedByCanary, setBlockedByCanary] = useState(false);
   const [review, setReview] = useState<"conflict" | "uncertain" | null>(null);
   const [latest, setLatest] = useState<Group | null>(null);
@@ -227,6 +236,7 @@ export default function GroupEditor({
     )
       return;
     setError("");
+    setConflicts(null);
     setBlockedByCanary(false);
     let operation: GroupOperation | null = null;
     try {
@@ -345,6 +355,11 @@ export default function GroupEditor({
         failure.status !== 408
       ) {
         setError(failure.message);
+        setConflicts(
+          failure.code === "CONFLICT"
+            ? parseMembershipConflicts(failure.details, failure.detailsTotal)
+            : null,
+        );
         setBlockedByCanary(failure.code === "ACTIVE_CANARY_OVERLAP");
       } else setReview("uncertain");
     }
@@ -496,7 +511,11 @@ export default function GroupEditor({
               {pendingCreate && !review && !busy && (
                 <ErrorBox message="Review the pending group request on the Groups page before creating another group. Your existing group edits are still available." />
               )}
-              {error && <ErrorBox message={error} />}
+              {conflicts && base
+                ? conflictSentences(conflicts, base.id).map((line) => (
+                    <ErrorBox key={line} message={line} />
+                  ))
+                : error && <ErrorBox message={error} />}
               {tooMany && (
                 <ErrorBox
                   message={`A group holds up to ${MAX_MEMBERS.toLocaleString()} devices. Remove ${(ids.size - MAX_MEMBERS).toLocaleString()} to save.`}
@@ -763,10 +782,19 @@ export default function GroupEditor({
                 </section>
               )}
               {base && allowed && compatible && !review && (
-                <GroupMembershipEffects group={base} ids={ids} />
+                <GroupMembershipEffects
+                  group={base}
+                  ids={ids}
+                  onBlocked={setBlockedReason}
+                />
               )}
             </div>
             <div className="modal-footer">
+              {allowed && blockedReason && (
+                <p className="group-save-blocked" id="group-save-blocked">
+                  {blockedReason}
+                </p>
+              )}
               <Button variant="secondary" onClick={close} disabled={busy}>
                 {allowed && !(review === "uncertain" && !base)
                   ? "Cancel"
@@ -776,6 +804,9 @@ export default function GroupEditor({
                 <Button
                   type="submit"
                   busy={busy}
+                  aria-describedby={
+                    blockedReason ? "group-save-blocked" : undefined
+                  }
                   disabled={
                     !compatible ||
                     pendingCreate ||
@@ -783,7 +814,8 @@ export default function GroupEditor({
                     !name.trim() ||
                     (base !== null && !changed) ||
                     loadingMembers ||
-                    tooMany
+                    tooMany ||
+                    !!blockedReason
                   }
                 >
                   {base ? "Save changes" : "Create group"}

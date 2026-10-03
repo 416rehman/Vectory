@@ -3,11 +3,14 @@ import { APIError, type GroupMembershipPreview } from "./api";
 import {
   AUTO_PREVIEW,
   BUSY_PREVIEW_RETRIES,
+  conflictSentences,
   membershipSentence,
+  parseMembershipConflicts,
   previewBusy,
   previewWanted,
   previewWithRetries,
   readUnavailableMembers,
+  savingBlocked,
 } from "./groupMembership";
 
 type Entry = GroupMembershipPreview["devices"][number];
@@ -221,5 +224,228 @@ describe("members the server no longer knows", () => {
     const reads = serve([]);
     expect(await readUnavailableMembers("g1", 0, signal())).toEqual([]);
     expect(reads).toHaveLength(1);
+  });
+});
+
+describe("a group edit that collides with another assignment", () => {
+  const BERLIN = "00000000-0000-4000-8000-0000000000b1";
+  const ROME = "00000000-0000-4000-8000-0000000000b2";
+  const description = (over: Record<string, unknown>) => ({
+    id: "a1",
+    name: null,
+    resource: "policy",
+    priority: 100,
+    target_mode: "snapshot",
+    status: "active",
+    created_at: null,
+    version_id: null,
+    version_number: null,
+    configuration_id: null,
+    configuration_name: null,
+    policy: {
+      heartbeat_seconds: 15,
+      sync_paused: false,
+      telemetry_enabled: true,
+    },
+    policy_id: null,
+    policy_name: null,
+    targets: "devices",
+    groups: [],
+    ...over,
+  });
+  const byHand = (over: Record<string, unknown> = {}) =>
+    description({ id: "a1", policy_name: "Fast check-in", ...over });
+  const followingBerlin = (over: Record<string, unknown> = {}) =>
+    description({
+      id: "b1",
+      policy_name: "Group defaults",
+      target_mode: "persistent",
+      targets: "group",
+      groups: [{ id: BERLIN, name: "Berlin edge" }],
+      ...over,
+    });
+  const collision = (device: string, assignments: unknown[], over = {}) => ({
+    device_id: `00000000-0000-4000-8000-0000000000${device.slice(-2)}`,
+    device_name: device,
+    resource: "policy",
+    priority: 100,
+    assignments,
+    ...over,
+  });
+  const parsed = (list: unknown[], total?: number) => {
+    const named = parseMembershipConflicts(list, total);
+    expect(named).not.toBeNull();
+    return named!;
+  };
+
+  it("names the device, both assignments and what to do", () => {
+    const named = parsed([collision("edge-01", [byHand(), followingBerlin()])]);
+    expect(conflictSentences(named, BERLIN)).toEqual([
+      "edge-01 already follows “Fast check-in” (agent settings, priority 100), and “Group defaults” follows Berlin edge at the same priority. Give one of them another priority, or remove edge-01 from the targets of “Fast check-in”, then add it to the group.",
+    ]);
+    // The order the server lists the two in does not matter.
+    const swapped = parsed([
+      collision("edge-01", [followingBerlin(), byHand()]),
+    ]);
+    expect(conflictSentences(swapped, BERLIN)).toEqual(
+      conflictSentences(named, BERLIN),
+    );
+  });
+
+  it("says pipeline, with the version, for pipelines", () => {
+    const metrics = description({
+      id: "p1",
+      resource: "configuration",
+      policy: null,
+      configuration_name: "Edge metrics",
+      version_number: 1,
+    });
+    const logs = description({
+      id: "p2",
+      resource: "configuration",
+      policy: null,
+      configuration_name: "Access logs",
+      version_number: 4,
+      target_mode: "persistent",
+      targets: "group",
+      groups: [{ id: BERLIN, name: "Berlin edge" }],
+    });
+    expect(
+      conflictSentences(
+        parsed([
+          collision("edge-03", [metrics, logs], { resource: "configuration" }),
+        ]),
+        BERLIN,
+      ),
+    ).toEqual([
+      "edge-03 already follows Edge metrics v1 (pipeline, priority 100), and Access logs v4 follows Berlin edge at the same priority. Give one of them another priority, or remove edge-03 from the targets of Edge metrics v1, then add it to the group.",
+    ]);
+  });
+
+  it("sends a device that follows another group out of that group", () => {
+    const viaRome = byHand({
+      targets: "group",
+      groups: [{ id: ROME, name: "Rome edge" }],
+      target_mode: "persistent",
+    });
+    expect(
+      conflictSentences(
+        parsed([collision("edge-01", [viaRome, followingBerlin()])]),
+        BERLIN,
+      )[0],
+    ).toContain("or take edge-01 out of Rome edge, then add it to the group.");
+  });
+
+  it("names the first devices once for the same two assignments", () => {
+    const named = parsed(
+      ["edge-01", "edge-02", "edge-03", "edge-04", "edge-05"].map((device) =>
+        collision(device, [byHand(), followingBerlin()]),
+      ),
+    );
+    const lines = conflictSentences(named, BERLIN);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe(
+      "edge-01, edge-02 and 3 more already follow “Fast check-in” (agent settings, priority 100), and “Group defaults” follows Berlin edge at the same priority. Give one of them another priority, or remove those devices from the targets of “Fast check-in”, then add them to the group.",
+    );
+  });
+
+  it("says each pair of assignments once and counts what is not listed", () => {
+    const other = byHand({ id: "a2", policy_name: "Slow check-in" });
+    const named = parsed(
+      [
+        collision("edge-01", [byHand(), followingBerlin()]),
+        collision("edge-02", [other, followingBerlin()]),
+      ],
+      12,
+    );
+    const lines = conflictSentences(named, BERLIN);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^edge-01 already follows “Fast check-in”/);
+    expect(lines[1]).toMatch(/^edge-02 already follows “Slow check-in”/);
+    expect(lines[2]).toBe("10 more conflicts aren't listed here.");
+    expect(
+      conflictSentences(
+        parsed([collision("edge-01", [byHand(), followingBerlin()])], 2),
+        BERLIN,
+      ).at(-1),
+    ).toBe("1 more conflict isn't listed here.");
+  });
+
+  it("does not guess which assignment is new when it can't tell", () => {
+    const both = parsed([
+      collision("edge-01", [
+        byHand({
+          targets: "group",
+          groups: [{ id: BERLIN, name: "Berlin edge" }],
+        }),
+        followingBerlin(),
+      ]),
+    ]);
+    expect(conflictSentences(both, BERLIN)[0]).toBe(
+      "edge-01 would follow both “Fast check-in” and “Group defaults” (agent settings, priority 100). Give one of them another priority, or take edge-01 out of one of them, then save again.",
+    );
+  });
+
+  it("falls back to the server's sentence when it names nothing usable", () => {
+    expect(parseMembershipConflicts(undefined)).toBeNull();
+    expect(parseMembershipConflicts([])).toBeNull();
+    expect(parseMembershipConflicts("edge-01")).toBeNull();
+    expect(
+      parseMembershipConflicts([collision("edge-01", [byHand()])]),
+    ).toBeNull();
+    expect(
+      parseMembershipConflicts(
+        Array.from({ length: 11 }, () =>
+          collision("edge-01", [byHand(), followingBerlin()]),
+        ),
+      ),
+    ).toBeNull();
+    // A total that is not larger than what is listed is never believed.
+    expect(
+      parseMembershipConflicts(
+        [collision("edge-01", [byHand(), followingBerlin()])],
+        0,
+      )?.total,
+    ).toBe(1);
+  });
+
+  it("blocks saving with the reason, and never for an edit that is fine", () => {
+    const sentence =
+      "Group membership creates conflicting equal-priority assignments";
+    const preview = (blockers: GroupMembershipPreview["blockers"]) =>
+      ({
+        group_id: BERLIN,
+        revision: 1,
+        stale: false,
+        ready: !blockers.length,
+        blockers,
+        devices: [],
+      }) as GroupMembershipPreview;
+    expect(savingBlocked(null)).toBe("");
+    expect(savingBlocked(preview([]))).toBe("");
+    expect(
+      savingBlocked(
+        preview([
+          {
+            code: "CONFLICT",
+            reason: sentence,
+            details: [collision("edge-01", [byHand(), followingBerlin()])],
+            details_total: 1,
+          },
+        ]),
+      ),
+    ).toBe("Saving is blocked until the conflict above is resolved.");
+    // Another blocker, or a conflict an older server did not name, says what
+    // the server said.
+    expect(
+      savingBlocked(
+        preview([
+          { code: "ACTIVE_CANARY_OVERLAP", reason: "Wait for the canary." },
+        ]),
+      ),
+    ).toBe("Wait for the canary.");
+    expect(
+      savingBlocked(preview([{ code: "CONFLICT", reason: sentence }])),
+    ).toBe(sentence);
   });
 });
