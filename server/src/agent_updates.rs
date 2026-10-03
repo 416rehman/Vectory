@@ -125,15 +125,15 @@ pub async fn enabled(conn: &mut SqliteConnection) -> Result<bool> {
             .await?,
     )
 }
+/// Whether updates are on, read apart from any transaction.
+pub async fn is_on(s: &State) -> Result<bool> {
+    let mut conn = s.pool.acquire().await?;
+    enabled(&mut conn).await
+}
 /// `404 AGENT_UPDATES_OFF` while updates are off: what every route but the
 /// setting asks first, before it reads a body or a query.
 pub async fn guard(s: &State) -> Result<()> {
-    let mut conn = s.pool.acquire().await?;
-    if enabled(&mut conn).await? {
-        Ok(())
-    } else {
-        Err(off())
-    }
+    if is_on(s).await? { Ok(()) } else { Err(off()) }
 }
 /// The setting, or `404 AGENT_UPDATES_OFF` while updates are off.
 pub async fn require_on(conn: &mut SqliteConnection) -> Result<Setting> {
@@ -342,6 +342,10 @@ impl Report {
     }
     pub fn code(&self) -> Option<&str> {
         self.member["code"].as_str()
+    }
+    /// The host's policy is paused.
+    pub fn paused(&self) -> bool {
+        self.member["paused"] == true
     }
     pub fn last(&self) -> Option<&Value> {
         self.member.get("last")
@@ -728,10 +732,39 @@ pub struct Outcome {
     pub enabled: bool,
     pub offer: Option<Value>,
 }
+/// Whether the report carries a rollback or a failure that the report stored
+/// before it did not: the agent's record of its latest update (`last`) names a
+/// result that is new to the server, which records it once.
+async fn new_result(
+    conn: &mut SqliteConnection,
+    device: &str,
+    report: Option<&Report>,
+) -> Result<bool> {
+    let Some(last) = report.and_then(Report::last) else {
+        return Ok(false);
+    };
+    if !matches!(last["outcome"].as_str(), Some("rolled_back" | "failed")) {
+        return Ok(false);
+    }
+    let before: Option<String> = sqlx::query_scalar(
+        "SELECT json_extract(report,'$.last') FROM agent_update_reports WHERE device_id=?",
+    )
+    .bind(device)
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten();
+    Ok(before
+        .map(|before| db::parse(&before))
+        .transpose()?
+        .as_ref()
+        != Some(last))
+}
+
 /// The agent-update part of a check-in, inside its transaction: store the report
 /// (a check-in without one removes it), let the device's target move as far as
 /// the check-in proves, and find the offer the device holds. While updates are
-/// off nothing but the stored report is touched, and nothing is offered.
+/// off nothing is read, kept, moved or offered: what a host says about updates
+/// then is not heard.
 pub async fn heartbeat(
     conn: &mut SqliteConnection,
     s: &State,
@@ -739,7 +772,6 @@ pub async fn heartbeat(
     build: &Build<'_>,
     report: Option<&Report>,
 ) -> Result<Outcome> {
-    store(conn, build.device_id, report, now).await?;
     let setting = setting(conn).await?;
     if !setting.enabled {
         return Ok(Outcome {
@@ -747,7 +779,9 @@ pub async fn heartbeat(
             offer: None,
         });
     }
-    crate::agent_update_rollouts::observe(conn, s, now, build, report).await?;
+    let fresh = new_result(conn, build.device_id, report).await?;
+    store(conn, build.device_id, report, now).await?;
+    crate::agent_update_rollouts::observe(conn, s, now, build, report, fresh).await?;
     let offer = if setting.stopped.is_some() {
         None
     } else {
@@ -1235,6 +1269,10 @@ pub async fn put(AppState(s): AppState<State>, h: HeaderMap, bytes: Bytes) -> Re
             sqlx::query("UPDATE agent_update_settings SET enabled=0 WHERE id=1")
                 .execute(&mut *tx)
                 .await?;
+            // What hosts said about updates is kept only while updates are on.
+            sqlx::query("DELETE FROM agent_update_reports")
+                .execute(&mut *tx)
+                .await?;
             audit(
                 &mut tx,
                 &actor_id,
@@ -1309,6 +1347,16 @@ pub async fn put(AppState(s): AppState<State>, h: HeaderMap, bytes: Bytes) -> Re
             sqlx::query("UPDATE agent_update_settings SET enabled=1 WHERE id=1")
                 .execute(&mut *tx)
                 .await?;
+            if !setting.enabled {
+                // A device that was finishing an update when they were turned off
+                // (Stop all updates lets it finish) could report nothing since: the
+                // time a target has waited, which every silence rule measures,
+                // starts again now.
+                sqlx::query("UPDATE agent_update_targets SET updated_at=? WHERE state IN ('pending','offered','downloading','staged','waiting_for_host','waiting_for_window','applying','restarted')")
+                    .bind(&at)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             let (custody, fingerprint) = match (&made, &current) {
                 (Some((key, kind)), _) => (kind.as_str().to_owned(), key.fingerprint().to_owned()),
                 (None, Some(current)) => (current.custody.clone(), current.fingerprint.clone()),

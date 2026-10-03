@@ -4,15 +4,20 @@
 //! is a valid release, and these tests decide only that the server's offers pass
 //! the check a host makes.
 mod audit;
+mod capacity;
 mod download;
 mod engine;
 mod fleet;
 mod issues;
 mod keys;
+mod late_results;
+mod liveness;
 mod notify;
 mod releases;
 mod report;
+mod restore;
 mod review;
 mod rollouts;
 mod settings;
+mod startup;
 mod support;

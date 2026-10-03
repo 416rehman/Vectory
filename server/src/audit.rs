@@ -271,7 +271,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{},'validation_id',{},'configuration_id',{},'run_tests',{},'truncated',{},'device_count',{},'pending_count',{},'offline_count',{},'unsupported_count',{}) AS extra{}",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'agent_update_rollouts_to_cancel',{},'agent_update_stop',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{},'validation_id',{},'configuration_id',{},'run_tests',{},'truncated',{},'device_count',{},'pending_count',{},'offline_count',{},'unsupported_count',{}) AS extra{}",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -293,6 +293,8 @@ fn base(details: bool) -> String {
             number("details.password_reset_codes"),
             number("details.enrollment_tokens_to_revoke"),
             number("details.mfa_recovery_codes"),
+            number("details.agent_update_rollouts_to_cancel"),
+            number("details.agent_update_stop"),
             text("details.reason_code", 64),
             text("details.name", 100),
             text("details.token_id", 128),
@@ -653,6 +655,13 @@ fn update_keys(action: &str) -> Option<&'static [&'static str]> {
             "reason",
             "cancelled_rollouts",
         ],
+        "agent_release.expire" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "cancelled_rollouts",
+        ],
         "agent_update_rollout.release" => &["stage", "device_ids", "released_count"],
         "agent_update_rollout.gate" => &["gate_state", "reason", "verified_count"],
         "device.agent_update" => &[
@@ -710,6 +719,8 @@ fn existing_keys(action: &str) -> &'static [&'static str] {
             "password_reset_codes",
             "enrollment_tokens_to_revoke",
             "mfa_recovery_codes",
+            "agent_update_rollouts_to_cancel",
+            "agent_update_stop",
         ],
         // Written by notifications and detection: a name and a change summary
         // built from secret-free settings (never a URL path or credential).

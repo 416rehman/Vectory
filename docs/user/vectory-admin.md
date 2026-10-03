@@ -18,7 +18,7 @@ vectory-admin --data-dir PATH <command> [flags]
 
 | Command | What it does |
 | --- | --- |
-| [`invalidate-restored-access`](#invalidate-restored-access) | After a restore, end every session and revoke reset links, recovery codes and enrollment tokens. |
+| [`invalidate-restored-access`](#invalidate-restored-access) | After a restore, end every session, revoke reset links, recovery codes and enrollment tokens, and stop agent updates. |
 | [`generation-recovery-state`](#generation-recovery-state) | Export each device's configuration counters for review after a restore. |
 | [`recover-generations`](#recover-generations) | Raise configuration counters above what devices already accepted, from a reviewed report. |
 | [`rotate-signing-key`](#rotate-signing-key) | Create a new manifest signing key. |
@@ -39,6 +39,8 @@ vectory-admin --data-dir /var/lib/vectory invalidate-restored-access --apply
 ```
 
 The first command shows counts only. With `--apply` it signs out every browser session, deletes all password reset links and two-factor recovery codes, and revokes all enrollment and device-recovery tokens. Passwords, roles, authenticators, devices and deployments stay as restored.
+
+With [agent updates](agent-updates.md) on, `--apply` also does **Stop all updates**, as a local administrator. It cancels every active or paused update rollout, withdraws every offer and refuses new rollouts until an administrator reviews the release keys, the releases and the rollouts and chooses **Clear the stop** in **Settings → Agent updates**. The counts show how many rollouts it will cancel (`agent_update_rollouts_to_cancel`) and whether it will set the stop (`agent_update_stop`). With updates off, or with a stop already set, it changes nothing about them.
 
 > [!WARNING]
 > **Saved recovery codes stop working**

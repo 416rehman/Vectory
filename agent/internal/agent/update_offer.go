@@ -651,7 +651,7 @@ func (e *Engine) sayStaged(version string, size int64, facts updateFacts) {
 	line := "Agent update " + version + " (" + byteSize(size) + ") is staged"
 	switch {
 	case facts.policy.Consent == UpdateConsentAsk:
-		line += ", and waits for you: " + CommandFor(e.Dir, "sudo vectory update apply") + "."
+		line += ", and waits for you: " + AdminCommandFor(e.Dir, "vectory update apply") + "."
 	default:
 		if windows, err := facts.policy.ParsedWindows(); err == nil && !windows.OpenAt(facts.now.Local()) {
 			line += ", and waits for the update window."

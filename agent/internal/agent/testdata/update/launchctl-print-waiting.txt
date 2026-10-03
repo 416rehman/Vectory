@@ -1,0 +1,35 @@
+system/io.vectory.agent = {
+	active count = 0
+	path = /Library/LaunchDaemons/io.vectory.agent.plist
+	type = LaunchDaemon
+	state = waiting
+
+	program = /usr/local/bin/vectory
+	arguments = {
+		/usr/local/bin/vectory
+		run
+		--state-dir
+		/Library/Application Support/Vectory/agent
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		XPC_SERVICE_NAME => io.vectory.agent
+	}
+
+	domain = system
+	username = _vectory
+	minimum runtime = 10
+	exit timeout = 330
+	runs = 2
+	last exit code = 2
+	immediate reason = inefficient
+	forks = 0
+	execs = 2
+	initial spawn type = daemon (3)
+
+	properties = keepalive | runatload | inferred program
+}

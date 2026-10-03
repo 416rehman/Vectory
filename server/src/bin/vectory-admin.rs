@@ -13,7 +13,8 @@ Accounts
 After restoring a backup
   invalidate-restored-access [--apply]
                                   Sign everyone out; revoke reset codes, MFA recovery codes
-                                  and enrollment tokens (preview without --apply)
+                                  and enrollment tokens; stop agent updates when they are on
+                                  (preview without --apply)
   generation-recovery-state       Export device counters to review after a restore
   recover-generations --report FILE [--apply]
                                   Raise generations from a reviewed report (preview without --apply)

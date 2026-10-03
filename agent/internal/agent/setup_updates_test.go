@@ -69,28 +69,55 @@ type consentFixture struct {
 	// installFails and eligibility let a test change what the fake step says.
 	installFails error
 	eligibility  string
+	// registered is what the fake service manager registered: the service for an
+	// executable, a state directory and an account, once setup has registered it. The
+	// fake step reads it as the real one reads the registered service.
+	registered    bool
+	registeredFor [3]string
+	// consentAtRegistration is the level the policy file said when the service was
+	// registered: the policy is in place before the service exists, so before its first
+	// check-in.
+	consentAtRegistration string
 }
 
 // serviceAccountForTests is an unprivileged account the service step can name:
-// setup checks the account exists, and that it can run Vector.
+// setup checks that the account exists, and that it can run Vector, as it would
+// for any account.
+//
+// Run by anyone but root, the account is the one that runs the tests. It owns
+// everything the fixture builds, so what other accounts may do in the temporary
+// directory decides nothing (macOS keeps the temporary directory private to its
+// user, and a stranger would be refused there for good reason). Run as root, the
+// account is nobody, whom setup really starts Vector as; for that the temporary
+// directory has to be open to other accounts.
 func serviceAccountForTests(t *testing.T) string {
 	t.Helper()
-	switch runtime.GOOS {
-	case "windows":
+	if runtime.GOOS == "windows" {
 		return ""
+	}
+	if os.Geteuid() != 0 {
+		current, err := user.Current()
+		if err != nil || CheckServiceAccountName(current.Username) != nil {
+			t.Skipf("setup with a service needs an account to name, and the account that runs the tests can't be one: %v", err)
+		}
+		return current.Username
 	}
 	if _, err := user.Lookup("nobody"); err != nil {
 		t.Skip("setup with a service needs an unprivileged account to name, and this host has no nobody")
 	}
+	if problem := accountAccessProblem(context.Background(), "nobody", os.TempDir(), false); problem != "" {
+		t.Skipf("the temporary directory isn't open to the account the service runs as: %s", problem)
+	}
 	return "nobody"
 }
 
-// openTo makes every directory from path up to the temporary directory
-// searchable by everyone, so that the service account can reach what setup
-// checks that it can run.
+// openTo makes every directory from path up to the temporary directory (not
+// including it, which isn't the test's to change) searchable by everyone, so
+// that nobody can reach what setup checks that it can run.
 func openTo(t *testing.T, path string) {
 	t.Helper()
-	for p := path; p != filepath.Dir(p) && p != os.TempDir(); p = filepath.Dir(p) {
+	stop := filepath.Clean(os.TempDir())
+	for p := filepath.Clean(path); p != filepath.Dir(p) && p != stop; p = filepath.Dir(p) {
 		_ = os.Chmod(p, 0o755)
 	}
 }
@@ -104,6 +131,14 @@ func newConsentFixture(t *testing.T) *consentFixture {
 	root := filepath.Dir(filepath.Dir(filepath.Dir(paths.PolicyDir)))
 	f := &consentFixture{t: t, server: newSetupServer(t), paths: paths, root: root, key: testReleaseKey(t, "team"), eligibility: UpdateEligible}
 	options, dir, managed := setupFixture(t)
+	// No link on the way to the state directory. Withdrawing updates deletes what
+	// the agent staged there only through a path that root alone can change, and
+	// that check refuses a link at any depth: on macOS the temporary directory is
+	// behind /var, which is one.
+	if real, err := filepath.EvalSymlinks(filepath.Dir(dir)); err == nil {
+		dir, managed = filepath.Join(real, filepath.Base(dir)), filepath.Join(real, "managed", "vector.json")
+		options.StateDir, options.ManagedConfig = dir, managed
+	}
 	f.options, f.dir, f.managed = options, dir, managed
 	f.agent = filepath.Join(root, "usr", "local", "bin", "vectory")
 	vector := fakeVector(t, VectorVersion)
@@ -135,12 +170,28 @@ func newConsentFixture(t *testing.T) *consentFixture {
 			if executable != f.agent {
 				t.Errorf("the step was given %q, and the agent is at %q", executable, f.agent)
 			}
+			if err := f.serviceProblem(dir, executable); err != nil {
+				return err
+			}
 			f.events = append(f.events, "install-step")
 			return f.installFails
 		},
 		removeUpdates: func() error { f.events = append(f.events, "remove-step"); return nil },
 	}
 	return f
+}
+
+// serviceProblem is what the real step says of the service the manager registered:
+// it refuses a host with none (NO_SERVICE), and one whose service runs another
+// executable or another state directory.
+func (f *consentFixture) serviceProblem(dir, executable string) error {
+	switch {
+	case !f.registered:
+		return newUpdateRefusal("NO_SERVICE", "no agent service is registered (%s doesn't exist)", "/etc/systemd/system/vectory.service")
+	case f.registeredFor[0] != executable || f.registeredFor[1] != dir:
+		return newUpdateRefusal("NO_SERVICE", "the registered service doesn't run %s for %s", executable, dir)
+	}
+	return nil
 }
 
 // consent sets the update flags a command carries.
@@ -155,10 +206,22 @@ func (f *consentFixture) consent(level string, keys ...ReleaseKey) {
 func (f *consentFixture) run() (SetupResult, error) {
 	f.t.Helper()
 	ops := f.manager.ops()
-	control := ops.control
+	control, install := ops.control, ops.install
 	ops.control = func(action string) error {
 		f.events = append(f.events, "service-"+action)
 		return control(action)
+	}
+	ops.install = func(exe, dir, account string) (ServiceRegistration, error) {
+		f.consentAtRegistration = ""
+		if policy, err := ReadUpdatePolicy(); err == nil {
+			f.consentAtRegistration = policy.Consent
+		}
+		registration, err := install(exe, dir, account)
+		if err == nil {
+			f.events = append(f.events, "service-register")
+			f.registered, f.registeredFor = true, [3]string{exe, dir, account}
+		}
+		return registration, err
 	}
 	return setupWith(context.Background(), f.options, ops, f.host)
 }
@@ -190,7 +253,11 @@ func (f *consentFixture) untouched() {
 
 func lastStep(result SetupResult) SetupStep { return result.Steps[len(result.Steps)-1] }
 
-func TestSetupTurnsUpdatesOnAfterEnrollmentAndBeforeTheServiceStarts(t *testing.T) {
+// On a fresh install setup writes the policy first, so that consent is in place
+// before the service exists and before its first check-in. It installs the
+// privileged step once the service is registered, which the step needs, and before
+// the service starts, so that its first run already has the step.
+func TestSetupTurnsUpdatesOnAfterEnrollmentWithTheStepInstalledOnceTheServiceIsRegistered(t *testing.T) {
 	f := newConsentFixture(t)
 	f.consent(UpdateConsentAuto, f.key)
 	f.options.UpdateWindows = []string{"Mon-Fri 02:00-04:00"}
@@ -198,8 +265,11 @@ func TestSetupTurnsUpdatesOnAfterEnrollmentAndBeforeTheServiceStarts(t *testing.
 	if err != nil || !result.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(result))
 	}
-	if strings.Join(f.events, ",") != "eligibility,install-step,service-start" {
+	if strings.Join(f.events, ",") != "eligibility,service-register,install-step,service-start" {
 		t.Fatalf("the order of what setup asked for: %v", f.events)
+	}
+	if f.consentAtRegistration != UpdateConsentAuto {
+		t.Fatalf("the policy said %q when the service was registered; consent has to be in place before the service exists", f.consentAtRegistration)
 	}
 	step := lastUpdatesStep(t, result)
 	if want := "automatic · patch releases · Mon–Fri 02:00–04:00 · key " + f.key.ShortID() + " (pinned)"; step.Detail != want || step.Status != "ok" || step.Label != "Updates" {
@@ -422,22 +492,25 @@ func TestSetupRefusesAKeyThatBreaksTheKeyRule(t *testing.T) {
 // refusals is every reason setup refuses consent before it changes anything, with
 // the words it says them in.
 func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
+	// What setup says to do about an install directory that others can write, on
+	// any system: name the directory, and say how to make it right.
+	const installFix = "Make INSTALLDIR, and every directory above it, writable by root alone, or install the agent in a directory that already is (the installer takes --install-dir for that), then run the command again. Or leave out --updates."
 	for name, tc := range map[string]struct {
-		prepare func(f *consentFixture)
+		// prepare gets the test of its own case: it may skip it or fail it.
+		prepare func(t *testing.T, f *consentFixture)
 		detail  string
 		fix     string
 	}{
 		"--service none": {
-			prepare: func(f *consentFixture) { f.options.Service = "none" },
+			prepare: func(t *testing.T, f *consentFixture) { f.options.Service = "none" },
 			detail:  "Agent updates need a service. The update step restarts the agent through its service manager, and --service none leaves that to you.",
 			fix:     "Leave out --updates, or leave out --service none.",
 		},
 		"no service manager": {
-			prepare: func(f *consentFixture) {
+			prepare: func(t *testing.T, f *consentFixture) {
 				f.host.systemd = func() bool { return false }
 				f.host.why = func() string { return "systemd isn't running in this container" }
 				if runtime.GOOS != "linux" {
-					f.options.Service = "none"
 					t.Skip("--service auto finds launchd or the Windows service manager elsewhere")
 				}
 			},
@@ -445,53 +518,56 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 			fix:    "Leave out --updates here, or run the agent on a host that has a service manager.",
 		},
 		"an operating system whose updates are not in this release": {
-			prepare: func(f *consentFixture) { f.eligibility = "PLATFORM_NOT_IN_RELEASE" },
+			prepare: func(t *testing.T, f *consentFixture) { f.eligibility = "PLATFORM_NOT_IN_RELEASE" },
 			detail:  "Agent updates aren't in this release for " + platformName(runtime.GOOS) + ". Hosts of this kind update by hand in this release.",
 			fix:     "Leave out --updates, and upgrade this host with the Upgrade agent command when a new agent is out.",
 		},
 		"a package-managed agent": {
-			prepare: func(f *consentFixture) { f.eligibility = "PACKAGE_MANAGED" },
+			prepare: func(t *testing.T, f *consentFixture) { f.eligibility = "PACKAGE_MANAGED" },
 			detail:  "This agent is installed from a package, and the package manager owns its file.",
 			fix:     "Leave out --updates, and upgrade it with the package manager.",
 		},
+		// The detail names the directory that failed, whichever one it is; the fix names
+		// the directory the agent is in. Both are what a person reads when the install
+		// directory of a hosted runner is writable by everyone.
 		"an install directory others can write": {
-			prepare: func(f *consentFixture) {
-				dir := filepath.Dir(f.agent)
-				if err := os.MkdirAll(dir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(dir, 0o775); err != nil {
-					t.Fatal(err)
-				}
+			prepare: func(t *testing.T, f *consentFixture) { loosen(t, filepath.Dir(f.agent), 0o775) },
+			detail:  "Agent updates need an install directory that only root can change. INSTALLDIR is writable by its group (mode 0775).",
+			fix:     installFix,
+		},
+		"an install directory everyone can write": {
+			prepare: func(t *testing.T, f *consentFixture) { loosen(t, filepath.Dir(f.agent), 0o777) },
+			detail:  "Agent updates need an install directory that only root can change. INSTALLDIR is writable by its group and by everyone (mode 0777).",
+			fix:     installFix,
+		},
+		"a directory above the install directory that others can write": {
+			prepare: func(t *testing.T, f *consentFixture) {
+				loosen(t, filepath.Dir(f.agent), 0o755)
+				loosen(t, filepath.Dir(filepath.Dir(f.agent)), 0o775)
 			},
-			detail: "Agent updates need an install directory that only root can change. ",
-			fix:    "Install the agent in a directory only root can write, such as " + DefaultPaths().Binary + ", then run the command again. Or leave out --updates.",
+			detail: "Agent updates need an install directory that only root can change. ABOVEDIR is writable by its group (mode 0775).",
+			fix:    installFix,
 		},
 		"a policy directory others can write": {
-			prepare: func(f *consentFixture) {
-				if err := os.MkdirAll(f.paths.PolicyDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(f.paths.PolicyDir, 0o777); err != nil {
-					t.Fatal(err)
-				}
-			},
-			detail: "Agent updates keep what decides an install where only root can change it. ",
-			fix:    "Make " + "POLICYDIR" + " and every directory above it root's alone, then run the command again. Or leave out --updates.",
+			prepare: func(t *testing.T, f *consentFixture) { loosen(t, f.paths.PolicyDir, 0o777) },
+			detail:  "Agent updates keep what decides an install where only root can change it. POLICYDIR is writable by its group and by everyone (mode 0777).",
+			fix:     "Make POLICYDIR and every directory above it root's alone, then run the command again. Or leave out --updates.",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newConsentFixture(t)
 			f.consent(UpdateConsentAuto, f.key)
-			tc.prepare(f)
+			tc.prepare(t, f)
 			result, err := f.run()
 			var failed *SetupError
 			if !errors.As(err, &failed) || failed.Step.ID != "updates" || result.OK {
 				t.Fatalf("%v\n%s", err, serviceDetail(result))
 			}
-			fix := strings.ReplaceAll(tc.fix, "POLICYDIR", f.paths.PolicyDir)
-			if !strings.HasPrefix(failed.Step.Detail, tc.detail) || failed.Step.Fix != fix {
-				t.Fatalf("detail %q\nfix %q\nwant %q\n and %q", failed.Step.Detail, failed.Step.Fix, tc.detail, fix)
+			install := filepath.Dir(f.agent)
+			places := strings.NewReplacer("INSTALLDIR", install, "ABOVEDIR", filepath.Dir(install), "POLICYDIR", f.paths.PolicyDir)
+			detail, fix := places.Replace(tc.detail), places.Replace(tc.fix)
+			if failed.Step.Detail != detail || failed.Step.Fix != fix {
+				t.Fatalf("detail %q\nfix %q\nwant %q\n and %q", failed.Step.Detail, failed.Step.Fix, detail, fix)
 			}
 			// The server is asked for its keys only after the host passed.
 			if f.server.keyRequests.Load() != 0 || f.server.enrolls.Load() != 0 || f.tokens != 0 || len(f.manager.actions) != 0 {
@@ -508,6 +584,17 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// loosen makes dir exist, with mode.
+func loosen(t *testing.T, dir string, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -533,20 +620,26 @@ func TestSetupRefusesUpdateFlagsThatCantWorkOnAnyHost(t *testing.T) {
 		options SetupOptions
 		want    string
 	}{
-		"a major track":                        {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "major"}, "This release offers patch and minor tracks. Upgrade to a new major version by hand."},
-		"another track":                        {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "weekly"}, `"weekly" isn't an update track. Use patch or minor.`},
-		"another level":                        {SetupOptions{Updates: "always", UpdateKeys: []string{good}}, `--updates takes auto, ask or off, and "always" isn't one.`},
-		"no key":                               {SetupOptions{Updates: "auto"}, "--updates auto needs --update-key-sha256: the SHA-256 fingerprint of the release key this host pins. Add device writes it into the command."},
-		"no key with ask":                      {SetupOptions{Updates: "ask"}, "--updates ask needs --update-key-sha256"},
-		"a short fingerprint":                  {SetupOptions{Updates: "auto", UpdateKeys: []string{"3f9a1c0277de9b41"}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint of a release key"},
-		"a fingerprint that isn't hex":         {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("zz", 32)}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint"},
-		"five keys":                            {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("01", 32), strings.Repeat("02", 32), strings.Repeat("03", 32), strings.Repeat("04", 32), strings.Repeat("05", 32)}}, "A host pins at most 4 release keys, and 5 were given with --update-key-sha256."},
-		"a window that isn't one":              {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: []string{"Mon-Mon 02:00-04:00"}}, `"Mon-Mon 02:00-04:00" isn't an update window`},
-		"eight windows":                        {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: strings.Fields("daily daily daily daily daily daily daily daily")}, "A host takes at most 7 update windows, and 8 were given."},
-		"a key without a level":                {SetupOptions{UpdateKeys: []string{good}}, "--update-key-sha256 go with --updates auto or --updates ask. Add --updates, or leave them out."},
-		"a track and a window without a level": {SetupOptions{UpdateTrack: "minor", UpdateWindows: []string{"daily 01:00-03:00"}}, "--update-track and --update-window go with --updates auto or --updates ask."},
-		"off with a key":                       {SetupOptions{Updates: "off", UpdateKeys: []string{good}}, "--updates off turns updates off. It doesn't take --update-key-sha256."},
-		"off with a track and a window":        {SetupOptions{Updates: "off", UpdateTrack: "patch", UpdateWindows: []string{"daily 01:00-03:00"}}, "--updates off turns updates off. It doesn't take --update-track and --update-window."},
+		"a major track":                {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "major"}, "This release offers patch and minor tracks. Upgrade to a new major version by hand."},
+		"another track":                {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "weekly"}, `"weekly" isn't an update track. Use patch or minor.`},
+		"another level":                {SetupOptions{Updates: "always", UpdateKeys: []string{good}}, `--updates takes auto, ask or off, and "always" isn't one.`},
+		"no key":                       {SetupOptions{Updates: "auto"}, "--updates auto needs --update-key-sha256: the SHA-256 fingerprint of the release key this host pins. Add device writes it into the command."},
+		"no key with ask":              {SetupOptions{Updates: "ask"}, "--updates ask needs --update-key-sha256"},
+		"a short fingerprint":          {SetupOptions{Updates: "auto", UpdateKeys: []string{"3f9a1c0277de9b41"}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint of a release key"},
+		"a fingerprint that isn't hex": {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("zz", 32)}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint"},
+		"five keys":                    {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("01", 32), strings.Repeat("02", 32), strings.Repeat("03", 32), strings.Repeat("04", 32), strings.Repeat("05", 32)}}, "A host pins at most 4 release keys, and 5 were given with --update-key-sha256."},
+		"a window that isn't one":      {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: []string{"Mon-Mon 02:00-04:00"}}, `"Mon-Mon 02:00-04:00" isn't an update window`},
+		"eight windows":                {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: strings.Fields("daily daily daily daily daily daily daily daily")}, "A host takes at most 7 update windows, and 8 were given."},
+		// Flags without a level amend what a host agreed to; what they say is checked
+		// as anywhere else, before the host is looked at.
+		"a short fingerprint alone":     {SetupOptions{UpdateKeys: []string{"3f9a1c0277de9b41"}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint of a release key"},
+		"five keys alone":               {SetupOptions{UpdateKeys: []string{strings.Repeat("01", 32), strings.Repeat("02", 32), strings.Repeat("03", 32), strings.Repeat("04", 32), strings.Repeat("05", 32)}}, "A host pins at most 4 release keys, and 5 were given with --update-key-sha256."},
+		"a major track alone":           {SetupOptions{UpdateTrack: "major"}, "This release offers patch and minor tracks. Upgrade to a new major version by hand."},
+		"another track alone":           {SetupOptions{UpdateTrack: "weekly"}, `"weekly" isn't an update track. Use patch or minor.`},
+		"a window alone that isn't one": {SetupOptions{UpdateWindows: []string{"Mon-Mon 02:00-04:00"}}, `"Mon-Mon 02:00-04:00" isn't an update window`},
+		"eight windows alone":           {SetupOptions{UpdateWindows: strings.Fields("daily daily daily daily daily daily daily daily")}, "A host takes at most 7 update windows, and 8 were given."},
+		"off with a key":                {SetupOptions{Updates: "off", UpdateKeys: []string{good}}, "--updates off turns updates off. It doesn't take --update-key-sha256."},
+		"off with a track and a window": {SetupOptions{Updates: "off", UpdateTrack: "patch", UpdateWindows: []string{"daily 01:00-03:00"}}, "--updates off turns updates off. It doesn't take --update-track and --update-window."},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := tc.options.CheckUpdates()
@@ -578,7 +671,7 @@ func TestSetupWithoutUpdateFlagsTouchesNothingOfUpdates(t *testing.T) {
 		t.Fatalf("updates were mentioned: %d key requests, %+v", f.server.keyRequests.Load(), result.Steps)
 	}
 	for _, event := range f.events {
-		if event != "service-start" {
+		if event != "service-register" && event != "service-start" {
 			t.Fatalf("setup reached for %q", event)
 		}
 	}
@@ -652,7 +745,7 @@ func TestSetupAgainReplacesThePinSetAndKeepsAPause(t *testing.T) {
 	if got := policy.Fingerprints(); len(got) != 1 || got[0] != next.Fingerprint() || !policy.Paused {
 		t.Fatalf("%+v", policy)
 	}
-	if want := "automatic · patch releases · any time · key " + next.ShortID() + " (pinned) · paused on this host: sudo vectory update resume --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
+	if want := "automatic · patch releases · any time · key " + next.ShortID() + " (pinned) · paused on this host: " + asAdmin("vectory update resume") + " --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
 		t.Fatalf("%q want %q", lastUpdatesStep(t, result).Detail, want)
 	}
 	// The same flags again change nothing in the policy file, and keep when each
@@ -688,7 +781,8 @@ func TestSetupKeepsWhenAKeyThatStaysWasPinned(t *testing.T) {
 	}
 }
 
-// A failure after enrollment says what was saved and what wasn't.
+// A failure to install the step, which comes after the service is registered, says
+// what was saved and what wasn't, and stops before the service is started.
 func TestSetupSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t *testing.T) {
 	f := newConsentFixture(t)
 	f.consent(UpdateConsentAuto, f.key)
@@ -698,8 +792,11 @@ func TestSetupSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t *testing.T) {
 	if !errors.As(err, &failed) || failed.Step.ID != "updates" || result.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(result))
 	}
-	if want := "The agent is installed and enrolled and the update policy is saved, but the update step couldn't be installed (Systemd refused the unit). Until it is, this host takes no update."; failed.Step.Detail != want {
+	if want := "The agent is installed and enrolled, the update policy is saved and the service is registered, but the update step couldn't be installed (Systemd refused the unit). Setup stopped before it started or restarted the service. Until the step is installed, this host takes no update."; failed.Step.Detail != want {
 		t.Fatalf("%q", failed.Step.Detail)
+	}
+	if !f.registered || strings.Contains(strings.Join(f.events, ","), "service-start") {
+		t.Fatalf("the service is registered and not started: %v", f.events)
 	}
 	if failed.Step.Fix != "Fix the cause, then run the same command again; setup resumes where it stopped." {
 		t.Fatalf("%q", failed.Step.Fix)
@@ -713,8 +810,55 @@ func TestSetupSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t *testing.T) {
 	}
 	f.installFails = nil
 	f.options.Token = func() (string, error) { t.Fatal("asked for a token again"); return "", nil }
+	f.events = nil
 	if again, err := f.run(); err != nil || !again.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(again))
+	}
+	// It resumes: the step is installed, and then the service starts.
+	if got := strings.Join(f.events, ","); got != "eligibility,service-register,install-step,service-start" {
+		t.Fatalf("%s", got)
+	}
+}
+
+// A service that can't be registered leaves the policy saved and the step not
+// installed, and says so; the step waits for the service, so nothing asks for it
+// first. Run again once the service can be registered, setup finishes.
+func TestSetupSaysSoWhenTheServiceCantBeRegisteredForTheUpdateStep(t *testing.T) {
+	f := newConsentFixture(t)
+	f.consent(UpdateConsentAuto, f.key)
+	f.manager.fail = map[string]error{"install": errors.New("systemctl daemon-reload failed")}
+	result, err := f.run()
+	var failed *SetupError
+	if !errors.As(err, &failed) || failed.Step.ID != "service" || result.OK {
+		t.Fatalf("%v\n%s", err, serviceDetail(result))
+	}
+	if got := lastUpdatesStep(t, result); got.Status != "warn" || got.Detail != "The update policy is saved, but the update step isn't installed: it can only be installed once the service is registered. Run the same command again when the service is fixed; setup resumes where it stopped." {
+		t.Fatalf("%+v", got)
+	}
+	if f.stepInstalls() != 0 || f.registered || result.Updates != nil {
+		t.Fatalf("%v %v", f.events, result.Updates)
+	}
+	if policy, err := ReadUpdatePolicy(); err != nil || policy.Consent != UpdateConsentAuto {
+		t.Fatalf("the policy: %+v %v", policy, err)
+	}
+	f.manager.fail = nil
+	f.options.Token = func() (string, error) { t.Fatal("asked for a token again"); return "", nil }
+	f.events = nil
+	if again, err := f.run(); err != nil || !again.OK || strings.Join(f.events, ",") != "eligibility,service-register,install-step,service-start" {
+		t.Fatalf("%v %v\n%s", err, f.events, serviceDetail(again))
+	}
+}
+
+// The fake step answers as the real one does when no service is registered, so
+// that a setup that asks for the step first can't pass.
+func TestTheFakeStepRefusesAHostWhoseServiceIsNotRegistered(t *testing.T) {
+	f := newConsentFixture(t)
+	if err := f.serviceProblem(f.dir, f.agent); err == nil || err.Error() != "NO_SERVICE: no agent service is registered (/etc/systemd/system/vectory.service doesn't exist)" {
+		t.Fatalf("%v", err)
+	}
+	f.registered, f.registeredFor = true, [3]string{"/usr/local/bin/other", f.dir, "nobody"}
+	if err := f.serviceProblem(f.dir, f.agent); err == nil || !strings.HasPrefix(err.Error(), "NO_SERVICE: the registered service doesn't run ") {
+		t.Fatalf("%v", err)
 	}
 }
 

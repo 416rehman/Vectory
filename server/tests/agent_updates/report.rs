@@ -311,3 +311,110 @@ async fn while_updates_are_off_the_manifest_lists_nothing_and_offers_nothing() {
         "no rollout, no offer"
     );
 }
+
+/// The reports the server keeps.
+async fn kept(f: &Fixture) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM agent_update_reports")
+        .fetch_one(&f.state.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn while_updates_are_off_the_member_is_ignored_and_the_stored_reports_go() {
+    let f = fixture_on().await;
+    let key = fingerprint("team");
+    let first = device(&f, "edge-00", "0.1.0").await;
+    let second = device(&f, "edge-01", "0.1.0").await;
+    report(&f, &first, "0.1.0", &db_hash(0), "boot-a", &member(&[&key])).await;
+    report(
+        &f,
+        &second,
+        "0.1.0",
+        &db_hash(1),
+        "boot-b",
+        &member(&[&key]),
+    )
+    .await;
+    assert_eq!(kept(&f).await, 2);
+    // Turning updates off keeps no report of what hosts said about them.
+    let current = ok(&f, "GET", "/api/v1/agent-updates", Value::Null, &f.admin).await;
+    ok(
+        &f,
+        "PUT",
+        "/api/v1/agent-updates/settings",
+        json!({"enabled":false,"current_password":PASSWORD,"revision":current["revision"]}),
+        &f.admin,
+    )
+    .await;
+    assert_eq!(kept(&f).await, 0);
+    // While they are off, a member is not read: a malformed one is no reason to
+    // refuse a check-in, and neither it nor a valid one is stored.
+    for sent in [
+        with(member(&[&key]), json!({"consent":"sometimes"})),
+        json!({"surprise":true}),
+        json!([]),
+        with(member(&[&key]), json!({"highest_counter":4242})),
+    ] {
+        let (status, manifest) = beat(
+            &f,
+            &first,
+            json!({"agent_version":"0.1.0","boot_id":"boot-a","agent_update":sent}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{sent}: {manifest}");
+        assert!(manifest.get("agent_update").is_none());
+        assert_eq!(kept(&f).await, 0, "{sent}");
+    }
+    // The check-in's own handling keeps nothing while they are off either,
+    // whoever hands it a report.
+    let handed = agent_updates::parse(&json!({"agent_update": member(&[&key])}))
+        .unwrap()
+        .unwrap();
+    let mut conn = f.state.pool.acquire().await.unwrap();
+    let outcome = agent_updates::heartbeat(
+        &mut conn,
+        &f.state,
+        "2026-10-03T12:00:00Z",
+        &agent_updates::Build {
+            device_id: &first,
+            agent_version: "0.1.0",
+            agent_sha256: None,
+            boot_id: "boot-a",
+        },
+        Some(&handed),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(!outcome.enabled && outcome.offer.is_none());
+    assert_eq!(kept(&f).await, 0);
+    // What a host said while they were off moves nothing when they are on: the
+    // next release counter is one more than the sequence.
+    switch(&f, true).await;
+    let mut conn = f.state.pool.acquire().await.unwrap();
+    assert_eq!(
+        agent_updates::next_counter(&mut conn, 0).await.unwrap(),
+        1,
+        "a counter a host sent while updates were off is not heard"
+    );
+    drop(conn);
+    // On, the member is read again, strictly; a stop doesn't change that.
+    ok(
+        &f,
+        "POST",
+        "/api/v1/agent-updates/stop",
+        json!({"reason":"hold"}),
+        &f.operator,
+    )
+    .await;
+    let (status, _) = beat(
+        &f,
+        &first,
+        json!({"agent_update": with(member(&[&key]), json!({"consent":"sometimes"}))}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    report(&f, &first, "0.1.0", &db_hash(0), "boot-a", &member(&[&key])).await;
+    assert_eq!(kept(&f).await, 1);
+}

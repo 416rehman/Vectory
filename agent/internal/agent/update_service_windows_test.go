@@ -148,9 +148,12 @@ func isolatedStepLocations(t *testing.T) UpdatePaths {
 	if err := os.MkdirAll(paths.Private, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	oldLocations, oldHost := updateLocationsOverride, updateHostOverride
-	updateLocationsOverride, updateHostOverride = &paths, noUpdateHost{}
-	t.Cleanup(func() { updateLocationsOverride, updateHostOverride = oldLocations, oldHost })
+	oldLocations, oldHost, oldGate := updateLocationsOverride, updateHostOverride, updateGateOverride
+	updateLocationsOverride, updateHostOverride = &paths, nil
+	updateGateOverride = func(string) bool { return false }
+	t.Cleanup(func() {
+		updateLocationsOverride, updateHostOverride, updateGateOverride = oldLocations, oldHost, oldGate
+	})
 	return paths
 }
 

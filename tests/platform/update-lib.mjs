@@ -23,7 +23,8 @@ import { root, run, sha256File } from "./lib.mjs";
  *          and runs, and never checks in (NO_CHECK_IN).
  *
  * On Windows every build, the first included, has one more word changed in its
- * copy: the release gate of the Windows step (windowsUpdatesInRelease) is open. The
+ * copy: the release gate of the Windows step (windowsUpdatesInRelease, in
+ * update_gate.go) is open. The
  * gate is closed in the product until the proof these builds are for is green at the
  * cut, so the proof opens it in the copy and the product opens it in the commit
  * that cites the green run: the step that is proven is the step that ships.
@@ -76,7 +77,7 @@ export function replaceOnce(text, from, to, what) {
 export const SOURCE = {
   version: "agent/internal/agent/types.go",
   reconcile: "agent/internal/agent/reconcile.go",
-  windowsHost: "agent/internal/agent/update_host_windows.go",
+  updateGate: "agent/internal/agent/update_gate.go",
 };
 
 export function setVersion(source, version) {
@@ -107,16 +108,17 @@ export function crashAtRun(source) {
 }
 
 /**
- * Opens the release gate of the Windows step in a copy of the source. A source
- * whose gate is already open is left as it is, so that the proof still builds after
- * the product opened it.
+ * Opens the release gate of the Windows step in a copy of the source: the line of the
+ * table in update_gate.go that says Windows is not shipped. A source whose gate is
+ * already open is left as it is, so that the proof still builds after the product
+ * opens it.
  */
 export function openWindowsGate(source) {
-  if (source.includes("const windowsUpdatesInRelease = true\n")) return source;
+  if (source.includes("\twindowsUpdatesInRelease = true\n")) return source;
   return replaceOnce(
     source,
-    "const windowsUpdatesInRelease = false\n",
-    "const windowsUpdatesInRelease = true\n",
+    "\twindowsUpdatesInRelease = false\n",
+    "\twindowsUpdatesInRelease = true\n",
     "The Windows release gate",
   );
 }
@@ -144,7 +146,7 @@ export function editsFor(build, read, goos = GOOS) {
   if (build.kind === "silent")
     files[SOURCE.reconcile] = moveHeartbeat(read(SOURCE.reconcile));
   if (goos === "windows")
-    files[SOURCE.windowsHost] = openWindowsGate(read(SOURCE.windowsHost));
+    files[SOURCE.updateGate] = openWindowsGate(read(SOURCE.updateGate));
   return files;
 }
 const GOARCH = { x64: "amd64", arm64: "arm64" }[process.arch];

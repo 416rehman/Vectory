@@ -44,12 +44,12 @@ func init() {
 		// The step's service as the Service Control Manager starts it:
 		// step-service.exe update-helper --state-dir <directory>. It is kept away from
 		// the host's own directories (the paths are under the directory it is told) and
-		// has no host, so that every run of the step says it is unavailable and the
-		// service stays up until it is stopped.
+		// has no host (the gate is closed in it), so that every run of the step says it is
+		// unavailable and the service stays up until it is stopped.
 		if len(os.Args) == 4 && os.Args[1] == "update-helper" && os.Args[2] == "--state-dir" {
 			paths := newUpdatePaths(filepath.Join(os.Args[3], "policy"), filepath.Join(os.Args[3], "step"), true)
 			updateLocationsOverride = &paths
-			updateHostOverride = noUpdateHost{}
+			updateGateOverride = func(string) bool { return false }
 			if err := RunUpdateHelperCommand(context.Background(), os.Args[3]); err != nil {
 				os.Exit(1)
 			}

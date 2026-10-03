@@ -289,10 +289,10 @@ Start with the device's page: its **Agent updates** card says what the host repo
 | **This host already runs this version** (`ALREADY_RUNNING`), **runs a newer agent** (`DOWNGRADE_REFUSED`) | Nothing to fix. A host never goes backward. |
 | **A package manager owns this agent** (`PACKAGE_MANAGED`) | Update it with the package manager. |
 | **No service keeps this agent running** (`NO_SERVICE`) | Run it under a service, then use **Upgrade agent**. |
-| **A directory on the agent's path can be written by others** (`UNTRUSTED_LOCATION`), **The host can't write in the agent's install directory** (`READ_ONLY`) | Only root may own and write the agent's directories and every directory above them. Change who owns them or their permissions. |
+| **A directory on the agent's path can be written by others** (`UNTRUSTED_LOCATION`), **The host can't write in the agent's install directory** (`READ_ONLY`) | Only root may own and write the agent's directories and every directory above them. Change who owns them or their permissions. On a Mac, an access list entry that lets another account write, delete or add files counts too: `ls -led /usr/local/bin` shows the entries and `sudo chmod -N /usr/local/bin` removes them. Homebrew on an Intel Mac owns `/usr/local/bin`, so install the agent in another directory only root can write, with the installer's `--install-dir`. |
 | **The update step on this host isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. |
 | **The host's service definition is older than this release needs** (`SERVICE_DEFINITION_OUTDATED`) | Run the **Upgrade agent** command once. |
-| **This release has no build for this host's platform** (`PLATFORM_NOT_IN_RELEASE`) | This server's catalog has no build of that version for it. Update the host by hand. |
+| **This release has no build for this host's platform** (`PLATFORM_NOT_IN_RELEASE`) | This server's catalog has no build of that version for it, or the agent was built without updates for its operating system. Update the host by hand. |
 | **The download failed** (`DOWNLOAD_FAILED`), **didn't match the release's size and digest** (`ARTIFACT_MISMATCH`), **no room for the new build** (`DISK_FULL`) | The agent tries again at its next check-in, and gives up after three failures for one release. Check the disk space and the connection to the server. |
 | **The new build didn't report the version and platform the release names** (`PROBE_FAILED`) | The host installed nothing. Check that the build in the catalog is the one the release names. |
 | **Rolled back**: **couldn't start**, **didn't check in within 5 minutes**, **wasn't healthy**, **was interrupted** | The host took the new build back and won't try it again. Read `sudo vectory update status` and `sudo vectory logs` on the host, fix the cause, and roll out a new release. See [When a host rolls back](agent-updates.md#when-a-host-rolls-back). |
@@ -438,6 +438,7 @@ The bootstrap secret only creates the first administrator; it can't sign anyone 
 | `RELEASE_NOT_IN_CATALOG`, `RELEASE_EXISTS`, `RELEASE_NOT_READY`, `RELEASE_STORAGE_FULL` | The catalog has no such build, the release exists, it isn't signed, withdrawn or expired, or 20 releases (or the release store's space) are in use. | Choose a build from **Newer builds**, sign or prepare the release again, or withdraw releases you no longer need. |
 | `UPDATE_REVIEW_CHANGED` (409) | A device, the release or the key changed since you reviewed. Nothing started. | Review again, then start. |
 | `UPDATE_ROLLOUT_OVERLAP`, `NOTHING_TO_UPDATE` (409) | A device is already in an update rollout, or the review has nobody who will update. | Wait for the other rollout, or fix what the review's **Won't update** list names. |
+| `UPDATE_ROLLOUT_LIMIT` (409) | 200 update rollouts are active or paused. | Cancel one, or wait for one to finish, then start the rollout again. |
 
 ## Prepare a useful problem report
 
