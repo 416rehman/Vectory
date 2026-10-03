@@ -145,11 +145,11 @@ func keepOwner(tmp, path string) {
 	_ = os.Lchown(tmp, int(oldStat.Uid), int(oldStat.Gid))
 }
 
-// ownedLikeParent gives a file this process just created the owner and group
-// of the directory that holds it, when this process is root: the agent's files
-// belong to the account that owns its state directory, and a file left to root
-// would be one that account can't write. Without root the file is already
-// this account's.
+// ownedLikeParent makes a file this process just created belong to the user
+// and group of the directory that holds it, when this process is root: the
+// agent's files belong to the account that has its state directory, and a file
+// left to root would be one that account can't write. Without root the file is
+// already this account's.
 func ownedLikeParent(path string) error {
 	if os.Geteuid() != 0 {
 		return nil

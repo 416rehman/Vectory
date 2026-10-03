@@ -52,7 +52,7 @@ impl ApiError {
         Self::new(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission denied")
     }
     /// A change whose session token header is absent or wrong: the same status
-    /// and code as a role refusal, so a script can tell which it hit.
+    /// and code as a role refusal, and a message that says which of the two it is.
     pub fn csrf() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
