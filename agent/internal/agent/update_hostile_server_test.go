@@ -39,7 +39,7 @@ import (
 func buildHostileServer(t *testing.T) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "hostile-update-server")
-	build := exec.Command("go", "build", "-o", binary, ".")
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", binary, ".")
 	build.Dir = filepath.Join("..", "..", "..", "tests", "platform", "hostile-update-server")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)

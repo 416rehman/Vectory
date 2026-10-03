@@ -98,13 +98,15 @@ func updateUnitValue(what, value string) (string, error) {
 //     every update would end READ_ONLY.
 //   - It does no network I/O: AF_UNIX is all it may open, and systemctl reaches the
 //     service manager over one.
-//   - CapabilityBoundingSet is what it needs and no more: it runs the probe as the
-//     service account (CAP_SETUID, CAP_SETGID), reads that account's private
-//     directory (CAP_DAC_OVERRIDE), links and renames files in the install
-//     directory (CAP_FOWNER, CAP_CHOWN), and ends a probe that doesn't answer in
+//   - CapabilityBoundingSet is the design's list and one more. The step runs the
+//     probe as the service account (CAP_SETUID, CAP_SETGID), reads that account's
+//     private directory (CAP_DAC_OVERRIDE), and ends a probe that doesn't answer in
 //     ten seconds (CAP_KILL: a process may signal another account's process only
-//     with it, and the probe is the service account's). A capability is added only
-//     when the native test shows the step needs it.
+//     with it, and the probe is the service account's). CAP_CHOWN and CAP_FOWNER
+//     are the design's, for the files it makes in the install directory: the step
+//     calls no chown, and its links, renames and modes are of files that root owns,
+//     so the native sandbox check is what says whether they can go. A capability is
+//     added only when a native test shows the step needs it.
 //
 // The step has no User=: it runs as root.
 func systemdUpdateUnits(spec updateUnitSpec) (service, timer string, err error) {

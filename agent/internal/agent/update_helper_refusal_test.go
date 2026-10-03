@@ -61,7 +61,7 @@ func (f *stepFixture) requireUnchanged(before machineSnapshot, ignore ...string)
 		f.t.Errorf("installed.json changed:\n%s\nwas\n%s", after.installed, before.installed)
 	case strings.Join(after.beside, ",") != strings.Join(before.beside, ","):
 		f.t.Errorf("the files beside the executable changed: %v, were %v", after.beside, before.beside)
-	case strings.Join(after.history, ",") != strings.Join(before.history, ","):
+	case !skip("history") && strings.Join(after.history, ",") != strings.Join(before.history, ","):
 		f.t.Errorf("the service was touched: %v, was %v", after.history, before.history)
 	}
 	if journal, found := f.journal(); found {

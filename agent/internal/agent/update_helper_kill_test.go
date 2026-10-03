@@ -370,6 +370,35 @@ func TestAnExecutableReplacedWhileTheStepWasDeadIsLeftAloneWhateverTheJournalSay
 	}
 }
 
+// A swap that is interrupted leaves the executable or its replacement, never neither.
+// When the executable is gone anyway (a person removed it while the step was dead) the
+// step can't open the install it has to settle, makes no executable of the file that
+// is beside it, and keeps its journal for a run that can.
+func TestAnExecutableThatIsGoneWhileTheStepWasDeadIsNotMadeAgainOfWhatIsBesideIt(t *testing.T) {
+	f := newStepFixture(t)
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+	if !f.runChildUntil("swapping") {
+		t.Fatal("an update never reached swapping")
+	}
+	if err := os.Remove(f.exe); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.installDir, ".vectory-previous"), fakeBuild("0.1.5", "good", "by hand"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.advance(30 * time.Second)
+	if err := f.run(); err == nil {
+		t.Error("a run that couldn't settle the update said nothing")
+	}
+	if content, err := os.ReadFile(f.exe); err == nil {
+		t.Errorf("the step made an executable of a file it can't vouch for: %s", digestOf(content))
+	}
+	if journal, found := f.journal(); !found || journal.Stage != UpdateStageSwapping {
+		t.Errorf("the journal after a run that couldn't settle: %+v (found %v)", journal, found)
+	}
+}
+
 func TestALeftoverTemporaryFileIsRemovedAndNoOtherFileBesideTheExecutableIsTouched(t *testing.T) {
 	f := newStepFixture(t)
 	release := f.newRelease("0.1.1", "good", releaseOptions{})

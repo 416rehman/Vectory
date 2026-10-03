@@ -122,6 +122,12 @@ func TestHealthThatIsNotTheNewBuildsCheckInIsNeverAcceptedAsOne(t *testing.T) {
 		"the record says the check-in is an hour from now":      {behavior: "future"},
 		"the build checks in after the deadline":                {behavior: "slow"},
 		"the record is the old build's and nothing replaces it": {behavior: "silent"},
+		"the record names this build and another version":       {behavior: "healthversion"},
+		// The two times a record carries are each held to the trial's start and to the
+		// clock: its own check-in time, and the time its file was last written.
+		"the record's check-in time is from before the build started": {behavior: "staletime"},
+		"the record's check-in time is an hour from now":              {behavior: "futurerecord"},
+		"the record's file was written an hour from now":              {behavior: "futurefile"},
 		"a record of the new build from before the trial": {behavior: "silent", before: func(f *stepFixture, release *fakeRelease) {
 			f.host.writeHealth(fakeService{Digest: release.buildSHA(), Version: release.version, Boot: digestOf([]byte("some boot"))}, f.clock.Now().Add(-time.Hour), UpdateVectorRunning)
 		}},
@@ -150,6 +156,46 @@ func TestHealthThatIsNotTheNewBuildsCheckInIsNeverAcceptedAsOne(t *testing.T) {
 			}
 			f.mustRun()
 			f.requireTakenBack(oldDigest, release, "NO_CHECK_IN")
+		})
+	}
+}
+
+// What the trial compares the new build's check-in with is the running build's own
+// record. A record that names another build is not believed: the journal keeps no
+// boot id from it, and the build is still held to its own digest and version.
+func TestAHealthRecordThatIsNotTheRunningBuildsIsNotKeptForTheTrialToCompareWith(t *testing.T) {
+	f := newStepFixture(t)
+	older := fakeService{Digest: digestOf([]byte("an older build")), Version: "0.0.9", Boot: digestOf([]byte("an older boot"))}
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+	// The running build keeps writing its own record; the stranger's is written just
+	// before the step reads it.
+	updateFault = func(point string) {
+		if point == "staged" {
+			f.host.writeHealth(older, f.clock.Now(), UpdateVectorRunning)
+		}
+	}
+	f.mustRun()
+	f.requireAnswered(release, UpdateOutcomeCommitted, "")
+	if journal, found := f.journal(); !found || journal.BootIDBefore != "" {
+		t.Errorf("the journal keeps the boot id %q of a record that isn't the running build's (found %v)", journal.BootIDBefore, found)
+	}
+}
+
+// A check-in is not enough: the service manager has to say the service is running, and
+// has to have kept it running since the trial began.
+func TestABuildTheManagerRestartedOrStillStartsIsNeverTakenAsHealthyWhateverItWrites(t *testing.T) {
+	for name, behavior := range map[string]string{
+		"the manager restarted it once after it started": "restarted",
+		"the manager reports the service still starting": "activating",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newStepFixture(t)
+			oldDigest := f.executableDigest()
+			release := f.newRelease("0.1.2", behavior, releaseOptions{})
+			f.stage(release)
+			f.mustRun()
+			f.requireTakenBack(oldDigest, release, "UNHEALTHY")
 		})
 	}
 }
@@ -367,6 +413,38 @@ func TestTheBuildThatCommittedBecomesTheHelperAndTheOldOneIsKeptBesideTheExecuta
 	entries, _ := os.ReadDir(f.paths.Helper)
 	if len(entries) != 1 {
 		t.Errorf("the helper's directory holds %d files", len(entries))
+	}
+}
+
+// The helper copy is the build that committed and nothing else: an executable that
+// someone put in its place after the commit is not copied over the helper, and what
+// is left of the commit waits for a run that can finish it.
+func TestAnExecutableReplacedAfterTheCommitIsNotMadeTheHelper(t *testing.T) {
+	f := newStepFixture(t)
+	data, _ := os.ReadFile(f.exe)
+	if err := os.WriteFile(f.paths.HelperExecutable, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	helperBefore := fileDigest(t, f.paths.HelperExecutable)
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+	replaced := false
+	updateFault = func(point string) {
+		if point == "commit:status" && !replaced {
+			replaced = true
+			f.installBuild(fakeBuild("0.1.5", "good", "by hand"))
+		}
+	}
+	f.mustRun()
+	if !replaced {
+		t.Fatal("the commit never reached its status")
+	}
+	f.requireAnswered(release, UpdateOutcomeCommitted, "")
+	if got := fileDigest(t, f.paths.HelperExecutable); got != helperBefore {
+		t.Errorf("the helper copy is %s: an executable that isn't the build that committed was made the helper", got)
+	}
+	if f.stagingEmpty() {
+		t.Error("the staging directory was emptied while the helper copy is still to do")
 	}
 }
 

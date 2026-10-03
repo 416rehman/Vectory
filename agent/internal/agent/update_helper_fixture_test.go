@@ -114,7 +114,12 @@ type fakeConfig struct {
 	ReadOnly    bool   `json:"read_only"`
 	StopFails   bool   `json:"stop_fails"`
 	StageENOSPC bool   `json:"stage_enospc"`
-	SwapFails   string `json:"swap_fails"`
+	// SwapFails is why the swap fails: "read-only" for a file system that turned
+	// read-only, and any other text for an error the system gives.
+	SwapFails string `json:"swap_fails"`
+	// CopyENOSPC names a directory, as the step holds it, in which the copy of the
+	// build runs out of room.
+	CopyENOSPC string `json:"copy_enospc"`
 }
 
 const fakeBigDisk = 1 << 40
@@ -209,12 +214,17 @@ func (h *fakeHost) healthPath() string { return UpdateExchangeFor(h.cfg.StateDir
 
 // writeHealth records a check-in of the running build.
 func (h *fakeHost) writeHealth(s fakeService, at time.Time, vector string) {
-	health := UpdateHealth{AgentSHA256: s.Digest, AgentVersion: s.Version, BootID: s.Boot, CheckedInAt: at.UTC().Truncate(time.Millisecond), Vector: vector}
+	h.writeHealthAt(s, at, at, vector)
+}
+
+// writeHealthAt records a check-in whose own time and whose file's time differ.
+func (h *fakeHost) writeHealthAt(s fakeService, checkedIn, written time.Time, vector string) {
+	health := UpdateHealth{AgentSHA256: s.Digest, AgentVersion: s.Version, BootID: s.Boot, CheckedInAt: checkedIn.UTC().Truncate(time.Millisecond), Vector: vector}
 	data, err := MarshalUpdateHealth(health)
 	if err != nil {
 		panic(err)
 	}
-	h.writeAsAccount(h.healthPath(), data, at)
+	h.writeAsAccount(h.healthPath(), data, written)
 }
 
 // behaviorDelay is how long after the start a build with that behavior writes
@@ -223,7 +233,8 @@ func behaviorDelay(behavior string) time.Duration {
 	switch behavior {
 	case "slow":
 		return 400 * time.Second
-	case "good", "novector", "wrongsha", "wrongboot", "future", "staleboot":
+	case "good", "novector", "wrongsha", "wrongboot", "future",
+		"healthversion", "staletime", "futurerecord", "futurefile", "restarted", "activating":
 		return 3 * time.Second
 	}
 	return -1
@@ -249,6 +260,15 @@ func (h *fakeHost) evolve(s *fakeService, now time.Time) {
 		return
 	}
 	s.State = "active"
+	switch s.Behavior {
+	case "restarted":
+		// The manager restarted it once, a second after it started.
+		if elapsed >= time.Second {
+			s.Restarts = 1
+		}
+	case "activating":
+		s.State = "activating"
+	}
 	delay := behaviorDelay(s.Behavior)
 	if delay < 0 || elapsed < delay {
 		return
@@ -271,6 +291,18 @@ func (h *fakeHost) evolve(s *fakeService, now time.Time) {
 		h.writeHealth(*s, at, UpdateVectorRunning)
 	case "future":
 		h.writeHealth(*s, now.Add(time.Hour), UpdateVectorRunning)
+	case "healthversion":
+		other := *s
+		other.Version = "9.9.9"
+		h.writeHealth(other, at, UpdateVectorRunning)
+	case "staletime":
+		// A record whose own check-in time is from before the build started, in a file
+		// that was just written.
+		h.writeHealthAt(*s, started.Add(-time.Hour), at, UpdateVectorRunning)
+	case "futurerecord":
+		h.writeHealthAt(*s, now.Add(time.Hour), at, UpdateVectorRunning)
+	case "futurefile":
+		h.writeHealthAt(*s, at, now.Add(time.Hour), UpdateVectorRunning)
 	default:
 		vector := s.Vector
 		if vector == "" {
@@ -366,6 +398,15 @@ func (h *fakeHost) RunProbe(ctx context.Context, path string, account updateAcco
 	return []byte(fmt.Sprintf(`{"version":%q,"vector_version":"0.58.0","go":"go1.26","os":%q,"arch":%q}`+"\n", version, runtime.GOOS, runtime.GOARCH)), nil
 }
 
+// CopyInto is the real copy, except for the build into the directory a test says
+// is full.
+func (h *fakeHost) CopyInto(dir *rootOwned, name string, perm rootFilePerm, src io.Reader, size int64) (string, error) {
+	if h.cfg.CopyENOSPC != "" && dir.Path() == h.cfg.CopyENOSPC && name == UpdateBuildFile(runtime.GOOS) {
+		return "", &os.PathError{Op: "write", Path: dir.entryPath(name), Err: syscall.ENOSPC}
+	}
+	return h.unixUpdateHost.CopyInto(dir, name, perm, src, size)
+}
+
 func (h *fakeHost) FreeSpace(dir *rootOwned) (uint64, error) {
 	if h.cfg.StepFree != 0 {
 		return h.cfg.StepFree, nil
@@ -418,10 +459,13 @@ func (i *fakeInstall) Stage(name string, src io.Reader, size int64) (string, err
 }
 
 func (i *fakeInstall) Swap(staged, previous string) error {
-	if i.cfg.SwapFails != "" {
-		return errors.New(i.cfg.SwapFails)
+	switch i.cfg.SwapFails {
+	case "":
+		return i.unixInstall.Swap(staged, previous)
+	case "read-only":
+		return fmt.Errorf("%w: the file system became read-only", errUpdateReadOnly)
 	}
-	return i.unixInstall.Swap(staged, previous)
+	return errors.New(i.cfg.SwapFails)
 }
 
 // ---------------------------------------------------------------- the fixture
