@@ -294,7 +294,17 @@ async function load({
           size: JSON.stringify(document.config).length,
           created_at: created,
           message: "Synthetic published version",
-          validation: { valid: true },
+          // What the server stores with a version that Vector accepted.
+          validation: {
+            valid: true,
+            vector_validated: true,
+            static_checked: true,
+            deferred: false,
+            vector_version: "0.58.0",
+            errors: [],
+            warnings: [],
+            diagnostics: [],
+          },
         });
       }
       if (path === "/mfa") return reply({ enabled: false });
@@ -1649,6 +1659,64 @@ try {
       },
     );
     await check(
+      "a person who can't run a check reads what is true about the draft, never an instruction",
+      async () => {
+        const instruction =
+          "Run a check to validate this pipeline with Vector.";
+        // A viewer, or anyone on an archived pipeline, sees the check the
+        // published version passed when its steps equal the draft.
+        for (const options of [
+          { role: "viewer", published: true },
+          { role: "admin", published: true, archived: true },
+        ]) {
+          await load(options);
+          await expect(control()).toHaveCount(0);
+          await expect(verdict()).toHaveText(
+            "Version 1 was checked by Vector 0.58 when it was published.",
+          );
+          await expect(problemsPanel()).toContainText("No problems");
+          await expect(problemsPanel()).not.toContainText("Run a check");
+          expect(fixture.validations).toEqual([]);
+        }
+        // Without a published version nothing is known to them, and nothing
+        // is asked of them.
+        for (const options of [
+          { role: "viewer" },
+          { role: "admin", archived: true },
+        ]) {
+          await load(options);
+          await expect(verdict()).toHaveText(
+            "Not checked since the last edit.",
+          );
+          await expect(problemsPanel()).toContainText("Not checked");
+          await expect(problemsPanel()).not.toContainText("Run a check");
+          expect(fixture.validations).toEqual([]);
+        }
+        // The people who can check are still told how.
+        await load({ role: "editor" });
+        await expect(verdict()).toHaveText(instruction);
+        await load({
+          role: "viewer",
+          published: true,
+          width: 375,
+          height: 900,
+        });
+        // On a phone the bar leaves the sentence out; the open panel has it.
+        await problemsPanel()
+          .getByRole("button", { name: "No problems", exact: true })
+          .click();
+        await expect(problemsPanel()).toContainText(
+          "Nothing to fix. Version 1 was checked by Vector 0.58 when it was published.",
+        );
+        await noOverflow("viewer check verdict 375");
+        await page.screenshot({
+          path: resolve(output, "viewer-check-verdict-375.png"),
+          animations: "disabled",
+        });
+        await axe("viewer check verdict");
+      },
+    );
+    await check(
       "unparsed code and unfinished fields are never sent or shown as checked",
       async () => {
         await load();
@@ -1843,7 +1911,7 @@ try {
         }
       },
     );
-    expect(results).toHaveLength(7);
+    expect(results).toHaveLength(8);
   } else if (nodeActionsOnly) {
     const nodeMenu = () =>
       page.getByRole("menu", { name: "Step: sample", exact: true });

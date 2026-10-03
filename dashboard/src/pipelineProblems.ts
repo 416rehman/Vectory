@@ -546,6 +546,25 @@ const deferralPhrases: Record<string, string> = {
   "device-local paths or external code files": "local files and paths",
 };
 
+/** What each device still checks for itself: "secrets and Lua code". */
+function deviceChecks(check: Pick<PipelineCheck, "deferred_reasons">) {
+  const reasons = [
+    ...new Set(
+      (check.deferred_reasons || []).map(
+        (reason) =>
+          deferralPhrases[reason] ||
+          reason.replace(
+            /^platform-specific source (.+)$/,
+            "the $1 source's platform",
+          ),
+      ),
+    ),
+  ];
+  return reasons.length > 1
+    ? `${reasons.slice(0, -1).join(", ")} and ${reasons.at(-1)}`
+    : reasons[0] || "their environment";
+}
+
 /** One-line verdict for a completed check. */
 export function checkVerdict(check: PipelineCheck | null, errors: number) {
   if (errors)
@@ -563,23 +582,37 @@ export function checkVerdict(check: PipelineCheck | null, errors: number) {
   if (!check.static_checked)
     return "Only the pipeline structure was checked. Each device validates before applying.";
   if (check.vector_validated) return "Vector 0.58 accepted this pipeline.";
-  const reasons = [
-    ...new Set(
-      (check.deferred_reasons || []).map(
-        (reason) =>
-          deferralPhrases[reason] ||
-          reason.replace(
-            /^platform-specific source (.+)$/,
-            "the $1 source's platform",
-          ),
-      ),
-    ),
-  ];
-  const what =
-    reasons.length > 1
-      ? `${reasons.slice(0, -1).join(", ")} and ${reasons.at(-1)}`
-      : reasons[0] || "their environment";
-  return `Vector 0.58 accepted this pipeline. Each device checks ${what} before applying it.`;
+  return `Vector 0.58 accepted this pipeline. Each device checks ${deviceChecks(check)} before applying it.`;
+}
+
+/** The stored result of the check a version passed when it was published. */
+type PublishedCheck = Partial<PipelineCheck> & { vector_version?: string };
+
+/**
+ * What a person who can't run a check reads about a draft. One that equals
+ * the latest published version was checked when it was published, and the
+ * version says so; anything else is simply not checked since the last edit.
+ * Never an instruction they can't follow.
+ */
+export function readOnlyCheck(
+  published: { number: number; validation?: PublishedCheck | null } | null,
+): { status: CheckStatus; verdict: string } {
+  const result = published?.validation;
+  if (
+    published &&
+    result?.valid === true &&
+    (result.vector_validated || result.static_checked)
+  ) {
+    const release = /^\d+\.\d+/.exec(result.vector_version ?? "")?.[0];
+    const when = `Version ${published.number} was checked by ${release ? `Vector ${release}` : "Vector"} when it was published.`;
+    return result.vector_validated
+      ? { status: "passed", verdict: when }
+      : {
+          status: "device",
+          verdict: `${when} Each device checks ${deviceChecks(result)} before applying it.`,
+        };
+  }
+  return { status: "unchecked", verdict: "Not checked since the last edit." };
 }
 
 /** Fewest single-character edits between two strings (small inputs only). */
