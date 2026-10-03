@@ -13,7 +13,9 @@
 //! - Offline and back-online facts come from a scan of check-in times, one
 //!   outage per device: announced once when it passes a channel's threshold,
 //!   and "back online" once after two check-ins, so a flapping device sends
-//!   nothing new.
+//!   nothing new. After the server starts, silence counts from the end of a
+//!   recovery window (`RECOVERY_WINDOW_SECONDS`), so a fleet that could not
+//!   reach the server is not reported offline the moment it returns.
 //! - At most `RATE_LIMIT` messages go to a channel in any minute; the rest
 //!   are summarised in one digest. Quiet hours hold messages and send one
 //!   digest when they end. A failed send retries after 1, 5 and 30 minutes,
@@ -45,6 +47,12 @@ pub const MAX_ATTEMPTS: i64 = 4;
 pub const RETENTION_DAYS: i64 = 30;
 /// How often device check-ins are scanned for outages.
 pub const SCAN_SECONDS: i64 = 60;
+/// After the server starts, devices have this long to reconnect before any of
+/// them can be reported offline. An agent that could not reach the server
+/// waits twice as long between attempts, up to five minutes, so the check-ins
+/// that went unanswered while the server was down say nothing about the
+/// devices.
+pub const RECOVERY_WINDOW_SECONDS: i64 = 300;
 /// Sends in flight across all channels.
 const SEND_SLOTS: usize = 4;
 const FANOUT_BATCH: i64 = 200;
@@ -58,6 +66,9 @@ pub struct Runtime {
     slots: std::sync::Arc<tokio::sync::Semaphore>,
     last_scan: std::sync::Mutex<Option<DateTime<Utc>>>,
     last_prune: std::sync::Mutex<Option<DateTime<Utc>>>,
+    /// When the devices' time to reconnect after a server start ends; none
+    /// until a start opens the window.
+    recovery_ends: std::sync::Mutex<Option<DateTime<Utc>>>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -66,7 +77,16 @@ impl Default for Runtime {
             slots: std::sync::Arc::new(tokio::sync::Semaphore::new(SEND_SLOTS)),
             last_scan: Default::default(),
             last_prune: Default::default(),
+            recovery_ends: Default::default(),
         }
+    }
+}
+impl Runtime {
+    /// The server started at `now`: no device is reported offline before
+    /// `RECOVERY_WINDOW_SECONDS` have passed, and silence counts from the end
+    /// of that window for any device that has not checked in since.
+    pub fn begin_recovery_window(&self, now: DateTime<Utc>) {
+        *lock(&self.recovery_ends) = Some(now + Duration::seconds(RECOVERY_WINDOW_SECONDS));
     }
 }
 fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -92,6 +112,7 @@ fn bounded(text: &str, max: usize) -> String {
 
 /// The background loop. Started once by the server binary.
 pub async fn run(s: State) {
+    s.notifier.begin_recovery_window(Utc::now());
     if let Err(e) = recover(&s, Utc::now()).await {
         tracing::warn!(code = e.code, "notifier recovery failed; continuing");
     }
@@ -150,7 +171,8 @@ async fn collect(s: &State, now: DateTime<Utc>) -> Result<()> {
     };
     let outages = if scan_due {
         let enabled: Vec<&Channel> = channels.iter().filter(|c| c.enabled).collect();
-        Some(scan(&mut conn, &enabled, now, &mut facts).await?)
+        let recovery_ends = *lock(&s.notifier.recovery_ends);
+        Some(scan(&mut conn, &enabled, now, recovery_ends, &mut facts).await?)
     } else {
         None
     };
@@ -282,13 +304,18 @@ enum OutageChange {
     Remove(String),
 }
 /// Compare check-in times with open outages. A device is offline after three
-/// missed check-ins, as everywhere else in Vectory.
+/// missed check-ins, as everywhere else in Vectory, and a channel announces it
+/// once it has been silent for the channel's minutes. Silence counts from the
+/// later of the last check-in and `recovery_ends`, the end of the time devices
+/// have to reconnect after the server started.
 async fn scan(
     db: &mut SqliteConnection,
     channels: &[&Channel],
     now: DateTime<Utc>,
+    recovery_ends: Option<DateTime<Utc>>,
     facts: &mut Vec<Fact>,
 ) -> Result<Vec<OutageChange>> {
+    let silent_from = |at: DateTime<Utc>| recovery_ends.map_or(at, |end| at.max(end));
     let rows = sqlx::query("SELECT id,revoked,policy,policy_generation,json_extract(data,'$.last_seen') AS last_seen,json_extract(data,'$.policy_generation') AS reported,json_extract(data,'$.heartbeat_floor_seconds') AS floor FROM devices")
         .fetch_all(&mut *db)
         .await?;
@@ -334,7 +361,7 @@ async fn scan(
         });
         let interval =
             crate::rollout::check_in_seconds(&policy, &evidence, row.get("policy_generation"));
-        let offline = (now - last_seen.1).num_seconds() > interval * 3;
+        let offline = (now - silent_from(last_seen.1)).num_seconds() > interval * 3;
         match (offline, outage) {
             (true, outage) => {
                 // Nothing is stored until a channel is told: until then the
@@ -347,8 +374,8 @@ async fn scan(
                     if notified.contains(&channel.id) {
                         continue;
                     }
-                    let crossing =
-                        since_time + Duration::minutes(channel.rules.offline_minutes as i64);
+                    let crossing = silent_from(since_time)
+                        + Duration::minutes(channel.rules.offline_minutes as i64);
                     // A channel reports outages that pass its threshold after
                     // it exists, not every device that was already gone.
                     if now >= crossing && crossing >= channel.created_at {
@@ -377,6 +404,10 @@ async fn scan(
             (false, Some((since, returned_at, notified))) => {
                 if notified.is_empty() {
                     changes.push(OutageChange::Remove(device));
+                } else if parse_time(&since).is_some_and(|since| last_seen.1 <= since) {
+                    // Not back: the recovery window only keeps a device that
+                    // has not checked in since the outage began from reading
+                    // as offline.
                 } else if let Some(first) = returned_at.as_deref().and_then(parse_time) {
                     // The second check-in since the outage: back for real.
                     if last_seen.1 > first {
