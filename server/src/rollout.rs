@@ -1550,20 +1550,13 @@ async fn preview_inner(
         .filter(|d| ["offline", "awaiting_first_check_in"].contains(&text(d, "status")))
         .count();
     if offline > 0 {
-        warnings.push(format!(
-            "{offline} {} not checking in. {} after {} reconnect.",
-            if offline == 1 {
-                "device is"
-            } else {
-                "devices are"
-            },
-            if offline == 1 {
-                "It applies the change"
-            } else {
-                "They apply the change"
-            },
-            if offline == 1 { "it" } else { "they" },
-        ));
+        warnings.push(if offline == 1 {
+            "1 device is not checking in. It applies the change after it reconnects.".to_owned()
+        } else {
+            format!(
+                "{offline} devices are not checking in. They apply the change after they reconnect."
+            )
+        });
     }
     if !paused.is_empty() {
         warnings.push(format!(
@@ -2002,11 +1995,131 @@ async fn mark_ineligible_targets(
     Ok(())
 }
 
+/// Conflicts a refused group edit names; `details_total` counts them all.
+const CONFLICTS_NAMED: usize = 10;
+/// Groups named for each assignment of a conflict.
+const GROUPS_NAMED: usize = 3;
+
+/// A stored record, or none when it is gone; any other failure is the caller's.
+async fn record_if_present(
+    db: &mut SqliteConnection,
+    kind: &str,
+    id: &str,
+) -> Result<Option<Value>> {
+    match db::record(db, kind, id).await {
+        Ok(record) => Ok(Some(record)),
+        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+/// One side of a membership conflict, described as the deploy review describes
+/// an assignment, with what it targets and which of the groups it follows hold
+/// the device. Names and numbers only: never a selector, a member list or a
+/// payload.
+async fn conflict_assignment(
+    db: &mut SqliteConnection,
+    described: &mut std::collections::HashMap<String, Value>,
+    id: &str,
+    device: &str,
+) -> Result<Option<Value>> {
+    let Some(deployment) = record_if_present(db, "deployment", id).await? else {
+        return Ok(None);
+    };
+    let mut out = describe(db, described, &deployment).await?;
+    let followed = ids(&deployment["selector"], "group_ids").unwrap_or_default();
+    let mut groups = Vec::new();
+    for group in &followed {
+        if groups.len() == GROUPS_NAMED {
+            break;
+        }
+        let Some(record) = record_if_present(db, "group", group).await? else {
+            continue;
+        };
+        let holds = record["device_ids"]
+            .as_array()
+            .is_some_and(|members| members.iter().any(|member| member == device));
+        if holds {
+            groups.push(json!({
+                "id": group,
+                "name": record["name"].as_str().unwrap_or("").chars().take(120).collect::<String>(),
+            }));
+        }
+    }
+    out["targets"] = json!(if followed.is_empty() {
+        "devices"
+    } else {
+        "group"
+    });
+    out["groups"] = json!(groups);
+    Ok(Some(out))
+}
+/// The conflicts of a refused membership edit in words a person can act on:
+/// per conflict the device and the two assignments that would both deliver to
+/// it at the same priority. At most `CONFLICTS_NAMED`, ordered by device name,
+/// and how many there were.
+async fn named_conflicts(
+    db: &mut SqliteConnection,
+    mut found: Vec<Value>,
+) -> Result<(Vec<Value>, usize)> {
+    let total = found.len();
+    let device_ids: Vec<&str> = found
+        .iter()
+        .map(|conflict| text(conflict, "device_id"))
+        .collect();
+    let names: std::collections::HashMap<String, Option<String>> = sqlx::query_as::<
+        _,
+        (String, Option<String>),
+    >(
+        "SELECT id,substr(name,1,240) FROM devices WHERE id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(json!(device_ids).to_string())
+    .fetch_all(&mut *db)
+    .await?
+    .into_iter()
+    .collect();
+    let name_of = |device: &str| names.get(device).cloned().flatten();
+    found.sort_by_cached_key(|conflict| {
+        let device = text(conflict, "device_id");
+        (
+            name_of(device).unwrap_or_default().to_lowercase(),
+            device.to_owned(),
+            conflict["assignment_ids"].to_string(),
+        )
+    });
+    let mut described = std::collections::HashMap::new();
+    let mut named = Vec::new();
+    for conflict in found.iter().take(CONFLICTS_NAMED) {
+        let device = text(conflict, "device_id");
+        let mut assignments = Vec::new();
+        for id in conflict["assignment_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if let Some(assignment) = conflict_assignment(db, &mut described, id, device).await? {
+                assignments.push(assignment);
+            }
+        }
+        named.push(json!({
+            "device_id": device,
+            "device_name": name_of(device),
+            "resource": conflict["resource"],
+            "priority": conflict["priority"],
+            "assignments": assignments,
+        }));
+    }
+    Ok((named, total))
+}
+
 pub async fn reconcile_membership(db: &mut SqliteConnection) -> Result<()> {
-    if !conflicts(db, None).await?.is_empty() {
+    let found = conflicts(db, None).await?;
+    if !found.is_empty() {
+        let (details, total) = named_conflicts(db, found).await?;
         return Err(ApiError::conflict(
             "Group membership creates conflicting equal-priority assignments",
-        ));
+        )
+        .with_fields(json!({"details": details, "details_total": total})));
     }
     // Releasing one assignment can retire another it replaces, so read each
     // record fresh instead of trusting a snapshot taken before the loop.
