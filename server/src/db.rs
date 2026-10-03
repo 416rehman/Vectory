@@ -164,48 +164,41 @@ pub async fn migrate(
         ),
     })
 }
-const TELEMETRY_RETENTION_VARIABLE: &str = "VECTORY_TELEMETRY_RETENTION_DAYS";
+pub const TELEMETRY_RETENTION_VARIABLE: &str = "VECTORY_TELEMETRY_RETENTION_DAYS";
 const TELEMETRY_RETENTION_DEFAULT_DAYS: i64 = 7;
 const TELEMETRY_RETENTION_RANGE: std::ops::RangeInclusive<i64> = 1..=30;
-/// Days of device metrics history to keep, and a sentence about the value
-/// given when it had to be changed. An unset or empty variable keeps the
-/// default; a number outside the range is clamped to it; anything else is not
-/// a number of days and keeps the default. None of them stops the server.
-fn telemetry_retention(value: Option<&str>) -> (i64, Option<String>) {
-    let (low, high) = (
-        *TELEMETRY_RETENTION_RANGE.start(),
-        *TELEMETRY_RETENTION_RANGE.end(),
-    );
+/// Days of device metrics history to keep for the value the variable holds
+/// (`None` when it is unset). Unset or empty is the default; anything that is
+/// not a whole number of days in the range is an error that names the
+/// variable, the value and the range, never a different retention.
+fn telemetry_retention(value: Option<&str>) -> std::result::Result<i64, String> {
     let Some(given) = value.map(str::trim).filter(|v| !v.is_empty()) else {
-        return (TELEMETRY_RETENTION_DEFAULT_DAYS, None);
+        return Ok(TELEMETRY_RETENTION_DEFAULT_DAYS);
     };
-    match given.parse::<i64>() {
-        Ok(days) if TELEMETRY_RETENTION_RANGE.contains(&days) => (days, None),
-        Ok(days) => {
-            let used = days.clamp(low, high);
-            (
-                used,
-                Some(format!(
-                    "{TELEMETRY_RETENTION_VARIABLE}={given:?} is outside {low} to {high} days; keeping metrics history for {used} days."
-                )),
-            )
-        }
-        Err(_) => (
-            TELEMETRY_RETENTION_DEFAULT_DAYS,
-            Some(format!(
-                "{TELEMETRY_RETENTION_VARIABLE}={:?} is not a number of days ({low} to {high}); keeping metrics history for {TELEMETRY_RETENTION_DEFAULT_DAYS} days.",
+    given
+        .parse::<i64>()
+        .ok()
+        .filter(|days| TELEMETRY_RETENTION_RANGE.contains(days))
+        .ok_or_else(|| {
+            format!(
+                "{TELEMETRY_RETENTION_VARIABLE} must be a whole number of days from {} to {}, not {:?}",
+                TELEMETRY_RETENTION_RANGE.start(),
+                TELEMETRY_RETENTION_RANGE.end(),
                 given.chars().take(40).collect::<String>()
-            )),
-        ),
-    }
+            )
+        })
+}
+/// Stops the server at startup, before it opens anything, when the variable
+/// holds a retention it would otherwise have to replace.
+pub fn check_telemetry_retention(value: Option<&str>) -> anyhow::Result<()> {
+    telemetry_retention(value)
+        .map(|_| ())
+        .map_err(anyhow::Error::msg)
 }
 pub fn telemetry_retention_days() -> i64 {
-    telemetry_retention(std::env::var(TELEMETRY_RETENTION_VARIABLE).ok().as_deref()).0
-}
-/// What to tell the operator at startup when the retention they set is not
-/// the one in force.
-pub fn telemetry_retention_warning() -> Option<String> {
-    telemetry_retention(std::env::var(TELEMETRY_RETENTION_VARIABLE).ok().as_deref()).1
+    // A server that started has checked the variable already.
+    telemetry_retention(std::env::var(TELEMETRY_RETENTION_VARIABLE).ok().as_deref())
+        .unwrap_or(TELEMETRY_RETENTION_DEFAULT_DAYS)
 }
 pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
@@ -356,58 +349,46 @@ pub fn validate_policy(v: &Value) -> Result<()> {
 
 #[cfg(test)]
 mod telemetry_retention_tests {
-    use super::telemetry_retention;
+    use super::{check_telemetry_retention, telemetry_retention};
 
     #[test]
-    fn a_value_in_range_is_used_without_a_word() {
+    fn unset_empty_or_in_range_values_are_used() {
         for (given, days) in [
             (None, 7),
             (Some(""), 7),
             (Some("  "), 7),
             (Some("1"), 1),
-            (Some("14"), 14),
+            (Some(" 14 "), 14),
             (Some("30"), 30),
         ] {
-            assert_eq!(telemetry_retention(given), (days, None), "{given:?}");
+            assert_eq!(telemetry_retention(given), Ok(days), "{given:?}");
+            assert!(check_telemetry_retention(given).is_ok(), "{given:?}");
         }
     }
 
     #[test]
-    fn a_number_outside_the_range_is_clamped_and_named() {
-        let (days, warning) = telemetry_retention(Some("90"));
-        assert_eq!(days, 30);
-        assert_eq!(
-            warning.as_deref(),
-            Some(
-                "VECTORY_TELEMETRY_RETENTION_DAYS=\"90\" is outside 1 to 30 days; keeping metrics history for 30 days."
-            )
-        );
-        for (given, days) in [("0", 1), ("-5", 1), ("31", 30)] {
-            let (used, warning) = telemetry_retention(Some(given));
-            assert_eq!(used, days, "{given}");
-            assert!(
-                warning.unwrap().contains(&format!("for {days} days")),
-                "{given}"
+    fn anything_else_stops_the_server_with_the_variable_the_value_and_the_range() {
+        for given in ["x", "30d", "7.5", "1e1", "0", "31", "90", "-5", "many"] {
+            let error = check_telemetry_retention(Some(given))
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                error,
+                format!(
+                    "VECTORY_TELEMETRY_RETENTION_DAYS must be a whole number of days from 1 to 30, not {given:?}"
+                )
             );
         }
     }
 
     #[test]
-    fn something_that_is_not_a_number_keeps_the_default_and_is_named() {
-        let (days, warning) = telemetry_retention(Some("abc"));
-        assert_eq!(days, 7);
-        assert_eq!(
-            warning.as_deref(),
-            Some(
-                "VECTORY_TELEMETRY_RETENTION_DAYS=\"abc\" is not a number of days (1 to 30); keeping metrics history for 7 days."
-            )
-        );
-        let (_, warning) = telemetry_retention(Some(
+    fn a_long_or_multi_line_value_is_cut_and_escaped_in_the_sentence() {
+        let error = telemetry_retention(Some(
             "7\nINJECTED log line, and a very long tail 0123456789 0123456789 0123456789",
-        ));
-        let warning = warning.unwrap();
-        assert!(!warning.contains('\n'), "{warning}");
-        assert!(warning.len() < 250, "{warning}");
+        ))
+        .unwrap_err();
+        assert!(!error.contains('\n'), "{error}");
+        assert!(error.len() < 200, "{error}");
     }
 }
 

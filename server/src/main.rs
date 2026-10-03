@@ -26,6 +26,24 @@ fn wake_options(value: Option<String>) -> anyhow::Result<wake::Options> {
     Ok(options)
 }
 
+/// The limits that decide how much the server keeps and accepts. A value that
+/// is not a whole number in its range stops the server here, before it opens
+/// anything, with a sentence that names the variable, the value and the range:
+/// it is never replaced by another one.
+fn check_resource_limits() -> anyhow::Result<()> {
+    vectory_server::db::check_telemetry_retention(
+        env::var(vectory_server::db::TELEMETRY_RETENTION_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
+    vectory_server::device::max_agent_connections(
+        env::var(vectory_server::device::MAX_CONNECTIONS_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
+    Ok(())
+}
+
 /// Ctrl-C, or SIGTERM from a service manager or `docker stop`.
 async fn shutdown_signal() {
     #[cfg(unix)]
@@ -204,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
             .ok()
             .as_deref(),
     )?;
+    check_resource_limits()?;
     let agent_addr = if cert.is_some() && key.is_some() {
         let address = env_or("VECTORY_AGENT_ADDR", "0.0.0.0:8443");
         check_agent_bind_address(development, validation_url.is_some(), &address)?;
@@ -255,9 +274,6 @@ async fn main() -> anyhow::Result<()> {
         wake: wake_options(env::var("VECTORY_AGENT_WAKE_LIMIT").ok())?,
     };
     let state = initialize(settings).await?;
-    if let Some(warning) = vectory_server::db::telemetry_retention_warning() {
-        tracing::warn!("{warning}");
-    }
     tracing::info!(
         "{}",
         install::startup_banner(&state, &web_addr, &secret_source).await
