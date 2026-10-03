@@ -969,6 +969,90 @@ async fn deployment_events_are_named_after_what_they_deployed() {
     assert_eq!(found["total"], 2);
 }
 
+/// Rows read as names, never as the identifiers they join: an issue is its
+/// title on its device, a device recovery was completed by the token that
+/// authorized it, and a row about a device carries the device's name.
+#[tokio::test]
+async fn issue_events_recoveries_and_devices_are_named_at_read_time() {
+    let (_temp, s, app, a) = fixture().await;
+    let device = db::id();
+    add_device(&s, &device, "edge-nyc-02").await;
+    let issue = db::hash("sink errors on edge-nyc-02");
+    insert(
+        &s,
+        "issue",
+        &json!({"id":issue,"device_id":device,"code":"DATA_PLANE_SINK_ERRORS","title":"http_out can't deliver events","resolved":false,"revision":1}),
+    )
+    .await;
+    let token = db::id();
+    sqlx::query("INSERT INTO enrollment_tokens(id,verifier,data) VALUES(?,?,?)")
+        .bind(&token)
+        .bind(db::hash(&token))
+        .bind(json!({"id":token,"name":"Recovery for edge-nyc-02","expires_at":"2099-01-01T00:00:00Z","uses":1,"max_uses":1,"revoked":false,"created_at":"2026-09-26T12:00:00Z"}).to_string())
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let other_device = db::id();
+    let mut acknowledged = event(0, &a.id, &issue);
+    acknowledged["action"] = json!("issue.acknowledge");
+    acknowledged["outcome"] = json!("success");
+    acknowledged["device_id"] = json!(device);
+    insert(&s, "audit", &acknowledged).await;
+    let mut recovered = event(1, &token, &format!("{other_device}:{device}"));
+    recovered["action"] = json!("device.recovery_complete");
+    recovered["outcome"] = json!("success");
+    insert(&s, "audit", &recovered).await;
+    let history = get(&app, "/api/v1/audit/history?page_size=50", &a).await;
+    let row = |action: &str| {
+        history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["action"] == action)
+            .unwrap()
+            .clone()
+    };
+    let issue_row = row("issue.acknowledge");
+    assert_eq!(issue_row["target"], issue.as_str());
+    assert_eq!(
+        issue_row["target_name"],
+        "http_out can't deliver events on edge-nyc-02"
+    );
+    assert_eq!(issue_row["target_kind"], "issue");
+    assert_eq!(issue_row["device_id"], device.as_str());
+    assert_eq!(issue_row["device_name"], "edge-nyc-02");
+    let recovery_row = row("device.recovery_complete");
+    assert_eq!(recovery_row["actor"], "Recovery for edge-nyc-02");
+    assert_eq!(recovery_row["actor_id"], token.as_str());
+    assert_eq!(recovery_row["actor_kind"], "unknown");
+    // A row about nobody's device has no device name, and a name never
+    // replaces the identity it labels.
+    let mut plain = event(2, &a.id, "unrelated");
+    plain["action"] = json!("login");
+    plain["outcome"] = json!("success");
+    insert(&s, "audit", &plain).await;
+    let history = get(&app, "/api/v1/audit/history?page_size=50", &a).await;
+    let login = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["action"] == "login")
+        .unwrap();
+    assert!(login["device_name"].is_null());
+    // The detail carries the same names.
+    let detail = get(
+        &app,
+        &format!("/api/v1/audit/{}", issue_row["id"].as_str().unwrap()),
+        &a,
+    )
+    .await;
+    assert_eq!(detail["device_name"], "edge-nyc-02");
+    assert_eq!(
+        detail["target_name"],
+        "http_out can't deliver events on edge-nyc-02"
+    );
+}
+
 #[tokio::test]
 async fn scope_separates_sign_in_activity_from_changes() {
     let (_temp, s, app, admin) = fixture().await;

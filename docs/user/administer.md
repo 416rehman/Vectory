@@ -161,7 +161,7 @@ A load test on 2026-09-30 ran a release build on a shared Linux virtual machine 
 
 - Search, then filter the **Event**, **Result** and **Time** columns. Dates cover whole days in UTC.
 - Select an event for its details, including the reason and request ID when recorded. **Event link** copies a link to it.
-- Names show each person's and resource's current name; the recorded ID is what the event refers to.
+- Names show each person's and resource's current name; the recorded ID is what the event refers to. An issue reads as its title on its device, and a device recovery as completed by the token that authorized it.
 - A run of device results from a rollout shares one row. For one device the row reads its last state, such as **edge-nyc-02 · rolled back**, and counts its steps (**12 results**); for several devices it reads, for example, **4 results for 2 devices**, with each device's last state counted. Select the row to read every step in order.
 
 To export:
