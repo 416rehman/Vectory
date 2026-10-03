@@ -34,6 +34,7 @@ func init() {
 			examples: []string{"sudo vectory run", "sudo vectory run --state-dir /srv/vectory/agent"},
 			define:   defineRun("run")},
 		{name: "service", group: "Run the agent", hidden: true, summary: "Service entry point", usage: "service [--state-dir PATH]", define: defineRun("service")},
+		{name: "update-helper", group: "Run the agent", hidden: true, summary: "One run of the update step", usage: "update-helper [--state-dir PATH]", define: defineUpdateHelper},
 		{name: "service-install", group: "Run the agent", summary: "Register the agent as a system service",
 			usage:    "service-install [--state-dir PATH] [--service-user NAME]",
 			about:    "Registers systemd (Linux), launchd (macOS) or a Windows service that runs `vectory run` as an unprivileged account, and hands it the state and managed-config directories. It doesn't start the service.",

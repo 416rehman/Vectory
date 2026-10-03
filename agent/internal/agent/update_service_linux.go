@@ -65,15 +65,21 @@ var _ updateHost = (*linuxUpdateHost)(nil)
 // ---------------------------------------------------------------- the step's units
 
 // updateUnitValue is a value the step's units name (a path, an argument), refused
-// when it holds a control character or isn't text: it is written inside quotes by
-// unitArg, and a value that could end the line or the quotes is never written.
+// when it holds a control character, a line or paragraph separator, a dollar sign
+// or isn't text: it is written inside quotes by unitArg, and a value that could end
+// the line or the quotes is never written. A dollar sign is refused because
+// ExecStart= reads it as the start of a variable and the lists of paths read it as
+// itself, so one escape can't be right in both.
 func updateUnitValue(what, value string) (string, error) {
 	if value == "" || !utf8.ValidString(value) {
 		return "", fmt.Errorf("%s isn't text a unit file can hold", what)
 	}
 	for _, r := range value {
-		if unicode.IsControl(r) || r == ' ' || r == ' ' {
+		switch {
+		case unicode.IsControl(r) || r == ' ' || r == ' ':
 			return "", fmt.Errorf("%s holds a control character, so it isn't written into a unit file", what)
+		case r == '$':
+			return "", fmt.Errorf("%s holds a dollar sign, which a unit file reads differently in different settings, so it isn't written into one", what)
 		}
 	}
 	return unitArg(value), nil
@@ -94,9 +100,11 @@ func updateUnitValue(what, value string) (string, error) {
 //     service manager over one.
 //   - CapabilityBoundingSet is what it needs and no more: it runs the probe as the
 //     service account (CAP_SETUID, CAP_SETGID), reads that account's private
-//     directory (CAP_DAC_OVERRIDE) and links and renames files in the install
-//     directory (CAP_FOWNER, CAP_CHOWN). A capability is added only when the
-//     native test shows the step needs it.
+//     directory (CAP_DAC_OVERRIDE), links and renames files in the install
+//     directory (CAP_FOWNER, CAP_CHOWN), and ends a probe that doesn't answer in
+//     ten seconds (CAP_KILL: a process may signal another account's process only
+//     with it, and the probe is the service account's). A capability is added only
+//     when the native test shows the step needs it.
 //
 // The step has no User=: it runs as root.
 func systemdUpdateUnits(spec updateUnitSpec) (service, timer string, err error) {
@@ -120,7 +128,7 @@ func systemdUpdateUnits(spec updateUnitSpec) (service, timer string, err error) 
 		"ProtectSystem=strict\nProtectHome=true\nPrivateTmp=true\nNoNewPrivileges=true\nProtectControlGroups=true\n" +
 		"RestrictAddressFamilies=AF_UNIX\nSystemCallFilter=@system-service\n" +
 		"ReadWritePaths=" + values[2] + " " + values[3] + " " + values[4] + "\n" +
-		"CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE\n"
+		"CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_KILL\n"
 	timer = "[Unit]\nDescription=Vectory agent update step schedule\n\n" +
 		"[Timer]\nOnBootSec=15s\nOnUnitInactiveSec=30s\nAccuracySec=5s\n\n" +
 		"[Install]\nWantedBy=timers.target\n"
@@ -434,9 +442,10 @@ func (h *linuxUpdateHost) PackageManaged(executable string) (string, bool) {
 }
 
 // hiddenFromTheStep are the places the step's sandbox makes inaccessible
-// (ProtectHome=true): an agent whose state directory or executable is there
+// (ProtectHome=true hides the first three, PrivateTmp=true gives the step its own
+// empty /tmp and /var/tmp): an agent whose state directory or executable is there
 // couldn't be updated, whatever the file permissions say.
-var hiddenFromTheStep = []string{"/home", "/root", "/run/user"}
+var hiddenFromTheStep = []string{"/home", "/root", "/run/user", "/tmp", "/var/tmp"}
 
 func hiddenPath(path string) (string, bool) {
 	cleaned := filepath.Clean(path)

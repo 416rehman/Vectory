@@ -13,10 +13,16 @@ import (
 // system's. Two variables let a test build a tree it owns and point the update
 // code at it: rootOwnedTrust and updateLocationsOverride. They are declared in
 // code that ships and assigned only in test files, so the agent that ships has
-// no way to relax the check. TestProductionAgentContainsNoTestHooks, in
-// cmd/vectory, keeps the same promise for the older seams.
+// no way to relax the check. The privileged step adds three more: the service
+// manager and the host's service files (updateHostOverride), the clock
+// (updateClockOverride) and the point a test stops the step at (updateFault).
+// TestProductionAgentContainsNoTestHooks, in cmd/vectory, keeps the same promise
+// for the older seams and for these.
 func TestTheUpdateSeamsAreAssignedOnlyByTests(t *testing.T) {
-	seams := map[string]bool{"rootOwnedTrust": true, "updateLocationsOverride": true}
+	seams := map[string]bool{
+		"rootOwnedTrust": true, "updateLocationsOverride": true,
+		"updateHostOverride": true, "updateClockOverride": true, "updateFault": true,
+	}
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no source to check: %v", err)
