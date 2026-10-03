@@ -43,6 +43,11 @@ func trustTree(t *testing.T, root string) {
 	t.Cleanup(func() { rootOwnedTrust = old })
 }
 
+// requireRootOwnedWriter does nothing here: under the seam the test's own
+// account is the one the check trusts, so what it makes is what the check
+// accepts.
+func requireRootOwnedWriter(t *testing.T) { t.Helper() }
+
 func mkdirMode(t *testing.T, path string, mode os.FileMode) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -281,6 +286,10 @@ func TestOpenRootOwnedRefusesANamedPipeWithoutWaiting(t *testing.T) {
 	for name, open := range map[string]func() error{
 		"openRootOwned": func() error { _, err := openRootOwned(pipe, rootOwnedFile); return err },
 		"openPlainFile": func() error { _, err := openPlainFile(pipe); return err },
+		"ReadUpdateHealth": func() error {
+			_, err := ReadUpdateHealth(pipe)
+			return err
+		},
 		"OpenAt": func() error {
 			r := mustOpen(t, root, rootOwnedDirectory)
 			_, err := r.OpenAt("pipe")
