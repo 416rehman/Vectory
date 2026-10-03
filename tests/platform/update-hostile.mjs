@@ -4,10 +4,11 @@
 // file only runs it.
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { agentPort, previewDir } from "./instance.mjs";
-import { outputRoot, root, run, sleep, until } from "./lib.mjs";
+import { agentPort, previewDir, webPort } from "./instance.mjs";
+import { outputRoot, root, run, sleep, until, windows } from "./lib.mjs";
 
 export const controlPort = process.env.VECTORY_HOSTILE_CONTROL_PORT || "8665";
 const sourceDir = path.join(root, "tests", "platform", "hostile-update-server");
@@ -15,7 +16,10 @@ const sourceDir = path.join(root, "tests", "platform", "hostile-update-server");
 /** Builds the program into `directory` and returns its path. */
 export function buildHostileServer(directory) {
   fs.mkdirSync(directory, { recursive: true });
-  const binary = path.join(directory, "hostile-update-server");
+  const binary = path.join(
+    directory,
+    windows ? "hostile-update-server.exe" : "hostile-update-server",
+  );
   run("go", ["build", "-buildvcs=false", "-o", binary, "."], {
     cwd: sourceDir,
     timeoutMs: 300000,
@@ -23,28 +27,97 @@ export function buildHostileServer(directory) {
   return binary;
 }
 
-/** The instance's own files the program borrows: its keys and its listener's TLS chain. */
+/**
+ * The instance's own files the program borrows: its keys and its listener's TLS chain.
+ * The Windows preview serves the leaf certificate and the platform job appends the CA
+ * to it (.local/pki/server.pem); scripts/preview.sh writes a chain of its own.
+ */
 export function instanceFiles() {
   return {
     keys: path.join(previewDir, "state", "keys"),
-    chain: path.join(previewDir, "agent-chain.pem"),
+    chain: windows
+      ? path.join(root, ".local", "pki", "server.pem")
+      : path.join(previewDir, "agent-chain.pem"),
     key: path.join(root, ".local", "pki", "server-key.pem"),
     ca: path.join(root, ".local", "pki", "ca.pem"),
   };
 }
 
-/** Stops the instance (its agent listener and its validator) and starts it again. */
-export const instance = {
-  stop() {
-    run(path.join(root, "scripts", "preview.sh"), ["stop"], { cwd: root });
-  },
-  start() {
-    run(path.join(root, "scripts", "preview.sh"), ["start"], {
-      cwd: root,
-      timeoutMs: 180000,
+/** Whether something listens on a loopback port. */
+function listening(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port: Number(port) });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
     });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+/**
+ * The Windows instance: the server process Start-LocalPreview.ps1 started (its
+ * process identifier is in server.pid), ended and started again. The validator is
+ * the job's own and stays up.
+ */
+const windowsInstance = {
+  async stop() {
+    const pidFile = path.join(previewDir, "server.pid");
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    run("taskkill.exe", ["/F", "/T", "/PID", String(pid)], {
+      allowFailure: true,
+    });
+    for (let i = 0; i < 100; i += 1) {
+      if (!(await listening(agentPort)) && !(await listening(webPort))) return;
+      await sleep(200);
+    }
+    throw new Error(
+      `The server (process ${pid}) still listens on ${agentPort} or ${webPort} after it was ended.`,
+    );
+  },
+  async start() {
+    run(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-File",
+        path.join(root, "packaging", "Start-LocalPreview.ps1"),
+      ],
+      { cwd: root, timeoutMs: 180000 },
+    );
+    // The script returns once the process starts: wait until it answers.
+    await until(
+      "the server answers",
+      async () => {
+        try {
+          const response = await fetch(
+            `http://127.0.0.1:${webPort}/api/v1/status`,
+            { signal: AbortSignal.timeout(5000) },
+          );
+          return response.ok;
+        } catch {
+          return false;
+        }
+      },
+      { timeoutMs: 120000, intervalMs: 1000 },
+    );
   },
 };
+
+/** Stops the instance (its agent listener and its validator) and starts it again. */
+export const instance = windows
+  ? windowsInstance
+  : {
+      async stop() {
+        run(path.join(root, "scripts", "preview.sh"), ["stop"], { cwd: root });
+      },
+      async start() {
+        run(path.join(root, "scripts", "preview.sh"), ["start"], {
+          cwd: root,
+          timeoutMs: 180000,
+        });
+      },
+    };
 
 /**
  * Starts the program as root with the arguments `serve` takes, in place of the
@@ -73,12 +146,13 @@ export async function startHostile({ binary, args, logName }) {
     files.key,
     ...args,
   ];
-  // It reads the instance's private keys and the agent's private state, so it runs as root.
-  const asRoot = process.getuid?.() === 0;
+  // It reads the instance's private keys and the agent's private state, so it runs as
+  // root (an elevated shell is what the Windows runner's steps run in).
+  const asRoot = windows || process.getuid?.() === 0;
   const child = spawn(
     asRoot ? binary : "sudo",
     asRoot ? serveArgs : ["-n", binary, ...serveArgs],
-    { stdio: ["ignore", log, log], detached: true },
+    { stdio: ["ignore", log, log], detached: true, windowsHide: true },
   );
   child.unref();
   let exited = null;

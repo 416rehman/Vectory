@@ -232,14 +232,29 @@ jobs:
   # NT SERVICE\Vectory. The Windows preview script starts no validator and
   # serves the leaf certificate only; this job starts the validator and appends
   # the CA to the served chain, as scripts/preview.sh does.
+  #
+  # After those phases, the privileged update step on the same instance
+  # (tests/platform/agent-update.mjs), the phases of the Linux job with the host
+  # object of Windows (tests/platform/update-host-windows.mjs): the step is the
+  # VectoryUpdate service under the Service Control Manager, run as LocalSystem from
+  # the helper copy; its swap is two renames, so one more phase ends it between them
+  # (boot-gap); the volume is nearly filled for the disk-full phase, because the path
+  # check refuses a mount point over the step's directory; and the builds are the
+  # product's source with the Windows line of the release gate (update_gate.go) opened
+  # in the copy. These phases are the proof that gates agent updates on Windows: while
+  # one fails, windowsUpdatesInRelease stays false, and Windows hosts update by hand
+  # in that release; the commit that sets it to true cites a green run of this job.
   windows:
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 240
     defaults:
       run:
         shell: pwsh
     env:
       VECTORY_PLATFORM_OUTPUT: artifacts/platforms/windows
+      # Where Start-LocalPreview.ps1 has the server read the release builds from: the
+      # update phases write the build they roll out there.
+      VECTORY_RELEASES_DIR: ${{ github.workspace }}/artifacts/releases
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         timeout-minutes: 10
@@ -259,7 +274,7 @@ jobs:
         with: { python-version: "3.13" }
       - name: Check the platform helpers against the text the tools print
         timeout-minutes: 10
-        run: node --test tests/platform/lib.test.mjs
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs tests/platform/update-hosts.test.mjs tests/platform/update-host-windows.test.mjs
       - name: Build the dashboard the instance serves
         timeout-minutes: 20
         run: |
@@ -427,11 +442,98 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs uninstall
+      # Agent updates. The builds are the product's source with a version constant
+      # changed in a copy (two have one more line changed, and every one has the Windows
+      # line of the release gate opened); nothing in the product is a hook. The host is
+      # returned to a clean state first (the services removed, C:\ProgramData\Vectory and
+      # C:\Program Files\Vectory deleted), so these phases don't depend on what the phases
+      # above left, only on the instance and its administrator.
+      - name: Build the agents the update checks roll out, from copies of the source
+        id: update-build
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 45
+        run: node tests/platform/agent-update.mjs build
+      - name: Make a release key and turn agent updates on with offline custody
+        id: update-enable
+        if: ${{ !cancelled() && steps.update-build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs enable
+      - name: Install agent 0.1.0 with the consent flags of Add device, and apply a pipeline
+        id: update-install
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs install
+      - name: Read the update step's service and the registrations of both, and watch the step run
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/agent-update.mjs sandbox
+      - name: Update the agent from 0.1.0 to 0.1.1 through a rollout
+        id: update-update
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs update
+      - name: Roll out a build that never starts, and offer it again
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs start-failure
+      - name: Roll out a build that never checks in
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-check-in
+      - name: Roll out a build whose store file is cut short
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs truncated
+      - name: Kill the update step while it swaps and while it tries a build
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs interrupt
+      # A swap of two renames has one moment with no executable. A program holds the
+      # staged file as a virus scanner does, so that the second rename waits, and the
+      # step is ended in that wait; then the services are started as a boot may.
+      - name: End the update step between the two renames of its swap, and start the services in the order a boot may
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs boot-gap
+      # The volume is nearly filled with a file of allocated space for this one: the
+      # path check refuses a mount point over the step's directory.
+      - name: Roll out a build to a host whose update step has no room
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs disk-full
+      # The listener is taken over: the server is ended and a small program answers the
+      # real agent with the instance's own TLS chain and manifest signing key.
+      - name: Offer the host what it must refuse, from a stand-in for the agent listener
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 60
+        run: node tests/platform/agent-update.mjs hostile
+      - name: Install a host without the consent flags, and offer it a good release
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-consent
       - name: Collect the service's logs, the instance's logs and stop the instance
         if: always()
         timeout-minutes: 10
         run: |
           node tests/platform/service.mjs collect
+          node tests/platform/agent-update.mjs collect
+          Write-Host '::group::The update step, as the Service Control Manager has it'
+          sc.exe queryex VectoryUpdate
+          sc.exe qc VectoryUpdate
+          sc.exe qfailure VectoryUpdate
+          Write-Host '::endgroup::'
+          Write-Host '::group::What the update step wrote to its log'
+          $stepLog = Join-Path $env:ProgramData 'Vectory/update-state/private/update-step.log'
+          if (Test-Path -LiteralPath $stepLog) { Get-Content -LiteralPath $stepLog -Tail 150 }
+          Write-Host '::endgroup::'
+          Write-Host '::group::What the update step keeps, with owners and access lists'
+          Get-ChildItem -LiteralPath (Join-Path $env:ProgramData 'Vectory') -Force -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+          icacls.exe (Join-Path $env:ProgramData 'Vectory/update-state') /T
+          Write-Host '::endgroup::'
+          Write-Host '::group::The install directory, with access lists'
+          Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'Vectory') -Force -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime -AutoSize | Out-String -Width 300 | Write-Host
+          icacls.exe (Join-Path $env:ProgramFiles 'Vectory')
+          Write-Host '::endgroup::'
           $logs = Join-Path $PWD 'artifacts/platforms/windows/logs'
           New-Item -ItemType Directory -Force $logs | Out-Null
           Copy-Item '.local/preview/*.log' $logs -ErrorAction SilentlyContinue

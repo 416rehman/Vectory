@@ -92,7 +92,10 @@ test("the crash is where the service runs and not where the probe does", () => {
     "func RunContinuous(ctx context.Context, dir string, noWake, verbose bool, report func(string)) error {\n\treturn runWith(",
     "func RunWindowsService(ctx context.Context, dir string, report func(string)) error {\n\treturn runWith(",
   ])
-    assert.ok(reconcile.includes(entry), `${entry.split("{")[0]} must call runWith`);
+    assert.ok(
+      reconcile.includes(entry),
+      `${entry.split("{")[0]} must call runWith`,
+    );
   const commands = read("agent/cmd/vectory/commands.go");
   assert.match(commands, /agent\.Run\(ctx, dir, \*once, report\)/);
   const service = read("agent/cmd/vectory/service_windows.go");

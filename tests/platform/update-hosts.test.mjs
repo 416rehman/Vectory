@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { root, run } from "./lib.mjs";
+import { windowsHost } from "./update-host-windows.mjs";
 import { linuxHost, macosHost, quoted, rootReaders } from "./update-hosts.mjs";
 
 const source = fs.readFileSync(
@@ -66,13 +67,45 @@ const PATHS = [
   "helper",
 ];
 
+// What a Windows host has instead of what only the systemd and launchd hosts have: a
+// file there has an access list and not a mode (assertRootOnly, layout), nothing can be
+// mounted over the step's directory (withLittleRoom), the step has no timer and its
+// service has no sandbox to read (checkUnits, whileTrying), and the step's own service
+// restarts after a commit and its swap has a moment with no executable (afterCommit,
+// bootGap).
+const WINDOWS_INSTEAD = {
+  stat: ["assertRootOnly", "layout", "expectedLayout"],
+  runStepOnce: ["checkUnits"],
+  stopTimer: ["scheduleState"],
+  startTimer: ["scheduleState"],
+  unitText: ["checkUnits"],
+  withSmallStepFilesystem: ["withLittleRoom"],
+};
+const WINDOWS_ONLY = [
+  "installVector",
+  "besideExecutable",
+  "whileTrying",
+  "afterCommit",
+  "bootGap",
+];
+
 test("every host has every member a phase calls, and every path it reads", () => {
   for (const [name, host] of Object.entries({
     linux: linuxHost(),
     macos: macosHost(),
+    windows: windowsHost(),
   })) {
-    for (const member of MEMBERS)
+    for (const member of MEMBERS) {
+      if (name === "windows" && WINDOWS_INSTEAD[member]) {
+        for (const instead of WINDOWS_INSTEAD[member])
+          assert.ok(
+            host[instead] !== undefined,
+            `windows has no ${instead}, which it has in place of ${member}`,
+          );
+        continue;
+      }
       assert.ok(host[member] !== undefined, `${name} has no ${member}`);
+    }
     for (const key of PATHS)
       assert.equal(
         typeof host.paths[key],
@@ -80,6 +113,8 @@ test("every host has every member a phase calls, and every path it reads", () =>
         `${name} has no path ${key}`,
       );
   }
+  for (const member of WINDOWS_ONLY)
+    assert.ok(windowsHost()[member] !== undefined, `windows has no ${member}`);
 });
 
 // A phase may call a member only one host has (checkUnits, whileTrying,
@@ -90,23 +125,32 @@ test("a phase calls host.<member> only for a member some host has", () => {
   const known = new Set([
     ...Object.keys(linuxHost()),
     ...Object.keys(macosHost()),
+    ...Object.keys(windowsHost()),
   ]);
   for (const [, member] of source.matchAll(/\bhost\.([A-Za-z0-9]+)/g))
     assert.ok(
       known.has(member),
       `agent-update.mjs calls host.${member}, which no host has`,
     );
-  // What a Mac's host alone has is behind a question to the host.
+  // What a Mac's host alone has, and a Windows host's, is behind a question to the
+  // host (or, for what a host must have for the phase to make sense, a refusal).
   for (const member of [
     "checkUnits",
     "whileTrying",
     "measureAgentRestart",
     "checkRefusedLocations",
+    "installVector",
+    "assertRootOnly",
+    "layout",
+    "besideExecutable",
+    "afterCommit",
+    "withLittleRoom",
+    "bootGap",
   ]) {
     assert.ok(
-      new RegExp(`if \\(host\\.${member}\\)|host\\.${member}\\s*\\?`).test(
-        source,
-      ),
+      new RegExp(
+        `if \\(!?host\\.${member}\\)|host\\.${member}\\s*\\?|!host\\.${member}`,
+      ).test(source),
       `agent-update.mjs never asks whether the host has ${member}`,
     );
   }
