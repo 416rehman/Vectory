@@ -1010,7 +1010,9 @@ async fn diagnostics_host_runtime_and_log_summaries_are_bounded_and_atomic() {
         with("code", json!("data_dir_missing")),
         with("severity", json!("fatal")),
         with("line", json!(0)),
-        with("component_id", json!("has space")),
+        // A space is part of an ID Vector accepts, so a device may report it; a
+        // path separator is not.
+        with("component_id", json!("has/slash")),
         top_level,
         runtime(json!({"data_dir":"/var/lib/vector","unknown":true})),
         runtime(json!({"data_dir_source":"somewhere"})),
