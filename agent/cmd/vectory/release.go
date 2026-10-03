@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -118,10 +119,13 @@ func defineReleaseKeygen(c *cli) func() int {
 		fmt.Fprintf(c.stdout, "Wrote the private key to %s, closed to other accounts.\n", *out)
 		fmt.Fprintln(c.stdout, "Keep it off the server. Whoever holds it can sign builds that every host pinning this key installs as root.")
 		fmt.Fprintln(c.stdout)
+		// The key line starts at the left edge, so copying the line gives the line
+		// and nothing before it: a file that holds spaces in front of it is refused.
 		fmt.Fprintln(c.stdout, "Public key (give it to the server, and save it in a file such as team.pub):")
-		fmt.Fprintf(c.stdout, "  %s\n", public.Line())
+		fmt.Fprintln(c.stdout, public.Line())
+		fmt.Fprintln(c.stdout)
 		fmt.Fprintln(c.stdout, "Fingerprint (hosts pin it; compare it with the one the dashboard shows):")
-		fmt.Fprintf(c.stdout, "  %s\n", agent.GroupFingerprint(public.Fingerprint()))
+		fmt.Fprintln(c.stdout, agent.GroupFingerprint(public.Fingerprint()))
 		return exitOK
 	}
 }
@@ -135,7 +139,7 @@ func defineReleaseSign(c *cli) func() int {
 		if !c.requireFlag("key", *keyFlag) || !c.requireFlag("checksums", *checksums) {
 			return exitUsage
 		}
-		manifestPath, ok := c.resolveOperand("release.json", c.operands[0])
+		manifestPath, ok := c.resolveOperand("the release file", c.operands[0])
 		if !ok {
 			return exitUsage
 		}
@@ -299,15 +303,19 @@ func defineReleaseVerify(c *cli) func() int {
 		if err != nil {
 			return c.fail(err)
 		}
-		manifestPath, ok := c.resolveOperand("release.json", c.operands[0])
+		manifestPath, ok := c.resolveOperand("the release file", c.operands[0])
 		if !ok {
 			return exitUsage
 		}
-		signaturesPath := *signatures
-		if signaturesPath == "" {
-			signaturesPath = manifestOutputPath("", c.operands[0])
+		var signaturesPath string
+		if *signatures != "" {
+			signaturesPath, ok = c.resolvePath("signatures", *signatures)
+		} else {
+			// Nobody typed this path: it is beside the manifest, and a message
+			// about it must not name a flag.
+			signaturesPath, ok = c.resolveOperand("the signature file", manifestOutputPath("", c.operands[0]))
 		}
-		if signaturesPath, ok = c.resolvePath("signatures", signaturesPath); !ok {
+		if !ok {
 			return exitUsage
 		}
 		manifestBytes, err := agent.ReadReleaseFile(manifestPath, agent.MaxReleaseManifest)
@@ -355,9 +363,11 @@ func plural(count int, noun string) string {
 }
 
 // printRelease prints what a signature authorizes: the version, the counter,
-// the expiry, who can take it and each build.
+// the expiry, when it was issued, the service definition it needs, who can take
+// it and each build.
 func printRelease(w io.Writer, manifest agent.ReleaseManifest, now time.Time) {
 	fmt.Fprintf(w, "Agent %s · counter %d · expires %s (%s)\n", manifest.Version, manifest.Counter, formatUTC(manifest.ExpiresAt), untilText(now, manifest.ExpiresAt))
+	fmt.Fprintf(w, "  Issued %s · service definition %d\n", formatUTC(manifest.IssuedAt), manifest.ServiceDefinition)
 	if manifest.MinFrom != "" {
 		fmt.Fprintf(w, "  For agents running %s or newer\n", manifest.MinFrom)
 	}
@@ -436,15 +446,18 @@ func manifestOutputPath(out, manifest string) string {
 	return manifest + ".sig"
 }
 
-// resolveOperand makes the path of a file argument absolute and canonical.
-func (c *cli) resolveOperand(label, value string) (string, bool) {
+// resolveOperand makes the path of a file the command reads absolute and
+// canonical. what names the file in words, such as "the signature file", so a
+// path nobody typed (the default beside the manifest) is never described as a
+// flag, and a path that was typed is not named twice.
+func (c *cli) resolveOperand(what, value string) (string, bool) {
 	resolved, err := agent.ResolveOperatorPath(value)
 	if err != nil {
-		fmt.Fprintf(c.stderr, "vectory %s: %s %s: %s\n", c.cmd.words(), label, value, err)
+		fmt.Fprintf(c.stderr, "vectory %s: can't use %s as %s: %s\n", c.cmd.words(), agent.ShellQuote(value), what, err)
 		return "", false
 	}
 	if resolved.Resolved {
-		fmt.Fprintf(c.stderr, "Using %s for %s (%s is a symbolic link).\n", resolved.Path, label, value)
+		fmt.Fprintf(c.stderr, "Using %s for %s (%s is a symbolic link).\n", resolved.Path, what, value)
 	}
 	return resolved.Path, true
 }
@@ -529,8 +542,10 @@ func writeFileExclusively(path string, contents []byte, mode os.FileMode) error 
 	}
 	if err != nil {
 		_ = os.Remove(path)
+		return err
 	}
-	return err
+	syncDirectory(filepath.Dir(path))
+	return nil
 }
 
 // writeFileAtomically replaces a file, or creates it, so that a reader sees the
@@ -554,5 +569,25 @@ func writeFileAtomically(path string, contents []byte, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	syncDirectory(filepath.Dir(path))
+	return nil
+}
+
+// syncDirectory asks the system to write a directory's entries to disk, so a
+// file just created or renamed there is still there after a crash. It is best
+// effort: the file is already in place, and a filesystem that can't flush a
+// directory (Windows can't) isn't a reason to report a failure for it.
+func syncDirectory(directory string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	handle, err := os.Open(directory)
+	if err != nil {
+		return
+	}
+	_ = handle.Sync()
+	_ = handle.Close()
 }

@@ -128,15 +128,21 @@ func TestReleaseKeygenWritesAPrivateKeyAndPrintsThePublicOne(t *testing.T) {
 	var keyLine, groups string
 	for i, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "  vectory-release-key ed25519 "):
-			keyLine = strings.TrimPrefix(line, "  ")
+		case strings.HasPrefix(line, "vectory-release-key ed25519 "):
+			keyLine = line
 		case strings.HasPrefix(line, "Fingerprint") && i+1 < len(lines):
-			groups = strings.TrimPrefix(lines[i+1], "  ")
+			groups = lines[i+1]
 		}
 	}
 	public, err := agent.ParseReleaseKey(keyLine)
 	if err != nil || public.Name() != "team ops" {
 		t.Fatalf("the public key line %q: %v\n%s", keyLine, err, stdout)
+	}
+	// The line is printed at the left edge, so what a person copies is the line
+	// and nothing in front of it: saved as it is, the file reads back as the key.
+	saved := f.write(t, "copied.pub", keyLine+"\n")
+	if read, err := agent.ReadReleasePublicKeyFile(saved); err != nil || read != public {
+		t.Errorf("the printed line saved to a file: %v", err)
 	}
 	if groups != agent.GroupFingerprint(public.Fingerprint()) || len(strings.Fields(groups)) != 8 {
 		t.Errorf("the fingerprint is printed in groups of eight: %q", groups)
@@ -220,6 +226,7 @@ func TestReleaseSignWritesASignatureAHostAccepts(t *testing.T) {
 	short := f.public.ShortID()
 	for _, want := range []string{
 		fmt.Sprintf("Agent 0.1.1 · counter 7 · expires %s (in 180 days)", f.now.Add(180*24*time.Hour).Format("2006-01-02 15:04")+" UTC"),
+		fmt.Sprintf("  Issued %s · service definition 1", f.now.Add(-time.Hour).Format("2006-01-02 15:04")+" UTC"),
 		"  For agents running 0.1.0 or newer",
 		"  linux/amd64    vectory-0.1.1-linux-amd64        15204352 bytes  sha256 4206fd2a4cefdeff…",
 		"  windows/amd64  vectory-0.1.1-windows-amd64.exe  15892480 bytes  sha256 25043433d22cf8f6…",
@@ -253,6 +260,21 @@ func TestReleaseSignWritesASignatureAHostAccepts(t *testing.T) {
 	code, stdout, stderr = invoke("release", "verify", "--key", f.pub, f.manifest)
 	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "Valid: release.json is signed by key "+short+" (team).\n") ||
 		!strings.Contains(stdout, "This check has no counter floors or running version.") {
+		t.Errorf("verify: %d %q %q", code, stdout, stderr)
+	}
+}
+
+// What a signature covers is shown, the service definition a host must already
+// have included: a number above what the fleet runs would stop every host at
+// SERVICE_DEFINITION_OUTDATED, and the person who signs should see it.
+func TestReleaseSummaryShowsTheServiceDefinition(t *testing.T) {
+	f := newReleaseFiles(t)
+	f.write(t, "release.json", strings.Replace(releaseManifestText(f.now, 180*24*time.Hour, 7), `"service_definition":1`, `"service_definition":3`, 1))
+	code, stdout, stderr := f.sign()
+	if code != 0 || !strings.Contains(stdout, " · service definition 3\n") {
+		t.Fatalf("sign: %d %q %q", code, stdout, stderr)
+	}
+	if code, stdout, stderr = invoke("release", "verify", "--key", f.pub, f.manifest); code != 0 || !strings.Contains(stdout, " · service definition 3\n") {
 		t.Errorf("verify: %d %q %q", code, stdout, stderr)
 	}
 }
@@ -613,6 +635,38 @@ func TestReleaseVerifyNamesTheKeyThatSigned(t *testing.T) {
 	}
 }
 
+// A file is named by what it is in a message about it: the signature file that
+// sits beside the manifest is no --signatures flag when nobody typed one, and a
+// file argument is not named twice.
+func TestReleaseVerifyNamesFilesByWhatTheyAre(t *testing.T) {
+	f := newReleaseFiles(t)
+	if code, _, stderr := f.sign(); code != 0 {
+		t.Fatal(stderr)
+	}
+	if code, stdout, stderr := invoke("release", "verify", "--key", f.pub, ""); code != 2 || stdout != "" || stderr != "vectory release verify: can't use '' as the release file: path is empty\n" {
+		t.Errorf("an empty file name: %d %q %q", code, stdout, stderr)
+	}
+	if runtime.GOOS == "windows" {
+		return // a link needs a privilege there
+	}
+	real := filepath.Join(f.dir, "real.sig")
+	if err := os.Rename(f.manifest+".sig", real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, f.manifest+".sig"); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := invoke("release", "verify", "--key", f.pub, f.manifest)
+	if want := "Using " + real + " for the signature file (" + f.manifest + ".sig is a symbolic link).\n"; code != 0 || !strings.HasPrefix(stdout, "Valid: ") || stderr != want {
+		t.Errorf("the default signature file is a link: %d %q\n%q, want %q", code, stdout, stderr, want)
+	}
+	// Named with the flag, it is the flag that is named.
+	code, _, stderr = invoke("release", "verify", "--key", f.pub, "--signatures", f.manifest+".sig", f.manifest)
+	if want := "Using " + real + " for --signatures (" + f.manifest + ".sig is a symbolic link).\n"; code != 0 || stderr != want {
+		t.Errorf("--signatures is a link: %d %q, want %q", code, stderr, want)
+	}
+}
+
 // ---------------------------------------------------------------- rollover
 
 // A key replaced through the tools: the old key signs a statement naming the
@@ -627,8 +681,8 @@ func TestReleaseRolloverLetsAHostFollowToTheNewKey(t *testing.T) {
 	}
 	var nextLine string
 	for _, line := range strings.Split(stdout, "\n") {
-		if strings.HasPrefix(line, "  vectory-release-key ") {
-			nextLine = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "vectory-release-key ") {
+			nextLine = line
 		}
 	}
 	nextPub := f.write(t, "next.pub", nextLine+"\n")
