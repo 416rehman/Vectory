@@ -6,6 +6,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),dashboard=resolve(root,'dashboard');
 const {nothingOffered}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
+const {updatesOff}=await import(pathToFileURL(resolve(dashboard,'tests/agent-update-replies.mjs')));
 const require=createRequire(resolve(dashboard,'package.json'));
 const {createServer}=await import(pathToFileURL(require.resolve('vite')));
 const {chromium,expect:strictExpect}=require('@playwright/test');const AxeBuilder=require('@axe-core/playwright').default;
@@ -64,6 +65,8 @@ async function fixture({route=`devices/${A.id}`,initial=assigned,modes={},width=
   if(/^\/configurations\/[^/]+$/.test(path)&&path!=='/configurations/library'&&method==='GET')return execute(path.endsWith(config.id)?config:wrongConfig);
   if(path==='/devices')return reply([state.initial,B,C]);if(path==='/groups'||path==='/policies')return reply([]);if(path==='/configurations/library')return reply({items:[],total:0,page:1,page_size:12});
   if((path==='/issues/history'||path==='/audit/history')&&method==='GET')return reply({items:[],total:0,page:1,page_size:Number(url.searchParams.get('page_size')||5)});
+  // The device page reads whether agent updates are on; a server nobody turned them on for says off.
+  if(path==='/agent-updates'&&method==='GET')return reply(updatesOff());
   report.unexpected.push({path,method});return reply({error:{code:'UNEXPECTED',message:'Unexpected synthetic request'}},500);
  });
  await page.goto(`${origin}/__device-retry-context-review#/${route}`);
