@@ -174,8 +174,8 @@ func (v UpdateView) Conflict() *RolloverConflict {
 	return conflict
 }
 
-// shortFingerprint is the short ID of a fingerprint.
-func shortFingerprint(fingerprint string) string {
+// fingerprintPrefix is the short ID of a fingerprint.
+func fingerprintPrefix(fingerprint string) string {
 	if len(fingerprint) > 16 {
 		return fingerprint[:16]
 	}
@@ -315,7 +315,7 @@ func (v UpdateView) busyWords() string {
 
 // conflictSentence says what a fork is and what to do about it.
 func conflictSentence(conflict *RolloverConflict) string {
-	return "two successors of key " + shortFingerprint(conflict.From) + " were seen, " + shortFingerprint(conflict.To[0]) + " and " + shortFingerprint(conflict.To[1]) + ": run the Upgrade agent command with the right key"
+	return "two successors of key " + fingerprintPrefix(conflict.From) + " were seen, " + fingerprintPrefix(conflict.To[0]) + " and " + fingerprintPrefix(conflict.To[1]) + ": run the Upgrade agent command with the right key"
 }
 
 // Headline is the one line `vectory status` shows: what needs attention first,
