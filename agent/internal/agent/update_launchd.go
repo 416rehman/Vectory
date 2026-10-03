@@ -75,6 +75,11 @@ type macosUpdateHost struct {
 	// show it. alive says whether a process is still there; a test replaces it.
 	startBound time.Duration
 	alive      func(pid int) bool
+	// leaving is the process of the agent's job that launchd was told to remove and that it
+	// hasn't been seen to finish removing (leavingKnown says there is one). The file the step
+	// keeps it in (updateLeavingFile) is what the next run reads.
+	leaving      int
+	leavingKnown bool
 }
 
 var _ updateHost = (*macosUpdateHost)(nil)
@@ -107,6 +112,9 @@ func (h *macosUpdateHost) job(label string, run func(ctx context.Context, args .
 	job.installed = func() bool {
 		_, err := os.Stat(job.definition)
 		return err == nil
+	}
+	if label == "" {
+		job.accepted = h.rememberLeaving
 	}
 	return job
 }
@@ -242,91 +250,6 @@ func readDefinition(path string) (string, error) {
 
 // ---------------------------------------------------------------- the agent's service
 
-// launchdPrinted is what `launchctl print` says about a job that launchd knows.
-type launchdPrinted struct {
-	// State is launchd's word: "running", "not running", "waiting", "spawn
-	// scheduled" and a few more.
-	State string
-	// PID is the process, 0 when there is none.
-	PID int
-	// Runs counts the times launchd has started the job since it loaded it.
-	Runs int
-	// LastExit is launchd's words for how the process last ended ("(never exited)",
-	// "0", "78", "9: Killed: 9") and Reason why launchd started the job.
-	LastExit, Reason string
-}
-
-// parseLaunchdPrint reads the top-level lines of `launchctl print system/<label>`:
-//
-//	system/io.vectory.agent = {
-//		active count = 1
-//		state = running
-//		arguments = {
-//			...
-//		}
-//		runs = 1
-//		pid = 4242
-//		...
-//	}
-//
-// Only the lines directly inside the job's braces count: a block inside it
-// (arguments, environment, endpoints) has lines of its own that look alike. A job
-// with no state, or no count of its runs, is an error: a manager that doesn't say
-// how often it started a job can't show that a build stayed up, and a build is
-// never taken as healthy on a guess.
-func parseLaunchdPrint(text string) (launchdPrinted, error) {
-	var printed launchdPrinted
-	var haveState, haveRuns bool
-	depth := 0
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case line == "":
-			continue
-		case line == "}":
-			depth--
-			continue
-		case strings.HasSuffix(line, "{"):
-			depth++
-			continue
-		}
-		if depth != 1 {
-			continue
-		}
-		key, value, ok := strings.Cut(line, " = ")
-		if !ok {
-			continue
-		}
-		switch key {
-		case "state":
-			printed.State, haveState = value, true
-		case "pid":
-			pid, err := strconv.Atoi(value)
-			if err != nil || pid < 0 {
-				return launchdPrinted{}, fmt.Errorf("launchctl print gave the pid %q", safeText(value, 40))
-			}
-			printed.PID = pid
-		case "last exit code":
-			printed.LastExit = safeText(value, 60)
-		case "immediate reason":
-			printed.Reason = safeText(value, 60)
-		case "runs":
-			runs, err := strconv.Atoi(value)
-			if err != nil || runs < 0 {
-				return launchdPrinted{}, fmt.Errorf("launchctl print gave the count of runs %q", safeText(value, 40))
-			}
-			printed.Runs, haveRuns = runs, true
-		}
-	}
-	if !haveState {
-		return launchdPrinted{}, errors.New("launchctl print didn't say what state the agent service is in")
-	}
-	if !haveRuns {
-		return launchdPrinted{}, errors.New("launchctl print didn't say how often the agent service was started")
-	}
-	return printed, nil
-}
-
 // serviceState is what the step reads of it. launchd keeps a job that has
 // KeepAlive loaded when its process ends or is killed, and starts it again no sooner
 // than its ThrottleInterval (10 s in the agent's definition): `print` then says "spawn
@@ -379,6 +302,13 @@ func (h *macosUpdateHost) ServiceState(ctx context.Context) (updateServiceState,
 // waits is the job's, and the second is for the process: its ID is read from `print`
 // before the bootout, and `kill(pid, 0)` says ESRCH once it is gone. Both are bounded by
 // the stop limit.
+//
+// A stop that gives up leaves a job that launchd goes on listing as running, with the
+// process it had, until the removal is done, and nothing in what `print` says tells it
+// from a job that was started. So from the moment launchd takes the bootout in hand the
+// step keeps the process of the job it told to leave (rememberLeaving), until `print` says
+// there is no such job or launchd has refused the bootout, and StartService never takes a
+// listing of that process for a start.
 func (h *macosUpdateHost) StopService(ctx context.Context) error {
 	deadline := h.agent.now().Add(serviceStopLimit)
 	pid := 0
@@ -388,8 +318,14 @@ func (h *macosUpdateHost) StopService(ctx context.Context) error {
 		}
 	}
 	if err := h.agent.controlContext(ctx, "stop"); err != nil {
+		var refused bootoutRefused
+		if errors.As(err, &refused) {
+			// launchd didn't take the removal in hand: the job is what it was.
+			h.forgetLeaving()
+		}
 		return err
 	}
+	h.forgetLeaving()
 	for pid > 0 && h.alive(pid) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -410,12 +346,19 @@ func (h *macosUpdateHost) StopService(ctx context.Context) error {
 // all, and confirms with `print` that launchd lists the job (loaded, whatever it is
 // doing: a job that is waiting out its throttle has started, and the watch judges it by
 // its runs); a job that isn't shown is bootstrapped again within the same minute. Only
-// a job that is shown ends it with nil. The stop that came before waits until launchd
-// has removed the old job (StopService), so a job that is listed now is the new
-// instance.
+// a job that is shown ends it with nil.
+//
+// A job that is listed is the new instance only if it isn't the one the step told launchd
+// to remove: the stop waits until launchd has removed the old job, but a stop that gave up
+// leaves it listed, as running, with the process it had (StopService). A listing of that
+// process, or of no process, while the step still holds it is not a start: the start waits
+// for launchd to finish within its minute, bootstraps once `print` says there is no such
+// job, and otherwise ends with an error that says what it found. The step never ends a
+// request on it.
 func (h *macosUpdateHost) StartService(ctx context.Context) error {
 	job := h.agent
 	deadline := job.now().Add(h.startBound)
+	leaving, leavingKnown := h.leavingProcess()
 	var last error
 	// gaveUp is the error of a start that has run out of its minute, with what launchd
 	// said last.
@@ -428,8 +371,10 @@ func (h *macosUpdateHost) StartService(ctx context.Context) error {
 	for {
 		printed := job.launchctl(ctx, launchdStatusLimit, "print", job.target())
 		pause := launchdStartPause
+		departing := leavingKnown && printed.status == 0 && listsOnlyTheLeavingJob(printed.stdout, leaving)
 		switch {
-		case printed.status == 0:
+		case printed.status == 0 && !departing:
+			h.forgetLeaving()
 			return nil
 		case ctx.Err() != nil:
 			return ctx.Err()
@@ -437,7 +382,13 @@ func (h *macosUpdateHost) StartService(ctx context.Context) error {
 			// No new try after the minute; a job a bootstrap just made is still looked at
 			// once more, above.
 			return gaveUp()
+		case departing:
+			last, pause = fmt.Errorf("it lists only the job it was told to remove, of the process %d", leaving), launchdUnloadPoll
 		case launchdNotLoaded(printed):
+			// launchd has finished removing the job it was told to remove; what is listed from
+			// here on is what this start makes.
+			h.forgetLeaving()
+			leavingKnown = false
 			args := []string{"bootstrap", "system", job.definition}
 			if result := job.launchctl(ctx, launchctlLimit, args...); result.status == 0 {
 				// Accepted: a moment for launchd to settle, then a look at what it kept.
@@ -452,6 +403,61 @@ func (h *macosUpdateHost) StartService(ctx context.Context) error {
 		}
 		job.sleep(pause)
 	}
+}
+
+// updateLeavingFile is where the step keeps the process of the agent's job it told launchd
+// to remove, in its private directory, for as long as launchd lists that job. The step is
+// a new process every 30 seconds, and the removal can last longer than a run.
+const updateLeavingFile = "agent-job-leaving"
+
+func (h *macosUpdateHost) leavingPath() string {
+	return filepath.Join(UpdateLocations().Private, updateLeavingFile)
+}
+
+// rememberLeaving records that launchd took a bootout of the agent's job in hand: pid is
+// the process the job had, 0 when it had none. It is kept in memory for this run and in a
+// file for the next, which finds a new host with nothing in its memory.
+func (h *macosUpdateHost) rememberLeaving(pid int) {
+	h.leaving, h.leavingKnown = pid, true
+	_ = AtomicWrite(h.leavingPath(), []byte(strconv.Itoa(pid)+"\n"))
+}
+
+// forgetLeaving records that there is no job left to wait for: launchd says it doesn't
+// know the job, has refused to remove it or lists a job that was started since.
+func (h *macosUpdateHost) forgetLeaving() {
+	h.leaving, h.leavingKnown = 0, false
+	_ = os.Remove(h.leavingPath())
+}
+
+// leavingProcess is the process of the job the step told launchd to remove and hasn't
+// seen go, and whether there is one. A file that isn't a process ID is no record: only the
+// step writes it, in a directory only root can enter.
+func (h *macosUpdateHost) leavingProcess() (pid int, known bool) {
+	if h.leavingKnown {
+		return h.leaving, true
+	}
+	data, err := os.ReadFile(h.leavingPath())
+	if err != nil || len(data) > 32 {
+		return 0, false
+	}
+	pid, err = strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid < 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// listsOnlyTheLeavingJob says whether a listing of the agent's job is the job the step told
+// launchd to remove: one that lists the process it had, or none, because launchd goes on
+// listing a job as running while it removes it, and a job it removed leaves its process.
+// A listing of another process is a job that was started since. A listing that can't be
+// read can't show that it is.
+func listsOnlyTheLeavingJob(listing string, leaving int) bool {
+	printed, err := parseLaunchdPrint(listing)
+	if err != nil {
+		return true
+	}
+	return printed.PID == 0 || printed.PID == leaving
 }
 
 // ReloadService loads the agent's job again when launchd doesn't know it, and says
@@ -530,6 +536,17 @@ func (h *macosUpdateHost) readAgentDefinition() (agentDefinition, error) {
 	return parseAgentDefinition(text)
 }
 
+// AgentExecutable is the executable the agent's definition runs.
+func (h *macosUpdateHost) AgentExecutable() (string, error) {
+	definition, err := h.readAgentDefinition()
+	if err != nil {
+		return "", err
+	}
+	return definition.Executable, nil
+}
+
+var _ agentLocator = (*macosUpdateHost)(nil)
+
 // Registered reads the agent's definition through the path check and says what it
 // runs and as whom. The definition must be root's alone, name an account that
 // exists, and run this state directory.
@@ -572,7 +589,7 @@ func (h *macosUpdateHost) Registered(stateDir string) (registeredService, error)
 // package left its receipt, or the executable (with links resolved) is in a
 // directory a package manager owns, Homebrew's among them.
 func (h *macosUpdateHost) PackageManaged(executable string) (string, bool) {
-	if directory, managed := underPackageDirectory(packageCandidates(executable)); managed {
+	if directory, managed := underPackageDirectory(packageCandidates(executable), macosPackageDirectories); managed {
 		return "it is under " + directory, true
 	}
 	if _, err := os.Lstat(h.receipt); err == nil {

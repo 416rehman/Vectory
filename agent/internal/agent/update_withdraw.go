@@ -35,6 +35,10 @@ type UpdateWithdrawal struct {
 	StagedLeft *UpdateLeft
 	// StepRemoved: the privileged step was removed.
 	StepRemoved bool
+	// RollbackEnded: the step was taking an update back and had put the previous build
+	// in place, and was trying to start the agent's service. Removing the step ended that
+	// rollback, and nothing tries to start the service now.
+	RollbackEnded bool
 	// KeysKept is how many pinned keys the policy keeps.
 	KeysKept int
 }
@@ -83,6 +87,9 @@ func (w UpdateWithdrawal) Parts() []string {
 	if w.StepRemoved {
 		parts = append(parts, "the update step is removed")
 	}
+	if w.RollbackEnded {
+		parts = append(parts, "the rollback that was waiting for the agent's service to start is over")
+	}
 	return parts
 }
 
@@ -110,22 +117,68 @@ func (w UpdateWithdrawal) saved() string {
 	return "Done so far: " + strings.Join(parts, ", ") + "."
 }
 
-// updateInProgress refuses while the privileged step applies or tries a build,
-// naming when a trial ends. A step that never ran, or whose status can't be read,
-// has nothing in progress that anyone can know of.
-func updateInProgress() error {
+// updateInProgress refuses while the privileged step applies, tries or takes back a
+// build, naming when a trial ends. A step that never ran, or whose status can't be read,
+// has nothing in progress that anyone can know of. A rollback that has put the previous
+// build back and only waits for the agent's service to start isn't one that refuses: the
+// removal ends it (endRollbackWaitingForAStart), and endsARollback says that it will.
+func updateInProgress() (endsARollback bool, err error) {
 	status, err := ReadUpdateStatus()
 	if err != nil {
-		return nil
+		return false, nil
 	}
-	return updateStageBusy(status)
+	if status.Stage == UpdateStageRollingBack && removalEndsTheRollback() {
+		return true, nil
+	}
+	return false, updateStageBusy(status)
+}
+
+// removalEndsTheRollback says whether a removal of the step now would end the rollback
+// the step's journal holds, because the previous build is already in place and only its
+// start is missing. It is advice, given before anything is changed: the removal decides
+// again under the lock. It takes the step's lock (lockStepForRemoval, which waits for the
+// run that is trying to start the previous build), because a rollback whose run is under
+// way isn't waiting for a start: the step is putting the previous build back or watching it,
+// and removing the step then is refused, with nothing changed.
+func removalEndsTheRollback() bool {
+	host := removalUpdateHost()
+	if host == nil {
+		return false
+	}
+	private, err := openRootOwned(UpdateLocations().Private, rootOwnedDirectory)
+	if err != nil {
+		return false
+	}
+	defer private.Close()
+	release, err := lockStepForRemoval(host, private)
+	if err != nil {
+		return false
+	}
+	defer release()
+	journal, found, err := readUpdateJournal(private)
+	return err == nil && found && journal.active() && rollbackWaitsForAStart(host, journal)
 }
 
 // UpdateBusyError says that an update is being applied, tried or taken back, so
-// what it works on can't be withdrawn now. Its text names when that ends.
+// what it works on can't be withdrawn now. Its text says when that ends, where there
+// is a time to say.
 type UpdateBusyError struct{ Message string }
 
 func (e *UpdateBusyError) Error() string { return e.Message }
+
+// rollbackBusyWords is what a rollback in progress is, true of one that is putting the
+// previous build back, of one that has put it back and waits for the agent's service to
+// start, and of one that is watching the build it started: the journal says rolling_back
+// through all three. It names no time at which that ends, because none is known: the step
+// tries every 30 seconds until it can start the build, and the watch's five minutes begin
+// when the build does.
+const rollbackBusyWords = "an update is being rolled back on this host; the update step puts the previous build back and starts it, tries every 30 seconds until it can, and then watches it for up to 5 minutes"
+
+// swapBusyWords is what an update is while the step has stopped, or is stopping, the agent's
+// service to replace the executable: it goes on to the trial, or back to the build it had,
+// and starts the service either way, so it is over when a start is shown, which the step
+// tries every 30 seconds until it can. It names no time for the same reason.
+const swapBusyWords = "an update is being applied on this host; the update step stops the agent's service, replaces the executable and starts the service again, and tries every 30 seconds if it can't"
 
 // updateStageBusy is the error for a status that shows the step at work, or nil.
 func updateStageBusy(status UpdateStatus) error {
@@ -135,10 +188,12 @@ func updateStageBusy(status UpdateStatus) error {
 			return &UpdateBusyError{fmt.Sprintf("an update is being tried on this host; it ends by %s", humanClock(status.Deadline))}
 		}
 		return &UpdateBusyError{"an update is being tried on this host; it ends within 5 minutes"}
-	case UpdateStagePreparing, UpdateStageSwapping:
+	case UpdateStagePreparing:
 		return &UpdateBusyError{"an update is being applied on this host; it takes a few minutes"}
+	case UpdateStageSwapping:
+		return &UpdateBusyError{swapBusyWords}
 	case UpdateStageRollingBack:
-		return &UpdateBusyError{"an update is being rolled back on this host; it takes a few minutes"}
+		return &UpdateBusyError{rollbackBusyWords}
 	}
 	return nil
 }
@@ -152,7 +207,8 @@ func WithdrawUpdates(dir string) (UpdateWithdrawal, error) {
 // withdrawUpdates is WithdrawUpdates with the step's removal passed in.
 func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, error) {
 	var done UpdateWithdrawal
-	if err := updateInProgress(); err != nil {
+	endsARollback, err := updateInProgress()
+	if err != nil {
 		return done, err
 	}
 	paths := UpdateLocations()
@@ -191,6 +247,7 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 			return done, fmt.Errorf("the update step's directory %s is still there, so the step is not removed", paths.StepDir)
 		}
 		done.StepRemoved = true
+		done.RollbackEnded = endsARollback
 	}
 	return done, nil
 }

@@ -572,6 +572,34 @@ func TestUpdateOffSaysWhenTheStagedFilesWereLeft(t *testing.T) {
 	}
 }
 
+// A rollback that waited for the agent's service to start is over when the step goes, and
+// nothing tries to start the service any more: the command says so, how to start it if it
+// isn't running, and what says why it won't start. The JSON document says it too, and says
+// nothing of it otherwise.
+func TestUpdateOffSaysWhenItEndedARollbackThatWaitedForTheAgentToStart(t *testing.T) {
+	h := newUpdateHost(t)
+	h.withdraw = agent.UpdateWithdrawal{PolicyOff: true, StepRemoved: true, RollbackEnded: true, KeysKept: 1}
+	code, stdout, stderr := h.run(noTerminalAt, "off")
+	want := "Agent updates are off on this host: the policy says off, the update step is removed, the rollback that was waiting for the agent's service to start is over.\n" +
+		"The pinned key is kept. To turn updates on again, run the Upgrade agent command with --updates.\n" +
+		"The rollback was waiting for the agent's service to start, and nothing will try again now. If the service isn't running, start it: " + asAdmin("vectory service-start") + ". " + asAdmin("vectory doctor") + " --state-dir " + agent.ShellQuote(h.dir) + " says why it won't start.\n"
+	if code != 0 || stdout != want || stderr != "" {
+		t.Fatalf("%d %q %q", code, stdout, stderr)
+	}
+	_, stdout, _ = h.run(noTerminalAt, "off", "--json")
+	var out map[string]any
+	if json.Unmarshal([]byte(stdout), &out) != nil || out["rollback_ended"] != true {
+		t.Fatalf("%q", stdout)
+	}
+	h.withdraw = agent.UpdateWithdrawal{PolicyOff: true, StepRemoved: true, KeysKept: 1}
+	if _, stdout, _ = h.run(noTerminalAt, "off"); strings.Contains(stdout, "isn't running") || strings.Contains(stdout, "rollback") {
+		t.Fatalf("an ordinary withdrawal says: %q", stdout)
+	}
+	if _, stdout, _ = h.run(noTerminalAt, "off", "--json"); json.Unmarshal([]byte(stdout), &out) != nil || out["rollback_ended"] != false {
+		t.Fatalf("%q", stdout)
+	}
+}
+
 // Taking the step away while it applies or tries a build could leave a build
 // that was never proven in place of the one that was: it is refused, and the
 // command says when to come back.

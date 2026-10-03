@@ -27,6 +27,8 @@ var agentJob = launchdJob{
 	},
 	now:   time.Now,
 	sleep: time.Sleep,
+	// A stop ends when launchd no longer lists the job and the process it had is gone.
+	alive: processExists,
 }
 
 // runLaunchctl runs /bin/launchctl, a fixed local tool, with a clean
@@ -175,9 +177,9 @@ func ServiceControl(action string) error {
 		if err := RemoveUpdateHelper(); err != nil {
 			return err
 		}
-		if _, loaded := agentJob.loaded(context.Background()); loaded {
-			_ = agentJob.bootout()
-		}
+		// The same stop as service-stop: it ends when launchd no longer lists the job and
+		// the process it had is gone, or after the stop limit.
+		_ = agentJob.control("stop")
 		if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
 			return err
 		}

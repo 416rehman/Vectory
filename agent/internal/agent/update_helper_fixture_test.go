@@ -341,7 +341,11 @@ func (h *fakeHost) Registered(stateDir string) (registeredService, error) {
 func (h *fakeHost) PackageManaged(string) (string, bool) {
 	return "a fake package owns it", h.cfg.Packaged
 }
+
 func (h *fakeHost) StateDirReachable(string) error { return nil }
+
+// AgentExecutable is the executable the fake service runs.
+func (h *fakeHost) AgentExecutable() (string, error) { return h.cfg.Exe, nil }
 
 func (h *fakeHost) ServiceState(ctx context.Context) (updateServiceState, error) {
 	s := h.loadService()

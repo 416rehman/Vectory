@@ -45,7 +45,7 @@ func (f *fakeLaunchctl) job() launchdJob {
 				if f.running {
 					state = "running"
 				}
-				return launchctlResult{stdout: "system/" + launchdLabel + " = {\n\tstate = " + state + "\n\tpid = 812\n}\n"}
+				return launchctlResult{stdout: "system/" + launchdLabel + " = {\n\tstate = " + state + "\n\truns = 1\n\tpid = 812\n}\n"}
 			case "bootout":
 				return f.bootout
 			}
@@ -105,6 +105,54 @@ func TestLaunchdStopReturnsOnlyWhenLaunchdNoLongerListsTheJob(t *testing.T) {
 	own := &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
 	if err := own.job().bootout(); err != nil || own.sleeping != launchdUnloadPoll {
 		t.Fatalf("bootout: %v, slept %s, calls %v", err, own.sleeping, own.calls)
+	}
+}
+
+// The agent's own service-stop and service-uninstall end as the update step's stop does:
+// when launchd no longer lists the job and the process the job had, which `print` names
+// before the bootout, is gone. A job that is given no way to look for a process doesn't
+// wait for one, and one that is waits within the stop limit.
+func TestTheAgentsOwnStopWaitsForTheProcessOfTheJobToBeGoneAsTheUpdateStepsDoes(t *testing.T) {
+	f := &fakeLaunchctl{loaded: []bool{true, true, false}, running: true, clock: time.Now()}
+	job := f.job()
+	var looked []int
+	remaining := 3
+	job.alive = func(pid int) bool {
+		looked = append(looked, pid)
+		if remaining > 0 {
+			remaining--
+			return true
+		}
+		return false
+	}
+	if err := job.control("stop"); err != nil {
+		t.Fatal(err)
+	}
+	// The process is looked for after the job is gone: four looks, each a quarter of a second
+	// after the one before, the first three finding it. One look at the listing found the job.
+	if len(looked) != 4 || looked[0] != 812 {
+		t.Errorf("the process was looked for as %v", looked)
+	}
+	if want := launchdUnloadPoll + 3*launchdUnloadPoll; f.sleeping != want {
+		t.Errorf("slept %s, want %s", f.sleeping, want)
+	}
+
+	// A process that never goes ends the stop after the stop limit, with the process named.
+	f = &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
+	job = f.job()
+	job.alive = func(int) bool { return true }
+	err := job.control("stop")
+	if err == nil || !strings.Contains(err.Error(), "the process 812 of io.vectory.agent is still there after launchd unloaded its job, and 6 min have passed") {
+		t.Fatalf("a process that never went: %v", err)
+	}
+	if f.sleeping < serviceStopLimit || f.sleeping > serviceStopLimit+time.Second {
+		t.Errorf("the stop waited %s of the %s it has", f.sleeping, serviceStopLimit)
+	}
+
+	// With no way to look for a process, a stop ends when the job is gone.
+	f = &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
+	if err := f.job().control("stop"); err != nil || f.sleeping != 0 {
+		t.Errorf("a stop with nothing to look for a process with: %v, slept %s", err, f.sleeping)
 	}
 }
 

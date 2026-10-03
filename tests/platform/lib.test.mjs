@@ -244,15 +244,24 @@ const sample = (name) =>
   );
 
 test("launchctl print: the job's own lines, not those of the blocks inside it", () => {
+  // launchctl-print-running.txt and -not-running.txt are what launchd printed on a Mac, for
+  // the agent's job and for the step's own job; the other two are the agent's text with the
+  // lines that depend on the state changed.
   const running = parseLaunchdPrint(sample("launchctl-print-running.txt"));
   assert.equal(running.state, "running");
-  assert.equal(running.pid, "4242");
+  assert.equal(running["active count"], "1");
+  assert.equal(running.pid, "34373");
   assert.equal(running.runs, "1");
+  assert.equal(running["last exit code"], "(never exited)");
+  assert.equal(running["immediate reason"], "speculative");
+  assert.equal(running["spawn type"], "daemon (3)");
   assert.equal(running.username, "_vectory");
   assert.equal(running["exit timeout"], "330");
-  // The environment and the arguments are blocks of their own.
+  // The environment, the arguments and the guard malloc policy are blocks of their own.
   assert.equal(running.PATH, undefined);
   assert.equal(running.XPC_SERVICE_NAME, undefined);
+  assert.equal(running["activation rate"], undefined);
+  assert.equal(running["sample rate"], undefined);
 
   const restarted = parseLaunchdPrint(sample("launchctl-print-restarted.txt"));
   assert.deepEqual(
@@ -262,18 +271,20 @@ test("launchctl print: the job's own lines, not those of the blocks inside it", 
       restarted.runs,
       restarted["last exit code"],
     ],
-    ["running", "4399", "3", "1"],
+    ["running", "34455", "3", "1"],
   );
   const waiting = parseLaunchdPrint(sample("launchctl-print-waiting.txt"));
   assert.deepEqual(
-    [waiting.state, waiting.pid, waiting.runs],
-    ["waiting", undefined, "2"],
+    [waiting.state, waiting.pid, waiting.runs, waiting["active count"]],
+    ["spawn scheduled", undefined, "2", "0"],
   );
   const idle = parseLaunchdPrint(sample("launchctl-print-not-running.txt"));
   assert.deepEqual(
     [idle.state, idle.pid, idle.runs, idle["last exit code"]],
-    ["not running", undefined, "0", "(never exited)"],
+    ["not running", undefined, "13", "0"],
   );
+  assert.equal(idle["run interval"], "30 seconds");
+  assert.equal(idle["exit timeout"], "5");
 
   // A line inside a nested block never counts, however much it looks like one.
   const nested = parseLaunchdPrint(
