@@ -356,11 +356,12 @@ func (e *Engine) poll(ctx context.Context) error {
 //     refuses them doesn't get for the rest of this process.
 //
 // A report the server keeps refusing then costs one more request on each
-// check-in, and the first time a report is left out of a check-in that goes
-// through, the log says so (Notice). The agent can't tell which of the reports
-// left out in one step the server refused, so it names all it left out, not the
-// culprit. A refusal that leaving all of them out doesn't end is a failed
-// check-in.
+// check-in for each step it takes to leave it out: one for the log reports, two
+// for the others. Announcements the server refuses are not sent again in this
+// process. The first time a report is left out of a check-in that goes through,
+// the log says so (Notice). The agent can't tell which of the reports left out
+// in one step the server refused, so it names all it left out, not the culprit.
+// A refusal that leaving all of them out doesn't end is a failed check-in.
 func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, error) {
 	announcementsDropped := false
 	// What the check-in that goes through lacks: said once it has.
