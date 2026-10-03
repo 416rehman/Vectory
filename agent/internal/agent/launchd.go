@@ -23,6 +23,8 @@ const launchctlInProgress = 36
 const (
 	launchctlLimit     = 30 * time.Second
 	launchdStatusLimit = 5 * time.Second
+	// launchdStopPoll is how often a stop asks launchd whether it still knows the job.
+	launchdStopPoll = 250 * time.Millisecond
 )
 
 func xmlText(s string) string {
@@ -170,10 +172,18 @@ func (j launchdJob) controlContext(ctx context.Context, action string) error {
 	return errors.New("invalid service operation")
 }
 
-// bootout unloads the daemon and returns once it has stopped. launchd stops
-// the agent, which drains Vector first (up to ExitTimeOut). When that takes a
-// while, launchctl stops waiting with 36 "Operation now in progress" while the
-// job keeps stopping: wait until launchd no longer knows the job.
+// bootout unloads the daemon and returns once it has stopped: once launchd no
+// longer knows the job. launchd stops the agent, which drains Vector first (up
+// to ExitTimeOut).
+//
+// launchctl bootout returns when launchd has begun to remove the job, not when it
+// has: launchd's own log shows "removing service" about half a second after
+// "bootout initiated", and until then launchctl print still lists the job with the
+// process it is stopping. A start in that time finds a running job and leaves it
+// alone, and the job is gone a moment later with nothing started. When the drain
+// takes longer, launchctl stops waiting with 36 "Operation now in progress" while
+// the job keeps stopping. Either way the stop is complete when print says the job
+// is unknown.
 func (j launchdJob) bootout() error { return j.bootoutContext(context.Background()) }
 
 // bootoutContext is bootout, which stops waiting when ctx ends.
@@ -181,14 +191,13 @@ func (j launchdJob) bootoutContext(ctx context.Context) error {
 	deadline := j.now().Add(serviceStopLimit)
 	args := []string{"bootout", j.target()}
 	result := j.launchctl(ctx, serviceStopLimit, args...)
-	if result.status == 0 {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if result.status != launchctlInProgress && !strings.Contains(result.stderr, "Operation now in progress") {
-		return launchctlFailure(args, result)
+	if result.status != 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if result.status != launchctlInProgress && !strings.Contains(result.stderr, "Operation now in progress") {
+			return launchctlFailure(args, result)
+		}
 	}
 	for {
 		// A real failure (the job isn't known) ends the wait; a timeout doesn't.
@@ -201,6 +210,6 @@ func (j launchdJob) bootoutContext(ctx context.Context) error {
 		if !j.now().Before(deadline) {
 			return errors.New(j.name() + " is still stopping after " + humanDuration(serviceStopLimit) + "; check it with sudo launchctl print " + j.target())
 		}
-		j.sleep(time.Second)
+		j.sleep(launchdStopPoll)
 	}
 }
