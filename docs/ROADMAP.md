@@ -8,7 +8,7 @@ The full loop (build, publish, canary, apply and roll back) runs against real Ve
 
 Shipped from earlier versions of this list: starter pipelines such as syslog to Loki and files to Amazon S3, live events per second on the pipeline canvas, and canary gates that also check delivery, such as sink errors and full buffers.
 
-In progress for 0.1: operator-issued agent updates, where a team turns updates on, each host consents when it is enrolled or upgraded, and a host installs only builds signed by a key it pinned, through a privileged step that stages them and undoes a build that fails, rolled out like pipelines (the design is [ADR 0015](adr/0015-operator-issued-agent-updates.md)).
+Also in 0.1: operator-issued agent updates on all three, where a team turns updates on, each host consents when it is enrolled or upgraded, and a host installs only builds signed by a key it pinned, through a privileged step that stages them and undoes a build that fails, rolled out like pipelines (the design is [ADR 0015](adr/0015-operator-issued-agent-updates.md)).
 
 ## Next
 
