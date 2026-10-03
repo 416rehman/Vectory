@@ -314,7 +314,7 @@ async function setupDevice(
   agent,
   name,
   flags,
-  { allowFailure = false } = {},
+  { allowFailure = false, agentPath = null } = {},
 ) {
   const ca = instanceFiles().ca;
   const fingerprint = new crypto.X509Certificate(fs.readFileSync(ca))
@@ -339,6 +339,7 @@ async function setupDevice(
       "--token-stdin",
       "--json",
       "--create-user",
+      ...(agentPath ? ["--agent-path", agentPath] : []),
       ...flags,
     ],
     {
@@ -453,6 +454,7 @@ async function install(evidence) {
         builds["0.1.0"].file,
         deviceName,
         flags,
+        { agentPath: host.paths.agent },
       );
       assertEqual(parsed.service, "systemd", "the service setup registered");
       assert(
@@ -1870,7 +1872,11 @@ async function noConsent(evidence) {
   const setup = await evidence.step(
     `A host installed without the consent flags: vectory setup 0.1.0 enrolls ${deviceName}`,
     async () =>
-      (await setupDevice(s, builds["0.1.0"].file, deviceName, [])).parsed,
+      (
+        await setupDevice(s, builds["0.1.0"].file, deviceName, [], {
+          agentPath: host.paths.agent,
+        })
+      ).parsed,
   );
   const deviceId = setup.device.id;
   await evidence.step(

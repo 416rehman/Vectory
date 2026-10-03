@@ -38,12 +38,17 @@ const expectedCapabilityMask = Object.values(CAPABILITIES).reduce(
   0n,
 );
 
+// The agent is installed where only root can write. A hosted runner's
+// /usr/local/bin is writable by everyone, and a host installed there rightly
+// can't take updates (UNTRUSTED_LOCATION), so the phases use their own directory.
+const INSTALL_DIR = "/opt/vectory-native/bin";
+
 function linuxHost() {
   const stepDir = "/var/lib/vectory-update";
   const paths = {
-    agent: "/usr/local/bin/vectory",
-    installDir: "/usr/local/bin",
-    previous: "/usr/local/bin/.vectory-previous",
+    agent: `${INSTALL_DIR}/vectory`,
+    installDir: INSTALL_DIR,
+    previous: `${INSTALL_DIR}/.vectory-previous`,
     stateDir: "/var/lib/vectory-agent",
     updatesDir: "/var/lib/vectory-agent/updates",
     managedConfig: "/etc/vectory/managed/vector.json",
@@ -278,6 +283,9 @@ function linuxHost() {
       );
       shell(
         `rm -rf ${paths.stateDir} ${paths.stepDir} ${paths.policyDir} /etc/vectory/managed ${paths.installDir}/.vectory-previous ${paths.installDir}/.vectory-previous.new ${paths.installDir}/.vectory-update-*`,
+      );
+      shell(
+        `install -d -m 0755 -o root -g root ${path.dirname(paths.installDir)} ${paths.installDir}`,
       );
     },
     /** What an install without consent must never leave. */
