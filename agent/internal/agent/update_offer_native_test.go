@@ -36,9 +36,13 @@ func TestNativeAnOfferAndAConfigurationApplyInOneCheckIn(t *testing.T) {
 	rig.e.Settings.CapabilityPolicy.AllowedFileRoots = []string{dataDir}
 	rig.e.Settings.VectorBinary, rig.e.Settings.VectorBinarySHA256 = binary, digest
 	rig.e.Settings.ValidationSeconds, rig.e.Settings.StartupSeconds = 30, 20
-	driver := &VectorDriver{Settings: rig.e.Settings, Dir: rig.state}
+	log := newVectorLog(rig.state)
+	driver := &VectorDriver{Settings: rig.e.Settings, Dir: rig.state, Log: log}
 	rig.e.Driver = driver
-	defer driver.Stop()
+	// Windows can't remove a directory that holds a file still open, so Vector is
+	// stopped and its log closed before the temporary directory goes, as the other
+	// native tests do.
+	t.Cleanup(func() { _ = driver.Stop(); log.close() })
 
 	// What the handler saw when the build was asked for: whether the new
 	// configuration was already in place, verified, with Vector running.

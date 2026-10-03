@@ -142,7 +142,7 @@ func TestSetupWithATrackAloneChangesOnlyTheTrack(t *testing.T) {
 			if err != nil || policy.Track != tc.to || policy.Consent != UpdateConsentAsk || !policy.Paused || len(policy.Windows) != 1 {
 				t.Fatalf("%+v %v", policy, err)
 			}
-			want := "ask on this host · " + UpdateTrackWords(tc.to) + " · Mon–Fri 02:00–04:00 · key " + f.key.ShortID() + " (pinned) · changed: track · paused on this host: sudo vectory update resume --state-dir " + ShellQuote(f.dir)
+			want := "ask on this host · " + UpdateTrackWords(tc.to) + " · Mon–Fri 02:00–04:00 · key " + f.key.ShortID() + " (pinned) · changed: track · paused on this host: " + asAdmin("vectory update resume") + " --state-dir " + ShellQuote(f.dir)
 			if step := lastUpdatesStep(t, result); step.Detail != want || step.Status != "ok" {
 				t.Fatalf("%+v want %q", step, want)
 			}
@@ -202,7 +202,7 @@ func TestSetupWithAKeyAloneRepinsAndKeepsEverythingElseByteForByte(t *testing.T)
 	if err != nil || len(policy.Keys) != 1 || policy.Keys[0].Key.Line() != next.Line() {
 		t.Fatalf("the pinned keys are exactly the keys given: %+v %v", policy.Keys, err)
 	}
-	if want := "automatic · minor and patch releases · Mon–Fri 02:00–04:00, Sat,Sun 01:00–03:00 UTC · key " + next.ShortID() + " (pinned) · changed: pinned keys · paused on this host: sudo vectory update resume --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
+	if want := "automatic · minor and patch releases · Mon–Fri 02:00–04:00, Sat,Sun 01:00–03:00 UTC · key " + next.ShortID() + " (pinned) · changed: pinned keys · paused on this host: " + asAdmin("vectory update resume") + " --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
 		t.Fatalf("%q want %q", lastUpdatesStep(t, result).Detail, want)
 	}
 	if got := result.Updates; got == nil || len(got.Keys) != 1 || got.Keys[0] != next.Fingerprint() || got.Consent != UpdateConsentAuto || got.Track != UpdateTrackMinor || !got.Paused {
@@ -296,7 +296,7 @@ func TestSetupWithALevelStillGivesTheWholeConsent(t *testing.T) {
 	if policy.Consent != UpdateConsentAuto || policy.Track != UpdateTrackPatch || len(policy.Windows) != 0 || !policy.Paused {
 		t.Fatalf("%+v", policy)
 	}
-	if want := "automatic · patch releases · any time · key " + f.key.ShortID() + " (pinned) · paused on this host: sudo vectory update resume --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
+	if want := "automatic · patch releases · any time · key " + f.key.ShortID() + " (pinned) · paused on this host: " + asAdmin("vectory update resume") + " --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
 		t.Fatalf("%q want %q", lastUpdatesStep(t, result).Detail, want)
 	}
 }
@@ -329,8 +329,9 @@ func TestSetupWithUpdateFlagsRefusesAHostThatAgreedToNothing(t *testing.T) {
 	const hint = "Add --updates auto or --updates ask, with --update-key-sha256"
 	for name, tc := range map[string]struct {
 		// setUp says the host was set up before, with consent that this case ends.
-		setUp   bool
-		prepare func(f *consentFixture)
+		setUp bool
+		// prepare gets the test of its own case.
+		prepare func(t *testing.T, f *consentFixture)
 		want    string
 	}{
 		"no policy": {
@@ -338,7 +339,7 @@ func TestSetupWithUpdateFlagsRefusesAHostThatAgreedToNothing(t *testing.T) {
 		},
 		"consent off": {
 			setUp: true,
-			prepare: func(f *consentFixture) {
+			prepare: func(t *testing.T, f *consentFixture) {
 				if err := ChangeUpdatePolicy(func(p *UpdatePolicy) error { p.Consent = UpdateConsentOff; return nil }); err != nil {
 					t.Fatal(err)
 				}
@@ -346,7 +347,7 @@ func TestSetupWithUpdateFlagsRefusesAHostThatAgreedToNothing(t *testing.T) {
 			want: "This host hasn't agreed to agent updates, so there is nothing to change. " + hint + ".",
 		},
 		"a policy that can't be used": {
-			prepare: func(f *consentFixture) {
+			prepare: func(t *testing.T, f *consentFixture) {
 				dir, err := ensureRootOwnedDir(f.paths.PolicyDir, rootReadable)
 				if err != nil {
 					t.Fatal(err)
@@ -365,7 +366,7 @@ func TestSetupWithUpdateFlagsRefusesAHostThatAgreedToNothing(t *testing.T) {
 				f.agreed(UpdateConsentAuto, UpdateTrackPatch)
 			}
 			if tc.prepare != nil {
-				tc.prepare(f)
+				tc.prepare(t, f)
 			}
 			policy, readErr := os.ReadFile(f.paths.Policy)
 			requests, tokens := f.server.keyRequests.Load(), f.tokens
@@ -424,22 +425,25 @@ func TestSetupWithUpdateFlagsRefusesAPolicyAnyoneCouldReplace(t *testing.T) {
 func TestSetupWithAKeyTheServerDoesntOfferChangesNothing(t *testing.T) {
 	stranger := testReleaseKey(t, "stranger")
 	for name, tc := range map[string]struct {
-		list func(f *consentFixture) []byte
+		// list is what the server answers for its keys, made by the test of its own case.
+		list func(t *testing.T, f *consentFixture) []byte
 		want string
 		fix  string
 	}{
 		"a list of other keys": {
-			list: func(f *consentFixture) []byte { return releaseKeyList(t, BundleKey{Key: f.key, State: "current"}) },
+			list: func(t *testing.T, f *consentFixture) []byte {
+				return releaseKeyList(t, BundleKey{Key: f.key, State: "current"})
+			},
 			want: "The server offers no release key with the fingerprint this command pins:\nexpected " + GroupFingerprint(stranger.Fingerprint()) + "\noffered  ",
 			fix:  "Compare it with the key in Settings → Agent updates, and copy the command again from Add device. If it still doesn't match, this address may lead to a different server; don't continue.",
 		},
 		"an empty list": {
-			list: func(f *consentFixture) []byte { return releaseKeyList(t) },
+			list: func(t *testing.T, f *consentFixture) []byte { return releaseKeyList(t) },
 			want: "The server offers no release key with the fingerprint this command pins:\nexpected " + GroupFingerprint(stranger.Fingerprint()) + "\nThe server's list of release keys is empty.",
 			fix:  "Compare it with the key in Settings → Agent updates, and copy the command again from Add device. If it still doesn't match, this address may lead to a different server; don't continue.",
 		},
 		"a list whose fingerprint member lies": {
-			list: func(f *consentFixture) []byte {
+			list: func(t *testing.T, f *consentFixture) []byte {
 				list := releaseKeyList(t, BundleKey{Key: f.key, State: "current"})
 				return []byte(strings.ReplaceAll(string(list), f.key.Fingerprint(), stranger.Fingerprint()))
 			},
@@ -447,7 +451,7 @@ func TestSetupWithAKeyTheServerDoesntOfferChangesNothing(t *testing.T) {
 			fix:  bundleFix,
 		},
 		"a server with updates off": {
-			list: func(f *consentFixture) []byte { return nil },
+			list: func(t *testing.T, f *consentFixture) []byte { return nil },
 			want: "This server doesn't offer agent updates.",
 			fix:  "Turn them on in Settings → Agent updates, or leave out the update flags.",
 		},
@@ -455,7 +459,7 @@ func TestSetupWithAKeyTheServerDoesntOfferChangesNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newConsentFixture(t)
 			f.agreed(UpdateConsentAuto, UpdateTrackMinor, "Mon-Fri 02:00-04:00")
-			f.server.releaseKeys = tc.list(f)
+			f.server.releaseKeys = tc.list(t, f)
 			policy := f.policyFile()
 			f.amending(UpdateTrackPatch, []string{"daily 01:00-03:00"}, stranger)
 			_, err := f.run()
@@ -494,7 +498,7 @@ func TestSetupWithUpdateFlagsThatSayWhatTheHostHasChangesNothing(t *testing.T) {
 			if string(f.policyFile()) != string(before) {
 				t.Fatalf("a policy that says the same was rewritten:\n%s\n%s", before, f.policyFile())
 			}
-			want := "ask on this host · minor and patch releases · Mon–Fri 02:00–04:00 · key " + f.key.ShortID() + " (pinned) · nothing changed · paused on this host: sudo vectory update resume --state-dir " + ShellQuote(f.dir)
+			want := "ask on this host · minor and patch releases · Mon–Fri 02:00–04:00 · key " + f.key.ShortID() + " (pinned) · nothing changed · paused on this host: " + asAdmin("vectory update resume") + " --state-dir " + ShellQuote(f.dir)
 			if lastUpdatesStep(t, result).Detail != want {
 				t.Fatalf("%q want %q", lastUpdatesStep(t, result).Detail, want)
 			}

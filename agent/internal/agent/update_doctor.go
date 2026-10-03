@@ -63,7 +63,7 @@ func updateChecks(v UpdateView) []DoctorCheck {
 		if v.Staged.Version != "" {
 			what = v.Staged.Version
 		}
-		add("updates-staged", "info", "Staged update", "Staged "+what+", offered "+humanDayClock(v.Staged.OfferedAt, v.ReadAt)+", and waiting for someone on this host.", "Apply it: "+CommandFor(v.StateDir, "sudo vectory update apply"))
+		add("updates-staged", "info", "Staged update", "Staged "+what+", offered "+humanDayClock(v.Staged.OfferedAt, v.ReadAt)+", and waiting for someone on this host.", "Apply it: "+AdminCommandFor(v.StateDir, "vectory update apply"))
 	}
 
 	if words, ok := v.LastResultWords(); ok {
@@ -72,7 +72,7 @@ func updateChecks(v UpdateView) []DoctorCheck {
 		case last.Outcome == UpdateOutcomeCommitted:
 			add("updates-last", "ok", "Last update", words, "")
 		case last.Code == "ROLLBACK_UNHEALTHY":
-			add("updates-last", "fail", "Last update", sentence(words), "Check the network and the server; the previous build hasn't checked in either. "+CommandFor(v.StateDir, "sudo vectory doctor")+" shows the connection.")
+			add("updates-last", "fail", "Last update", sentence(words), "Check the network and the server; the previous build hasn't checked in either. "+AdminCommandFor(v.StateDir, "vectory doctor")+" shows the connection.")
 		default:
 			add("updates-last", "warn", "Last update", sentence(words), "Nothing to do here: the next release reaches this host. The dashboard shows how the rollout went.")
 		}
@@ -87,7 +87,7 @@ func updateEligibilityFix(dir, code string) string {
 	case "PACKAGE_MANAGED":
 		return "Update the agent with its package manager. Agent updates from the dashboard need an agent that the Add device command installed."
 	case "NO_SERVICE":
-		return "Register the agent as a service with the Add device command, or " + CommandFor(dir, "sudo vectory service-install") + ", and make sure the service runs this executable for this state directory."
+		return "Register the agent as a service with the Add device command, or " + AdminCommandFor(dir, "vectory service-install") + ", and make sure the service runs this executable for this state directory."
 	case "UNTRUSTED_LOCATION":
 		return "Make every directory on the path of the agent, of the update policy and of the update step writable by root alone, and keep them so."
 	case "READ_ONLY":
