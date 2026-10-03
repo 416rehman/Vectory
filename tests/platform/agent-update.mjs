@@ -1818,6 +1818,8 @@ async function noConsent(evidence) {
               "--token-stdin",
               "--json",
               "--create-user",
+              "--agent-path",
+              host.paths.agent,
               "--updates",
               "auto",
               "--update-key-sha256",

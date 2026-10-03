@@ -38,12 +38,51 @@ const expectedCapabilityMask = Object.values(CAPABILITIES).reduce(
   0n,
 );
 
-// The agent is installed where only root can write. A hosted runner's
-// /usr/local/bin is writable by everyone, and a host installed there rightly
-// can't take updates (UNTRUSTED_LOCATION), so the phases use their own directory.
-const INSTALL_DIR = "/opt/vectory-native/bin";
+// The agent is installed where only root can write, all the way up the path. A
+// hosted runner's /usr/local/bin and /opt are writable by everyone, and a host
+// installed under either rightly can't take updates (UNTRUSTED_LOCATION), so the
+// phases use a directory of their own under a place that is root's.
+const INSTALL_DIR_CANDIDATES = [
+  "/usr/lib/vectory-native/bin",
+  "/srv/vectory-native/bin",
+  "/usr/share/vectory-native/bin",
+];
+
+/** What keeps a directory from being root's alone: another owner, or write for group or others. */
+function notRootsAlone(dir) {
+  const info = fs.statSync(dir);
+  if (info.uid !== 0) return `${dir} is owned by uid ${info.uid}`;
+  if (info.mode & 0o022)
+    return `${dir} is writable by its group or by everyone (mode ${(info.mode & 0o7777).toString(8).padStart(4, "0")})`;
+  return null;
+}
+
+/**
+ * The first candidate directory whose existing ancestors are all root's alone; the
+ * rest of the path is made by cleanHost as root. The check is the product's own
+ * rule, so a refusal in a phase is the product's and not a runner image's.
+ */
+function rootOnlyInstallDir() {
+  const problems = [];
+  for (const candidate of INSTALL_DIR_CANDIDATES) {
+    let existing = path.dirname(candidate);
+    while (!fs.existsSync(existing)) existing = path.dirname(existing);
+    const chain = [];
+    for (let dir = existing; ; dir = path.dirname(dir)) {
+      chain.push(dir);
+      if (dir === path.dirname(dir)) break;
+    }
+    const reason = chain.map(notRootsAlone).find(Boolean);
+    if (!reason) return candidate;
+    problems.push(`${candidate}: ${reason}`);
+  }
+  throw new Error(
+    `No directory of the machine's is root's alone for the agent to be installed in:\n  ${problems.join("\n  ")}`,
+  );
+}
 
 function linuxHost() {
+  const INSTALL_DIR = rootOnlyInstallDir();
   const stepDir = "/var/lib/vectory-update";
   const paths = {
     agent: `${INSTALL_DIR}/vectory`,
