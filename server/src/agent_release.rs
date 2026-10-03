@@ -1986,18 +1986,26 @@ mod tests {
             &entries[0].signature
         ));
 
-        // The host of the example story takes the release. The signature covers
-        // the bytes without the example file's final line feed.
+        // The host of the example story takes the release. The example file is
+        // written exactly as signed, so it verifies as it stands; the signature
+        // covers every byte, so the same file with a final line feed does not.
         let verified = Host::new(&[&team])
             .decide(built.as_slice(), EXAMPLE_SIGNATURES.as_bytes())
             .unwrap();
+        assert_eq!(EXAMPLE_RELEASE.as_bytes(), built.as_slice());
+        Host::new(&[&team])
+            .decide(EXAMPLE_RELEASE.as_bytes(), EXAMPLE_SIGNATURES.as_bytes())
+            .unwrap();
         assert_eq!(
             Host::new(&[&team])
-                .decide(EXAMPLE_RELEASE.as_bytes(), EXAMPLE_SIGNATURES.as_bytes())
+                .decide(
+                    format!("{EXAMPLE_RELEASE}\n").as_bytes(),
+                    EXAMPLE_SIGNATURES.as_bytes()
+                )
                 .unwrap_err()
                 .code,
             Code::SignatureInvalid,
-            "a signature covers every byte, the final line feed too"
+            "a signature covers every byte, a final line feed too"
         );
         assert_eq!(verified.signer, team.key.fingerprint());
         assert_eq!(verified.artifact.file, "vectory-0.1.1-linux-amd64");
