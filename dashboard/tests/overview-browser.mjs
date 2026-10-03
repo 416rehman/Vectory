@@ -1408,6 +1408,138 @@ try {
     },
   );
   await check(
+    "When the only verified device goes offline the checklist stays done and the tile says it is offline, not unverified",
+    async () => {
+      const offline = [
+        device(30, "qa-linux-1", {
+          status: "offline",
+          last_seen: ago(7200),
+          running_version: runningVersion(
+            version,
+            2,
+            pipeline,
+            "First pipeline",
+          ),
+        }),
+      ];
+      const verifiedOnce = (extra = {}) =>
+        overview(
+          {
+            configurations_total: 1,
+            versions_total: 2,
+            devices_managed: 1,
+            devices_on_desired: 0,
+            attention: [],
+            rollouts: [],
+            running: [
+              {
+                configuration_id: pipeline,
+                configuration_name: "First pipeline",
+                version_id: version,
+                version: 2,
+                device_count: 1,
+                devices_reporting: 0,
+                groups: [],
+                more_groups: 0,
+                events_in_per_second: null,
+                events_out_per_second: null,
+                state: "running",
+                not_delivering: 0,
+                canary: null,
+              },
+            ],
+            running_total: 1,
+            devices_offline_on_desired: 1,
+            offline_on_desired_version: 2,
+            ...extra,
+          },
+          offline,
+        );
+      let { context, page } = await open({
+        overview: verifiedOnce(),
+        fleet: offline,
+      });
+      const tile = page.locator(".overview-kpi-tile").nth(1);
+      await expect(tile.locator(".overview-kpi-value")).toHaveText("0 / 1");
+      await expect(tile).toContainText("1 offline, last verified v2");
+      await expect(tile).not.toContainText("not yet verified");
+      await expect(page.locator(".overview-checklist")).toHaveCount(0);
+      for (const width of [1280, 390])
+        for (const theme of ["light", "dark"]) {
+          await page.setViewportSize({
+            width,
+            height: width === 390 ? 844 : 900,
+          });
+          await page.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          await page.locator(".overview-kpis").screenshot({
+            path: resolve(
+              output,
+              `offline-verified-${width === 390 ? "mobile" : "desktop"}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+        }
+      await page.setViewportSize({ width: 1280, height: 900 });
+      // The device verified, then Vectory stopped knowing what it runs (an
+      // update under way): this account saw the steps done, so they stay done.
+      state.overview = verifiedOnce({
+        running: [],
+        running_total: 0,
+        devices_offline_on_desired: 0,
+        offline_on_desired_version: null,
+      });
+      await page.reload();
+      await expect(page.locator(".overview-kpis")).toBeVisible();
+      await expect(page.locator(".overview-checklist")).toHaveCount(0);
+      // And only what is true is said of the device now.
+      await expect(page.locator(".overview-kpi-tile").nth(1)).toContainText(
+        "1 not yet verified",
+      );
+      await context.close();
+      // Offline devices that never verified are not yet verified, in a
+      // checklist that has not been completed.
+      ({ context, page } = await open({
+        overview: verifiedOnce({
+          running: [],
+          running_total: 0,
+          devices_offline_on_desired: 0,
+          offline_on_desired_version: null,
+        }),
+        fleet: offline,
+      }));
+      await expect(page.locator(".overview-checklist")).toContainText(
+        "4 of 5 done",
+      );
+      await expect(
+        page.locator('.overview-checklist li[data-state="current"]'),
+      ).toContainText("Deploy and verify");
+      await expect(page.locator(".overview-kpi-tile").nth(1)).toContainText(
+        "1 not yet verified",
+      );
+      // Several devices that last verified different versions name none.
+      await context.close();
+      ({ context, page } = await open({
+        overview: verifiedOnce({
+          devices_managed: 3,
+          devices_offline_on_desired: 2,
+          offline_on_desired_version: null,
+        }),
+        fleet: offline,
+      }));
+      await expect(page.locator(".overview-kpi-tile").nth(1)).toContainText(
+        "2 offline, last verified their assigned version · 1 not yet verified",
+      );
+      await context.close();
+    },
+  );
+  await check(
     "Desktop and mobile Overview stay readable and accessible in both themes",
     async () => {
       const { context, page } = await open({
