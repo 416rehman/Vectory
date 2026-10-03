@@ -34,7 +34,13 @@ was started, copies every configuration file it loads into the state
 directory (adoption-inventory, private to this account) and stops. When the
 Vector loads several files, a directory, includes or configuration chosen by
 an environment variable, setup names them: merge them into the one JSON file
-the agent manages, or adopt them as they are with --adopt-existing.`,
+the agent manages, or adopt them as they are with --adopt-existing.
+Agent updates are opt-in, once, here: --updates auto or ask, with the
+fingerprint of the release key to pin, lets the dashboard update this agent
+with builds that key signed. Setup checks the fingerprint against the server's
+own list of keys before it changes anything, and keeps the choice in a file
+only root can write. Without --updates this host never updates itself.
+Pinning a key trusts its holder with root on this host.`,
 	examples: []string{
 		`cd "$(mktemp -d)"`,
 		"curl -fsSL --proto '=https' --proto-redir '=https' --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh",
@@ -44,6 +50,8 @@ the agent manages, or adopt them as they are with --adopt-existing.`,
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-file /etc/vectory/server-ca.pem",
 		"sudo vectory setup --server https://vectory.example.com:8443 --token-file /run/secrets/vectory-token --service none",
 		"sudo vectory setup --server https://vectory.example.com:8443 --dry-run",
+		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> --updates auto --update-key-sha256 <64-hex-fingerprint> --update-window 'Mon-Fri 02:00-04:00'",
+		"sudo vectory setup --server https://vectory.example.com:8443 --updates off",
 	},
 	define: defineSetup,
 }
@@ -70,6 +78,10 @@ func defineSetup(c *cli) func() int {
 	agentPath := c.HiddenString("agent-path", "where the service runs the agent from (set by the installer)")
 	dryRun := c.Bool("dry-run", "Check everything and show the plan without changing anything")
 	noWake := c.Bool("no-wake", noWakeHelp)
+	updates := c.String("updates", "", "LEVEL", "Agent updates this host takes from the dashboard: auto, ask (wait for sudo vectory update apply) or off; leave it out to change nothing")
+	updateKeys := c.Strings("update-key-sha256", "HEX", "SHA-256 fingerprint of a release key to pin, as Add device shows it; required with --updates auto or ask, repeat for up to 4 keys")
+	updateTrack := c.String("update-track", "", "TRACK", "Which releases the host takes: patch or minor (default patch)")
+	updateWindows := c.Strings("update-window", "SPEC", "When an update may start, such as 'Mon-Fri 02:00-04:00' or 'daily 01:00-03:00 UTC'; repeat for up to 7, leave it out for any time")
 	c.JSON("Print one JSON document instead of progress lines")
 	return func() int {
 		if *pin != "" && c.supplied("ca-file") {
@@ -87,6 +99,11 @@ func defineSetup(c *cli) func() int {
 		options := agent.SetupOptions{
 			Server: *server, CASHA256: *pin, Name: *name, Mode: *mode, Service: *service,
 			CreateUser: *createUser, KeepExistingVector: *keep, AdoptExisting: *adopt, DashboardURL: *dashboard, DryRun: *dryRun,
+			Updates: *updates, UpdateKeys: *updateKeys, UpdateTrack: *updateTrack, UpdateWindows: *updateWindows,
+		}
+		if err := options.CheckUpdates(); err != nil {
+			fmt.Fprintln(c.stderr, "vectory setup: "+err.Error())
+			return exitUsage
 		}
 		if c.supplied("state-dir") {
 			options.StateDir = *c.state

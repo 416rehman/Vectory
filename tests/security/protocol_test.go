@@ -1825,3 +1825,674 @@ func TestDeviceCARotationWithTheAdminTool(t *testing.T) {
 		t.Fatalf("a retired CA is still reported: %#v", settings["device_ca"])
 	}
 }
+
+// The agent update protocol from outside the server: who may do what, the key
+// bundle a host pins from, the offer inside the signed manifest, the download
+// that offer authorizes, and the member a host reports. The release key is this
+// test's own, held offline, so the release signature is checked here the way a
+// host checks it: with the pinned key, over the bytes as delivered.
+func TestAgentUpdateBoundaries(t *testing.T) {
+	s := newServer(t)
+	s.start()
+	h := s.h
+	const adminPassword = "test-only-password-29843"
+	n, v, headers := h.api("POST", "/bootstrap", map[string]any{"bootstrap_secret": h.bootstrap, "email": "updates-admin@example.invalid", "name": "Updates test", "password": adminPassword})
+	okay(t, n, v)
+	h.cookie = strings.Split(headers.Get("Set-Cookie"), ";")[0]
+	h.csrf = v["csrf_token"].(string)
+
+	type session struct{ cookie, csrf string }
+	admin := session{h.cookie, h.csrf}
+	login := func(role string) session {
+		email := "updates-" + role + "@example.invalid"
+		n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "updates " + role, "role": role, "password": "test-only-password-82734"})
+		okay(t, n, v)
+		n, v, headers := h.req(h.plain, h.http, "POST", "/api/v1/login", map[string]any{"email": email, "password": "test-only-password-82734"}, "", "")
+		okay(t, n, v)
+		return session{strings.Split(headers.Get("Set-Cookie"), ";")[0], v["csrf_token"].(string)}
+	}
+	viewer, editor, operator := login("viewer"), login("editor"), login("operator")
+	as := func(who session, method, path string, body any) (int, map[string]any, http.Header) {
+		return h.req(h.plain, h.http, method, "/api/v1"+path, body, who.cookie, who.csrf)
+	}
+	// raw sends bytes as they are and returns the answer as it came.
+	raw := func(who session, method, path string, body []byte) (int, []byte) {
+		t.Helper()
+		r, e := http.NewRequest(method, h.http+"/api/v1"+path, bytes.NewReader(body))
+		if e != nil {
+			t.Fatal(e)
+		}
+		r.Header.Set("Cookie", who.cookie)
+		if method != "GET" {
+			r.Header.Set("X-CSRF-Token", who.csrf)
+		}
+		res, e := h.plain.Do(r)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer res.Body.Close()
+		out, _ := io.ReadAll(io.LimitReader(res.Body, 4*1024*1024))
+		return res.StatusCode, out
+	}
+	errorCode := func(v map[string]any) string {
+		e, _ := v["error"].(map[string]any)
+		c, _ := e["code"].(string)
+		return c
+	}
+
+	// The team's key: its private half never reaches the server.
+	public, private, e := ed25519.GenerateKey(rand.Reader)
+	if e != nil {
+		t.Fatal(e)
+	}
+	keyLine := "vectory-release-key ed25519 " + base64.StdEncoding.EncodeToString(public) + " security-test"
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256(public))
+	releasePrefix := []byte("vectory-agent-release-v1\n")
+	signatureFile := func(signer ed25519.PrivateKey, manifest []byte) []byte {
+		signature := ed25519.Sign(signer, append(append([]byte{}, releasePrefix...), manifest...))
+		return []byte(fmt.Sprintf(`{"schema":"vectory.agent-release-signatures.v1","signatures":[{"key":%q,"signature":%q}]}`, fingerprint, base64.StdEncoding.EncodeToString(signature)))
+	}
+
+	// Hosts, as agents: enrolled with a certificate, answered with a manifest the
+	// device's own signing key signed.
+	token := h.token(map[string]any{"name": "updates-token", "expires_hours": 1, "max_uses": 20, "name_prefix": "upd-"})
+	type host struct {
+		id          string
+		client      *http.Client
+		credentials map[string]any
+	}
+	enrollHost := func(name string) host {
+		key, csr := keyCSR(t)
+		n, credentials := h.enroll(token, name, fmt.Sprintf("%x", serial()), csr)
+		okay(t, n, credentials)
+		client := h.client(credentials, key)
+		t.Cleanup(client.CloseIdleConnections)
+		return host{credentials["device_id"].(string), client, credentials}
+	}
+	beats := 0
+	nonce := func() string {
+		beats++
+		value := bytes.Repeat([]byte{7}, 32)
+		binary.BigEndian.PutUint64(value[:8], uint64(beats))
+		return base64.StdEncoding.EncodeToString(value)
+	}
+	// beat is a check-in that reports `extra`; it returns the status, the decoded
+	// manifest (or the refusal), the signed bytes and the envelope.
+	beat := func(who host, extra map[string]any) (int, map[string]any, []byte, map[string]any) {
+		t.Helper()
+		body := map[string]any{"protocol_version": 1, "request_id": fmt.Sprintf("%x", serial()), "nonce": nonce(), "boot_id": "security-test", "agent_version": "0.1.0", "vector_version": "0.58.0", "reported_generation": 0, "policy_generation": 0, "actual_sha256": "", "apply_state": "unmanaged", "local_paused": false, "remote_pause_acknowledged": false}
+		for k, value := range extra {
+			body[k] = value
+		}
+		n, envelope, _ := h.req(who.client, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+		if n != 200 {
+			return n, envelope, nil, nil
+		}
+		payload, e := base64.StdEncoding.DecodeString(envelope["payload"].(string))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var manifest map[string]any
+		if e = json.Unmarshal(payload, &manifest); e != nil {
+			t.Fatal(e)
+		}
+		return n, manifest, payload, envelope
+	}
+	signedFor := func(who host, payload []byte, envelope map[string]any) bool {
+		key, _ := base64.StdEncoding.DecodeString(who.credentials["signing_public_key"].(string))
+		signature, _ := base64.StdEncoding.DecodeString(envelope["signature"].(string))
+		return ed25519.Verify(key, payload, signature)
+	}
+	// member is what a host that takes updates on its own reports, pinning the
+	// team's key and with nothing to do.
+	member := func(extra map[string]any) map[string]any {
+		m := map[string]any{"consent": "auto", "paused": false, "track": "patch", "windows": []any{}, "window_open": true, "keys": []any{fingerprint}, "highest_counter": 0, "eligibility": "eligible", "service_definition": 1, "state": "idle"}
+		for k, value := range extra {
+			m[k] = value
+		}
+		return m
+	}
+	fetch := func(who host, digest string) (int, []byte) {
+		t.Helper()
+		res, e := who.client.Get(h.https + "/agent/v1/agent-releases/" + digest)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 8*1024*1024))
+		return res.StatusCode, body
+	}
+
+	t.Run("while-updates-are-off-nothing-of-it-answers", func(t *testing.T) {
+		n, v, _ := as(viewer, "GET", "/agent-updates", nil)
+		okay(t, n, v)
+		if v["enabled"] != false {
+			t.Fatalf("updates start off: %#v", v)
+		}
+		for _, path := range []string{"/agent-release-keys", "/agent-releases", "/agent-update-rollouts"} {
+			n, v, _ := as(viewer, "GET", path, nil)
+			expect(t, n, 404, v)
+			if errorCode(v) != "AGENT_UPDATES_OFF" {
+				t.Fatalf("%s while off: %#v", path, v)
+			}
+		}
+		n, v, _ = h.req(h.tls, h.https, "GET", "/agent/v1/release-keys", nil, "", "")
+		expect(t, n, 404, v)
+		// A host that reports a member is told nothing of updates.
+		a := enrollHost("upd-quiet")
+		_, manifest, _, _ := beat(a, map[string]any{"agent_update": member(nil)})
+		if features, _ := manifest["features"].([]any); containsValue(features, "agent_update") {
+			t.Fatalf("a server with updates off lists the feature: %#v", manifest["features"])
+		}
+		if _, offered := manifest["agent_update"]; offered {
+			t.Fatalf("a server with updates off made an offer: %#v", manifest)
+		}
+	})
+
+	t.Run("every-route-needs-its-role-and-a-token-for-what-it-changes", func(t *testing.T) {
+		some := "00000000-0000-4000-8000-000000000001"
+		type route struct{ method, path, role string }
+		routes := []route{
+			{"GET", "/agent-updates", "any"},
+			{"PUT", "/agent-updates/settings", "admin"},
+			{"POST", "/agent-updates/stop", "operator"},
+			{"POST", "/agent-updates/stop/clear", "admin"},
+			{"GET", "/agent-release-keys", "any"},
+			{"POST", "/agent-release-keys/rotate", "admin"},
+			{"POST", "/agent-release-keys/rollover", "admin"},
+			{"POST", "/agent-release-keys/" + fingerprint + "/revoke", "admin"},
+			{"GET", "/agent-releases", "any"},
+			{"POST", "/agent-releases", "admin"},
+			{"GET", "/agent-releases/" + some, "any"},
+			{"GET", "/agent-releases/" + some + "/manifest", "any"},
+			{"PUT", "/agent-releases/" + some + "/signature", "admin"},
+			{"POST", "/agent-releases/" + some + "/withdraw", "admin"},
+			{"GET", "/agent-update-rollouts", "any"},
+			{"POST", "/agent-update-rollouts/preview", "operator"},
+			{"POST", "/agent-update-rollouts", "operator"},
+			{"GET", "/agent-update-rollouts/" + some, "any"},
+			{"GET", "/agent-update-rollouts/" + some + "/targets", "any"},
+			{"POST", "/agent-update-rollouts/" + some + "/pause", "operator"},
+			{"POST", "/agent-update-rollouts/" + some + "/resume", "operator"},
+			{"POST", "/agent-update-rollouts/" + some + "/cancel", "operator"},
+		}
+		denied := map[string]map[string]session{
+			"any":      {},
+			"operator": {"viewer": viewer, "editor": editor},
+			"admin":    {"viewer": viewer, "editor": editor, "operator": operator},
+		}
+		lowest := map[string]session{"any": viewer, "operator": operator, "admin": admin}
+		for _, r := range routes {
+			label := r.method + " " + r.path
+			n, v, _ := h.req(h.plain, h.http, r.method, "/api/v1"+r.path, map[string]any{}, "", "")
+			if n != 401 {
+				t.Fatalf("%s without a session: HTTP %d %#v", label, n, v)
+			}
+			for who, session := range denied[r.role] {
+				n, v, _ := as(session, r.method, r.path, map[string]any{})
+				if n != 403 {
+					t.Fatalf("%s as %s: HTTP %d %#v", label, who, n, v)
+				}
+			}
+			allowed := lowest[r.role]
+			if r.method != "GET" {
+				n, v, _ := h.req(h.plain, h.http, r.method, "/api/v1"+r.path, map[string]any{}, allowed.cookie, "")
+				if n != 403 {
+					t.Fatalf("%s without the CSRF token: HTTP %d %#v", label, n, v)
+				}
+			}
+			// The role it is for gets past authorization (and then is told what is
+			// wrong with the request, or that updates are off).
+			n, v, _ = as(allowed, r.method, r.path, map[string]any{})
+			if n == 401 || n == 403 {
+				t.Fatalf("%s as %s: HTTP %d %#v", label, r.role, n, v)
+			}
+		}
+	})
+
+	t.Run("an-administrator-turns-updates-on-with-the-password-and-the-teams-key", func(t *testing.T) {
+		n, v, _ := as(admin, "GET", "/agent-updates", nil)
+		okay(t, n, v)
+		revision := v["revision"]
+		on := func(password string, revision any) map[string]any {
+			return map[string]any{"enabled": true, "custody": map[string]any{"kind": "offline", "public_key": keyLine}, "current_password": password, "revision": revision}
+		}
+		n, v, _ = as(admin, "PUT", "/agent-updates/settings", on("not the password at all", revision))
+		expect(t, n, 403, v)
+		n, v, _ = as(admin, "PUT", "/agent-updates/settings", on(adminPassword, 9999))
+		expect(t, n, 409, v)
+		n, v, _ = as(admin, "PUT", "/agent-updates/settings", on(adminPassword, revision))
+		okay(t, n, v)
+		current, _ := v["current_key"].(map[string]any)
+		if v["enabled"] != true || v["custody"] != "offline" || current["fingerprint"] != fingerprint {
+			t.Fatalf("the setting after turning updates on: %#v", v)
+		}
+		// Updates are on for everyone's reads now, and the keys list names custody
+		// where only people who are signed in read it.
+		status, body := raw(viewer, "GET", "/agent-release-keys", nil)
+		if status != 200 || !strings.Contains(string(body), `"custody"`) {
+			t.Fatalf("the signed-in key list: %d %s", status, body)
+		}
+	})
+
+	t.Run("the-key-bundle-is-public-and-holds-no-custody", func(t *testing.T) {
+		res, e := h.tls.Get(h.https + "/agent/v1/release-keys")
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		if res.StatusCode != 200 {
+			t.Fatalf("the bundle: HTTP %d %s", res.StatusCode, body)
+		}
+		if strings.Contains(strings.ToLower(string(body)), "custody") {
+			t.Fatalf("the public bundle says who holds a key: %s", body)
+		}
+		var bundle struct {
+			Schema    string           `json:"schema"`
+			Keys      []map[string]any `json:"keys"`
+			Rollovers []any            `json:"rollovers"`
+		}
+		if e = json.Unmarshal(body, &bundle); e != nil || bundle.Schema != "vectory.release-keys.v1" || len(bundle.Keys) == 0 {
+			t.Fatalf("the bundle is not the documented one: %v %s", e, body)
+		}
+		found := false
+		for _, entry := range bundle.Keys {
+			if len(entry) != 3 {
+				t.Fatalf("an entry of the bundle has members beyond its key, fingerprint and state: %#v", entry)
+			}
+			parts := strings.Split(entry["public_key"].(string), " ")
+			if len(parts) != 4 || parts[0] != "vectory-release-key" || parts[1] != "ed25519" {
+				t.Fatalf("an entry is not a key line: %#v", entry)
+			}
+			decoded, e := base64.StdEncoding.DecodeString(parts[2])
+			if e != nil || len(decoded) != 32 {
+				t.Fatalf("an entry holds no 32-byte key: %#v", entry)
+			}
+			// A fingerprint is computed from the key, so one that disagrees with
+			// its key is a bundle a host must refuse.
+			if entry["fingerprint"] != fmt.Sprintf("%x", sha256.Sum256(decoded)) {
+				t.Fatalf("a fingerprint of the bundle disagrees with its key: %#v", entry)
+			}
+			if entry["fingerprint"] == fingerprint {
+				found = entry["state"] == "current"
+			}
+		}
+		if !found {
+			t.Fatalf("the team's key is not the current key of the bundle: %s", body)
+		}
+		// No certificate is asked for, and the bundle is not on the dashboard's
+		// listener.
+		n, _, _ := h.req(h.plain, h.http, "GET", "/agent/v1/release-keys", nil, "", "")
+		if n == 200 {
+			t.Fatal("the dashboard's listener serves the host's key bundle")
+		}
+	})
+
+	// Builds of 0.1.1 in the release mirror: one for the hosts' platform, and one
+	// for another that no host here runs, so a digest that is a release's but is
+	// not the one a host is offered can be asked for.
+	build := bytes.Repeat([]byte("a build of the agent that a security test serves "), 800)
+	digest := fmt.Sprintf("%x", sha256.Sum256(build))
+	elsewhere := bytes.Repeat([]byte("a build for a platform no host here runs "), 700)
+	elsewhereDigest := fmt.Sprintf("%x", sha256.Sum256(elsewhere))
+	mirror := filepath.Join(s.dir, "releases")
+	if e = os.MkdirAll(mirror, 0o755); e != nil {
+		t.Fatal(e)
+	}
+	var entries []map[string]any
+	for _, b := range []struct {
+		os, arch string
+		bytes    []byte
+	}{{"windows", "amd64", build}, {"linux", "arm64", elsewhere}} {
+		file := "vectory-0.1.1-" + b.os + "-" + b.arch
+		if e = os.WriteFile(filepath.Join(mirror, file), b.bytes, 0o644); e != nil {
+			t.Fatal(e)
+		}
+		entries = append(entries, map[string]any{"name": file, "os": b.os, "arch": b.arch, "version": "0.1.1", "sha256": fmt.Sprintf("%x", sha256.Sum256(b.bytes)), "size": len(b.bytes)})
+	}
+	catalog, _ := json.Marshal(entries)
+	if e = os.WriteFile(filepath.Join(mirror, "catalog.json"), catalog, 0o644); e != nil {
+		t.Fatal(e)
+	}
+	var releaseID string
+	var manifestBytes []byte
+
+	t.Run("a-release-waits-for-the-teams-signature-and-takes-only-a-valid-one", func(t *testing.T) {
+		n, release, _ := as(admin, "POST", "/agent-releases", map[string]any{"version": "0.1.1"})
+		okay(t, n, release)
+		releaseID = release["id"].(string)
+		if release["state"] != "awaiting_signature" {
+			t.Fatalf("a release of offline custody is signed by the team: %#v", release)
+		}
+		status, bytesOfManifest := raw(viewer, "GET", "/agent-releases/"+releaseID+"/manifest", nil)
+		if status != 200 {
+			t.Fatalf("the manifest: HTTP %d", status)
+		}
+		manifestBytes = bytesOfManifest
+		if fmt.Sprintf("%x", sha256.Sum256(manifestBytes)) != release["manifest_sha256"] {
+			t.Fatal("the manifest served is not the one the release names")
+		}
+		_, otherPrivate, _ := ed25519.GenerateKey(rand.Reader)
+		for label, file := range map[string][]byte{
+			"a signature of another key under the team's name": signatureFile(otherPrivate, manifestBytes),
+			"a signature of other bytes":                       signatureFile(private, append(append([]byte{}, manifestBytes...), '\n')),
+			"a file that is not a signature file":              []byte(`not json`),
+		} {
+			status, body := raw(admin, "PUT", "/agent-releases/"+releaseID+"/signature", file)
+			var refusal map[string]any
+			json.Unmarshal(body, &refusal)
+			if status != 422 || errorCode(refusal) != "RELEASE_SIGNATURE_INVALID" {
+				t.Fatalf("%s: HTTP %d %s", label, status, body)
+			}
+		}
+		status, body := raw(admin, "PUT", "/agent-releases/"+releaseID+"/signature", signatureFile(private, manifestBytes))
+		if status != 200 {
+			t.Fatalf("the team's own signature: HTTP %d %s", status, body)
+		}
+		var ready map[string]any
+		json.Unmarshal(body, &ready)
+		if ready["state"] != "ready" {
+			t.Fatalf("a signed release is ready: %s", body)
+		}
+		// A second signature is not taken.
+		status, _ = raw(admin, "PUT", "/agent-releases/"+releaseID+"/signature", signatureFile(private, manifestBytes))
+		if status != 409 {
+			t.Fatalf("a release that is ready took another signature: HTTP %d", status)
+		}
+	})
+
+	a, b, c := enrollHost("upd-a"), enrollHost("upd-b"), enrollHost("upd-c")
+	var rolloutID, offeredNonce string
+	var offeredPayload []byte
+	var offeredEnvelope, offered map[string]any
+
+	t.Run("a-rollout-offers-the-release-to-the-hosts-it-released-to", func(t *testing.T) {
+		for _, who := range []host{a, b, c} {
+			n, manifest, _, _ := beat(who, map[string]any{"agent_update": member(nil)})
+			expect(t, n, 200, manifest)
+		}
+		request := map[string]any{"release_id": releaseID, "selector": map[string]any{"device_ids": []string{a.id, b.id}, "group_ids": []string{}, "exclude_ids": []string{}}, "rollout": map[string]any{"canary_size": 2, "batch_size": 10, "observation_seconds": 60, "failure_threshold": 100}}
+		n, review, _ := as(operator, "POST", "/agent-update-rollouts/preview", request)
+		okay(t, n, review)
+		if updated, _ := review["will_update"].([]any); len(updated) != 2 {
+			t.Fatalf("the review of two hosts that report eligible: %#v", review)
+		}
+		request["review_token"] = review["review_token"]
+		n, rollout, _ := as(operator, "POST", "/agent-update-rollouts", request)
+		okay(t, n, rollout)
+		rolloutID = rollout["id"].(string)
+		// The scheduler releases the canary within a few seconds.
+		deadline := time.Now().Add(25 * time.Second)
+		for {
+			n, manifest, payload, envelope := beat(a, map[string]any{"agent_update": member(nil)})
+			expect(t, n, 200, manifest)
+			if held, ok := manifest["agent_update"].(map[string]any); ok {
+				offered, offeredPayload, offeredEnvelope = held, payload, envelope
+				offeredNonce = manifest["nonce"].(string)
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("a host in a rollout was never offered the release")
+			}
+			time.Sleep(time.Second)
+		}
+	})
+
+	t.Run("the-offer-is-in-the-signed-manifest-bound-to-the-device-and-the-nonce", func(t *testing.T) {
+		if len(offeredPayload) == 0 {
+			t.Skip("needs the offer of the previous subtest")
+		}
+		if !signedFor(a, offeredPayload, offeredEnvelope) {
+			t.Fatal("the manifest that carries the offer is not signed by the device's signing key")
+		}
+		var manifest map[string]any
+		json.Unmarshal(offeredPayload, &manifest)
+		if manifest["device_id"] != a.id || manifest["nonce"] != offeredNonce {
+			t.Fatalf("the manifest is not bound to its recipient and nonce: %#v", manifest)
+		}
+		if features, _ := manifest["features"].([]any); !containsValue(features, "agent_update") {
+			t.Fatalf("a server with updates on lists the feature: %#v", manifest["features"])
+		}
+		if offered["rollout_id"] != rolloutID || offered["release_id"] != releaseID {
+			t.Fatalf("the offer names another rollout or release: %#v", offered)
+		}
+		// What a host checks: the release manifest and its signature file, as
+		// delivered, verify under the key it pinned.
+		delivered, e := base64.StdEncoding.DecodeString(offered["manifest"].(string))
+		if e != nil || !bytes.Equal(delivered, manifestBytes) {
+			t.Fatalf("the offer does not carry the stored release manifest exactly: %v", e)
+		}
+		signatures, e := base64.StdEncoding.DecodeString(offered["signatures"].(string))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var file struct {
+			Schema     string `json:"schema"`
+			Signatures []struct {
+				Key       string `json:"key"`
+				Signature string `json:"signature"`
+			} `json:"signatures"`
+		}
+		if e = json.Unmarshal(signatures, &file); e != nil || file.Schema != "vectory.agent-release-signatures.v1" || len(file.Signatures) != 1 || file.Signatures[0].Key != fingerprint {
+			t.Fatalf("the signature file of the offer: %v %s", e, signatures)
+		}
+		signature, _ := base64.StdEncoding.DecodeString(file.Signatures[0].Signature)
+		if !ed25519.Verify(public, append(append([]byte{}, releasePrefix...), delivered...), signature) {
+			t.Fatal("the release signature of the offer does not verify under the team's key")
+		}
+		var parsed map[string]any
+		json.Unmarshal(delivered, &parsed)
+		artifacts, _ := parsed["artifacts"].([]any)
+		digests := map[string]string{}
+		for _, raw := range artifacts {
+			entry := raw.(map[string]any)
+			digests[entry["os"].(string)+"/"+entry["arch"].(string)] = entry["sha256"].(string)
+		}
+		if parsed["version"] != "0.1.1" || len(digests) != 2 || digests["windows/amd64"] != digest || digests["linux/arm64"] != elsewhereDigest {
+			t.Fatalf("the release manifest of the offer: %s", delivered)
+		}
+		artifact, _ := offered["artifact"].(map[string]any)
+		if artifact["sha256"] != digest || artifact["path"] != "/agent/v1/agent-releases/"+digest || artifact["size"] != float64(len(build)) {
+			t.Fatalf("the artifact of the offer: %#v", artifact)
+		}
+		if rollovers, _ := offered["rollovers"].([]any); len(rollovers) != 0 {
+			t.Fatalf("a host that pins the current key needs no statement: %#v", rollovers)
+		}
+		// A host the rollout did not release to is offered nothing, and another
+		// host's offer is its own.
+		_, outside, _, _ := beat(c, map[string]any{"agent_update": member(nil)})
+		if _, asked := outside["agent_update"]; asked {
+			t.Fatalf("a host outside the rollout was offered the release: %#v", outside)
+		}
+		// Any change to the signed bytes breaks the signature: the offer is only
+		// as good as the manifest that carries it.
+		embedded := []byte(offered["manifest"].(string))
+		at := bytes.Index(offeredPayload, embedded) + 12
+		flipped := append([]byte{}, offeredPayload...)
+		flipped[at] ^= 1
+		mutations := map[string][]byte{
+			"recipient changed":                           bytes.Replace(offeredPayload, []byte(a.id), []byte(b.id), 1),
+			"nonce changed":                               bytes.Replace(offeredPayload, []byte(offeredNonce), []byte(nonce()), 1),
+			"artifact digest changed":                     bytes.ReplaceAll(offeredPayload, []byte(digest), []byte(strings.Repeat("0", 64))),
+			"rollout changed":                             bytes.Replace(offeredPayload, []byte(rolloutID), []byte(strings.Repeat("a", 8)+rolloutID[8:]), 1),
+			"a byte of the embedded release manifest":     flipped,
+			"the offer renamed so a host does not see it": bytes.Replace(offeredPayload, []byte(`"agent_update":{`), []byte(`"agent_updatf":{`), 1),
+			"one byte flipped at the start":               append([]byte{offeredPayload[0] ^ 1}, offeredPayload[1:]...),
+		}
+		for label, tampered := range mutations {
+			if bytes.Equal(tampered, offeredPayload) {
+				t.Fatalf("%s: the mutation changed nothing", label)
+			}
+			if signedFor(a, tampered, offeredEnvelope) {
+				t.Fatalf("%s: a tampered offer passed the signature", label)
+			}
+		}
+		if !signedFor(a, offeredPayload, offeredEnvelope) {
+			t.Fatal("the untouched manifest no longer verifies")
+		}
+	})
+
+	t.Run("the-download-is-for-the-offered-host-and-the-offered-digest", func(t *testing.T) {
+		if len(offeredPayload) == 0 {
+			t.Skip("needs the offer of an earlier subtest")
+		}
+		status, body := fetch(a, digest)
+		if status != 200 || !bytes.Equal(body, build) || fmt.Sprintf("%x", sha256.Sum256(body)) != digest {
+			t.Fatalf("a host that holds the offer cannot download the build: HTTP %d", status)
+		}
+		// b was released with a, so it is offered too once it checks in again.
+		_, manifest, _, _ := beat(b, map[string]any{"agent_update": member(nil)})
+		if _, ok := manifest["agent_update"]; !ok {
+			t.Fatalf("a host of the canary stage is not offered the release: %#v", manifest)
+		}
+		if status, body := fetch(b, digest); status != 200 || !bytes.Equal(body, build) {
+			t.Fatalf("a second host of the stage cannot download its build: HTTP %d", status)
+		}
+		// A digest that is a release's but is not the one the host is offered, and
+		// a host that holds no offer, are refused; a digest no release has is
+		// unknown.
+		for label, probe := range map[string]struct {
+			who    host
+			digest string
+			want   int
+		}{
+			"a host that holds no offer":                            {c, digest, 403},
+			"another build of the same release":                     {a, elsewhereDigest, 403},
+			"a digest no release has":                               {a, strings.Repeat("0", 64), 404},
+			"the digest of the release manifest, which is no build": {b, fmt.Sprintf("%x", sha256.Sum256(manifestBytes)), 404},
+		} {
+			if status, _ := fetch(probe.who, probe.digest); status != probe.want {
+				t.Fatalf("%s: HTTP %d, want %d", label, status, probe.want)
+			}
+		}
+		n, v, _ := h.req(h.tls, h.https, "GET", "/agent/v1/agent-releases/"+digest, nil, "", "")
+		expect(t, n, 401, v)
+	})
+
+	t.Run("stop-all-updates-takes-every-offer-and-every-download-away", func(t *testing.T) {
+		if len(offeredPayload) == 0 {
+			t.Skip("needs the offer of an earlier subtest")
+		}
+		n, v, _ := as(operator, "POST", "/agent-updates/stop", map[string]any{"reason": "a protocol test of the stop"})
+		okay(t, n, v)
+		for _, who := range []host{a, b} {
+			_, manifest, _, _ := beat(who, map[string]any{"agent_update": member(nil)})
+			if _, offered := manifest["agent_update"]; offered {
+				t.Fatalf("a stopped server still offers a build: %#v", manifest)
+			}
+			if features, _ := manifest["features"].([]any); !containsValue(features, "agent_update") {
+				t.Fatalf("a stopped server keeps the feature listed, so agents keep reporting: %#v", manifest["features"])
+			}
+			if status, _ := fetch(who, digest); status != 403 {
+				t.Fatalf("a stopped server still serves a build: HTTP %d", status)
+			}
+		}
+		n, v, _ = as(viewer, "GET", "/agent-update-rollouts/"+rolloutID, nil)
+		okay(t, n, v)
+		if v["status"] != "cancelled" {
+			t.Fatalf("Stop all updates ends the rollout: %#v", v)
+		}
+		// Ending the stop is for an administrator, and resumes nothing.
+		n, v, _ = as(admin, "GET", "/agent-updates", nil)
+		okay(t, n, v)
+		n, denied, _ := as(operator, "POST", "/agent-updates/stop/clear", map[string]any{"revision": v["revision"]})
+		expect(t, n, 403, denied)
+		n, cleared, _ := as(admin, "POST", "/agent-updates/stop/clear", map[string]any{"revision": v["revision"]})
+		okay(t, n, cleared)
+		_, manifest, _, _ := beat(a, map[string]any{"agent_update": member(nil)})
+		if _, offered := manifest["agent_update"]; offered {
+			t.Fatalf("ending the stop brought the offer back: %#v", manifest)
+		}
+		if status, _ := fetch(a, digest); status != 403 {
+			t.Fatalf("ending the stop brought the download back: HTTP %d", status)
+		}
+	})
+
+	t.Run("a-member-that-breaks-a-bound-is-refused-whole-and-changes-nothing", func(t *testing.T) {
+		_, source, _, _ := runtime.Caller(0)
+		data, e := os.ReadFile(filepath.Join(filepath.Dir(source), "..", "..", "contracts", "fixtures", "agent-release", "report.json"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var fixture struct {
+			Members []struct {
+				Name     string `json:"name"`
+				Member   any    `json:"member"`
+				Accepted bool   `json:"accepted"`
+			} `json:"members"`
+		}
+		if e = json.Unmarshal(data, &fixture); e != nil || len(fixture.Members) < 50 {
+			t.Fatalf("the shared cases of the heartbeat member: %v", e)
+		}
+		// A host may check in 30 times a minute, so the cases are spread over
+		// four hosts.
+		hosts := []host{enrollHost("upd-r1"), enrollHost("upd-r2"), enrollHost("upd-r3"), enrollHost("upd-r4")}
+		stored := func(who host) string {
+			n, v, _ := as(admin, "GET", "/devices/"+who.id, nil)
+			okay(t, n, v)
+			out, _ := json.Marshal(v["agent_update"])
+			return string(out)
+		}
+		last := map[string]string{}
+		for i, c := range fixture.Members {
+			who := hosts[i%len(hosts)]
+			n, answer, _, _ := beat(who, map[string]any{"agent_update": c.Member})
+			if c.Accepted {
+				if n != 200 {
+					t.Fatalf("%q: a member the shared cases accept was refused: HTTP %d %#v", c.Name, n, answer)
+				}
+				last[who.id] = stored(who)
+				continue
+			}
+			if n != 400 {
+				t.Fatalf("%q: a member the shared cases refuse was taken: HTTP %d %#v", c.Name, n, answer)
+			}
+			if before, known := last[who.id]; known && stored(who) != before {
+				t.Fatalf("%q: a refused check-in changed what the server holds of the host", c.Name)
+			}
+		}
+	})
+
+	t.Run("turning-updates-off-takes-the-bundle-and-the-feature-away", func(t *testing.T) {
+		n, v, _ := as(admin, "GET", "/agent-updates", nil)
+		okay(t, n, v)
+		n, v, _ = as(admin, "PUT", "/agent-updates/settings", map[string]any{"enabled": false, "current_password": adminPassword, "revision": v["revision"]})
+		okay(t, n, v)
+		if v["enabled"] != false || v["current_key"] == nil {
+			t.Fatalf("turning updates off keeps the key: %#v", v)
+		}
+		n, v, _ = h.req(h.tls, h.https, "GET", "/agent/v1/release-keys", nil, "", "")
+		expect(t, n, 404, v)
+		_, manifest, _, _ := beat(a, map[string]any{"agent_update": member(nil)})
+		if features, _ := manifest["features"].([]any); containsValue(features, "agent_update") {
+			t.Fatalf("a server with updates off lists the feature: %#v", manifest["features"])
+		}
+		if status, _ := fetch(b, digest); status != 403 && status != 404 {
+			t.Fatalf("a server with updates off serves a build: HTTP %d", status)
+		}
+	})
+
+	t.Run("the-audit-trail-says-what-was-done-and-nothing-a-key-is-made-of", func(t *testing.T) {
+		for action, want := range map[string]int{
+			"agent_update.enable":            1,
+			"agent_update.stop":              1,
+			"agent_update.stop_clear":        1,
+			"agent_update.disable":           1,
+			"agent_release.prepare":          1,
+			"agent_release.signature_upload": 4,
+			"agent_update_rollout.create":    1,
+		} {
+			n, v, _ := h.api("GET", "/audit/history?action="+action, nil)
+			okay(t, n, v)
+			if items, _ := v["items"].([]any); len(items) != want {
+				t.Fatalf("%s: %d audit events, want %d: %#v", action, len(items), want, v)
+			}
+		}
+		n, v, _ := h.api("GET", "/audit/history?page_size=50", nil)
+		okay(t, n, v)
+		if text := fmt.Sprint(v); strings.Contains(text, base64.StdEncoding.EncodeToString(private.Seed())) {
+			t.Fatal("the audit trail holds the private key")
+		}
+	})
+}

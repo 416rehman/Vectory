@@ -29,11 +29,14 @@ fn receipt(id: &str, revoked: bool) -> Value {
 /// operator revoked it or an identity recovery replaced it: it leaves its
 /// groups and persistent assignments, and since it never checks in again,
 /// nothing it reported can resolve on its own, so its open issues close as
-/// `revoked` and its delivery state goes.
+/// `revoked`, its delivery state goes and the agent update it was in goes on
+/// without it.
 pub(crate) async fn retire(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
     crate::groups::remove_device(tx, id).await?;
     crate::rollout::retire_persistent_targets(tx, id).await?;
     crate::issues::resolve_device(tx, id, "revoked").await?;
+    // An agent update it was in goes on without it.
+    crate::agent_update_rollouts::device_revoked(tx, id).await?;
     sqlx::query("DELETE FROM data_plane_state WHERE device_id=?")
         .bind(id)
         .execute(&mut *tx)

@@ -121,6 +121,9 @@ sudo vectory resume
 
 A local pause belongs to the host: the dashboard can't clear it. Resuming clears only the local pause; a pause set in agent settings from the dashboard still applies. Once sync resumes, the agent replaces manual edits with the assigned version.
 
+<!-- verify-after-merge: that `vectory pause` also stops agent updates on the host, from the agent's update step -->
+While the host is paused, it also takes no agent update: it keeps its [update choices](agent-updates.md#what-a-host-agrees-to) and reports that it is paused. `sudo vectory update pause` pauses only updates.
+
 ## Retry a rejected version
 
 The agent doesn't retry a version that failed, so a broken version can't restart Vector in a loop. After you fix the cause on the host, allow one more attempt:
@@ -136,6 +139,8 @@ From the dashboard, **Retry application** on the device does the same for the ve
 ## Upgrade the agent
 
 An agent upgrade replaces one file. It doesn't change Vector, the device's mode or its identity.
+
+To update many devices from the dashboard instead, with a canary and a rollback on each host, turn on [agent updates](agent-updates.md). A host takes them only after it agreed to them in the command you ran on it, and it installs only a build that a key it pinned signed. The steps below are the way to upgrade a host that hasn't agreed, one that can't take an update, and any host on a platform a release doesn't carry.
 
 On Linux and macOS, choose **Upgrade agent** on the device page. If the device already runs this server's build, it says so, for example `edge-01 already runs this build (SHA-256 975c1a33…0e9d19)`. Otherwise it shows one command to run on the device: the **Add device** installer, with no token. The installer checks and replaces the agent, and setup restarts the service on the new build and waits for its first check-in. It prints, for example, `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`.
 
@@ -159,7 +164,7 @@ On the device page, confirm the same device identity, a fresh check-in and the e
 
 ### Upgrade many devices
 
-Vectory doesn't send an agent update to a device: each host replaces its own agent, and an agent never updates itself. To upgrade a fleet without logging in to every host by hand, run the same command from your own tooling:
+Unless a host agreed to [agent updates](agent-updates.md), Vectory doesn't send it an agent update: each host replaces its own agent. To upgrade a fleet without logging in to every host by hand, run the same command from your own tooling:
 
 <!-- steps -->
 1. On a Linux or macOS device's page, choose **Upgrade agent** and copy the command. It holds no token or secret: it names this server's address, its installer's SHA-256 and, for a private certificate authority, that authority's certificate.
@@ -167,6 +172,8 @@ Vectory doesn't send an agent update to a device: each host replaces its own age
 3. Check the result on the **Devices** page. Each device reports its agent version at its next check-in, and a device that already runs this server's build says so in its **Upgrade agent** dialog.
 
 A device that keeps its state outside the default directory, or has no service, gets `--state-dir` or `--service none` in its own command, so copy the command of one device of each kind. Copy it again after you upgrade the server: it carries the installer's checksum, which changes with the server's build. Upgrade a few hosts first and look at them before the rest. On Windows, follow the by-hand steps above with your own deployment tooling.
+
+With agent updates on, this is also how a host agrees to them: the command's **Agent updates** step carries the choice, and running it once is the only visit that host needs. See [A host that was installed without consent](agent-updates.md#a-host-that-was-installed-without-consent).
 
 ## Replace the Vector binary
 

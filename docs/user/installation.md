@@ -105,6 +105,8 @@ The installer and `vectory setup` then:
 
 The token is never part of the URL, the command or the installer script. The command and the installer contain only public values: your server's address, its CA certificate and fingerprint, and the checksums.
 
+While [agent updates](agent-updates.md) are on, **Add device** has an **Agent updates** step before the command. Choose **Automatic (recommended)**, **Ask on the host** or **Off**. Nothing is chosen for you, and the command carries your choice, and the fingerprint of the release key the host will pin, to `vectory setup`. With updates off the step isn't there, and the command is the one shown above. See [What a host agrees to](agent-updates.md#what-a-host-agrees-to).
+
 If you type a device name on **Add device**, the command's token enrolls only that name: a copied command can't enroll a host under another one. The token list shows it as **Only** followed by the name. A token pasted short or mangled is refused on the host before anything is sent.
 
 ### Keep tokens out of shell history
@@ -292,3 +294,4 @@ sudo vectory doctor
 
 - [Deploy your first pipeline](first-pipeline.md) to this device.
 - [Run and maintain agents](agents.md): upgrades, local settings, identity recovery and removal.
+- [Update agents from the dashboard](agent-updates.md): roll out a signed build to hosts that agreed to updates.

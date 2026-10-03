@@ -32,9 +32,10 @@ func (e *Engine) serverSupports(feature string) bool {
 }
 
 // addHeartbeatFeatures adds host runtime, Vector log summaries, rich
-// telemetry, diagnostics, bound secret names and what a check on request needs
-// (validation.go) where the server accepts them. It never mutates persisted
-// state: the heartbeat holds clones.
+// telemetry, diagnostics, bound secret names, what a check on request needs
+// (validation.go) and the report on agent updates (update_report.go) where the
+// server accepts them. It never mutates persisted state: the heartbeat holds
+// clones.
 func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSource, metricsAddress string) {
 	if e.serverSupports(featureSecretNames) {
 		// Names only, at most 64: never a file path or a value.
@@ -88,6 +89,12 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 		h.AgentFeatures = []string{featureValidation}
 		h.Readiness = e.readiness(running)
 		h.ValidationResult = e.validation.pending
+	}
+	// What this host consented to for agent updates and where an offer stands, in
+	// every heartbeat while the server lists the feature, and never again once a
+	// server has refused a heartbeat that carried it (exchange).
+	if e.serverSupports(featureAgentUpdate) && !e.update.memberRefused {
+		h.AgentUpdate = e.agentUpdateReport()
 	}
 }
 

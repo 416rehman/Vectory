@@ -217,6 +217,9 @@ h3,
 .help-nav-refresh-cw {
   --help-nav-icon: url("../assets/icons/refresh-cw.svg");
 }
+.help-nav-circle-arrow-up {
+  --help-nav-icon: url("../assets/icons/circle-arrow-up.svg");
+}
 .sidebar-content a.help-nav-link:hover {
   background: var(--sl-color-gray-6);
 }

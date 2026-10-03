@@ -27,7 +27,7 @@ use sqlx::{Row, SqliteConnection};
 use std::collections::BTreeSet;
 
 /// Event types a channel can ask for, in the order the dashboard lists them.
-pub const EVENTS: [&str; 7] = [
+pub const EVENTS: [&str; 11] = [
     "issue.opened",
     "issue.resolved",
     "rollout.failed",
@@ -35,6 +35,10 @@ pub const EVENTS: [&str; 7] = [
     "canary.paused",
     "device.offline",
     "device.recovered",
+    "agent_update.failed",
+    "agent_update.rolled_back",
+    "agent_update.stopped",
+    "agent_update.key_changed",
 ];
 pub const MAX_CHANNELS: usize = 20;
 pub const DEFAULT_OFFLINE_MINUTES: u64 = 15;

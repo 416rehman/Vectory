@@ -31,6 +31,27 @@ export const notificationEvents = [
     description: "A canary waits because devices stopped delivering.",
   },
   {
+    value: "agent_update.failed",
+    label: "An agent update rollout stopped",
+    description: "An update rollout reached its failure threshold.",
+  },
+  {
+    value: "agent_update.rolled_back",
+    label: "A device rolled back an agent update",
+    description: "A device took its previous agent build back.",
+  },
+  {
+    value: "agent_update.stopped",
+    label: "All agent updates were stopped",
+    description: "Someone used Stop all updates.",
+  },
+  {
+    value: "agent_update.key_changed",
+    label: "The release key changed",
+    description:
+      "Updates were turned on or off, or a key was rotated, rolled over or revoked.",
+  },
+  {
     value: "device.offline",
     label: "Device offline",
     description: "No check-in for longer than you choose.",
@@ -194,6 +215,20 @@ export function rulesSummary(rules: Rules) {
         ? "rollout problems"
         : `${rollouts.join(" and ")} rollouts`,
     );
+  const updates = (
+    [
+      ["agent_update.failed", "failures"],
+      ["agent_update.rolled_back", "rollbacks"],
+      ["agent_update.stopped", "stops"],
+      ["agent_update.key_changed", "key changes"],
+    ] as const
+  ).filter(([event]) => has(event));
+  if (updates.length)
+    parts.push(
+      updates.length === 4
+        ? "agent update events"
+        : `agent update ${updates.map(([, name]) => name).join(" and ")}`,
+    );
   if (has("device.offline"))
     parts.push(
       `offline after ${minutesText(rules.offline_minutes)}${has("device.recovered") ? " and back online" : ""}`,
@@ -224,6 +259,34 @@ export function filtersSummary(rules: Rules) {
       `Quiet ${rules.quiet_hours.start}–${rules.quiet_hours.end} (${rules.quiet_hours.time_zone})`,
     );
   return parts.join(" · ");
+}
+/**
+ * What a pipeline or group filter does to the events of agent updates, said
+ * where the filters are set: none of those events is about a pipeline, and the
+ * two that are about the whole server belong to no group. Empty when the
+ * filters leave every chosen event of agent updates alone.
+ */
+export function updateFilterNotes(
+  events: readonly string[],
+  filters: { pipelines: number; groups: number },
+): string[] {
+  const chosen = events.filter((event) => event.startsWith("agent_update."));
+  if (!chosen.length) return [];
+  if (filters.pipelines > 0)
+    return [
+      chosen.length === 1
+        ? "A pipeline filter matches no agent update event, so this channel won't send it."
+        : "A pipeline filter matches no agent update event, so this channel won't send them.",
+    ];
+  const wholeServer = chosen.filter(
+    (event) =>
+      event === "agent_update.stopped" || event === "agent_update.key_changed",
+  );
+  if (filters.groups > 0 && wholeServer.length)
+    return [
+      `A group filter keeps out ${wholeServer.map((event) => `"${eventLabel(event)}"`).join(" and ")}: an event about the whole server reaches only a channel with no pipeline or group filter.`,
+    ];
+  return [];
 }
 export type StatusView = { tone: StatusTone; label: string; detail: string };
 /** What the list says about a channel's recent deliveries. */

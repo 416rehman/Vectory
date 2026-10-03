@@ -14,7 +14,6 @@ import {
   targetLabel,
   targetTone,
   timelineSteps,
-  type ProgressSegment,
 } from "./deploymentStatus";
 import {
   watchRows,
@@ -28,6 +27,8 @@ import { withStep } from "./pipelineDestination";
 import { Button, StatusBadge, useNow } from "./ui";
 import "./deployment-rollout.css";
 
+/** One mark of a progress bar: its key sets the colour, its label and count the legend. */
+export type BarSegment = { key: string; label: string; count: number };
 function share(count: number, total: number) {
   return total ? `${Math.round((count / total) * 100)}%` : "0%";
 }
@@ -40,16 +41,24 @@ function share(count: number, total: number) {
  */
 export function ProgressBar({
   counts,
+  segments: given,
+  always = ["verified", "failed"],
   stopped = false,
   variant = "full",
   label,
 }: {
-  counts: Record<string, number>;
+  /** A deployment's recorded target states, read as its own segments. */
+  counts?: Record<string, number>;
+  /** Segments already worked out, such as an update rollout's. */
+  segments?: BarSegment[];
+  /** Segments the legend lists even when they count nothing. */
+  always?: string[];
   stopped?: boolean;
   variant?: "full" | "mini";
   label: string;
 }) {
-  const segments = progressSegments(counts, { stopped });
+  const segments: BarSegment[] =
+    given ?? progressSegments(counts ?? {}, { stopped });
   const total = segments.reduce((sum, segment) => sum + segment.count, 0);
   const visible = segments.filter((segment) => segment.count > 0);
   const summary = visible
@@ -83,11 +92,9 @@ export function ProgressBar({
         <ul className="rollout-legend" aria-label={`${label} by state`}>
           {segments
             .filter(
-              (segment) =>
-                segment.count > 0 ||
-                ["verified", "failed"].includes(segment.key),
+              (segment) => segment.count > 0 || always.includes(segment.key),
             )
-            .map((segment: ProgressSegment) => (
+            .map((segment) => (
               <li key={segment.key} data-segment={segment.key}>
                 <span className="rollout-swatch" aria-hidden="true" />
                 <span className="rollout-legend-count">{segment.count}</span>

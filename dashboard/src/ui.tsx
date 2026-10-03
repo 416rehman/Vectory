@@ -823,6 +823,8 @@ export type ShellTab = {
   label: string;
   icon: LucideIcon;
   href: string;
+  /** Listed only while this feature is on, and on its own page. */
+  requires?: "agent-updates";
 };
 export type ShellInfo = {
   sectionLabel: string;
@@ -975,6 +977,21 @@ export function PageHeader({
 }
 function SectionTabs({ shell }: { shell: ShellInfo }) {
   const strip = useRef<HTMLDivElement>(null);
+  // A tab for a feature that is off isn't listed. Only a strip that has such a
+  // tab asks the server, and the answer is shared with every page that reads it.
+  const gated = shell.tabs.some((tab) => tab.requires);
+  const features = useResource<{ enabled: boolean } | null>(
+    gated ? "/agent-updates" : null,
+    null,
+    0,
+    { interval: 60000 },
+  );
+  const tabs = shell.tabs.filter(
+    (tab) =>
+      !tab.requires ||
+      shell.currentTab === tab.id ||
+      features.data?.enabled === true,
+  );
   // Tabs hidden past either end of a strip that scrolls: they fade out there,
   // and a chevron marks the end where more tabs wait.
   const [hidden, setHidden] = useState({ before: false, after: false });
@@ -998,7 +1015,7 @@ function SectionTabs({ shell }: { shell: ShellInfo }) {
       node.removeEventListener("scroll", measure);
       observer?.disconnect();
     };
-  }, [shell.tabs.length]);
+  }, [tabs.length]);
   useEffect(() => {
     // Scroll only the strip. scrollIntoView would also move the sequential
     // focus start, so the first Tab would skip the skip link and the shell.
@@ -1023,7 +1040,7 @@ function SectionTabs({ shell }: { shell: ShellInfo }) {
       data-hidden-after={hidden.after || undefined}
     >
       <div ref={strip} className="page-tabs-strip">
-        {shell.tabs.map((tab) => (
+        {tabs.map((tab) => (
           <a
             key={tab.id}
             href={tab.href}

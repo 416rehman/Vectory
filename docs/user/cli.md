@@ -44,6 +44,7 @@ The `release` verbs keep no agent state, so they take neither flag.
 | [`configure-secrets`](#configure-secrets) | Map `vectory-secret:NAME` references to local files. | Yes |
 | [`re-adopt`](#re-adopt) | Approve a Vector binary you replaced on purpose. | Yes |
 | [`recover-enrollment`](#recover-enrollment) | Replace a lost identity with an administrator's recovery token. | Yes |
+| [`update`](#update) | Show where agent updates stand, apply a staged one, pause, resume or turn them off. | No |
 | [`service-install`, `service-start`, `service-stop`, `service-uninstall`](#service-commands) | Manage the agent's operating-system service. | Varies |
 | [`unenroll`](#unenroll) | Delete this host's credentials. | Yes |
 | [`uninstall`](#uninstall) | Delete the agent's state with `--purge`. | Yes |
@@ -77,6 +78,10 @@ Copy the whole command from **Add device** rather than typing it: it carries you
 | `--adopt-existing` | Adopt the Vector that ran here as it is, although it loaded several files, a directory, includes or configuration chosen by an environment variable. The agent manages only its one JSON file; the others stay where they are, backed up. Can't be combined with `--keep-existing-vector`. |
 | `--dry-run` | Check everything and show the plan without changing anything. |
 | `--no-wake` | Check in on schedule only: turn wake-ups off (see [run](#run)). Saved as a local setting; `--no-wake=false` turns them back on. |
+| `--updates LEVEL` | How this host takes [agent updates](agent-updates.md): `auto`, `ask` or `off`. `auto` and `ask` need `--update-key-sha256`. Leave it out to change nothing. See [Agent updates in setup](#agent-updates-in-setup). |
+| `--update-key-sha256 HEX` | The fingerprint of the release key to pin, as **Add device** shows it: all 64 hexadecimal characters of the SHA-256 of the key's bytes, never a shortened form. Setup reads the keys from the server and pins the one whose fingerprint it computes to be this. Repeat the flag for up to 4 keys. Running setup again with other fingerprints re-pins: it replaces the pinned keys and keeps the host's counter floors. |
+| `--update-track TRACK` | The releases this host takes: `patch` (the default) or `minor`. `major` isn't a track. |
+| `--update-window SPEC` | When an update may start, such as `Mon-Fri 02:00-04:00` or `Sat,Sun 01:00-03:00 UTC`. Repeat the flag for up to 7 windows. Times are the host's own unless `UTC` follows. Without one, any time. |
 | `--json` | Print the result as JSON for scripts. |
 
 If the server's certificates don't match the pin, `setup` stops before sending anything and prints both fingerprints in full, one above the other, with the first byte that differs:
@@ -102,6 +107,42 @@ Ctrl-C while `setup` waits for the first check-in stops only the wait: the servi
 Without a service manager (most containers, WSL, Alpine with OpenRC), `--service auto` has nothing to register. Setup checks in once with a full report, then prints `[!!] Service` with the reason and the exact command that keeps the agent running, such as `/usr/local/bin/vectory run --state-dir /var/lib/vectory-agent`, and exits with code `3`. With `--service none`, the same command is the plan, and setup exits with `0`. `--create-user` needs a service; without one, setup says it created no account. `--dry-run` shows the same **Service** row, and the agent path where the installer puts it.
 
 Run again beside a running `vectory run`, setup says there is nothing to start. If that agent still runs an older build than the one just installed, it says so and how to restart it on the new one.
+
+### Agent updates in setup
+
+A host takes agent updates only when the command that installed or upgraded it says so, once. **Add device** and **Upgrade agent** write these flags for you while the team has agent updates on, and the dashboard can't change what a host consented to afterwards. Without `--updates`, `setup` touches none of it.
+
+```sh
+sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> \
+  --updates auto --update-key-sha256 <64-hex-fingerprint> --update-window 'Mon-Fri 02:00-04:00'
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--updates LEVEL` | `auto` downloads and stages a build when an update rollout reaches the host, then applies it inside the window, if there is one. `ask` stages it and waits for someone on the host to run [`vectory update apply`](#update). `off` withdraws consent, deletes what the agent staged and removes the update step, and keeps the pinned keys. |
+| `--update-key-sha256 HEX` | Required with `auto` or `ask`: the fingerprint of the release key to pin, 64 hexadecimal characters (groups separated by spaces, colons or dashes are fine). Repeat it for up to 4 keys. Giving it again replaces the pinned keys and ends a stop after a fork. |
+| `--update-track TRACK` | `patch` (the default) takes releases with the same major and minor version as the agent that runs. `minor` takes newer minor releases too. `major` is refused: `This release offers patch and minor tracks. Upgrade to a new major version by hand.` |
+| `--update-window SPEC` | When an update may start: `DAYS HH:MM-HH:MM`, optionally followed by `UTC` (otherwise the host's local time). `DAYS` is `daily`, a day (`Mon`), a range (`Mon-Fri`) or a list (`Sat,Sun`). A window that ends before it starts crosses midnight. Repeat it for up to 7 windows. |
+
+Pinning a key lets whoever holds its private half run code as root on this host. Pin only a key you trust with that.
+
+`setup` checks every update flag, and that updates can work on this host, before it changes anything. It stops with the reason and the fix, and no other effect, when:
+
+- there is no service manager, or you passed `--service none`: the update step restarts the agent through its service manager;
+- the agent is installed from a package, which the package manager owns;
+- the operating system's updates are not in this release (`Hosts of this kind update by hand in this release.`);
+- the install directory, the update policy's directory or the update step's directory can be changed by an account other than root (an Administrator on Windows);
+- the server doesn't offer agent updates: `This server doesn't offer agent updates.` Turn them on in **Settings → Agent updates**, or leave out `--updates`.
+
+`setup` finds the key to pin in the server's list of release keys, which it fetches over the connection it already verified, with no token and no client certificate. It computes the SHA-256 of each key itself and pins the one whose fingerprint is the value you passed. The list's own `fingerprint` member is never used for matching, and one that disagrees with its key makes the whole list invalid (`RELEASE_KEY_INVALID`) with nothing pinned. A fingerprint the server doesn't offer fails with the fingerprints it does, in the rows `--ca-sha256` uses, and nothing changes.
+
+After the agent is installed and enrolled and before the service starts, `setup` writes the policy to a file only root can change (`/etc/vectory/updates/policy.json` on Linux, `/Library/Application Support/Vectory/updates/policy.json` on macOS, `%ProgramData%\Vectory\updates\policy.json` on Windows) and installs the update step. If that fails, the message says what was saved and what wasn't, and running the same command again resumes. A pause set with [`vectory update pause`](#update) survives running `setup` again.
+
+```text
+[ok] Updates      automatic · patch releases · Mon–Fri 02:00–04:00 · key 3f9a1c0277de9b41 (pinned)
+```
+
+`--dry-run` plans the step without asking the server for its keys: `Would turn on updates: automatic · patch releases · any time · key 3f9a1c0277de9b41.` With `--json`, `updates` holds `consent`, `track`, `windows` and `keys`.
 
 ## install
 
@@ -182,6 +223,14 @@ Vector stopped after 3.2 s.
 
 When Vector doesn't finish in time, the last line is `Drain limit reached after 60 s; Vector was terminated before it finished its in-flight events.`
 
+When an update rollout reaches a host that consented to agent updates, the agent says what it does with the offer, once for each step: it downloads the build, stages it for the update step, refuses it with the code the dashboard shows, or deletes what it staged because the server withdrew the offer.
+
+```text
+Downloading agent update 0.1.1 (14.5 MB).
+Agent update 0.1.1 (14.5 MB) is staged. The update step applies it within a minute.
+Agent update 0.1.2 was refused (KEY_NOT_PINNED): no key this host pins signed it.
+```
+
 A check-in that keeps failing for the same reason, such as a revoked device or a server that is down, is logged when it starts and again if the reason changes, not at every retry. `vectory status` says since when.
 
 ## status
@@ -205,7 +254,17 @@ Wake-ups   on · a new version or setting reaches this device within seconds
 - **Check-in** is the last successful check-in plus the interval of the device's agent settings: `next due in 48 s (every minute)`, or `overdue by 35 s (every minute)` when it has passed. The agent adds up to 20% of random spacing, so a few seconds late is normal. It shows only while the agent runs.
 - **Wake-ups** reads `on`, `off · turned off on this host` ([turn them back on](agents.md#turn-off-wake-ups)), `off · this run was started with --no-wake`, `paused while check-ins fail`, or `not getting through` when the last request failed and the agent keeps its schedule. It is absent when the server doesn't hold wake-ups or the agent isn't running.
 
-With `--json`, the keys `running_pipeline` (`name`, `version_number`, `version_id`, `generation`), `check_in` (`interval_seconds`, `last_at`, `next_due_at`, and `due_in_seconds` or `overdue_by_seconds`) and `wake_ups` (`listening`, and `reason` when it isn't) are added. Each is present only when the agent has something true to say, and every key `status --json` always had is unchanged.
+- **Updates** says what the host consented to for agent updates, or what needs attention first. It reads `off on this host` when the host never consented. See [`update`](#update).
+
+```text
+Updates    automatic · patch releases · Mon–Fri 02:00–04:00 (next in 6 h) · key 3f9a1c0277de9b41
+Updates    staged 0.1.1, waiting for you: sudo vectory update apply
+Updates    0.1.0 → 0.1.1 at 02:14 · first check-in 2.1 s after restart
+Updates    rolled back from 0.1.1 at 02:19: it didn't check in within 5 minutes; this host won't try 0.1.1 again
+Updates    off on this host
+```
+
+With `--json`, the keys `running_pipeline` (`name`, `version_number`, `version_id`, `generation`), `check_in` (`interval_seconds`, `last_at`, `next_due_at`, and `due_in_seconds` or `overdue_by_seconds`), `wake_ups` (`listening`, and `reason` when it isn't) and `updates` (the document [`update status --json`](#update-status) prints) are added. Each is present only when the agent has something true to say, and every key `status --json` always had is unchanged.
 
 When Vector's own log shows a sink failing requests in the last minute, `status` says so under **Vector**, and **Next** says what to check instead of "Nothing to do":
 
@@ -226,6 +285,8 @@ Check the local setup and the connection to the server, and print a fix for each
 ```sh
 sudo vectory doctor
 ```
+
+For a host that consented to agent updates it also checks that the update policy can be trusted, that the update step ran in the last two minutes, that the host can take a build (the step's own answer, such as `PACKAGE_MANAGED` or `READ_ONLY`, with the fix), that no pinned key is stopped by a fork, whether a build waits for someone on the host, and how the last update ended. A host that never consented gets one line saying so.
 
 ## logs
 
@@ -341,6 +402,100 @@ sudo vectory recover-enrollment
 
 A request the server refused, or that never left this host, doesn't hold back the next token: run the command again with a new one. A request that may have reached the server does, because it may have issued the new identity: run the command again with the same token.
 
+## update
+
+The host's side of [agent updates](agent-updates.md): show where they stand on this host, and do the few things a person here can do about them. A host takes agent updates only when it consented to them, once, in [`setup`](#agent-updates-in-setup); the dashboard can't change that. Every verb but `status` needs root (an Administrator, from an elevated PowerShell, on Windows) and prints the exact command to run when it doesn't have it.
+
+```sh
+sudo vectory update status
+sudo vectory update apply
+sudo vectory update pause
+sudo vectory update resume
+sudo vectory update off
+```
+
+| Verb | What it does |
+| --- | --- |
+| [`status`](#update-status) | Shows the host's consent, the releases it takes, its windows, the keys it pins, what it is doing now and how its last update ended. |
+| [`apply`](#update-apply) | Installs the build a host set to **Ask on the host** has staged. |
+| [`pause`, `resume`](#update-pause-and-resume) | Keeps the host's choices and stops every download and install until `resume`. |
+| [`off`](#update-off) | Withdraws consent: the staged build is deleted and the update step is removed. |
+
+Each verb takes the flags every command takes, `--state-dir` and `--json`. The commands these verbs print for you to run include `--state-dir` when your directory isn't the default.
+
+### update status
+
+Read the policy, what the update step last wrote and what the agent staged, and print where updates stand. It changes nothing. On a default install the agent's state directory is private to its account, so run it with `sudo`.
+
+```text
+Updates      automatic · patch releases · Mon–Fri 02:00–04:00 (next in 6 h) · key 3f9a1c0277de9b41
+Key          3f9a1c0277de9b41 · team · pinned 3 Oct 2026 12:30
+Eligibility  this host can take updates
+Update step  running · last ran 12 s ago · service definition 1
+Staged       0.1.1 (14.5 MB) · offered 01:58
+```
+
+| Row | Says |
+| --- | --- |
+| **Updates** | The level (`automatic`, `ask on this host` or `off`), the track, the windows with whether one is open now or when the next one opens, and the pinned keys by short ID. A pause shows after it, with the command that lifts it. |
+| **Key** | One row for each pinned key: its short ID, its name and when it was pinned. |
+| **Eligibility** | Whether this host can take an update and, when it can't, why, with the code: `PACKAGE_MANAGED`, `NO_SERVICE`, `UNTRUSTED_LOCATION`, `READ_ONLY`, `HELPER_NOT_RUNNING`, `SERVICE_DEFINITION_OUTDATED` or `PLATFORM_NOT_IN_RELEASE`. |
+| **Update step** | Whether the update step ran in the last two minutes (it runs every 30 seconds), and when. |
+| **Stopped** | Two successors of a pinned key were seen (a fork), with their short IDs. The host takes no update until it is pinned again with `setup --update-key-sha256`. |
+| **In progress** | A build being applied, tried (with when the trial ends) or taken back. |
+| **Staged** | The build the agent staged for the update step, and when it was offered. |
+| **Last result** | How the last update ended, such as `rolled back from 0.1.1 at 02:19: it didn't check in within 5 minutes; this host won't try 0.1.1 again`. |
+
+With `--json`, `status` prints one document: `state_dir`, `consent`, `paused`, `local_pause`, `track`, `windows`, `window_open`, `next_window_at`, `keys` (each with `fingerprint`, `short_id`, `name` and `pinned_at`), `policy_problem`, `eligibility`, `step`, `staged`, `in_progress`, `last`, `rollover_conflict` and `line`, the text `vectory status` shows. Every member is present, `null` where nothing applies.
+
+### update apply
+
+For a host that asks first (`--updates ask`): apply the build the agent staged now, in the foreground, through the same update step, and print each step. It shows what the agent last reported about the offer before it starts.
+
+| Flag | Meaning |
+| --- | --- |
+| `--force` | Apply although the agent's last report says the offer is gone or is more than 5 minutes old. It asks you to confirm on a terminal, and refuses without one. |
+
+```text
+Staged: 0.1.1 (14.5 MB), offered 5 Oct 01:58.
+The agent reported 12 s ago (02:13) that the server offers 0.1.1.
+  <each step the update step takes>
+Updated: 0.1.0 → 0.1.1 at 02:14 · first check-in 2.1 s after restart.
+The dashboard shows this device as updated once the server has seen the new build check in.
+```
+
+When the report says the server no longer offers the build (a paused or cancelled rollout, or **Stop all updates**) or is more than 5 minutes old, `apply` refuses, says what the report said and how old it is, and says to run it again with `--force` if you know the offer stands. Check **Devices → Agent updates** first. That check is advice: the report is a file the agent's account writes. Whatever you confirm, the update step verifies the signed release, the pinned keys and this host's policy again before it installs anything.
+
+`apply` also refuses, with the reason, when updates are off, when the policy can't be used, when updates or `vectory pause` hold the host, when nothing is staged and when the staged build isn't complete. What it prints at the end is what the update step recorded: a build that was taken back says so and exits `1`.
+
+### update pause and resume
+
+`pause` keeps what the host consented to and stops every download and apply until you `resume`. It takes effect at the agent's next check-in, with no restart. A build the update step is already applying finishes. `vectory pause`, which holds back every change on the host, is separate, and `resume` says when it still holds updates back.
+
+```text
+Paused. The agent stops downloading and applying agent updates at its next check-in; no restart is needed. A build the update step is already applying finishes.
+Resume with: sudo vectory update resume
+```
+
+```text
+Resumed. At its next check-in the agent downloads and applies updates again, inside its window.
+```
+
+Both say `Nothing changed.` when the host is already in that state, and say so when updates are off.
+
+### update off
+
+Withdraw this host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned keys stay, so the **Upgrade agent** command with `--updates` turns updates on again.
+
+```text
+Agent updates are off on this host: the policy says off, the staged build is deleted, the update step is removed.
+The pinned key is kept. To turn updates on again, run the Upgrade agent command with --updates.
+```
+
+It refuses while the update step applies or tries a build, and says when that ends: `vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that`.
+
+A host's level, releases, windows and pinned keys change only when someone runs `setup` again on it: the **Upgrade agent** command carries them. Nothing the server sends changes them.
+
 ## Service commands
 
 | Command | Meaning |
@@ -404,7 +559,7 @@ Create a release key. The private half goes in the file you name, which `keygen`
 | Flag | Meaning |
 | --- | --- |
 | `--out FILE` | Required. The file for the private key. It must not exist, and a link in its place is refused. |
-| `--name NAME` | The display name in the public key line, 1 to 64 printable ASCII characters without a quotation mark or a backslash, and not starting or ending with a space. Default `release`. |
+| `--name NAME` | The display name in the public key line, 1 to 64 printable ASCII characters without a quotation mark or a backslash, and not starting or ending with a space. Default `release-` and the first 8 characters of the fingerprint, the name a key the server makes gets, so a public key line doesn't say who holds the private key. |
 
 ```text
 Wrote the private key to team.key, closed to other accounts.

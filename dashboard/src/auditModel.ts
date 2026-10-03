@@ -105,6 +105,24 @@ export const auditActions: Record<string, string> = {
   "signing.device_ca.rotate.prepare": "Device CA rotation prepared",
   "signing.device_ca.rotate": "Device CA rotated",
   "signing.device_ca.retire": "Previous device CA retired",
+  "agent_update.enable": "Agent updates turned on",
+  "agent_update.disable": "Agent updates turned off",
+  "agent_update.stop": "All agent updates stopped",
+  "agent_update.stop_clear": "Agent update stop cleared",
+  "agent_release_key.rotate": "Release key rotated",
+  "agent_release_key.rollover": "Release key rolled over",
+  "agent_release_key.revoke": "Release key revoked",
+  "agent_release.prepare": "Agent release prepared",
+  "agent_release.sign": "Agent release signed",
+  "agent_release.signature_upload": "Release signature uploaded",
+  "agent_release.withdraw": "Agent release withdrawn",
+  "agent_update_rollout.create": "Agent update rollout started",
+  "agent_update_rollout.pause": "Agent update rollout paused",
+  "agent_update_rollout.resume": "Agent update rollout resumed",
+  "agent_update_rollout.cancel": "Agent update rollout cancelled",
+  "agent_update_rollout.release": "Agent update rollout released a stage",
+  "agent_update_rollout.gate": "Agent update rollout gate checked",
+  "device.agent_update": "Device agent update",
 };
 
 export const auditFamilies: Record<string, string> = {
@@ -122,6 +140,10 @@ export const auditFamilies: Record<string, string> = {
   vrl: "VRL tests",
   notification: "Notifications",
   detection: "Detection thresholds",
+  agent_update: "Agent updates",
+  agent_release_key: "Release keys",
+  agent_release: "Agent releases",
+  agent_update_rollout: "Agent update rollouts",
 };
 
 export function auditActionLabel(action: string) {
@@ -310,6 +332,7 @@ export function auditResourceRoute(
     configuration: "configurations",
     deployment: "deployments",
     issue: "issues",
+    agent_update_rollout: "agent-updates",
   };
   return prefix[kind || ""]
     ? `${prefix[kind || ""]}/${id.toLowerCase()}`

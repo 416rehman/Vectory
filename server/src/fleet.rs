@@ -11,7 +11,7 @@
 //! read, so a caller always sees its own writes; heartbeats and scheduler
 //! ticks show up within `TTL`. Rows a page shows are read fresh.
 use crate::{
-    State, api, auth,
+    State, agent_updates, api, auth,
     deployment_history::query,
     error::{ApiError, Result},
     rollout,
@@ -294,6 +294,8 @@ struct Entry {
     running_version_id: Option<String>,
     pipeline: Option<String>,
     vector_version: Option<String>,
+    /// The agent version as the device reported it.
+    agent_version: Option<String>,
     /// Lowercased search text: the device's own fields, then its groups.
     search: String,
     /// Length of the device's own part of `search`.
@@ -384,6 +386,7 @@ impl Entry {
             running_version_id: running.map(str::to_owned),
             pipeline,
             vector_version: field("vector_version").map(str::to_owned),
+            agent_version: field("agent_version").map(str::to_owned),
             search,
             own,
             groups,
@@ -1151,6 +1154,8 @@ pub struct InventoryQuery {
     version: Option<String>,
     desired_version: Option<String>,
     running_version: Option<String>,
+    agent_update: Option<String>,
+    agent_version: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 }
@@ -1164,6 +1169,8 @@ impl InventoryQuery {
             version: self.version,
             desired_version: self.desired_version,
             running_version: self.running_version,
+            agent_update: self.agent_update,
+            agent_version: self.agent_version,
             sort: self.sort,
             dir: self.dir,
         }
@@ -1180,6 +1187,8 @@ pub struct FilterQuery {
     version: Option<String>,
     desired_version: Option<String>,
     running_version: Option<String>,
+    agent_update: Option<String>,
+    agent_version: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 }
@@ -1205,6 +1214,11 @@ struct Filter {
     version: Option<String>,
     desired_version: Option<String>,
     running_version: Option<String>,
+    /// The update level asked for, and, once read, the devices at it.
+    agent_level: Option<&'static str>,
+    agent_devices: Option<BTreeSet<String>>,
+    /// The agent version as reported, exactly.
+    agent_version: Option<String>,
     sort: Sort,
     descending: bool,
 }
@@ -1249,6 +1263,26 @@ impl Filter {
             }
             value => value.map(str::to_owned),
         };
+        let agent_level = match given(&input.agent_update) {
+            None => None,
+            Some(value) => Some(
+                agent_updates::LEVELS
+                    .iter()
+                    .find(|level| **level == value)
+                    .copied()
+                    .ok_or_else(|| {
+                        ApiError::invalid(
+                            "agent_update must be automatic, ask, off, cannot_update or not_reported",
+                        )
+                    })?,
+            ),
+        };
+        let agent_version = match given(&input.agent_version) {
+            Some(value) if value.len() > 128 => {
+                return Err(ApiError::invalid("agent_version must be at most 128 bytes"));
+            }
+            value => value.map(str::to_owned),
+        };
         let sort = match given(&input.sort).unwrap_or("name") {
             "name" => Sort::Name,
             "status" => Sort::Status,
@@ -1277,9 +1311,23 @@ impl Filter {
             version,
             desired_version: uuid(input.desired_version.as_deref(), "desired_version")?,
             running_version: uuid(input.running_version.as_deref(), "running_version")?,
+            agent_level,
+            agent_devices: None,
+            agent_version,
             sort,
             descending,
         })
+    }
+    /// Reads who is at the update level asked for, now, from each device's
+    /// latest report: `404 AGENT_UPDATES_OFF` while updates are off, as no device
+    /// has a level then. Nothing is read when no level was asked for.
+    async fn read_levels(&mut self, s: &State) -> Result<()> {
+        if let Some(level) = self.agent_level {
+            agent_updates::guard(s).await?;
+            let mut conn = s.pool.acquire().await?;
+            self.agent_devices = Some(agent_updates::devices_at(&mut conn, level).await?);
+        }
+        Ok(())
     }
     /// The search and scope filters, which the counts follow.
     fn scope(&self, snapshot: &Snapshot, entry: &Entry) -> bool {
@@ -1302,6 +1350,14 @@ impl Filter {
                 .running_version
                 .as_ref()
                 .is_none_or(|version| entry.running_version_id.as_ref() == Some(version))
+            && self
+                .agent_version
+                .as_ref()
+                .is_none_or(|version| entry.agent_version.as_ref() == Some(version))
+            && self
+                .agent_devices
+                .as_ref()
+                .is_none_or(|devices| devices.contains(&entry.id))
     }
     /// The status and view chips. Revoked devices appear only for status=revoked.
     fn chips(&self, entry: &Entry) -> bool {
@@ -1399,7 +1455,8 @@ pub async fn inventory(
     let reader = auth::authorize(&s, &headers, &[], false).await?;
     let input = query(raw.as_deref(), parsed)?;
     let (page, size, offset) = page_bounds(input.page, input.page_size)?;
-    let filter = Filter::parse(&input.filters())?;
+    let mut filter = Filter::parse(&input.filters())?;
+    filter.read_levels(&s).await?;
     let snapshot = s.fleet.snapshot(&s.pool, &reader).await?;
     let (matching, counts) = filter.select(&snapshot);
     let shown: Vec<&Entry> = matching
@@ -1436,7 +1493,8 @@ pub async fn inventory_ids(
 ) -> Result<Json<Value>> {
     let reader = auth::authorize(&s, &headers, &[], false).await?;
     let input = query(raw.as_deref(), parsed)?;
-    let filter = Filter::parse(&input)?;
+    let mut filter = Filter::parse(&input)?;
+    filter.read_levels(&s).await?;
     let snapshot = s.fleet.snapshot(&s.pool, &reader).await?;
     let (matching, _) = filter.select(&snapshot);
     Ok(Json(ids_page(&snapshot, &matching, MAX_IDS)))
@@ -1647,12 +1705,21 @@ mod tests {
             json!({"desired_version":"00000000-0000-4000-8000-00000000000A"}),
             json!({"q":"x".repeat(101)}),
             json!({"version":"9".repeat(65)}),
+            json!({"agent_update":"Automatic"}),
+            json!({"agent_update":"on"}),
+            json!({"agent_version":"9".repeat(129)}),
         ] {
             assert!(filter(bad.clone()).is_err(), "{bad}");
         }
         assert!(filter(json!({"q":"%_[]\\'".repeat(10)})).is_ok());
-        let empty = filter(json!({"status":"","view":"","sort":"","dir":"","group":""})).unwrap();
+        for level in agent_updates::LEVELS {
+            let asked = filter(json!({ "agent_update": level })).unwrap();
+            assert_eq!(asked.agent_level, Some(level));
+        }
+        assert!(filter(json!({"agent_version":"9".repeat(128)})).is_ok());
+        let empty = filter(json!({"status":"","view":"","sort":"","dir":"","group":"","agent_update":"","agent_version":""})).unwrap();
         assert!(empty.status.is_none() && empty.view.is_none() && empty.group.is_none());
+        assert!(empty.agent_level.is_none() && empty.agent_version.is_none());
         assert!(filter(json!({"sort":"last_seen"})).unwrap().descending);
         assert!(
             !filter(json!({"sort":"last_seen","dir":"asc"}))
