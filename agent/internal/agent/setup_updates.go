@@ -528,7 +528,7 @@ func (r *setupRun) applyUpdates(plan *updatePlan, agentPath, dir string) error {
 	}
 	words := UpdatePolicyWords(policy) + " (pinned)"
 	if policy.Paused {
-		words += " · paused on this host: " + CommandFor(dir, "sudo vectory update resume")
+		words += " · paused on this host: " + AdminCommandFor(dir, "vectory update resume")
 	}
 	r.add("updates", "ok", "Updates", words, "")
 	r.result.Updates = &SetupUpdates{Consent: policy.Consent, Track: policy.Track, Windows: policy.Windows, Keys: policy.Fingerprints(), Paused: policy.Paused}
@@ -625,7 +625,7 @@ func (r *setupRun) amendUpdates(plan *updatePlan, agentPath, dir string) error {
 		words += " · changed: " + quoteList(parts)
 	}
 	if now.Paused {
-		words += " · paused on this host: " + CommandFor(dir, "sudo vectory update resume")
+		words += " · paused on this host: " + AdminCommandFor(dir, "vectory update resume")
 	}
 	r.add("updates", "ok", "Updates", words, "")
 	r.result.Updates = &SetupUpdates{Consent: now.Consent, Track: now.Track, Windows: now.Windows, Keys: now.Fingerprints(), Paused: now.Paused}

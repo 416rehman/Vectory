@@ -151,7 +151,7 @@ func TestAnAskHostStagesAndWaitsForTheHost(t *testing.T) {
 	if _, err := ReadUpdateRequest(rig.exchange().Request); err != nil {
 		t.Fatal(err)
 	}
-	if !rig.said1("is staged, and waits for you: sudo vectory update apply --state-dir") {
+	if !rig.said1("is staged, and waits for you: " + asAdmin("vectory update apply") + " --state-dir") {
 		t.Fatalf("the log said %q", rig.said)
 	}
 }
@@ -245,10 +245,11 @@ func TestHealthIsNotWrittenForACheckInThatWasNotAnswered(t *testing.T) {
 // A host whose consent is off, or whose policy this agent may not trust, reports
 // that and does nothing else: no download, no file, not even a directory.
 func TestAHostThatIsOffMakesNothingAnywhere(t *testing.T) {
-	for name, setup := range map[string]func(*offerRig){
-		"consent off with its key kept": func(r *offerRig) { r.consent(UpdateConsentOff) },
-		"no policy at all":              func(r *offerRig) { _ = os.RemoveAll(r.paths.PolicyDir) },
-		"a policy in a directory others can write": func(r *offerRig) {
+	// Each setup gets the test of its own case: it may skip it or fail it.
+	for name, setup := range map[string]func(*testing.T, *offerRig){
+		"consent off with its key kept": func(t *testing.T, r *offerRig) { r.consent(UpdateConsentOff) },
+		"no policy at all":              func(t *testing.T, r *offerRig) { _ = os.RemoveAll(r.paths.PolicyDir) },
+		"a policy in a directory others can write": func(t *testing.T, r *offerRig) {
 			if runtime.GOOS == "windows" {
 				t.Skip("the Windows rule is tested by the path check")
 			}
@@ -264,7 +265,7 @@ func TestAHostThatIsOffMakesNothingAnywhere(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rig := newOfferRig(t)
-			setup(rig)
+			setup(t, rig)
 			for i := 0; i < 3; i++ {
 				rig.poll()
 			}

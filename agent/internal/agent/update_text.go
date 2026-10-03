@@ -69,6 +69,19 @@ func UpdatePolicyWords(p UpdatePolicy) string {
 	return strings.Join([]string{UpdateConsentWords(p.Consent), UpdateTrackWords(p.Track), UpdateWindowsWords(p.Windows), UpdateKeysWords(p.PinnedKeys())}, " · ")
 }
 
+// AdminCommandFor is CommandFor for a command that needs root. words is the
+// command as it is written on every system ("vectory update resume"). On Linux and
+// macOS a person runs it with sudo, so it is printed with it; on Windows a person
+// runs it from an elevated PowerShell, where sudo isn't how it is run, so it is
+// printed without. Either way the state directory is named, quoted for the shell
+// of the system, when it isn't the default one.
+func AdminCommandFor(dir, words string) string {
+	if runtime.GOOS != "windows" {
+		words = "sudo " + words
+	}
+	return CommandFor(dir, words)
+}
+
 // platformName is an operating system as a person names it.
 func platformName(goos string) string {
 	switch goos {

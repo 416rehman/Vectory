@@ -116,14 +116,11 @@ func (e updateEnv) needRoot(c *cli, verb string) (int, bool) {
 	if e.elevated() {
 		return exitOK, true
 	}
-	words := "vectory update " + verb
 	how := "Run it with sudo: "
 	if runtime.GOOS == "windows" {
 		how = "Run it from an elevated PowerShell: "
-	} else {
-		words = "sudo " + words
 	}
-	return c.fail(errors.New("this changes what only an administrator can change. " + how + agent.CommandFor(*c.state, words))), false
+	return c.fail(errors.New("this changes what only an administrator can change. " + how + agent.AdminCommandFor(*c.state, "vectory update "+verb))), false
 }
 
 func printUpdateRows(w io.Writer, rows []agent.UpdateRow) {
@@ -215,7 +212,7 @@ func (e updateEnv) defineApply(c *cli) func() int {
 		switch outcome {
 		case "":
 			if human {
-				fmt.Fprintf(c.stdout, "Done. %s shows how it went.\n", agent.CommandFor(dir, "sudo vectory update status"))
+				fmt.Fprintf(c.stdout, "Done. %s shows how it went.\n", agent.AdminCommandFor(dir, "vectory update status"))
 			}
 		case agent.UpdateOutcomeCommitted:
 			if human {
@@ -257,11 +254,11 @@ func applyBlocker(dir string, view agent.UpdateView) error {
 	case view.Policy.Consent == agent.UpdateConsentOff:
 		return errors.New("updates are off on this host. Turn them on with the Upgrade agent command from the dashboard")
 	case view.Policy.Paused:
-		return errors.New("updates are paused on this host. Resume them first: " + agent.CommandFor(dir, "sudo vectory update resume"))
+		return errors.New("updates are paused on this host. Resume them first: " + agent.AdminCommandFor(dir, "vectory update resume"))
 	case view.LocalPaused:
-		return errors.New("vectory pause holds back every change on this host, updates included. Resume it first: " + agent.CommandFor(dir, "sudo vectory resume"))
+		return errors.New("vectory pause holds back every change on this host, updates included. Resume it first: " + agent.AdminCommandFor(dir, "vectory resume"))
 	case view.Staged == nil:
-		return errors.New("nothing is staged on this host. The agent stages a build when an update rollout reaches it; " + agent.CommandFor(dir, "sudo vectory update status") + " shows where things stand")
+		return errors.New("nothing is staged on this host. The agent stages a build when an update rollout reaches it; " + agent.AdminCommandFor(dir, "vectory update status") + " shows where things stand")
 	case !view.Staged.Complete:
 		return errors.New("the staged build isn't complete: the agent is still downloading it. Try again in a minute")
 	}
@@ -304,11 +301,11 @@ func (e updateEnv) definePause(pause bool) func(c *cli) func() int {
 				return c.fail(err)
 			}
 			if pause {
-				return say(true, "Paused. The agent stops downloading and applying agent updates at its next check-in; no restart is needed. A build the update step is already applying finishes.\nResume with: "+agent.CommandFor(dir, "sudo vectory update resume"))
+				return say(true, "Paused. The agent stops downloading and applying agent updates at its next check-in; no restart is needed. A build the update step is already applying finishes.\nResume with: "+agent.AdminCommandFor(dir, "vectory update resume"))
 			}
 			message := "Resumed. At its next check-in the agent downloads and applies updates again" + map[bool]string{true: ", inside its window.", false: "."}[len(view.Policy.Windows) > 0]
 			if view.LocalPaused {
-				message += "\nvectory pause is also in force and still holds updates back: " + agent.CommandFor(dir, "sudo vectory resume")
+				message += "\nvectory pause is also in force and still holds updates back: " + agent.AdminCommandFor(dir, "vectory resume")
 			}
 			return say(true, message)
 		}

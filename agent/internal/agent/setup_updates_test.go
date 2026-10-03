@@ -72,25 +72,43 @@ type consentFixture struct {
 }
 
 // serviceAccountForTests is an unprivileged account the service step can name:
-// setup checks the account exists, and that it can run Vector.
+// setup checks that the account exists, and that it can run Vector, as it would
+// for any account.
+//
+// Run by anyone but root, the account is the one that runs the tests. It owns
+// everything the fixture builds, so what other accounts may do in the temporary
+// directory decides nothing (macOS keeps the temporary directory private to its
+// user, and a stranger would be refused there for good reason). Run as root, the
+// account is nobody, whom setup really starts Vector as; for that the temporary
+// directory has to be open to other accounts.
 func serviceAccountForTests(t *testing.T) string {
 	t.Helper()
-	switch runtime.GOOS {
-	case "windows":
+	if runtime.GOOS == "windows" {
 		return ""
+	}
+	if os.Geteuid() != 0 {
+		current, err := user.Current()
+		if err != nil || CheckServiceAccountName(current.Username) != nil {
+			t.Skipf("setup with a service needs an account to name, and the account that runs the tests can't be one: %v", err)
+		}
+		return current.Username
 	}
 	if _, err := user.Lookup("nobody"); err != nil {
 		t.Skip("setup with a service needs an unprivileged account to name, and this host has no nobody")
 	}
+	if problem := accountAccessProblem(context.Background(), "nobody", os.TempDir(), false); problem != "" {
+		t.Skipf("the temporary directory isn't open to the account the service runs as: %s", problem)
+	}
 	return "nobody"
 }
 
-// openTo makes every directory from path up to the temporary directory
-// searchable by everyone, so that the service account can reach what setup
-// checks that it can run.
+// openTo makes every directory from path up to the temporary directory (not
+// including it, which isn't the test's to change) searchable by everyone, so
+// that nobody can reach what setup checks that it can run.
 func openTo(t *testing.T, path string) {
 	t.Helper()
-	for p := path; p != filepath.Dir(p) && p != os.TempDir(); p = filepath.Dir(p) {
+	stop := filepath.Clean(os.TempDir())
+	for p := filepath.Clean(path); p != filepath.Dir(p) && p != stop; p = filepath.Dir(p) {
 		_ = os.Chmod(p, 0o755)
 	}
 }
@@ -423,21 +441,21 @@ func TestSetupRefusesAKeyThatBreaksTheKeyRule(t *testing.T) {
 // the words it says them in.
 func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 	for name, tc := range map[string]struct {
-		prepare func(f *consentFixture)
+		// prepare gets the test of its own case: it may skip it or fail it.
+		prepare func(t *testing.T, f *consentFixture)
 		detail  string
 		fix     string
 	}{
 		"--service none": {
-			prepare: func(f *consentFixture) { f.options.Service = "none" },
+			prepare: func(t *testing.T, f *consentFixture) { f.options.Service = "none" },
 			detail:  "Agent updates need a service. The update step restarts the agent through its service manager, and --service none leaves that to you.",
 			fix:     "Leave out --updates, or leave out --service none.",
 		},
 		"no service manager": {
-			prepare: func(f *consentFixture) {
+			prepare: func(t *testing.T, f *consentFixture) {
 				f.host.systemd = func() bool { return false }
 				f.host.why = func() string { return "systemd isn't running in this container" }
 				if runtime.GOOS != "linux" {
-					f.options.Service = "none"
 					t.Skip("--service auto finds launchd or the Windows service manager elsewhere")
 				}
 			},
@@ -445,17 +463,17 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 			fix:    "Leave out --updates here, or run the agent on a host that has a service manager.",
 		},
 		"an operating system whose updates are not in this release": {
-			prepare: func(f *consentFixture) { f.eligibility = "PLATFORM_NOT_IN_RELEASE" },
+			prepare: func(t *testing.T, f *consentFixture) { f.eligibility = "PLATFORM_NOT_IN_RELEASE" },
 			detail:  "Agent updates aren't in this release for " + platformName(runtime.GOOS) + ". Hosts of this kind update by hand in this release.",
 			fix:     "Leave out --updates, and upgrade this host with the Upgrade agent command when a new agent is out.",
 		},
 		"a package-managed agent": {
-			prepare: func(f *consentFixture) { f.eligibility = "PACKAGE_MANAGED" },
+			prepare: func(t *testing.T, f *consentFixture) { f.eligibility = "PACKAGE_MANAGED" },
 			detail:  "This agent is installed from a package, and the package manager owns its file.",
 			fix:     "Leave out --updates, and upgrade it with the package manager.",
 		},
 		"an install directory others can write": {
-			prepare: func(f *consentFixture) {
+			prepare: func(t *testing.T, f *consentFixture) {
 				dir := filepath.Dir(f.agent)
 				if err := os.MkdirAll(dir, 0o755); err != nil {
 					t.Fatal(err)
@@ -468,7 +486,7 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 			fix:    "Install the agent in a directory only root can write, such as " + DefaultPaths().Binary + ", then run the command again. Or leave out --updates.",
 		},
 		"a policy directory others can write": {
-			prepare: func(f *consentFixture) {
+			prepare: func(t *testing.T, f *consentFixture) {
 				if err := os.MkdirAll(f.paths.PolicyDir, 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -483,7 +501,7 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newConsentFixture(t)
 			f.consent(UpdateConsentAuto, f.key)
-			tc.prepare(f)
+			tc.prepare(t, f)
 			result, err := f.run()
 			var failed *SetupError
 			if !errors.As(err, &failed) || failed.Step.ID != "updates" || result.OK {
@@ -658,7 +676,7 @@ func TestSetupAgainReplacesThePinSetAndKeepsAPause(t *testing.T) {
 	if got := policy.Fingerprints(); len(got) != 1 || got[0] != next.Fingerprint() || !policy.Paused {
 		t.Fatalf("%+v", policy)
 	}
-	if want := "automatic · patch releases · any time · key " + next.ShortID() + " (pinned) · paused on this host: sudo vectory update resume --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
+	if want := "automatic · patch releases · any time · key " + next.ShortID() + " (pinned) · paused on this host: " + asAdmin("vectory update resume") + " --state-dir " + ShellQuote(f.dir); lastUpdatesStep(t, result).Detail != want {
 		t.Fatalf("%q want %q", lastUpdatesStep(t, result).Detail, want)
 	}
 	// The same flags again change nothing in the policy file, and keep when each

@@ -139,7 +139,7 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 		{
 			name: "a service that doesn't run this agent",
 			view: UpdateView{StateDir: "/srv/agent state", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), Status: step(func(s *UpdateStatus) { s.Eligibility = "NO_SERVICE" }), StepRunning: true, Eligibility: "NO_SERVICE"},
-			want: map[string]verdict{"updates-host": {"fail", "no service manager runs this agent, or the registered service doesn't run this executable for this state directory (NO_SERVICE).", "sudo vectory service-install --state-dir '/srv/agent state'"}},
+			want: map[string]verdict{"updates-host": {"fail", "no service manager runs this agent, or the registered service doesn't run this executable for this state directory (NO_SERVICE).", asAdmin("vectory service-install") + " --state-dir '/srv/agent state'"}},
 		},
 		{
 			name: "an operating system whose updates are not in this release",
@@ -155,7 +155,7 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 			name: "a build waiting for someone on an ask host",
 			view: UpdateView{StateDir: "/srv/agent state", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAsk), Status: step(nil), StepRunning: true, Eligibility: UpdateEligible,
 				Staged: &StagedUpdate{ManifestSHA256: strings.Repeat("a", 64), OfferedAt: now.Add(-time.Hour), Version: "0.1.1", Complete: true}},
-			want: map[string]verdict{"updates-staged": {"info", "Staged 0.1.1, offered 19:00, and waiting for someone on this host.", "Apply it: sudo vectory update apply --state-dir '/srv/agent state'"}},
+			want: map[string]verdict{"updates-staged": {"info", "Staged 0.1.1, offered 19:00, and waiting for someone on this host.", "Apply it: " + asAdmin("vectory update apply") + " --state-dir '/srv/agent state'"}},
 		},
 		{
 			name: "an update that committed",

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,17 @@ func yes(string) (string, bool)          { return "y", true }
 func no(string) (string, bool)           { return "n", true }
 func noTerminalAt(string) (string, bool) { return "", false }
 
+// asAdmin is a command that needs root as a person types it on this system: with
+// sudo on Linux and macOS, as it stands in an elevated PowerShell on Windows. The
+// text these tests expect is built with it, and with the quoting of a state
+// directory for the shell of the system, so one test is right on every system.
+func asAdmin(command string) string {
+	if runtime.GOOS == "windows" {
+		return command
+	}
+	return "sudo " + command
+}
+
 func TestUpdateStatusPrintsWhatTheHostSays(t *testing.T) {
 	h := newUpdateHost(t)
 	h.view.Policy.Windows = []string{"Mon-Fri 02:00-04:00 UTC"}
@@ -160,10 +172,11 @@ func TestUpdateVerbsThatChangeTheHostNeedRoot(t *testing.T) {
 	h.root = false
 	for _, verb := range []string{"apply", "pause", "resume", "off"} {
 		code, stdout, stderr := h.run(noTerminalAt, verb)
-		want := "vectory: this changes what only an administrator can change. Run it with sudo: sudo vectory update " + verb + " --state-dir " + h.dir + "\n"
-		if filepath.Separator == '\\' {
-			want = "vectory: this changes what only an administrator can change. Run it from an elevated PowerShell: vectory update " + verb + " --state-dir " + h.dir + "\n"
+		how := "Run it with sudo: "
+		if runtime.GOOS == "windows" {
+			how = "Run it from an elevated PowerShell: "
 		}
+		want := "vectory: this changes what only an administrator can change. " + how + asAdmin("vectory update "+verb) + " --state-dir " + agent.ShellQuote(h.dir) + "\n"
 		if code != 1 || stdout != "" || stderr != want {
 			t.Errorf("%s: %d %q %q, want %q", verb, code, stdout, stderr, want)
 		}
@@ -287,11 +300,11 @@ func TestUpdateApplyIsRefusedWhereThereIsNothingToApply(t *testing.T) {
 		"the policy can't be used": {func(h *updateHost) { h.view.PolicyProblem = "/etc/vectory is writable by its group" },
 			"vectory: the update policy can't be used (/etc/vectory is writable by its group), so this host takes no update"},
 		"updates are paused": {func(h *updateHost) { h.view.Policy.Paused = true },
-			"vectory: updates are paused on this host. Resume them first: sudo vectory update resume --state-dir "},
+			"vectory: updates are paused on this host. Resume them first: " + asAdmin("vectory update resume") + " --state-dir "},
 		"the host is paused": {func(h *updateHost) { h.view.LocalPaused = true },
-			"vectory: vectory pause holds back every change on this host, updates included. Resume it first: sudo vectory resume --state-dir "},
+			"vectory: vectory pause holds back every change on this host, updates included. Resume it first: " + asAdmin("vectory resume") + " --state-dir "},
 		"nothing is staged": {func(h *updateHost) {},
-			"vectory: nothing is staged on this host. The agent stages a build when an update rollout reaches it; sudo vectory update status --state-dir "},
+			"vectory: nothing is staged on this host. The agent stages a build when an update rollout reaches it; " + asAdmin("vectory update status") + " --state-dir "},
 		"the build is still arriving": {func(h *updateHost) {
 			h.stage(time.Minute, true)
 			h.view.Staged.Complete = false
@@ -321,7 +334,7 @@ func TestUpdateApplyReportsWhatTheStepRecorded(t *testing.T) {
 	}{
 		"it rolled back": {last: &agent.UpdateLast{Outcome: agent.UpdateOutcomeRolledBack, Code: "NO_CHECK_IN", At: time.Date(2026, 10, 5, 2, 19, 0, 0, time.UTC), FromVersion: "0.1.0", ToVersion: "0.1.1"}, code: 1,
 			stderr: "vectory: rolled back from 0.1.1 at "},
-		"it recorded nothing": {code: 0, stdout: "Done. sudo vectory update status --state-dir "},
+		"it recorded nothing": {code: 0, stdout: "Done. " + asAdmin("vectory update status") + " --state-dir "},
 		"the step refused": {applyErr: errors.New("UNTRUSTED_LOCATION: /usr/local is writable by its group"), code: 1,
 			stderr: "vectory: UNTRUSTED_LOCATION: /usr/local is writable by its group"},
 	} {
@@ -369,7 +382,7 @@ func TestUpdatePauseAndResume(t *testing.T) {
 	if code != 0 || stderr != "" || !h.policy.Paused || h.changes != 1 {
 		t.Fatalf("%d %q %q", code, stdout, stderr)
 	}
-	for _, want := range []string{"Paused. The agent stops downloading and applying agent updates at its next check-in; no restart is needed.", "A build the update step is already applying finishes.", "Resume with: sudo vectory update resume --state-dir " + h.dir} {
+	for _, want := range []string{"Paused. The agent stops downloading and applying agent updates at its next check-in; no restart is needed.", "A build the update step is already applying finishes.", "Resume with: " + asAdmin("vectory update resume") + " --state-dir " + agent.ShellQuote(h.dir)} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("lacks %q:\n%s", want, stdout)
 		}
@@ -394,7 +407,7 @@ func TestUpdateResumeNamesTheWindowAndAnotherPause(t *testing.T) {
 	h.view.Policy.Windows = []string{"daily 01:00-03:00"}
 	h.view.LocalPaused = true
 	_, stdout, _ := h.run(noTerminalAt, "resume")
-	if want := "Resumed. At its next check-in the agent downloads and applies updates again, inside its window.\nvectory pause is also in force and still holds updates back: sudo vectory resume --state-dir " + h.dir + "\n"; stdout != want {
+	if want := "Resumed. At its next check-in the agent downloads and applies updates again, inside its window.\nvectory pause is also in force and still holds updates back: " + asAdmin("vectory resume") + " --state-dir " + agent.ShellQuote(h.dir) + "\n"; stdout != want {
 		t.Fatalf("%q", stdout)
 	}
 }
