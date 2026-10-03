@@ -268,7 +268,13 @@ async fn simulate_membership(
             if error.status != StatusCode::CONFLICT {
                 return Err(error);
             }
-            blockers.push(json!({"code":error.code,"reason":error.message}));
+            // The same evidence the save would answer with: which devices,
+            // which two assignments, and at which priority.
+            let mut blocker = json!({"code":error.code,"reason":error.message});
+            for (key, value) in error.fields.iter().flatten() {
+                blocker[key] = value.clone();
+            }
+            blockers.push(blocker);
         }
         let next = if blockers.is_empty() {
             delivery(db, &changed).await?

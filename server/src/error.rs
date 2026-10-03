@@ -15,6 +15,10 @@ pub struct ApiError {
     /// Members added beside `error` in the body, for a refusal that carries
     /// the evidence it stopped on (`409 TESTS_FAILED` lists the test results).
     pub extra: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Members added inside the `error` object beside `code` and `message`:
+    /// the named evidence a person needs to act (`409 CONFLICT` of a group
+    /// edit lists the colliding assignments as `details`).
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 pub type Result<T> = std::result::Result<T, ApiError>;
 impl ApiError {
@@ -25,11 +29,18 @@ impl ApiError {
             message: message.into(),
             retry_after: None,
             extra: None,
+            fields: None,
         }
     }
     /// Adds the members of `extra` (an object) beside `error` in the body.
     pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
         self.extra = extra.as_object().cloned();
+        self
+    }
+    /// Adds the members of `fields` (an object) inside `error`. `code` and
+    /// `message` are never replaced.
+    pub fn with_fields(mut self, fields: serde_json::Value) -> Self {
+        self.fields = fields.as_object().cloned();
         self
     }
     pub fn throttled(code: &'static str, message: impl Into<String>, seconds: u64) -> Self {
@@ -68,7 +79,13 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status;
-        let mut body = json!({"error":{"code":self.code,"message":self.message}});
+        let mut error = json!({"code":self.code,"message":self.message});
+        for (key, value) in self.fields.into_iter().flatten() {
+            if key != "code" && key != "message" {
+                error[key] = value;
+            }
+        }
+        let mut body = json!({ "error": error });
         for (key, value) in self.extra.into_iter().flatten() {
             // The error object is never replaced by evidence.
             if key != "error" {
