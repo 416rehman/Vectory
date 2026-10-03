@@ -579,6 +579,20 @@ describe("a rollout's progress", () => {
         cancel_reason: "key_revoked",
       }),
     ).toMatch(/revoked/);
+    expect(
+      ending({
+        status: "failed",
+        failure_reason: "stalled",
+        cancel_reason: null,
+      }),
+    ).toBe("Stopped: it made no progress for 24 hours");
+    expect(
+      ending({
+        status: "cancelled",
+        failure_reason: null,
+        cancel_reason: "release_expired",
+      }),
+    ).toBe("Cancelled: its release expired");
   });
 });
 

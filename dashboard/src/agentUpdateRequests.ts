@@ -88,6 +88,10 @@ const sentences: Record<string, { message: string; field?: Failure["field"] }> =
       message:
         "A device in this review is already in an update rollout that hasn't ended. Review again.",
     },
+    UPDATE_ROLLOUT_LIMIT: {
+      message:
+        "At most 200 update rollouts can be active or paused at once. Cancel or finish one first.",
+    },
     UPDATE_REVIEW_CHANGED: {
       message:
         "Something changed since this review (a device, a release or its key). Review again before you start.",
