@@ -406,6 +406,7 @@ export default function DeviceCheck({
   devices,
   artifacts,
   testCount,
+  onPassed,
 }: {
   /** The request the review was computed from. */
   request: Record<string, any>;
@@ -415,6 +416,11 @@ export default function DeviceCheck({
   artifacts: DeploymentPreview["artifact_previews"];
   /** How many tests the pipeline holds. */
   testCount: number;
+  /**
+   * The devices whose host passed the check for this review, now. Empty while
+   * nothing was asked, after the review changed and when this goes away.
+   */
+  onPassed?: (ids: ReadonlySet<string>) => void;
 }) {
   const identity = useMemo(
     () => reviewIdentity(request, devices, artifacts),
@@ -468,6 +474,19 @@ export default function DeviceCheck({
   const reviewed = devices.length;
   const truncated = !stale && !!runs[0]?.detail?.truncated;
   const unanswered = rows.filter((row) => isUnanswered(checkKind(row)));
+  // Who passed is reported to the review, which words what a restricted host
+  // still has to allow by it.
+  const passedKey = rows
+    .filter((row) => checkKind(row) === "passed")
+    .map((row) => row.id)
+    .sort()
+    .join(",");
+  const report = useRef(onPassed);
+  report.current = onPassed;
+  useEffect(() => {
+    report.current?.(new Set(passedKey ? passedKey.split(",") : []));
+  }, [passedKey]);
+  useEffect(() => () => report.current?.(new Set()), []);
 
   useEffect(() => {
     mounted.current = true;

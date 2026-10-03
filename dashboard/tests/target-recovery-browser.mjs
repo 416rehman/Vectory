@@ -1630,16 +1630,27 @@ try {
       await preview();
       await expect(
         dialog().getByText(
-          "2 selected devices run in restricted mode and refuse this version until their hosts approve it",
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
           { exact: true },
         ),
       ).toBeVisible();
-      // Each row says the host refuses it, instead of a plain "New".
+      // Nothing here sees a host's allowances: a condition, never a fact.
+      await expect(dialog()).toContainText(
+        "It uses destination 127.0.0.1:8239. They refuse this version unless their hosts already allow these.",
+      );
+      await expect(dialog()).toContainText(
+        "Vectory can't see a host's allowances; Check on devices in the review shows whether they have them.",
+      );
+      await expect(dialog()).not.toContainText("until their hosts approve");
+      // Each row says what the host must allow, instead of a plain "New".
       const alpha = table()
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
       await expect(alpha.locator(".target-outcome")).toContainText(
-        "No pipeline assigned; refused until its host approves it",
+        "No pipeline assigned; refuses it unless its host allows destination 127.0.0.1:8239",
+      );
+      await expect(alpha.locator(".target-outcome")).not.toContainText(
+        "approves it",
       );
       await dialog()
         .getByText("Commands for the host", { exact: true })

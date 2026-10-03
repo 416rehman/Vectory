@@ -141,6 +141,45 @@ const version = {
 };
 const idOf = (f, name) => f.devices.find((item) => item.name === name).id;
 
+// Restricted hosts: Vectory never sees what a host allows, so the review says
+// what a version uses as a condition and drops it only for a device a check
+// passed on, or whose verified running version already uses the same.
+const COLLECTOR = "http://127.0.0.1:8678/collect";
+const withSink = (uri, extra = {}) => ({
+  ...version,
+  config: {
+    sources: { seed: { type: "demo_logs", format: "json" } },
+    sinks: {
+      out: {
+        type: "http",
+        inputs: ["seed"],
+        uri,
+        encoding: { codec: "json" },
+      },
+    },
+  },
+  ...extra,
+});
+/** What a device's own record says it verifiably runs. */
+const runs = (candidate) => ({
+  id: candidate.id,
+  number: candidate.number,
+  configuration_id: candidate.configuration_id,
+  configuration_name: "Synthetic logs",
+});
+const restricted = (n, name, extra = {}) =>
+  device(n, name, {
+    configuration_mode: "restricted",
+    state_dir: "/srv/vectory state",
+    service_manager: "none",
+    ...extra,
+  });
+/** The review's rows (not the check's), inside a dialog locator. */
+const reviewedRows = (scope) =>
+  scope
+    .locator("tbody tr")
+    .filter({ has: scope.page().locator(".target-outcome") });
+
 /** What each device answers, as the agent words it. */
 const finding = (message, extra = {}) => ({
   severity: "error",
@@ -470,6 +509,14 @@ async function launch(
       );
       return validation
         ? reply(readable(validation))
+        : reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    }
+    if (method === "GET" && path.startsWith("/versions/")) {
+      const key = path.split("/").pop();
+      f.versionReads?.push(key);
+      const found = f.versions?.[key];
+      return found
+        ? reply(found)
         : reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
     }
     if (method === "POST") {
@@ -1424,6 +1471,242 @@ try {
       }
     },
   );
+
+  await check(
+    "A restricted host nobody has asked about gets a condition, never the claim that it refuses",
+    async () => {
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({
+          devices: [restricted(0, "edge-restr-01")],
+          versionReads: [],
+        });
+        f.initial = {};
+        const app = await openReview(f, {
+          version: withSink(COLLECTOR),
+          width,
+          theme,
+        });
+        const { page, dialog } = app;
+        try {
+          const note = dialog.locator(".target-approval-note");
+          await expect(note.locator("strong")).toHaveText(
+            "edge-restr-01 runs in restricted mode and needs its host to allow what this version uses",
+          );
+          await expect(note.locator("p").nth(0)).toHaveText(
+            "It uses destination 127.0.0.1:8678. It refuses this version unless its host already allows these.",
+          );
+          await expect(note.locator("p").nth(1)).toHaveText(
+            "Vectory can't see a host's allowances; Check on devices in the review shows whether it has them. Only the host operator can allow these; the dashboard can't.",
+          );
+          await expect(reviewedRows(dialog)).toContainText(
+            "No pipeline assigned; refuses it unless its host allows destination 127.0.0.1:8678",
+          );
+          await expect(dialog).not.toContainText(
+            /until its host approves|approves it|refused until/,
+          );
+          // The commands for the host are still handed over, made for that host.
+          await note
+            .getByText("Commands for the host", { exact: true })
+            .click();
+          await expect(
+            dialog.getByLabel("Host approval commands, On edge-restr-01", {
+              exact: true,
+            }),
+          ).toContainText("--state-dir '/srv/vectory state'");
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "restricted host not asked about", width, theme);
+          await note.scrollIntoViewIfNeeded();
+          const file = `approval-condition-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          // No version runs there, so nothing was read to compare.
+          expect(f.versionReads).toEqual([]);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+
+  await check(
+    "A host whose device already runs a version using the same destinations is not told anything; one that cannot be compared still gets the condition",
+    async () => {
+      const covering = withSink(COLLECTOR, { id: id(71), number: 1 });
+      const elsewhere = withSink("http://127.0.0.1:9/elsewhere", {
+        id: id(72),
+        number: 2,
+      });
+      // The same address, but a version whose addresses differ by device.
+      const perDevice = withSink(COLLECTOR, {
+        id: id(73),
+        number: 3,
+        variables: [{ name: "target", path: "/sinks/out/uri", type: "string" }],
+      });
+      const f = scene({
+        devices: [
+          restricted(0, "edge-restr-01", { running_version: runs(covering) }),
+          restricted(1, "edge-restr-02", { running_version: runs(elsewhere) }),
+          restricted(2, "edge-restr-03", { running_version: runs(perDevice) }),
+        ],
+        versions: {
+          [covering.id]: covering,
+          [elsewhere.id]: elsewhere,
+          [perDevice.id]: perDevice,
+        },
+        versionReads: [],
+      });
+      f.initial = {};
+      const app = await openReview(f, {
+        version: withSink(COLLECTOR, { id: id(60), number: 4 }),
+      });
+      const { page, dialog } = app;
+      try {
+        const note = dialog.locator(".target-approval-note");
+        await expect(note.locator("strong")).toHaveText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+        );
+        await expect(note).toContainText(
+          "edge-restr-01 already runs a version that uses these.",
+        );
+        const row = (name) =>
+          reviewedRows(dialog).filter({ hasText: name }).first();
+        await expect(row("edge-restr-01")).not.toContainText("refuses it");
+        await expect(row("edge-restr-01")).toContainText(
+          "No pipeline assigned",
+        );
+        for (const name of ["edge-restr-02", "edge-restr-03"])
+          await expect(row(name)).toContainText(
+            "refuses it unless its host allows destination 127.0.0.1:8678",
+          );
+        // Each running version is read once, however many devices run it.
+        expect([...f.versionReads].sort()).toEqual(
+          [covering.id, elsewhere.id, perDevice.id].sort(),
+        );
+        noErrors(f);
+      } finally {
+        await app.close();
+      }
+      // When every restricted device already runs it, the review says nothing.
+      const quiet = scene({
+        devices: [
+          restricted(0, "edge-restr-01", { running_version: runs(covering) }),
+        ],
+        versions: { [covering.id]: covering },
+        versionReads: [],
+      });
+      quiet.initial = {};
+      const second = await openReview(quiet, {
+        version: withSink(COLLECTOR, { id: id(60), number: 4 }),
+      });
+      try {
+        await expect(second.dialog.locator(".target-outcome")).toHaveCount(1);
+        await expect(second.dialog.locator(".target-outcome")).toContainText(
+          "No pipeline assigned",
+        );
+        await expect(
+          second.dialog.locator(".target-outcome"),
+        ).not.toContainText("refuses it");
+        await expect(
+          second.dialog.locator(".target-approval-note"),
+        ).toHaveCount(0);
+        await shot(
+          second.page,
+          second.check,
+          "approval-already-runs-1280-light",
+        );
+        noErrors(quiet);
+      } finally {
+        await second.close();
+      }
+    },
+  );
+
+  await check(
+    "Once Check on devices passes on a restricted host the review says that instead, and asks again after the selection changes",
+    async () => {
+      const f = scene({
+        devices: [restricted(0, NAMES.pass), restricted(1, NAMES.fix)],
+        versionReads: [],
+      });
+      f.initial = {};
+      const app = await openReview(f, { version: withSink(COLLECTOR) });
+      const { page, dialog, check: section } = app;
+      try {
+        const note = dialog.locator(".target-approval-note");
+        const headline = note.locator("strong");
+        const condition = "refuses it unless its host allows destination";
+        await expect(headline).toHaveText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+        );
+        await askButton(section).click();
+        await expect(summary(section)).toContainText("2 still checking", WAIT);
+        // Asking is not an answer: nothing changes until a host passes.
+        await expect(reviewedRows(dialog)).toHaveCount(2);
+        for (const row of await reviewedRows(dialog).all())
+          await expect(row).toContainText(condition);
+        answer(f, NAMES.pass, answers.pass);
+        answer(f, NAMES.fix, answers.fix);
+        await expect(summary(section)).toContainText(
+          "Checked 2 of 2 devices: 1 passes, 1 needs a fix.",
+          WAIT,
+        );
+        // The one that passed leaves the condition and is named after it.
+        await expect(headline).toHaveText(
+          `${NAMES.fix} runs in restricted mode and needs its host to allow what this version uses`,
+        );
+        await expect(note).toContainText(
+          `Check on devices passed on ${NAMES.pass}.`,
+        );
+        await expect(
+          reviewedRows(dialog).filter({ hasText: NAMES.pass }).first(),
+        ).not.toContainText(condition);
+        await expect(
+          reviewedRows(dialog).filter({ hasText: NAMES.fix }).first(),
+        ).toContainText(condition);
+        // Fixed on the host and checked again: nothing is left to say but that.
+        await section
+          .getByRole("button", { name: `Check ${NAMES.fix} again` })
+          .click();
+        await expect(summary(section)).toContainText("1 still checking", WAIT);
+        answer(f, NAMES.fix, answers.pass);
+        await expect(summary(section)).toContainText(
+          "Checked 2 of 2 devices: 2 pass.",
+          WAIT,
+        );
+        await expect(headline).toHaveText(
+          `Check on devices passed on ${NAMES.pass} and ${NAMES.fix}`,
+        );
+        await expect(note).toContainText(
+          "They run in restricted mode, and their hosts accepted this version.",
+        );
+        await expect(dialog).not.toContainText(condition);
+        await expect(dialog).not.toContainText(/approves it|refused until/);
+        await expect(
+          note.getByText("Commands for the host", { exact: true }),
+        ).toHaveCount(0);
+        await shot(page, note, "approval-check-passed-1280-light");
+        // A check belongs to the review it was asked on: going back clears it,
+        // and the condition returns until a host passes again.
+        await dialog.getByRole("button", { name: "Back to selection" }).click();
+        await dialog
+          .getByRole("button", { name: "Review deployment", exact: true })
+          .click();
+        await expect(section).toBeVisible();
+        await expect(headline).toHaveText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+        );
+        noErrors(f);
+      } finally {
+        await app.close();
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -1432,7 +1715,7 @@ try {
     scope:
       "The real deploy review and its Check on devices section, with intercepted synthetic HTTP. The synthetic server answers when the harness says so: no host validated anything.",
     passed:
-      results.length === 15 &&
+      results.length === 18 &&
       results.every((r) => r.passed) &&
       accessibility.every((s) => !s.violations.length),
     results,
