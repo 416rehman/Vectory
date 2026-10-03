@@ -884,9 +884,9 @@ function HostFixes({
       </summary>
       <div className="update-fixes-body">
         <p className="control-muted">
-          Each command is the Upgrade agent command for that host. It keeps what
-          the host already allows, and makes it pin this server&apos;s current
-          key. Run it on the host, as shown.
+          Each command is the Upgrade agent command for that host, with only the
+          change this fix needs, such as the key to pin. The host keeps what it
+          already allows. Run it on the host, as shown.
         </p>
         {!keyFingerprint && (
           <p className="control-note" role="status">

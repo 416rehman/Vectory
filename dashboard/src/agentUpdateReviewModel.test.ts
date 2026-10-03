@@ -212,7 +212,7 @@ describe("the command that fixes a device that won't update", () => {
     expect(command).not.toContain("--update-window");
   });
 
-  it("keeps what a host already allows and pins this server's key", () => {
+  it("pins this server's key and says nothing else about a host that already takes updates", () => {
     const keeps = device({
       agent_update: report({
         consent: "ask",
@@ -227,14 +227,16 @@ describe("the command that fixes a device that won't update", () => {
       install,
       key,
     })!;
-    expect(command).toContain("--updates ask");
+    // The level, track and windows are what the device says about itself, so
+    // the command leaves them to the host's own policy.
     expect(command).toContain(`--update-key-sha256 ${key}`);
-    expect(command).toContain("--update-track minor");
-    expect(command).toContain("--update-window 'Sat,Sun 01:00-03:00 UTC'");
+    expect(command).not.toContain("--updates");
+    expect(command).not.toContain("--update-track");
+    expect(command).not.toContain("--update-window");
     expect(command).not.toContain(teamFingerprint);
   });
 
-  it("moves a host to the minor track when its track is the problem", () => {
+  it("moves a host to the minor track, and changes nothing else, when its track is the problem", () => {
     const command = hostFixCommand({
       group: group("VERSION_NOT_ON_TRACK"),
       device: device({
@@ -244,6 +246,18 @@ describe("the command that fixes a device that won't update", () => {
       key,
     })!;
     expect(command).toContain("--update-track minor");
+    expect(command).not.toContain("--updates");
+    expect(command).not.toContain("--update-key-sha256");
+  });
+
+  it("carries no update flag when the upgrade itself is the fix", () => {
+    const command = hostFixCommand({
+      group: group("SERVICE_DEFINITION_OUTDATED"),
+      device: device({ agent_update: report({ consent: "auto" }) }),
+      install,
+      key,
+    })!;
+    expect(command).not.toContain("--update");
   });
 
   it("follows the host's own state directory and service", () => {

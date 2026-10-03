@@ -26,6 +26,16 @@ export type UpdateConsent =
       key: string;
     };
 /**
+ * A command for a host that already agreed to updates changes only what it
+ * carries: the host keeps its level, track, windows and pause. Nothing here
+ * comes from what the device reported about itself.
+ */
+export type UpdateAmend = {
+  level: "keep";
+  key?: string;
+  track?: UpdateTrack;
+};
+/**
  * How the host checks the server before it sends the token: pin the
  * server's CA by the fingerprint this page shows, trust a CA certificate file
  * already on the host, or trust the host's own certificate store.
@@ -199,11 +209,21 @@ export function commandValueProblem(label: string, value: string, os: HostOS) {
  * isn't a whole fingerprint, or a window the agent wouldn't read.
  */
 export function updateArguments(
-  consent: UpdateConsent | undefined,
+  consent: UpdateConsent | UpdateAmend | undefined,
   os: HostOS,
 ): string[] {
   if (!consent) return [];
   if (consent.level === "off") return ["--updates", "off"];
+  if (consent.level === "keep") {
+    if (consent.key !== undefined && !/^[0-9a-f]{64}$/.test(consent.key))
+      throw new CommandValueError("control");
+    return [
+      ...(consent.key === undefined
+        ? []
+        : ["--update-key-sha256", consent.key]),
+      ...(consent.track === undefined ? [] : ["--update-track", consent.track]),
+    ];
+  }
   if (
     !/^[0-9a-f]{64}$/.test(consent.key) ||
     consent.windows.length > WINDOW_LIMIT ||

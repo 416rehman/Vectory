@@ -1241,8 +1241,9 @@ try {
         `--update-key-sha256 ${teamFingerprint}`,
       );
       await expect(command).toContainText("--update-track patch");
-      // A host that already takes updates keeps what it reported, and only
-      // pins this server's current key.
+      // A host that already takes updates keeps what it agreed to: the command
+      // carries only the key to pin, never a level or window the device
+      // reported about itself.
       const fork = dialog.locator("article", {
         hasText: "edge-05 saw two successors",
       });
@@ -1250,11 +1251,12 @@ try {
       const kept = fork.getByLabel("Upgrade command for edge-05", {
         exact: true,
       });
-      await expect(kept).toContainText("--updates auto");
-      await expect(kept).toContainText("--update-window");
       await expect(kept).toContainText(
         `--update-key-sha256 ${teamFingerprint}`,
       );
+      await expect(kept).not.toContainText("--updates");
+      await expect(kept).not.toContainText("--update-window");
+      await expect(kept).not.toContainText("--update-track");
       await look("review-commands");
     },
   );
@@ -2345,19 +2347,19 @@ try {
         await expect(dialog).toContainText(
           "Automatic · patch releases · Mon–Fri 02:00–04:00 · key 05cc6c02351af0cb",
         );
-        // The command that pins the current key again keeps the host's choices.
+        // The command that pins the current key again carries only the key:
+        // the host keeps the choices it made.
         await dialog.getByText("Pin this server's current key again").click();
         const again = dialog.getByLabel(
           "Command to pin the current key on edge-01",
           { exact: true },
         );
-        await expect(again).toContainText("--updates auto");
         await expect(again).toContainText(
           `--update-key-sha256 ${teamFingerprint}`,
         );
-        await expect(again).toContainText(
-          "--update-window 'Mon-Fri 02:00-04:00'",
-        );
+        await expect(again).not.toContainText("--updates");
+        await expect(again).not.toContainText("--update-window");
+        await expect(again).not.toContainText("--update-track");
         await look("upgrade-opted-in", view);
       }
       // Roll out to this device: the review, with this device chosen.

@@ -168,7 +168,7 @@ Nothing starts until you choose **Start update rollout**, and the server checks 
 The review lists every device you chose exactly once:
 
 - **Will update · N:** the devices that will take the build, with how each takes it (**Automatic** or **Ask on the host**) and when it can start. The canary is chosen for you, among devices that take updates by themselves, or by you with **Canary devices**. The canary's result is what its devices report, so name canary devices your team trusts.
-- **Won't update · N:** each device that won't, grouped by the first reason that applies, with the fix. For a reason a command fixes, **Commands for the host** gives the **Upgrade agent** command for that host. It keeps what the host already allows and pins this server's current key. For a host that has no consent to keep, you choose how it should take updates first.
+- **Won't update · N:** each device that won't, grouped by the first reason that applies, with the fix. For a reason a command fixes, **Commands for the host** gives the **Upgrade agent** command for that host, with only the change the fix needs, such as the key to pin. The host keeps what it already allows. For a host that has no consent to keep, you choose how it should take updates first.
 - **Worth knowing:** devices that will update but may be slow: offline now, waiting for someone on the host, waiting for a window or paused on the host.
 
 | Group | Means |
