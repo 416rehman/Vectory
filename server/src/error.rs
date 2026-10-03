@@ -51,6 +51,15 @@ impl ApiError {
     pub fn forbidden() -> Self {
         Self::new(StatusCode::FORBIDDEN, "FORBIDDEN", "Permission denied")
     }
+    /// A change whose session token header is absent or wrong: the same status
+    /// and code as a role refusal, so a script can tell which it hit.
+    pub fn csrf() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            "The X-CSRF-Token header is missing or wrong",
+        )
+    }
     pub fn missing() -> Self {
         Self::new(StatusCode::NOT_FOUND, "NOT_FOUND", "Record not found")
     }

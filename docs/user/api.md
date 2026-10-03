@@ -48,7 +48,7 @@ Let the server filter, sort and count, and read a page at a time. `GET /api/v1/d
 | `GET /api/v1/groups/{id}/members` | A page of a group's members. Search it with `q`. |
 | `GET /api/v1/overview?slim=1` | The Overview's numbers, without a row per device. |
 
-`q` matches names, OS, architecture, pipelines, Vector and agent versions and group names as plain text. The inventory and member pages refuse an unknown or repeated parameter with `400`, so a typo never lists everything. They and the slim Overview can lag check-ins by up to two seconds; your own changes show at once.
+`q` matches names, OS, architecture, pipelines, Vector and agent versions and group names as plain text. The inventory and member pages refuse an unknown or repeated parameter with `400` and name it (`Invalid query parameters: stauts isn't a parameter of this request`), so a typo never lists everything. They and the slim Overview can lag check-ins by up to two seconds; your own changes show at once.
 
 ```sh
 curl -fsS -b cookies.txt \
@@ -110,7 +110,7 @@ Errors return a JSON `error` object with a stable `code` and a readable `message
 | Status | Meaning |
 | --- | --- |
 | `401` | Not signed in, or the session ended. |
-| `403` | Your role doesn't allow it, or the CSRF token is missing or wrong. |
+| `403` | Your role doesn't allow it (`Permission denied`), or the CSRF token is missing or wrong (`The X-CSRF-Token header is missing or wrong`). Both answer `FORBIDDEN`; the message says which. |
 | `409` | Someone changed the resource first (`STALE_REVISION`), or the request conflicts with current state. Read the resource again before retrying. |
 | `429` | Too many requests. Wait for the `Retry-After` time. |
 

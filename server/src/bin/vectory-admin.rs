@@ -266,9 +266,13 @@ impl Operation {
                 println!(
                     "They can also choose \"Forgot password?\" on the sign-in page and paste this code:\n\n  {code}\n"
                 );
-                println!(
-                    "Start the server again before sharing it. Two-factor authentication stays on; run disable-mfa too if the authenticator is lost."
-                );
+                if vectory_server::mfa::local_is_on(state, &email).await? {
+                    println!(
+                        "Start the server again before sharing it. Two-factor authentication stays on; run disable-mfa too if the authenticator is lost."
+                    );
+                } else {
+                    println!("Start the server again before sharing it.");
+                }
             }
             Operation::DisableMfa { email } => {
                 let name = vectory_server::mfa::local_disable(state, &email).await?;
@@ -297,9 +301,18 @@ impl Operation {
                     return Err(Failure::Failed("Generation report exceeds 8 MiB".into()));
                 }
                 let bytes = std::fs::read(&report).map_err(anyhow::Error::from)?;
-                let report: vectory_server::maintenance::GenerationReport =
+                let document: serde_json::Value =
                     serde_json::from_slice(&bytes).map_err(|error| {
                         Failure::Failed(format!("The report is not valid JSON: {error}"))
+                    })?;
+                if let Some(problem) = vectory_server::maintenance::missing_counters(&document) {
+                    return Err(Failure::Failed(problem));
+                }
+                let report: vectory_server::maintenance::GenerationReport =
+                    serde_json::from_value(document).map_err(|error| {
+                        Failure::Failed(format!(
+                            "The report doesn't have the shape generation-recovery-state exports: {error}"
+                        ))
                     })?;
                 let result =
                     vectory_server::maintenance::recover_generations(state, report, apply).await?;
