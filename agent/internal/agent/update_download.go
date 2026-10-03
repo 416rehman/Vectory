@@ -77,7 +77,7 @@ func (c *Client) downloadClient() (client *http.Client, closeIdle func()) {
 // the signed ones. It never leaves a file under the final name that isn't exactly
 // them, and removes what it wrote when it fails.
 func (c *Client) downloadAgentBuild(ctx context.Context, path, dir string, size int64, digest string) (os.FileInfo, error) {
-	owner := ctx
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, updateDownloadDeadline)
 	defer cancel()
 	var stalled atomic.Bool
@@ -87,11 +87,12 @@ func (c *Client) downloadAgentBuild(ctx context.Context, path, dir string, size 
 	})
 	defer watchdog.Stop()
 	// interrupted explains a transfer that stopped for a reason of the network,
-	// the clock or the other side; one the owner stopped isn't a failure at all.
+	// the clock or the other side. A transfer that whoever called it ended (the
+	// agent stopping, an offer that changed) isn't a failure at all.
 	interrupted := func(err error) error {
 		switch {
-		case owner.Err() != nil:
-			return owner.Err()
+		case caller.Err() != nil:
+			return caller.Err()
 		case stalled.Load():
 			return &updateDownloadError{Code: "DOWNLOAD_FAILED", Words: fmt.Sprintf("The server stopped sending the build for %s. %s", humanDuration(updateDownloadStall), updateDownloadWords.again), cause: err}
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
@@ -119,7 +120,7 @@ func (c *Client) downloadAgentBuild(ctx context.Context, path, dir string, size 
 	defer closeIdle()
 	res, err := client.Do(req)
 	if err != nil {
-		if owner.Err() != nil || stalled.Load() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if caller.Err() != nil || stalled.Load() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, interrupted(err)
 		}
 		proxy, _ := http.ProxyFromEnvironment(req)

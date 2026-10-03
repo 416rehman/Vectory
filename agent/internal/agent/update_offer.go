@@ -702,13 +702,13 @@ func (e *Engine) startUpdateDownload(ctx context.Context, ex UpdateExchange, dir
 		}
 	}
 	client := e.Client
-	owner, cancel := context.WithCancel(ctx)
+	transfer, cancel := context.WithCancel(ctx)
 	d := &updateDownload{release: v.ManifestSHA256, cancel: cancel, done: make(chan struct{})}
 	run.download = d
 	size, digest, path := v.Artifact.Size, v.Artifact.SHA256, offer.Artifact.Path
 	go func() {
 		defer close(d.done)
-		d.info, d.err = client.downloadAgentBuild(owner, path, dir, size, digest)
+		d.info, d.err = client.downloadAgentBuild(transfer, path, dir, size, digest)
 	}()
 	decide(UpdateStateDownloading, "")
 	e.sayOnce("download", "Downloading agent update "+v.Manifest.Version+" ("+byteSize(size)+").")
