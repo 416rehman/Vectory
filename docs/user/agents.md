@@ -262,6 +262,8 @@ Use recovery when a device's credentials are lost or can no longer renew. It cre
 
 4. **In the dashboard:** find the new device identity, add it back to its groups and deploy its pipeline. Recovery keeps the files on the host but not groups or assignments.
 
+If the server refuses the token because it expired, was revoked or was mistyped, run the command again with a new one. If the connection dropped after the command sent its request, run it again with the same token: it finishes the request it started, and a different token is refused until it does.
+
 Delete any downloaded token file afterwards. If creating the token was interrupted, see [If a request is interrupted](interrupted-requests.md).
 
 ## Remove the agent
