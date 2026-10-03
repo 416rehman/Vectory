@@ -67,6 +67,10 @@ impl Release {
     pub fn platform(&self) -> String {
         format!("{}/{}", self.os, self.arch)
     }
+    /// Where the build's file is.
+    pub fn path(&self) -> &FsPath {
+        &self.path
+    }
     fn file_name(&self) -> &'static str {
         if self.os == "windows" {
             "vectory.exe"
@@ -318,10 +322,17 @@ impl Drop for AddressSlot {
     }
 }
 
-/// Stream a release from disk. The SHA-256 is recomputed while streaming and
-/// the final chunk is withheld unless it matches, so a file that changed after
-/// it was listed can never be delivered complete. A client that stops reading
-/// for 20 seconds, or takes more than five minutes, is cut off.
+/// A file to stream, and what it must be.
+pub(crate) struct Transfer<'a> {
+    pub path: &'a FsPath,
+    pub size: u64,
+    pub sha256: &'a str,
+    /// Names the file in the log when it changes on disk.
+    pub label: &'a str,
+}
+
+/// Stream a public agent build from disk, with the headers of a download: its
+/// ETag (a conditional request that matches gets `304`) and its file name.
 async fn stream(release: &Release, h: &HeaderMap, slot: Option<AddressSlot>) -> Result<Response> {
     let etag = format!("\"{}\"", release.sha256);
     let matches = h
@@ -342,19 +353,51 @@ async fn stream(release: &Release, h: &HeaderMap, slot: Option<AddressSlot>) -> 
             BUSY_RETRY_SECONDS,
         )
     })?;
-    let mut file = tokio::fs::File::open(&release.path)
+    let guard: Option<Box<dyn std::any::Any + Send>> = slot.map(|slot| Box::new(slot) as _);
+    let mut response = stream_verified(
+        Transfer {
+            path: &release.path,
+            size: release.size,
+            sha256: &release.sha256,
+            label: &release.name,
+        },
+        permit,
+        guard,
+    )
+    .await?;
+    let headers = response.headers_mut();
+    headers.insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", release.file_name()))
+            .unwrap(),
+    );
+    Ok(response)
+}
+
+/// Stream a file from disk. The SHA-256 is recomputed while streaming and the
+/// final chunk is withheld unless it matches, so a file that changed after it
+/// was listed can never be delivered complete. A client that stops reading for
+/// 20 seconds, or takes more than five minutes, is cut off. `permit` and
+/// `guard` are held for as long as the transfer runs.
+pub(crate) async fn stream_verified(
+    file: Transfer<'_>,
+    permit: tokio::sync::SemaphorePermit<'static>,
+    guard: Option<Box<dyn std::any::Any + Send>>,
+) -> Result<Response> {
+    let mut open = tokio::fs::File::open(file.path)
         .await
         .map_err(|_| ApiError::missing())?;
-    let meta = file.metadata().await.map_err(|_| ApiError::missing())?;
-    if !meta.is_file() || meta.len() != release.size {
+    let meta = open.metadata().await.map_err(|_| ApiError::missing())?;
+    if !meta.is_file() || meta.len() != file.size {
         return Err(ApiError::conflict(
             "This agent build changed while it was being served. Try again.",
         ));
     }
     let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
-    let (expected, size, name) = (release.sha256.clone(), release.size, release.name.clone());
+    let (expected, size, name) = (file.sha256.to_owned(), file.size, file.label.to_owned());
     tokio::spawn(async move {
-        let (_permit, _slot) = (permit, slot);
+        let (_permit, _guard) = (permit, guard);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
         // Every send gives up when the client stops reading for 20 seconds or
         // the transfer passes its deadline; dropping the sender then cuts the
@@ -369,7 +412,7 @@ async fn stream(release: &Release, h: &HeaderMap, slot: Option<AddressSlot>) -> 
         let (mut total, mut held) = (0u64, None::<Bytes>);
         let failed = || Err(std::io::Error::other("agent download interrupted"));
         loop {
-            let read = match tokio::time::timeout_at(deadline, file.read(&mut buffer)).await {
+            let read = match tokio::time::timeout_at(deadline, open.read(&mut buffer)).await {
                 Ok(Ok(read)) => read,
                 _ => {
                     send(failed()).await;
@@ -407,13 +450,7 @@ async fn stream(release: &Release, h: &HeaderMap, slot: Option<AddressSlot>) -> 
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
-    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(release.size));
-    headers.insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", release.file_name()))
-            .unwrap(),
-    );
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(file.size));
     Ok(response)
 }
 
@@ -831,6 +868,23 @@ const INSTALL_SH: &str = r#"#!/bin/sh
 # or --ca-file= (this host's trusted certificates), the download and setup
 # trust the server that way instead of the pin. No option turns off
 # certificate verification.
+#
+# Agent updates are the host's own choice, made here and nowhere else. These
+# four setup options pass through too:
+#
+#   --updates auto|ask|off        auto applies an update the server offers, inside
+#                                 the window if there is one; ask waits for
+#                                 `sudo vectory update apply`; off takes nothing
+#   --update-key-sha256 HEX       the SHA-256 fingerprint of a release key to
+#                                 trust (64 hex digits, up to 4); required with
+#                                 auto or ask. Setup checks it against the keys
+#                                 this server offers and pins only that key
+#   --update-track patch|minor    patch (the default) stays on the running
+#                                 major.minor; minor stays on the running major
+#   --update-window 'DAYS HH:MM-HH:MM [UTC]'
+#                                 when an update may start, in this host's time
+#                                 unless UTC follows (repeatable, such as
+#                                 'Mon-Fri 02:00-04:00'; none means any time)
 set -eu
 
 vectory_install() {
@@ -1037,6 +1091,22 @@ pub async fn installer(s: &State, agent_url: &str) -> (String, String) {
     );
     let sha = db::hash(&script);
     (script, sha)
+}
+
+/// The limits of a public route of the agent listener (the installer, the key
+/// bundle): the address's own budget first; the one every address shares only
+/// for what that lets through.
+pub(crate) fn public_limits(s: &State, route: &str, peer: Option<std::net::IpAddr>) -> Result<()> {
+    s.limit(
+        format!("{route}:{}", peer_key(peer)),
+        300,
+        Duration::from_secs(600),
+    )?;
+    s.limit(
+        route.to_owned(),
+        PUBLIC_REQUESTS_PER_MINUTE,
+        Duration::from_secs(60),
+    )
 }
 
 /// `GET /agent/v1/install.sh` on the agent listener.

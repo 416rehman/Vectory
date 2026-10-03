@@ -41,6 +41,11 @@ fn check_resource_limits() -> anyhow::Result<()> {
             .ok()
             .as_deref(),
     )?;
+    vectory_server::agent_releases::storage_limit(
+        env::var(vectory_server::agent_releases::STORAGE_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
     Ok(())
 }
 
@@ -272,6 +277,11 @@ async fn main() -> anyhow::Result<()> {
         agent_certificate_pem,
         outbound: Default::default(),
         wake: wake_options(env::var("VECTORY_AGENT_WAKE_LIMIT").ok())?,
+        agent_release_storage_bytes: Some(vectory_server::agent_releases::storage_limit(
+            env::var(vectory_server::agent_releases::STORAGE_VARIABLE)
+                .ok()
+                .as_deref(),
+        )?),
     };
     let state = initialize(settings).await?;
     tracing::info!(
