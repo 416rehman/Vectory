@@ -865,8 +865,10 @@ pub(crate) async fn open_failures(conn: &mut SqliteConnection) -> Result<HashMap
     if !enabled(conn).await? {
         return Ok(HashMap::new());
     }
+    // Only issues that are not resolved are read, through the index of an issue's
+    // state (migration 0011): a long history of resolved issues costs nothing.
     let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT json_extract(data,'$.device_id'),json_extract(data,'$.code'),json_extract(data,'$.update_code'),json_extract(data,'$.last_seen') FROM records WHERE kind='issue' AND json_extract(data,'$.stage')='agent_update' AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND json_extract(data,'$.code') IN ('AGENT_UPDATE_ROLLED_BACK','AGENT_UPDATE_FAILED')",
+        "SELECT json_extract(data,'$.device_id'),json_extract(data,'$.code'),json_extract(data,'$.update_code'),json_extract(data,'$.last_seen') FROM records WHERE kind='issue' AND (CASE WHEN json_type(data,'$.resolved')='true' THEN 'resolved' WHEN json_type(data,'$.acknowledged')='true' THEN 'acknowledged' ELSE 'open' END) IN ('open','acknowledged') AND json_extract(data,'$.stage')='agent_update' AND json_extract(data,'$.code') IN ('AGENT_UPDATE_ROLLED_BACK','AGENT_UPDATE_FAILED')",
     )
     .fetch_all(&mut *conn)
     .await?;

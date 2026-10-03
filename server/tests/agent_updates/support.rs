@@ -430,12 +430,25 @@ pub async fn seen(f: &Fixture, device: &str, at: &str) {
         .unwrap();
 }
 
+/// The device's row only: what a review or a count reads.
 pub async fn revoke(f: &Fixture, device: &str) {
     sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
         .bind(device)
         .execute(&f.state.pool)
         .await
         .unwrap();
+}
+/// A device revoked as the dashboard revokes one, with everything that follows a
+/// revocation.
+pub async fn revoke_through_the_api(f: &Fixture, device: &str) {
+    ok(
+        f,
+        "POST",
+        &format!("/api/v1/devices/{device}/revoke"),
+        json!({}),
+        &f.operator,
+    )
+    .await;
 }
 
 /// A report as an eligible, consenting host sends it: `auto`, no window, pinning
