@@ -202,7 +202,10 @@ export default function App() {
         (nextRoute.split("?")[0] !== route.split("?")[0] ||
           /^(deployments|schedules|issues|audit)(?:[/?]|$)/.test(route)) &&
         !window.dispatchEvent(
-          new Event("vectory:before-navigate", { cancelable: true }),
+          new CustomEvent("vectory:before-navigate", {
+            cancelable: true,
+            detail: { route: nextRoute },
+          }),
         )
       ) {
         history.replaceState(null, "", "#/" + route);

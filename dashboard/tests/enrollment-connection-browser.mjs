@@ -398,6 +398,44 @@ try {
     },
   );
   await check(
+    "Saving or discarding the token on the leave prompt goes where the person was heading; closing the prompt stays",
+    async () => {
+      for (const choice of ["I've saved the token", "Discard token copy"]) {
+        const f = await fixture();
+        try {
+          await f.createCommand();
+          const save = f.page.getByRole("dialog", {
+            name: "Save your enrollment token",
+          });
+          const head = () =>
+            f.page.evaluate(() => {
+              location.hash = "/devices";
+            });
+          await head();
+          await expect(save).toBeVisible();
+          await expect(save).toContainText(
+            "Save this token or discard its in-page copy before leaving.",
+          );
+          await expect(f.page).toHaveURL(/#\/enrollment$/);
+          // Closing the prompt without choosing is a decision to stay.
+          await f.page.keyboard.press("Escape");
+          await expect(save).toHaveCount(0);
+          await expect(f.page).toHaveURL(/#\/enrollment$/);
+          await head();
+          await expect(save).toBeVisible();
+          await save.getByRole("button", { name: choice, exact: true }).click();
+          await expect(f.page).toHaveURL(/#\/devices$/);
+          await expect(
+            f.page.getByRole("heading", { name: "Devices", exact: true }),
+          ).toBeVisible();
+          await expect(save).toHaveCount(0);
+        } finally {
+          await f.close();
+        }
+      }
+    },
+  );
+  await check(
     "Each certificate choice puts its exact option in the commands, and the choices lock while a token is created",
     async () => {
       const f = await fixture();
