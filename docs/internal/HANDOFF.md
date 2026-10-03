@@ -1,6 +1,6 @@
-# Vectory handoff
+# Vectory status
 
-This report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. Vectory is a developer preview: it is not production qualified and has no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). The requirement-by-requirement status, with the test behind each claim, is in [REQUIREMENTS.md](REQUIREMENTS.md). The earlier narrative handoff is kept as a historical record in [HANDOFF-2026-09-27.md](HANDOFF-2026-09-27.md); most of the evidence it names was never committed.
+This report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. Vectory is a developer preview: it is not production qualified and has no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). The requirement-by-requirement status, with the test behind each claim, is in [REQUIREMENTS.md](REQUIREMENTS.md).
 
 > **Newer state.** Work has landed since `a469266`. [CONTINUATION.md](CONTINUATION.md) lists what changed, how to verify the current head, what is unstable, and what to do next; the tables below are as of `a469266` and several of their rows are closed (the install command's certificate checks, rollback of a live canary, device CA rotation, enrollment token scope, adoption inventory, apply fault injection, paged fleet reads and the publish gate among them). What is open now is in [WORK-QUEUE.md](WORK-QUEUE.md), [the security findings](../security/OPEN-FINDINGS.md) and [AUTHORING-GAPS.md](AUTHORING-GAPS.md).
 
@@ -32,7 +32,7 @@ Measured on 2026-09-29 and 30 with a release build on a shared 4-vCPU Linux VM t
 
 ## Open defects at `a469266`
 
-From the specification audit and the round-2 reviews. Each was re-checked against `a469266`; defects fixed on the branch since then are removed (the install command's `curl -k`, the missing trust choice, rollback during a canary, an unautomated clean install and `go test` without `-json`). Severity follows the reviews: P0 breaks a hard requirement or a status claim, P1 misses a required capability or test.
+From an audit against the specification and from independent reviews. Each was re-checked against `a469266`; defects fixed on the branch since then are removed (the install command's `curl -k`, the missing trust choice, rollback during a canary, an unautomated clean install and `go test` without `-json`). Severity: P0 breaks a hard requirement or a status claim, P1 misses a required capability or test.
 
 | Sev. | Defect | Where |
 | --- | --- | --- |

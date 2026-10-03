@@ -217,17 +217,17 @@ describe("rolling back a live canary", () => {
     expect(RollbackPreviewSchema.safeParse(extra).success).toBe(false);
   });
   it("says who returns, who keeps what, and that the rollout stops", () => {
-    expect(rollbackStory(canary(), "r15-demo v1").map((l) => l.text)).toEqual([
+    expect(rollbackStory(canary(), "web-demo v1").map((l) => l.text)).toEqual([
       "edge-nyc-02 returns to Edge syslog processing v1.",
-      "edge-fra-01 and edge-nyc-01 never received r15-demo v1 and keep Edge syslog processing v1 (no change).",
+      "edge-fra-01 and edge-nyc-01 never received web-demo v1 and keep Edge syslog processing v1 (no change).",
       "The rollout stops here.",
     ]);
-    expect(excludedDetail(canary().excluded_devices[0], "r15-demo v1")).toBe(
-      "Never received r15-demo v1 · keeps Edge syslog processing v1 (no change)",
+    expect(excludedDetail(canary().excluded_devices[0], "web-demo v1")).toBe(
+      "Never received web-demo v1 · keeps Edge syslog processing v1 (no change)",
     );
     // A stopped rollout doesn't stop again.
     expect(
-      rollbackStory({ ...canary(), source_status: "failed" }, "r15-demo v1").at(
+      rollbackStory({ ...canary(), source_status: "failed" }, "web-demo v1").at(
         -1,
       )?.text,
     ).not.toBe("The rollout stops here.");
@@ -239,16 +239,16 @@ describe("rolling back a live canary", () => {
       { ...review.excluded_devices[0], effect: "fallback", next: web },
       { ...review.excluded_devices[1], effect: "retained_pending", next: web },
     ];
-    const lines = rollbackStory(review, "r15-demo v1");
+    const lines = rollbackStory(review, "web-demo v1");
     expect(lines[1]).toEqual({
-      text: "edge-fra-01 never received r15-demo v1 but would switch to Web access logs v2 once the rollout stops.",
+      text: "edge-fra-01 never received web-demo v1 but would switch to Web access logs v2 once the rollout stops.",
       tone: "danger",
     });
     expect(lines[2].text).toBe(
-      "edge-nyc-01 never received r15-demo v1 and keeps Edge syslog processing v1 until Web access logs v2 reaches it.",
+      "edge-nyc-01 never received web-demo v1 and keeps Edge syslog processing v1 until Web access logs v2 reaches it.",
     );
-    expect(excludedDetail(review.excluded_devices[0], "r15-demo v1")).toBe(
-      "Never received r15-demo v1 · would switch to Web access logs v2",
+    expect(excludedDetail(review.excluded_devices[0], "web-demo v1")).toBe(
+      "Never received web-demo v1 · would switch to Web access logs v2",
     );
   });
 });

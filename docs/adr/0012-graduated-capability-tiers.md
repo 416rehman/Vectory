@@ -90,7 +90,7 @@ An approval names a component type and covers it as a source and as a sink: `--c
 | --- | --- | --- |
 | Built in | acknowledgements, buffer_utilization_ewma_half_life_seconds, expire_metrics, expire_metrics_per_metric_set, expire_metrics_secs, healthchecks, latency_ewma_alpha, log_schema, metrics_storage_refresh_period, schema, telemetry, tests, timezone, wildcard_matching | They tune Vector's own behavior: event field names, metric expiry, smoothing, schema checks, the time zone, input matching, unit tests. None reaches the host. |
 | Built in with a resource | data_dir, proxy, enrichment_tables | `data_dir` must sit under an allowed file root, as today. Each `proxy` URL is a destination and needs its allowance. Enrichment tables by type, below. |
-| Host owned | api | Vector's API has no authentication. Only the host decides whether it exists ([ADR 0011](0011-opt-in-event-sampling.md), work package 0). |
+| Host owned | api | Vector's API has no authentication. Only the host decides whether it exists ([ADR 0011](0011-opt-in-event-sampling.md), Step 0 of its implementation plan). |
 | Full mode | provider, secret | A configuration provider replaces the signed pipeline with content fetched elsewhere. Secret backends can run programs and read files; device secrets ([ADR 0008](0008-device-secret-field-table.md)) are restricted mode's alternative. |
 
 ### Templates

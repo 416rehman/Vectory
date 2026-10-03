@@ -12,7 +12,7 @@ const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
 const output = resolve(repository, ".local/mfa-recovery-browser");
 await mkdir(output, { recursive: true });
-// An OS-assigned port: harnesses never claim a fixed port another worker may use.
+// An OS-assigned port: harnesses never claim a fixed port another process may use.
 const reservation = net.createServer();
 await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
 const port = reservation.address().port;

@@ -170,7 +170,7 @@ const savedRequest = (id, overrides = {}) => ({
   id,
   recorded_at: iso(-120000),
   request: {
-    name: "r16-full install command",
+    name: "lab-full install command",
     expires_hours: 1,
     max_uses: 1,
     name_prefix: null,
@@ -1025,7 +1025,7 @@ try {
         await f.advanced();
         await f.page
           .getByLabel("Device name", { exact: true })
-          .fill("r16-full");
+          .fill("lab-full");
         await f.createCommand("Full Vector");
         // The reminder names the token its command showed, never the secret.
         const [reminder] = await f.stored();
@@ -1033,7 +1033,7 @@ try {
         expect(JSON.stringify(reminder)).not.toContain(secret);
         const lookups = f.state.lookups.length;
         await f.reload(() => {
-          // Meanwhile, on the host, r16-full enrolled with it.
+          // Meanwhile, on the host, lab-full enrolled with it.
           const at = iso(60000);
           f.state.tokens = f.state.tokens.map((token) =>
             token.id === tokenId
@@ -1043,11 +1043,11 @@ try {
               : token,
           );
           f.state.devices = [
-            device({ name: "r16-full", last_seen: iso(61000) }),
+            device({ name: "lab-full", last_seen: iso(61000) }),
           ];
         });
         await expect(watchRegion(f.page)).toContainText(
-          /r16-full install command enrolled r16-full at \d{1,2}:\d{2}/,
+          /lab-full install command enrolled lab-full at \d{1,2}:\d{2}/,
         );
         await expect(requestCard(f.page)).toHaveCount(0);
         await expect.poll(() => f.stored()).toEqual([]);
@@ -1063,7 +1063,7 @@ try {
         // Said once: the next visit has nothing left to explain.
         await f.reload();
         await expect(watchRegion(f.page)).not.toContainText(
-          "enrolled r16-full",
+          "enrolled lab-full",
         );
       } finally {
         await f.context.close();
@@ -1142,7 +1142,7 @@ try {
       const id = "0b6c1c55-8a53-4c4b-9f47-4a1c3a5d0e11",
         token = "6f1f3a8e-2f0a-4a53-8c1d-7c9e1a0b2c3d",
         at = iso(-60000);
-      const listed = usedToken(token, "r16-full install command", at);
+      const listed = usedToken(token, "lab-full install command", at);
       const status = {
         request_id: id,
         request_correlation: true,
@@ -1167,7 +1167,7 @@ try {
       });
       try {
         await expect(watchRegion(f.page)).toContainText(
-          /r16-full install command enrolled r16-full at \d{1,2}:\d{2}/,
+          /lab-full install command enrolled lab-full at \d{1,2}:\d{2}/,
         );
         await expect(requestCard(f.page)).toHaveCount(0);
         await expect.poll(() => f.stored()).toEqual([]);
@@ -1190,7 +1190,7 @@ try {
           name: "Check token request",
         });
         await expect(dialog).toContainText(
-          /r16-full install command enrolled r16-full at \d{1,2}:\d{2}.* Its token can't enroll another device, so there is nothing to cancel\./,
+          /lab-full install command enrolled lab-full at \d{1,2}:\d{2}.* Its token can't enroll another device, so there is nothing to cancel\./,
         );
         await expect(dialog).not.toContainText("cannot be retrieved");
         await expect(
@@ -1199,7 +1199,7 @@ try {
         await dialog.getByRole("button", { name: "Done", exact: true }).click();
         await expect(card).toHaveCount(0);
         await expect(watchRegion(f.page)).toContainText(
-          "r16-full install command enrolled r16-full",
+          "lab-full install command enrolled lab-full",
         );
         expect(f.state.revokes).toEqual([]);
         expect(f.state.cancels).toEqual([]);
@@ -1424,7 +1424,7 @@ try {
       });
       for (const width of [1280, 390]) {
         for (const theme of ["light", "dark"]) {
-          // Back after three commands: one enrolled r16-full, one wasn't
+          // Back after three commands: one enrolled lab-full, one wasn't
           // used, and one creation's response never arrived.
           let f = await fixture({
             width,
@@ -1435,19 +1435,19 @@ try {
                 confirmed_at: iso(-110000),
               }),
               savedRequest(unused, {
-                request: request(unused, "r16-web install command"),
+                request: request(unused, "lab-web install command"),
                 token_id: unusedToken,
                 confirmed_at: iso(-100000),
               }),
               savedRequest(lost, {
                 recorded_at: iso(-30000),
-                request: request(lost, "r16-db install command"),
+                request: request(lost, "lab-db install command"),
               }),
             ],
             tokens: [
-              usedToken(doneToken, "r16-full install command", iso(-60000)),
+              usedToken(doneToken, "lab-full install command", iso(-60000)),
               {
-                ...usedToken(unusedToken, "r16-web install command", null),
+                ...usedToken(unusedToken, "lab-web install command", null),
                 uses: 0,
                 device_count: 0,
                 devices: [],
@@ -1457,7 +1457,7 @@ try {
           try {
             await f.chooseMode();
             await expect(watchRegion(f.page)).toContainText(
-              "r16-full install command enrolled r16-full",
+              "lab-full install command enrolled lab-full",
             );
             await expect(f.page.locator(".enroll-unused")).toBeVisible();
             await expect(requestCard(f.page)).toContainText(

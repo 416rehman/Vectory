@@ -126,7 +126,7 @@ const NAME: &str = "COALESCE(NULLIF(CASE WHEN json_type(d.data,'$.name')='text' 
 const STATUS_LABEL: &str = "CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN 'Rolled back' WHEN json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.replaced_by')='array' THEN 'Replaced' ELSE CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Failed' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE json_extract(d.data,'$.status') END END";
 const ROLLED_BACK: &str = "json_type(d.data,'$.rolled_back_by')='text'";
 /// The bounded pipeline name of deployment `n`'s version, so lineage says
-/// "Rollback of r15-demo v3" rather than a bare number from another pipeline.
+/// "Rollback of web-demo v3" rather than a bare number from another pipeline.
 /// Callers add the `WHERE` that picks `n`.
 const PIPELINE_NAME: &str = "CASE WHEN json_type(nc.data,'$.name')='text' THEN substr(json_extract(nc.data,'$.name'),1,240) END FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') JOIN records nc ON nc.kind='configuration' AND nc.id=json_extract(nv.data,'$.configuration_id')";
 /// The assignment of the deployment whose `data` is `deployment` was removed,

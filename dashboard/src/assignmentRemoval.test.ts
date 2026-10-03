@@ -256,7 +256,7 @@ describe("reviewed assignment removal", () => {
       "Default agent policy",
     );
   });
-  // Round-2 operator review P3: say what each device runs afterwards.
+  // The removal review says what each device runs afterwards.
   it("says what each device keeps or switches to, by name", () => {
     const [device] = review().devices;
     expect(removalEffectLabel(device)).toBe("Switches to Log delivery v1");

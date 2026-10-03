@@ -268,7 +268,7 @@ describe("conflict rows", () => {
       id: id(21),
       priority: 100,
       status: "cancelled",
-      configuration_name: "r15-demo",
+      configuration_name: "web-demo",
       version_number: 1,
     });
     const rows = conflictRows(
@@ -308,7 +308,7 @@ describe("conflict rows", () => {
     );
     expect(rows[0].winner?.id).toBe(id(20));
     expect(rows[0].alsoBound.map(boundName)).toEqual([
-      "r15-demo v1 (cancelled)",
+      "web-demo v1 (cancelled)",
     ]);
     expect(boundName(rows[0].winner!)).toBe(
       "Rollback to Edge syslog processing v1",

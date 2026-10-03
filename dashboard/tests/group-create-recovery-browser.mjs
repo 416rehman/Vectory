@@ -739,7 +739,7 @@ try {
           )
           .toBe(true);
         observations.push({
-          scenario: "Open group keyboard handoff",
+          scenario: "Open group keyboard focus",
           focus: await s.page.evaluate(() => ({
             tag: document.activeElement?.tagName,
             label: document.activeElement?.getAttribute("aria-label"),

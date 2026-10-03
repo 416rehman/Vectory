@@ -201,7 +201,7 @@ Specification: `docs/product-specification.md`, 342 lines, SHA-256 `4b47c5563655
 | L331 | Hours of outage keep last-known-good; bounded retries; no stampede on recovery; backup, restore and migrations preserve state | Partial | `docs/evidence/native-outage.json`, `server/tests/accounts.rs::migration_keeps_existing_accounts_and_sessions_enabled`, `tests/security/test_backup.py` (manual, HTTP, unit) | The only outage record is 32 seconds on Windows (2026-09-26); no hours-long outage or stampede measurement |
 | L332 | Browser and accessibility tests of real workflows at realistic fleet and canvas sizes; load tests report capacity and storage | Partial | `dashboard/tests/axe.mjs`, `help-center/tests/ci.mjs`, `ci:dashboard/node help-center/tests/ci.mjs` (browser) | 37 of 60 browser harnesses and 12 of 14 Playwright specs, including the fleet-size and canvas-size checks, are not in CI |
 
-## 16. Final handoff requirements
+## 16. Final report requirements
 
 | Spec | Requirement | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
