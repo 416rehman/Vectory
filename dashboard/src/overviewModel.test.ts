@@ -379,20 +379,20 @@ describe("delivery Vectory can and can't measure", () => {
   it("leads with metrics being off in a device's agent settings, naming the settings", () => {
     const advice = metricsAdvice(
       [
-        silent("qa-linux-1", {
+        silent("edge-linux-1", {
           effective_policy: { telemetry_enabled: false },
           policy_assignment: { policy_name: "No metrics" },
           ...runs("First pipeline", 2),
         }),
-        silent("qa-linux-2"),
+        silent("edge-linux-2"),
       ],
       exporters({ "First pipeline-2": "127.0.0.1:8655" }),
     );
     expect(advice.settingsOff).toEqual([
-      { id: "id-qa-linux-1", name: "qa-linux-1", settings: "No metrics" },
+      { id: "id-edge-linux-1", name: "edge-linux-1", settings: "No metrics" },
     ]);
     expect(settingsOffPhrase(advice.settingsOff)).toEqual({
-      names: "qa-linux-1",
+      names: "edge-linux-1",
       owner: "its",
       settings: " (“No metrics”)",
     });
