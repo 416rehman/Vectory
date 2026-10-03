@@ -29,6 +29,10 @@ const (
 	// maxUpdateStepFile bounds journal.json, counters.json and installed.json.
 	maxUpdateStepFile = 4 * 1024
 
+	// updateLockFile is the step's lock, in its private directory (the other
+	// names there are in update_locations.go).
+	updateLockFile = "lock"
+
 	// The journal's two terminal stages. Its other stages are the stages of
 	// status.json (UpdateStagePreparing, UpdateStageSwapping, UpdateStageTrial and
 	// UpdateStageRollingBack). A journal that is missing, committed or rolled_back
