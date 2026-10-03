@@ -114,6 +114,7 @@ const HOME_DIRECTORIES = [
   /(?<![\w.~-])\/home\/([A-Za-z_][\w.-]*)/g,
   /(?<![\w.~-])\/Users\/([A-Za-z_][\w.-]*)/g,
   /\b[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2}([A-Za-z_][\w.~-]*)/g,
+  /(?<![\w.~-])\/mnt\/[a-z]\/Users\/([A-Za-z_][\w.~-]*)/g,
 ];
 const HOME_RULE = {
   id: "home-directory",
