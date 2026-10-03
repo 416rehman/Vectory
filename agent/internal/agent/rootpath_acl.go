@@ -196,22 +196,82 @@ func checkWindowsEntryName(name string) error {
 	return nil
 }
 
-// windowsSDDL is the security descriptor of what root makes on Windows: SYSTEM
-// and the Administrators have full control and nobody else gets more than what
-// perm says, and nothing is inherited. For a directory the entries pass to what
-// is made in it. rootExecutable has no descriptor of its own: what is made
-// takes the access its directory gives, which is the install directory's.
+// Rights as SDDL writes them: the mask of FILE_GENERIC_READ and
+// FILE_GENERIC_EXECUTE together, which is what a person running a program needs.
+const sddlReadAndRun = "0x1200a9"
+
+// windowsSDDL is the security descriptor of what root makes on Windows: the
+// Administrators own it, SYSTEM and the Administrators have full control and
+// nobody else gets more than what perm says, and nothing is inherited into it from
+// the directory that holds it. A file that inherited its directory's entries would
+// be as safe as the directory's inheritable entries, which the check doesn't read
+// (it judges the entries that apply to the directory itself), so every file and
+// directory root makes has a list of its own. For a directory the entries pass to
+// what is made in it.
+//
+//	rootPrivate     SYSTEM, the Administrators
+//	rootReadable    and the agent's service reads
+//	rootExecutable  and TrustedInstaller; the Users and the agent's service read
+//	                and run it
 func windowsSDDL(perm rootFilePerm, directory bool, service string) string {
 	inherit := ""
 	if directory {
 		inherit = "OICI"
 	}
-	base := "D:P(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)"
+	base := "O:BAD:P(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)"
 	switch perm {
 	case rootPrivate:
 		return base
 	case rootReadable:
 		return base + "(A;" + inherit + ";FR;;;" + serviceSID(service) + ")"
+	case rootExecutable:
+		return base + "(A;" + inherit + ";FA;;;" + sidTrustedInstaller + ")(A;" + inherit + ";" + sddlReadAndRun + ";;;BU)(A;" + inherit + ";" + sddlReadAndRun + ";;;" + serviceSID(service) + ")"
+	}
+	return ""
+}
+
+// updateRootSDDL is the security descriptor of the directory the policy's and the
+// step's directories are made in (%ProgramData%\Vectory): the Administrators own it,
+// SYSTEM and the Administrators have full control of it and of what is made in
+// it, the agent's service may list and read it (its own directories are below it),
+// and nobody else may add an entry, which is what a squatter needs.
+func updateRootSDDL(service string) string {
+	return "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;" + sddlReadAndRun + ";;;" + serviceSID(service) + ")"
+}
+
+// privateDirectoryProblem says why a directory that only root may enter is
+// open to someone else, or "": its owner must be root's, and no entry may give any
+// account but root a right of any kind, even one that only passes to what is made
+// in it later. aclProblem judges what an account can change; this judges what it
+// can see. extra is one more account that passes, as for aclProblem.
+func privateDirectoryProblem(owner string, hasACL bool, entries []aclEntry, extra string, name func(string) string) string {
+	label := func(sid string) string {
+		if name != nil {
+			return name(sid)
+		}
+		return sid
+	}
+	root := func(sid string) bool {
+		return sid == sidSystem || sid == sidAdministrators || sid == sidTrustedInstaller || (extra != "" && sid == extra)
+	}
+	switch {
+	case !root(owner):
+		return "belongs to " + label(owner) + ", not to SYSTEM or the Administrators"
+	case !hasACL:
+		return "has no access list, so everyone can enter it"
+	}
+	for _, entry := range entries {
+		switch entry.Type {
+		case aclAccessAllowed:
+			// The entry for whichever account owns what is made in the directory is
+			// no account of its own: that account is root, and is judged as such.
+			if !root(entry.SID) && entry.SID != sidCreatorOwner && entry.Mask != 0 {
+				return "can be entered by " + label(entry.SID)
+			}
+		case aclAccessDenied:
+		default:
+			return "has an access entry of a kind this check doesn't read (type " + strconv.Itoa(int(entry.Type)) + ")"
+		}
 	}
 	return ""
 }
