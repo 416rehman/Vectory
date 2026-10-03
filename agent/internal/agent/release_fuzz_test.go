@@ -2,12 +2,15 @@ package agent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -85,6 +88,59 @@ func FuzzReleaseSignatureAndStatement(f *testing.F) {
 		if _, err := ParseRollover(raw, make([]byte, 64)); err == nil {
 			if inside, why := insideTheProfile(raw, MaxRolloverStatement); !inside {
 				t.Fatalf("statement accepted outside the profile (%s): %q", why, raw)
+			}
+		}
+	})
+}
+
+// FuzzParseReleaseKey holds the key line grammar and the key rule together to a
+// second reading in both directions: a line is a key exactly when it has the
+// contract's three fields, a canonical base64 of 32 bytes that is a point of the
+// curve that is not of small order, and a name of the allowed characters. The
+// reading uses a regular expression for the shape and the independent curve
+// implementation of the key tests for the point.
+func FuzzParseReleaseKey(f *testing.F) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "fixtures", "agent-release", "vectors.json"))
+	if err != nil {
+		f.Fatal(err)
+	}
+	var vectors releaseVectors
+	if err := json.Unmarshal(data, &vectors); err != nil {
+		f.Fatal(err)
+	}
+	for _, vector := range vectors.KeyLines {
+		f.Add(vector.Line)
+	}
+	f.Add("vectory-release-key ed25519 " + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)) + " team")
+	pattern := regexp.MustCompile(`^vectory-release-key ed25519 ([A-Za-z0-9+/=]+) ([\x20-\x7e]+)$`)
+	f.Fuzz(func(t *testing.T, line string) {
+		key, err := ParseReleaseKey(line)
+		want := false
+		var fingerprint string
+		if match := pattern.FindStringSubmatch(line); match != nil {
+			raw, decodeErr := base64.StdEncoding.DecodeString(match[1])
+			name := match[2]
+			var encoded [32]byte
+			if decodeErr == nil && len(raw) == 32 && base64.StdEncoding.EncodeToString(raw) == match[1] &&
+				len(name) <= 64 && !strings.ContainsAny(name, `"\`) && name[0] != ' ' && name[len(name)-1] != ' ' {
+				copy(encoded[:], raw)
+				if oracleAccepts(encoded) {
+					want = true
+					sum := sha256.Sum256(raw)
+					fingerprint = hex.EncodeToString(sum[:])
+				}
+			}
+		}
+		if (err == nil) != want {
+			t.Fatalf("%q: the parser says %v (%v) and the second reading says %v", line, err == nil, err, want)
+		}
+		if err == nil && (key.Fingerprint() != fingerprint || key.Line() != line) {
+			t.Fatalf("%q: the key is %s %q", line, key.Fingerprint(), key.Line())
+		}
+		if err != nil {
+			var refusal *UpdateRefusal
+			if !errors.As(err, &refusal) || refusal.Code != "RELEASE_KEY_INVALID" {
+				t.Fatalf("%q: %v", line, err)
 			}
 		}
 	})

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -120,9 +121,9 @@ func newUpdateRefusal(code, format string, args ...any) *UpdateRefusal {
 // quotation mark or a backslash), no member occurs twice in an object, numbers
 // are written 0 or a digit 1 to 9 followed by digits and are at most 2^53-1,
 // every other value is a string, an array or an object, and nothing follows the
-// object but that one line feed. encoding/json is not used: it keeps the last of
-// two duplicate members without a word, accepts 1e2 and 7.0 as numbers, accepts
-// escapes, and skips whatever follows a value it was not asked to read.
+// object but that one line feed. encoding/json is not used to read them: it keeps
+// the last of two duplicate members without a word, takes 1e2 and 7.0 for whole
+// numbers and reads escape sequences, so the grammar is written out here.
 
 type releaseValueKind int
 
@@ -568,6 +569,32 @@ func ParseReleaseManifest(raw []byte) (ReleaseManifest, error) {
 	return manifest, nil
 }
 
+// BuildReleaseManifest writes a manifest the way the server does: one line, the
+// members in the contract's order, no spaces and no final line feed. It is for
+// tests and tools that need a manifest to sign. The bytes are parsed again before
+// they are returned, so it never writes a manifest that every host refuses.
+func BuildReleaseManifest(manifest ReleaseManifest) ([]byte, error) {
+	var out strings.Builder
+	out.WriteString(`{"schema":"` + releaseManifestSchema + `","version":"` + manifest.Version + `","counter":` + strconv.FormatUint(manifest.Counter, 10))
+	out.WriteString(`,"issued_at":"` + formatReleaseInstant(manifest.IssuedAt) + `","expires_at":"` + formatReleaseInstant(manifest.ExpiresAt) + `"`)
+	if manifest.MinFrom != "" {
+		out.WriteString(`,"min_from":"` + manifest.MinFrom + `"`)
+	}
+	out.WriteString(`,"service_definition":` + strconv.FormatInt(manifest.ServiceDefinition, 10) + `,"artifacts":[`)
+	for i, artifact := range manifest.Artifacts {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.WriteString(`{"os":"` + artifact.OS + `","arch":"` + artifact.Arch + `","format":"` + artifact.Format + `","file":"` + artifact.File + `","size":` + strconv.FormatInt(artifact.Size, 10) + `,"sha256":"` + artifact.SHA256 + `"}`)
+	}
+	out.WriteString(`]}`)
+	built := []byte(out.String())
+	if _, err := ParseReleaseManifest(built); err != nil {
+		return nil, err
+	}
+	return built, nil
+}
+
 var (
 	releaseOperatingSystems = []string{"linux", "darwin", "windows"}
 	releaseArchitectures    = []string{"amd64", "arm64"}
@@ -966,8 +993,13 @@ type Verified struct {
 	Floors map[string]uint64
 }
 
-// Signer is the first of the signers.
-func (v Verified) Signer() ReleaseKey { return v.Signers[0] }
+// Signer is the first of the signers, or the zero key for a value that holds none.
+func (v Verified) Signer() ReleaseKey {
+	if len(v.Signers) == 0 {
+		return ReleaseKey{}
+	}
+	return v.Signers[0]
+}
 
 // VerifyRelease decides an offered release in the order of the contract and
 // stops at the first refusal. It is the one function the agent (before it
