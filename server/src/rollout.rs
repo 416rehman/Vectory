@@ -2186,7 +2186,12 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                             .fetch_one(&mut *db)
                             .await?;
                     crate::variables::snapshot(db, &device, generation, new, &artifact).await?;
-                    sqlx::query("UPDATE deployment_targets SET generation=?,previous_version_id=?,previous_artifact_sha256=?,previous_generation=? WHERE deployment_id=? AND device_id=?")
+                    // What the device ran before this deployment is recorded
+                    // when the deployment first takes it, and kept after that:
+                    // taking the device again, once a higher-priority
+                    // assignment that held it is gone, must not make that
+                    // assignment the version a rollback returns to.
+                    sqlx::query("UPDATE deployment_targets SET generation=?,previous_version_id=CASE WHEN previous_recorded=0 THEN ? ELSE previous_version_id END,previous_artifact_sha256=CASE WHEN previous_recorded=0 THEN ? ELSE previous_artifact_sha256 END,previous_generation=CASE WHEN previous_recorded=0 THEN ? ELSE previous_generation END,previous_recorded=1 WHERE deployment_id=? AND device_id=?")
                         .bind(generation).bind(current).bind(previous_sha)
                         .bind(old_id.as_ref().map(|_| row.get::<i64,_>("desired_generation")))
                         .bind(text(w,"id")).bind(&device).execute(&mut *db).await?;
@@ -2457,7 +2462,7 @@ async fn advance_with(db: &mut SqliteConnection, d: &mut Value, early: Option<&s
         let at = db::now();
         for (device, _) in &wave {
             // Positive sentinel marks admission. resolve immediately replaces it with actual generation in the same transaction.
-            sqlx::query("UPDATE deployment_targets SET state='desired',generation=1,released_at=? WHERE deployment_id=? AND device_id=? AND generation=0")
+            sqlx::query("UPDATE deployment_targets SET state='desired',generation=1,released_at=?,previous_recorded=0 WHERE deployment_id=? AND device_id=? AND generation=0")
                 .bind(&at)
                 .bind(text(d, "id"))
                 .bind(device)
