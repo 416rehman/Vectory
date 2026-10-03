@@ -6,10 +6,12 @@ import DeviceCheck, { DeviceCheckResults } from "./DeviceCheck";
 import {
   POLL_BACKOFF_MS,
   POLL_MS,
+  bindCommands,
   checkBody,
   checkKind,
   checkLook,
   explainCheckError,
+  hostHint,
   isRunning,
   isUnanswered,
   leadFinding,
@@ -616,10 +618,11 @@ describe("the results", () => {
         expect(html).toContain(
           "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
         );
-        // Windows hosts get theirs without sudo.
+        // Windows hosts get theirs for PowerShell, with the full path, never sudo.
         expect(html).toContain(
-          "vectory configure-secrets --secret-files C:\\ProgramData\\Vectory\\secret-bindings.json",
+          "configure-secrets --secret-files &#x27;C:\\ProgramData\\Vectory\\secret-bindings.json&#x27;",
         );
+        expect(html).toContain("# In an elevated PowerShell:");
         expect(html).toContain("Copy the commands for edge-secret");
         expect(html).toContain("Copy the commands for win-secret");
         // The bindings file keeps what the host already has bound.
@@ -673,6 +676,213 @@ describe("the results", () => {
   it("keeps the asking buttons focusable but inert while a request is out", () => {
     expect(render("table", true)).toContain('aria-disabled="true"');
     expect(render("table", false)).not.toContain('aria-disabled="true"');
+  });
+});
+
+describe("commands made for the host", () => {
+  const file = "/etc/vectory/secret-bindings.json";
+  const linux = { os: "linux", secret_names: ["DD_API_KEY"] };
+  const winExe = "& 'C:\\Program Files\\Vectory\\vectory.exe'";
+  const winFile = "'C:\\ProgramData\\Vectory\\secret-bindings.json'";
+
+  it("are the three usual lines on a host with a service and the default state directory", () => {
+    for (const service_manager of ["systemd", "launchd"] as const)
+      expect(
+        bindCommands(["API_KEY"], {
+          ...linux,
+          service_manager,
+          state_dir: "/var/lib/vectory-agent",
+        }).commands,
+      ).toBe(
+        [
+          "sudo vectory service-stop",
+          `sudo vectory configure-secrets --secret-files ${file}`,
+          "sudo vectory service-start",
+        ].join("\n"),
+      );
+    // The bindings file still lists what the host already has bound.
+    expect(JSON.parse(bindCommands(["API_KEY"], linux).bindings)).toEqual({
+      API_KEY: "/etc/vectory/secrets/API_KEY",
+      DD_API_KEY: "/etc/vectory/secrets/DD_API_KEY",
+    });
+  });
+
+  it("name a state directory that isn't the default, and stop and start the agent the way it runs", () => {
+    expect(
+      bindCommands(["API_KEY"], {
+        ...linux,
+        state_dir: "/srv/vectory state",
+        service_manager: "none",
+      }).commands,
+    ).toBe(
+      [
+        "# First stop the agent: Ctrl-C where `vectory run` runs (`vectory status` shows its pid).",
+        "sudo vectory configure-secrets \\",
+        "  --state-dir '/srv/vectory state' \\",
+        `  --secret-files ${file}`,
+        "# Then start the agent again the way you started it.",
+      ].join("\n"),
+    );
+    expect(
+      bindCommands(["API_KEY"], {
+        ...linux,
+        state_dir: "/srv/vectory",
+        service_manager: "systemd",
+      }).commands,
+    ).toBe(
+      [
+        "sudo vectory service-stop",
+        "sudo vectory configure-secrets \\",
+        "  --state-dir /srv/vectory \\",
+        `  --secret-files ${file}`,
+        "sudo vectory service-start",
+      ].join("\n"),
+    );
+  });
+
+  it("say what an agent that doesn't report how it runs leaves open", () => {
+    expect(bindCommands(["API_KEY"], linux).commands).toBe(
+      [
+        "# Without a service (`vectory run`), stop it with Ctrl-C instead, and start it again yourself.",
+        "sudo vectory service-stop",
+        `sudo vectory configure-secrets --secret-files ${file}`,
+        "sudo vectory service-start",
+      ].join("\n"),
+    );
+  });
+
+  it("are for PowerShell on Windows, with the state directory when it isn't the default", () => {
+    const win = { os: "windows", secret_names: [] };
+    expect(
+      bindCommands(["API_KEY"], {
+        ...win,
+        service_manager: "windows",
+        state_dir: "C:\\ProgramData\\Vectory\\agent",
+      }).commands,
+    ).toBe(
+      [
+        "# In an elevated PowerShell:",
+        `${winExe} service-stop`,
+        `${winExe} configure-secrets --secret-files ${winFile}`,
+        `${winExe} service-start`,
+      ].join("\n"),
+    );
+    expect(
+      bindCommands(["API_KEY"], {
+        ...win,
+        service_manager: "none",
+        state_dir: "D:\\Vectory State",
+      }).commands,
+    ).toBe(
+      [
+        "# In an elevated PowerShell. First stop the agent: Ctrl-C where `vectory run` runs.",
+        `${winExe} configure-secrets --state-dir 'D:\\Vectory State' --secret-files ${winFile}`,
+        "# Then start the agent again the way you started it.",
+      ].join("\n"),
+    );
+  });
+
+  it("are the generic ones when the device isn't known, and say so when a value can't be carried", () => {
+    expect(bindCommands(["API_KEY"]).commands).toBe(
+      [
+        "sudo vectory service-stop",
+        `sudo vectory configure-secrets --secret-files ${file}`,
+        "sudo vectory service-start",
+      ].join("\n"),
+    );
+    expect(
+      bindCommands(["API_KEY"], {
+        ...linux,
+        state_dir: "/srv/vec\u0007tory",
+        service_manager: "none",
+      }).commands,
+    ).toBe(
+      [
+        "# No command can be shown for this host: the state directory contains a control character.",
+        "# Check where the agent keeps its state, then write the vectory configure-secrets command by hand.",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("fixes that name a command", () => {
+  const hint =
+    "Allow it on the host, with the agent stopped: vectory allow --network 10.0.0.9:9. Or deploy to a full-mode device.";
+
+  it("add the state directory when the host keeps its state elsewhere", () => {
+    expect(
+      hostHint(hint, { os: "linux", state_dir: "/srv/vectory state" }),
+    ).toBe(
+      "Allow it on the host, with the agent stopped: vectory allow --state-dir '/srv/vectory state' --network 10.0.0.9:9. Or deploy to a full-mode device.",
+    );
+    expect(
+      hostHint("Run vectory allow --file-root DIR on the host.", {
+        os: "windows",
+        state_dir: "D:\\Agent",
+      }),
+    ).toBe(
+      "Run vectory allow --state-dir 'D:\\Agent' --file-root DIR on the host.",
+    );
+  });
+
+  it("leave a fix alone when nothing differs, nothing is known or it names no such command", () => {
+    for (const device of [
+      { os: "linux", state_dir: "/var/lib/vectory-agent" },
+      { os: "darwin", state_dir: "/Library/Application Support/Vectory/agent" },
+      { os: "windows", state_dir: "C:\\ProgramData\\Vectory\\agent" },
+      { os: "linux" },
+      { os: "linux", state_dir: "/srv/vec\u0007tory" },
+    ])
+      expect(hostHint(hint, device)).toBe(hint);
+    expect(hostHint(hint)).toBe(hint);
+    expect(hostHint(undefined, { os: "linux", state_dir: "/srv/x" })).toBe(
+      undefined,
+    );
+    const other = "Bind it on the host with configure-secrets.";
+    expect(hostHint(other, { os: "linux", state_dir: "/srv/x" })).toBe(other);
+    // Already there: said once, however often it is applied.
+    const once = hostHint(hint, { os: "linux", state_dir: "/srv/x" });
+    expect(hostHint(once, { os: "linux", state_dir: "/srv/x" })).toBe(once);
+  });
+
+  it("reach the row's fix line and its secret commands", () => {
+    const device = {
+      os: "linux",
+      state_dir: "/srv/vectory state",
+      service_manager: "none" as const,
+    };
+    const html = renderToStaticMarkup(
+      createElement(DeviceCheckResults, {
+        rows: [
+          row("edge-fix", "failed", {
+            diagnostics: [
+              finding(
+                "Sink out sends to 10.0.0.9:9, which this host hasn't approved.",
+                { hint },
+              ),
+            ],
+          }),
+          row("edge-secret", "failed", { secrets_missing: ["API_KEY"] }),
+        ],
+        devices: new Map([
+          ["id-edge-fix", { id: "id-edge-fix", name: "edge-fix", ...device }],
+          [
+            "id-edge-secret",
+            { id: "id-edge-secret", name: "edge-secret", ...device },
+          ],
+        ]),
+        layout: "table",
+        blocked: false,
+        onRetry: () => {},
+      }),
+    );
+    expect(html).toContain(
+      "vectory allow --state-dir &#x27;/srv/vectory state&#x27; --network 10.0.0.9:9.",
+    );
+    expect(html).toContain("sudo vectory configure-secrets \\");
+    expect(html).toContain("--state-dir &#x27;/srv/vectory state&#x27; \\");
+    expect(html).toContain("# First stop the agent: Ctrl-C where");
+    expect(html).not.toContain("sudo vectory service-stop");
   });
 });
 

@@ -796,7 +796,10 @@ try {
         await expect(secret).toContainText(
           "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
         );
+        // This agent doesn't say how it runs, so the commands say what to do
+        // for each way, as the commands for the host do.
         const commands = [
+          "# Without a service (`vectory run`), stop it with Ctrl-C instead, and start it again yourself.",
           "sudo vectory service-stop",
           "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
           "sudo vectory service-start",
@@ -815,8 +818,9 @@ try {
         await expect(secret).toContainText("API_KEY");
         const windows = rowOf(section, NAMES.winSecret);
         await expect(windows).toContainText(
-          "vectory configure-secrets --secret-files C:\\ProgramData\\Vectory\\secret-bindings.json",
+          "configure-secrets --secret-files 'C:\\ProgramData\\Vectory\\secret-bindings.json'",
         );
+        await expect(windows).toContainText("In an elevated PowerShell");
         await expect(windows).not.toContainText("sudo");
 
         await expect(rowOf(section, NAMES.late)).toContainText(
@@ -1628,6 +1632,101 @@ try {
   );
 
   await check(
+    "A host with its own state directory that runs vectory run gets the secret commands and the fix made for it",
+    async () => {
+      const own = { state_dir: "/srv/vectory state", service_manager: "none" };
+      // A table row at 1280 px and a card at 390 px: both carry the device's id.
+      const resultOf = (section, name) =>
+        section.locator("[data-device-check-row]").filter({ hasText: name });
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({
+          devices: [
+            device(0, NAMES.fix, own),
+            device(1, NAMES.secret, { ...own, secret_names: ["DD_API_KEY"] }),
+            device(2, NAMES.late, {
+              state_dir: "/var/lib/vectory-agent",
+              service_manager: "systemd",
+            }),
+          ],
+        });
+        f.initial = {};
+        const app = await openReview(f, { width, theme });
+        const { page, check: section } = app;
+        try {
+          await askButton(section).click();
+          await expect(summary(section)).toContainText(
+            "3 still checking",
+            WAIT,
+          );
+          answer(f, NAMES.fix, answers.fix);
+          answer(f, NAMES.secret, answers.secret("API_KEY"));
+          answer(f, NAMES.late, answers.secret("API_KEY"));
+          await expect(summary(section)).toContainText(
+            "Checked 3 of 3 devices: 2 need a secret, 1 needs a fix.",
+            WAIT,
+          );
+          // The fix names the host's state directory.
+          await expect(resultOf(section, NAMES.fix)).toContainText(
+            "Run vectory allow --state-dir '/srv/vectory state' --network 10.0.0.9:9 on the host.",
+          );
+          // The secret commands stop the agent the way it runs, and say where it keeps its state.
+          const own_commands = [
+            "# First stop the agent: Ctrl-C where `vectory run` runs (`vectory status` shows its pid).",
+            "sudo vectory configure-secrets \\",
+            "  --state-dir '/srv/vectory state' \\",
+            "  --secret-files /etc/vectory/secret-bindings.json",
+            "# Then start the agent again the way you started it.",
+          ].join("\n");
+          const secret = resultOf(section, NAMES.secret);
+          await expect(secret.locator("pre").first()).toHaveText(own_commands);
+          // A host with the defaults still gets the usual three lines.
+          await expect(
+            resultOf(section, NAMES.late).locator("pre").first(),
+          ).toHaveText(
+            [
+              "sudo vectory service-stop",
+              "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
+              "sudo vectory service-start",
+            ].join("\n"),
+          );
+          await page.evaluate(() =>
+            Object.defineProperty(navigator, "clipboard", {
+              configurable: true,
+              value: {
+                writeText: async (value) => {
+                  window.copiedCommands = value;
+                },
+              },
+            }),
+          );
+          await secret
+            .getByRole("button", {
+              name: `Copy the commands for ${NAMES.secret}`,
+            })
+            .click();
+          expect(await page.evaluate(() => window.copiedCommands)).toBe(
+            own_commands,
+          );
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "secret commands made for the host", width, theme);
+          await secret.scrollIntoViewIfNeeded();
+          const file = `host-commands-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+
+  await check(
     "Once Check on devices passes on a restricted host the review says that instead, and asks again after the selection changes",
     async () => {
       const f = scene({
@@ -1715,7 +1814,7 @@ try {
     scope:
       "The real deploy review and its Check on devices section, with intercepted synthetic HTTP. The synthetic server answers when the harness says so: no host validated anything.",
     passed:
-      results.length === 18 &&
+      results.length === 19 &&
       results.every((r) => r.passed) &&
       accessibility.every((s) => !s.violations.length),
     results,
