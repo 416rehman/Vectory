@@ -588,6 +588,42 @@ try {
     },
   );
   await check(
+    "Devices that left a rollout are not counted on the Overview: a schedule counts the ones that follow it, and one nobody follows says so",
+    async () => {
+      const base = overview();
+      const rollouts = [
+        // Every device was revoked or moved to another assignment.
+        { ...base.rollouts[0], target_count: 2, state_counts: { removed: 2 } },
+        // A schedule of four devices, one of them revoked since.
+        {
+          ...base.rollouts[1],
+          target_count: 4,
+          state_counts: { pending: 3, removed: 1 },
+        },
+        // A schedule whose devices all left.
+        {
+          ...base.rollouts[1],
+          id: uuid(60),
+          target_count: 2,
+          state_counts: { removed: 2 },
+        },
+      ];
+      const { context, page } = await open({
+        overview: { ...base, rollouts },
+      });
+      const meta = (index) =>
+        page
+          .locator(".overview-rollout-item")
+          .nth(index)
+          .locator(".overview-rollout-meta");
+      await expect(meta(0)).toHaveText("No devices follow this now");
+      await expect(meta(1)).toContainText("· 3 devices");
+      await expect(meta(1)).not.toContainText("4 devices");
+      await expect(meta(2)).toContainText("· No devices follow this now");
+      await context.close();
+    },
+  );
+  await check(
     "Running now lists each pipeline version by devices, groups, rates and what it is doing, above Rollouts",
     async () => {
       const { context, page } = await open({
