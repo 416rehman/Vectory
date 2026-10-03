@@ -247,7 +247,7 @@ The Overview's **Needs you** lists what still needs a person, most urgent first:
 
 Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 devices applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering**, is named apart (**2 of 3 devices applied · 1 not delivering**) and doesn't count as applied. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
 
-Before a schedule starts, **Update scheduled devices** compares its saved device list with current group membership. Review who is added and removed, then confirm. If anything changes while you review, refresh the review and confirm again.
+Before a schedule starts, **Review scheduled devices** on its page compares its saved device list with current group membership. Review who is added and removed, then choose **Update scheduled devices**. If a device can't take the version, for example a restricted device when the version needs full mode, the review names it and **Update scheduled devices** stays unavailable. If anything changes while you review, refresh the review and confirm again.
 
 ## Pause, cancel and remove
 
