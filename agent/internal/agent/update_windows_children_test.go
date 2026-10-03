@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+// stagedBuildName is the name the step gives a build it stages and probes: a dot and
+// no extension, as on every system (the contract names it, and Windows runs the file
+// it is given whatever it is called).
+const stagedBuildName = ".vectory-update-7"
+
 // The Windows tests of the step need programs to run: an executable that is
 // running (whose file can be renamed but not replaced), a build that answers
 // `version --json`, one that never answers, one that prints too much, one that
@@ -23,7 +28,7 @@ import (
 // and its arguments alone, because the step starts a build with a clean environment.
 func init() {
 	switch strings.ToLower(filepath.Base(os.Args[0])) {
-	case "vectory.exe":
+	case "vectory.exe", stagedBuildName:
 		switch {
 		case len(os.Args) == 3 && os.Args[1] == "version" && os.Args[2] == "--json":
 			fmt.Printf(`{"version":"0.1.0","vector_version":"0.58.0","go":"go1.26","os":"windows","arch":%q}`+"\n", runtime.GOARCH)
