@@ -394,19 +394,8 @@ func (r *rootOwned) entryPath(name string) string {
 	return r.dirPath + `\` + name
 }
 
-// checkEntryName accepts one name in the directory: nothing that could reach
-// another directory or a stream of a file.
-func checkEntryName(name string) error {
-	if name == "" || name == "." || name == ".." || len(name) > 255 || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
-		return fmt.Errorf("%q isn't a name in a directory", name)
-	}
-	for _, c := range name {
-		if c < 0x20 || strings.ContainsRune(`<>:"/\|?*`, c) {
-			return fmt.Errorf("%q isn't a name in a directory", name)
-		}
-	}
-	return nil
-}
+// checkEntryName accepts one plain name in the directory (checkWindowsEntryName).
+func checkEntryName(name string) error { return checkWindowsEntryName(name) }
 
 // OpenAt opens a regular file of the held directory for reading, as the check
 // opens the file of a path: no link, no alias, and SYSTEM's and the

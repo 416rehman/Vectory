@@ -195,10 +195,13 @@ func TestOpenRootOwnedRefusesAnAccountThatCanChangeTheHolderOrTheFile(t *testing
 		{"a directory above the holder lets Users delete a child", filepath.Join(tree, "a", "b"), true, "(A;;0x40;;;BU)", "can be changed by " + users + " (delete)"},
 	} {
 		setDACL(t, tc.path, ownDACL(t, tc.directory, tc.entry))
-		_, err := openRootOwned(file, rootOwnedFile)
+		held, err := openRootOwned(file, rootOwnedFile)
 		if tc.problem == "" {
 			if err != nil {
 				t.Errorf("%s: %v", tc.name, err)
+			} else {
+				// A held path can't be removed with the temporary directory.
+				held.Close()
 			}
 		} else if refusal := refusedAs(t, err); refusal.Detail != tc.path+" "+tc.problem {
 			t.Errorf("%s: %q, want %q", tc.name, refusal.Detail, tc.path+" "+tc.problem)
@@ -293,7 +296,9 @@ func TestOpenRootOwnedSaysWhenSomethingIsMissingAndRefusesTheWrongKind(t *testin
 	if _, err := r.OpenAt("NUL"); err == nil {
 		t.Error("a device was opened as a file")
 	}
-	for _, name := range []string{"", ".", "..", `..\file`, "a/b", "a:stream", "a.", "a ", "a*b", strings.Repeat("n", 256)} {
+	// A device is opened in every directory by its name, with or without an
+	// extension, so those names are refused before anything is opened.
+	for _, name := range []string{"", ".", "..", `..\file`, "a/b", "a:stream", "a.", "a ", "a*b", "NUL", "con.json", "COM1", "lpt9.txt", strings.Repeat("n", 256)} {
 		if _, err := r.OpenAt(name); err == nil {
 			t.Errorf("OpenAt(%q) succeeded", name)
 		}

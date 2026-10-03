@@ -169,6 +169,33 @@ func serviceSID(name string) string {
 	return "S-1-5-80-" + strings.Join(words, "-")
 }
 
+// checkWindowsEntryName accepts one plain name in a directory: letters, digits,
+// dots, underscores and hyphens, which can't reach another directory, a stream of
+// a file or a short name, and isn't the name of a device. The system opens CON,
+// PRN, AUX, NUL, COM1 to COM9 and LPT1 to LPT9, with or without an extension, as
+// the device in every directory, so a name that is one is refused.
+func checkWindowsEntryName(name string) error {
+	invalid := fmt.Errorf("%q isn't a name in a directory", name)
+	if name == "" || name == "." || name == ".." || len(name) > 255 || strings.HasSuffix(name, ".") {
+		return invalid
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return invalid
+		}
+	}
+	base, _, _ := strings.Cut(strings.ToUpper(name), ".")
+	switch base {
+	case "CON", "PRN", "AUX", "NUL":
+		return invalid
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9' {
+		return invalid
+	}
+	return nil
+}
+
 // windowsSDDL is the security descriptor of what root makes on Windows: SYSTEM
 // and the Administrators have full control and nobody else gets more than what
 // perm says, and nothing is inherited. For a directory the entries pass to what
