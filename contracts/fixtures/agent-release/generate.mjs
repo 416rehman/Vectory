@@ -71,15 +71,21 @@ function reportText() {
   ].join("\n")}\n`;
 }
 
-// Each file is written with one final line feed; the contract quotes it
-// without.
+// Each file is written with one final line feed, and the contract quotes it
+// without, except the two files a signature covers byte for byte (the release
+// manifest and the rollover statement): they are written exactly as signed, so
+// a host that is handed the example verifies it.
+const SIGNED_BYTES = new Set(["release.json", "rollover.json"]);
 function outputs() {
   const files = new Map([
     ["vectors.json", vectorsText()],
     ["report.json", reportText()],
   ]);
   for (const [name, content] of Object.entries(buildExamples()))
-    files.set(`examples/${name}`, `${content}\n`);
+    files.set(
+      `examples/${name}`,
+      SIGNED_BYTES.has(name) ? content : `${content}\n`,
+    );
   return files;
 }
 
