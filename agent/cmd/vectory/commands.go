@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -234,7 +235,8 @@ func defineServiceControl(action string) func(c *cli) func() int {
 			}
 			switch action {
 			case "start":
-				fmt.Fprintf(c.stdout, "Started %s.\nCheck it: sudo vectory status\n", agent.ServiceName)
+				// The service runs for the state directory it was registered with.
+				fmt.Fprintf(c.stdout, "Started %s.\nCheck it: %s\n", agent.ServiceName, agent.CommandFor(agent.ServiceStatus(context.Background()).StateDir, "sudo vectory status"))
 			case "stop":
 				fmt.Fprintf(c.stdout, "Stopped %s. Its Vector is stopped too; the configuration is kept.\n", agent.ServiceName)
 			default:
@@ -277,7 +279,7 @@ func defineInstall(c *cli) func() int {
 				var resolved agent.ResolvedPath
 				if resolved, err = agent.ResolveExecutablePath(*binary); err == nil {
 					if resolved.Resolved {
-						fmt.Fprintf(c.stderr, "Adopting %s (%s is a symbolic link). After upgrading Vector, approve the new binary with vectory re-adopt.\n", resolved.Path, *binary)
+						fmt.Fprintf(c.stderr, "Adopting %s (%s is a symbolic link). After upgrading Vector, approve the new binary with %s.\n", resolved.Path, *binary, agent.CommandFor(*c.state, "vectory re-adopt"))
 					}
 					*binary = resolved.Path
 					opts.VectorBinary = binary
@@ -482,7 +484,7 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			if recover {
 				verb = "Recovered"
 			}
-			fmt.Fprintf(c.stdout, "%s as %s (device %s) with %s.\nNext: start the agent with %s, or run it as a service with sudo vectory setup.\n", verb, settings.Name, shortID(credentials.DeviceID), settings.Server, agent.RunCommandFor(dir))
+			fmt.Fprintf(c.stdout, "%s as %s (device %s) with %s.\nNext: start the agent with %s, or run it as a service with %s.\n", verb, settings.Name, shortID(credentials.DeviceID), settings.Server, agent.RunCommandFor(dir), agent.CommandFor(dir, "sudo vectory setup"))
 			return exitOK
 		}
 	}
@@ -507,7 +509,7 @@ func definePause(pause bool) func(c *cli) func() int {
 			if *c.json {
 				c.output(map[string]string{"status": "ok", "command": name})
 			} else if pause {
-				fmt.Fprintln(c.stdout, "Paused on this host. The current configuration keeps running and the agent keeps checking in; changes from the server wait until you run: sudo vectory resume")
+				fmt.Fprintln(c.stdout, "Paused on this host. The current configuration keeps running and the agent keeps checking in; changes from the server wait until you run: "+agent.CommandFor(*c.state, "sudo vectory resume"))
 			} else {
 				fmt.Fprintln(c.stdout, "Resumed. At its next check-in the agent applies the latest configuration from the server, replacing local edits to the managed file. A pause set from the dashboard still applies.")
 			}
@@ -554,7 +556,7 @@ func defineRetry(c *cli) func() int {
 			if *c.json {
 				c.output(map[string]any{"status": "ok", "command": "retry", "nothing_failed": true})
 			} else {
-				fmt.Fprintln(c.stdout, "Nothing to retry: no version has failed on this host. `vectory status` shows what it runs.")
+				fmt.Fprintln(c.stdout, "Nothing to retry: no version has failed on this host. `"+agent.CommandFor(*c.state, "vectory status")+"` shows what it runs.")
 			}
 			return exitOK
 		}
@@ -569,7 +571,7 @@ func defineRetry(c *cli) func() int {
 			if *c.json {
 				c.output(map[string]any{"status": "ok", "command": "retry", "queued": true, "agent_pid": held.Owner.PID})
 			} else {
-				fmt.Fprintf(c.stdout, "Retry queued. The running agent (pid %d) tries the failed version again within a few seconds; `vectory logs` and the device page show the result.\n", held.Owner.PID)
+				fmt.Fprintf(c.stdout, "Retry queued. The running agent (pid %d) tries the failed version again within a few seconds; `%s` and the device page show the result.\n", held.Owner.PID, agent.CommandFor(*c.state, "vectory logs"))
 			}
 			return exitOK
 		case err != nil:
@@ -787,7 +789,7 @@ func defineUninstall(c *cli) func() int {
 		if *c.json {
 			c.output(map[string]string{"status": "ok", "command": "uninstall"})
 		} else {
-			fmt.Fprintf(c.stdout, "Nothing was deleted. State and identity stay in %s for a reinstall.\nTo remove the agent: sudo vectory service-uninstall, remove the binary, then vectory uninstall --purge --state-dir %s\n", dir, filepath.Clean(dir))
+			fmt.Fprintf(c.stdout, "Nothing was deleted. State and identity stay in %s for a reinstall.\nTo remove the agent: sudo vectory service-uninstall, remove the binary, then vectory uninstall --purge --state-dir %s\n", dir, agent.ShellQuote(filepath.Clean(dir)))
 		}
 		return exitOK
 	}

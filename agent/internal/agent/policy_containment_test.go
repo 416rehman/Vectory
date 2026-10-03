@@ -152,8 +152,8 @@ func TestTheNextStepForARefusalNoAllowanceCanLiftDoesNotPointAtAnAllowance(t *te
 	refused := func(code string) State {
 		return State{LastGoodSHA256: "a", Error: &Issue{Code: "CAPABILITY_DENIED", Diagnostics: []Diagnostic{{Code: code, Severity: "error"}}}}
 	}
-	api := applyNextAction(refused("LOCAL_API_DENIED"))
-	id := applyNextAction(refused("INVALID_COMPONENT_ID"))
+	api := applyNextAction("", refused("LOCAL_API_DENIED"))
+	id := applyNextAction("", refused("INVALID_COMPONENT_ID"))
 	for name, next := range map[string]string{"api": api, "component ID": id} {
 		if strings.Contains(next, "Allow what the problem names") || !strings.HasSuffix(next, "Vector keeps running the last working configuration.") {
 			t.Errorf("%s: %q", name, next)
@@ -167,7 +167,7 @@ func TestTheNextStepForARefusalNoAllowanceCanLiftDoesNotPointAtAnAllowance(t *te
 	}
 	// Any other capability refusal still says to allow what it names.
 	other := State{LastGoodSHA256: "a", Error: &Issue{Code: "CAPABILITY_DENIED", Diagnostics: []Diagnostic{{Code: "LISTENER_DENIED", Severity: "error"}}}}
-	if next := applyNextAction(other); !strings.HasPrefix(next, "Allow what the problem names on this host") {
+	if next := applyNextAction("", other); !strings.HasPrefix(next, "Allow what the problem names on this host") {
 		t.Errorf("other: %q", next)
 	}
 }

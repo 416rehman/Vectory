@@ -1148,7 +1148,9 @@ func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
 			r.safe[token] = true
 		}
 	}
-	return []Diagnostic{r.finalize(refusal.Diagnostic())}
+	refused := *refusal
+	refused.StateDir = e.Dir
+	return []Diagnostic{r.finalize(refused.Diagnostic())}
 }
 
 // containsSecret reports whether text overlaps a secret value.
@@ -1207,5 +1209,9 @@ func (e *Engine) redactorFor(effective []byte) *redactor {
 	}
 	r.addLabel(e.Settings.ManagedConfig, "managed configuration")
 	r.addLabel(hostRuntimePath(e.Dir), "host runtime settings")
+	// A fix the agent prints names its own state directory (CommandFor).
+	if e.Dir != "" {
+		r.safe[e.Dir] = true
+	}
 	return r
 }

@@ -195,7 +195,7 @@ func TestDiskFullAtEveryWriteOfAnApply(t *testing.T) {
 					if d.e.State.FailedGeneration != nil {
 						t.Fatal("a full disk held the version back from the next attempt")
 					}
-					if next := applyNextAction(d.e.State); !strings.Contains(next, "Free some space") {
+					if next := applyNextAction("", d.e.State); !strings.Contains(next, "Free some space") {
 						t.Fatalf("the next step doesn't name the fix: %s", next)
 					}
 				}
