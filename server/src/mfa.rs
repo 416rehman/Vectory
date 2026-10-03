@@ -418,6 +418,18 @@ pub async fn admin_reset(
     Ok(Json(json!({"user":out})))
 }
 
+/// Whether the account behind `email` signs in with two-factor authentication,
+/// for the words `vectory-admin reset-password` closes with.
+pub async fn local_is_on(s: &State, email: &str) -> anyhow::Result<bool> {
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "SELECT m.enabled FROM user_mfa m JOIN users u ON u.id=m.user_id WHERE u.email=?",
+    )
+    .bind(email.trim().to_ascii_lowercase())
+    .fetch_optional(&s.pool)
+    .await?;
+    Ok(enabled == Some(true))
+}
+
 /// Offline break-glass from `vectory-admin disable-mfa` on a stopped server.
 pub async fn local_disable(s: &State, email: &str) -> anyhow::Result<String> {
     let email = email.trim().to_ascii_lowercase();
