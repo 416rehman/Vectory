@@ -570,7 +570,7 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 	}
 	for _, executable := range []string{
 		"/usr/local/bin/vectory", "/opt/vectory/vectory", "/usr/binary/vectory", "/usr/libexec/vectory", "/binary/vectory",
-		"/srv/usr/bin/vectory", "/usr/local/Cellar2/vectory", "/home/me/vectory",
+		"/srv/usr/bin/vectory", "/usr/local/Cellar2/vectory", "/home/you/vectory",
 	} {
 		if reason, managed := host.PackageManaged(executable); managed {
 			t.Errorf("%s is taken for a package's: %s", executable, reason)
@@ -614,8 +614,8 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 func TestWhatTheStepsSandboxHidesIsRefusedAsAnUntrustedLocationWithTheReason(t *testing.T) {
 	host, _ := newTestLinuxHost(t)
 	for path, hiddenBy := range map[string]string{
-		"/home/me/vectory": "/home", "/home": "/home", "/root/bin/vectory": "/root", "/run/user/1000/x": "/run/user",
-		"/tmp/vectory-state": "/tmp", "/var/tmp/x/y": "/var/tmp", "/home/../home/me/x": "/home",
+		"/home/you/vectory": "/home", "/home": "/home", "/root/bin/vectory": "/root", "/run/user/1000/x": "/run/user",
+		"/tmp/vectory-state": "/tmp", "/var/tmp/x/y": "/var/tmp", "/home/../home/you/x": "/home",
 	} {
 		if directory, hidden := hiddenPath(path); !hidden || directory != hiddenBy {
 			t.Errorf("%s: %q, %v", path, directory, hidden)

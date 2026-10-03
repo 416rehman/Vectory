@@ -418,9 +418,13 @@ func (cfg *config) loadCraft(now time.Time) (*craft, error) {
 	return c, nil
 }
 
-// floorOf is the floor the step reports for a key in its status file.
+// floorOf is the floor the step reports for a key in its status file. A host that
+// has no step has no status file, and no floor.
 func floorOf(statusFile, fingerprint string) (uint64, error) {
 	data, err := os.ReadFile(statusFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
 	if err != nil {
 		return 0, err
 	}
