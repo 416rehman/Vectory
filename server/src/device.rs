@@ -600,10 +600,11 @@ fn log_summary(v: &Value) -> Result<Value> {
 ///   device never spends another's rows.
 /// - The first apply-state row of each state that starts or ends an attempt
 ///   (`desired`, `verified_applied` and `failed`) for a generation is written
-///   whatever the limit says, and does not count toward it. Only a deployment or
-///   a retry makes a generation, so a device released to three versions in a
-///   minute still shows each one's start and result, while one that repeats a
-///   generation gets that exemption once per state every ten minutes.
+///   whatever the limit says, and does not count toward it. Only the server
+///   makes a generation (a release, a retry or the recovery after a restore),
+///   never the device, so one released to three versions in a minute still shows
+///   each one's start and result, while one that repeats a generation gets that
+///   exemption once per state every ten minutes.
 ///
 /// A change that the limit skips is not written later: the device record holds
 /// the current value, the audit log holds what fitted. The counts live in memory
