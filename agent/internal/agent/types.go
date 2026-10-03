@@ -67,6 +67,12 @@ func sameVectorSeries(a, b string) bool {
 }
 
 const MaxArtifact = 1024 * 1024
+
+// MaxAgentBuild bounds an agent build: the download of an update, and the
+// privileged step's copy of it (128 MiB, the contract's bound on a release's
+// artifact). MaxArtifact keeps bounding pipeline artifacts and the signed
+// manifest that carries an offer.
+const MaxAgentBuild = 128 * 1024 * 1024
 const MaxJSONCounter uint64 = 9007199254740991
 
 type Policy struct {
