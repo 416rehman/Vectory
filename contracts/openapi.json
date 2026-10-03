@@ -14985,6 +14985,18 @@
               }
             ]
           },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The current name of device_id, or null when no device exists with that ID."
+          },
           "outcome": {
             "type": "string",
             "maxLength": 128
@@ -15026,6 +15038,7 @@
           "target_kind",
           "target_name",
           "device_id",
+          "device_name",
           "outcome",
           "created_at",
           "request_id"
@@ -15110,6 +15123,18 @@
                 "type": "null"
               }
             ]
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The current name of device_id, or null when no device exists with that ID."
           },
           "outcome": {
             "type": "string",
@@ -15398,6 +15423,7 @@
           "target_kind",
           "target_name",
           "device_id",
+          "device_name",
           "outcome",
           "created_at",
           "request_id",
@@ -31705,6 +31731,44 @@
                 "type": "null"
               }
             ]
+          },
+          "restored": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version_number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "version_number"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on rollout.rolled_back: the pipeline version the rollback restored, or null when that is not known. It can belong to another pipeline than the rolled-back deployment."
           },
           "count": {
             "type": "integer",

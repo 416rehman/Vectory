@@ -367,7 +367,11 @@ try {
     });
     versions.push(version);
     const policy = index % 20 === 0;
-    const status = statuses[index % statuses.length];
+    // The deployments that carry target rows keep them counting: a removed
+    // assignment's devices read as no longer targeted, so these are cancelled.
+    const status = [0, 7, 21].includes(index)
+      ? "cancelled"
+      : statuses[index % statuses.length];
     deployments.push(
       record("deployment", {
         id: deploymentIds[index],
@@ -425,8 +429,8 @@ try {
   // The populated target parent is terminal, so background scheduling cannot mutate the fixture.
   const parent = deployments[0],
     otherParent = deployments[7];
-  assert.equal(parent.status, "unassigned");
-  assert.equal(otherParent.status, "unassigned");
+  assert.equal(parent.status, "cancelled");
+  assert.equal(otherParent.status, "cancelled");
   const targetStates = [
     "pending",
     "desired",
@@ -664,7 +668,9 @@ try {
     const target = {
       device_id: device.id,
       device_name: device.name,
-      state,
+      // A revoked device no longer follows the deployment: the row reads
+      // removed, while the stored state below stays as history.
+      state: index % 13 === 0 ? "removed" : state,
       generation: index,
       error: index % 7 === 0 ? "Synthetic observed failure" : null,
       original: index % 3 !== 0,
@@ -689,7 +695,7 @@ try {
     insertTarget.run(
       parent.id,
       device.id,
-      target.state,
+      state,
       target.generation,
       target.error,
       target.original ? 1 : 0,
@@ -1474,9 +1480,14 @@ try {
       );
       const foreign = await get(targetRoute(otherParent.id, { page_size: 50 }));
       assert.equal(foreign.total, 37);
+      // A revoked device no longer follows the deployment, so its row reads removed.
       assert(
         foreign.items.every(
-          (t) => t.state === "failed" && t.generation >= 8000,
+          (t) =>
+            t.state ===
+              (deviceIds.indexOf(t.device_id) % 13 === 0
+                ? "removed"
+                : "failed") && t.generation >= 8000,
         ),
       );
       for (const state of targetStates) {

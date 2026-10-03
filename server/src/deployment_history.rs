@@ -102,12 +102,40 @@ const ROLLED_BACK: &str = "json_type(d.data,'$.rolled_back_by')='text'";
 /// "Rollback of r15-demo v3" rather than a bare number from another pipeline.
 /// Callers add the `WHERE` that picks `n`.
 const PIPELINE_NAME: &str = "CASE WHEN json_type(nc.data,'$.name')='text' THEN substr(json_extract(nc.data,'$.name'),1,240) END FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') JOIN records nc ON nc.kind='configuration' AND nc.id=json_extract(nv.data,'$.configuration_id')";
-const VERIFIED: &str = "(SELECT count(*) FROM deployment_targets st WHERE st.deployment_id=d.id AND st.state='verified_applied')";
+/// The assignment of the deployment whose `data` is `deployment` was removed,
+/// and not by a rollback, which keeps counting what applied before it.
+fn assignment_removed(deployment: &str) -> String {
+    format!(
+        "(json_extract({deployment},'$.status')='unassigned' AND json_type({deployment},'$.rolled_back_by') IS NOT 'text')"
+    )
+}
+/// A target's state as counts and rows report it. The stored state is proof of
+/// what happened and stays as it was, but a device that was revoked (or no
+/// longer exists) and every device of a deployment whose assignment was removed
+/// no longer follow it: they read `removed`, **No longer targeted**, and don't
+/// count. `target` and `device` are the aliases of the target row and its left
+/// joined device, `deployment` the deployment's `data`.
+pub(crate) fn followed_state(target: &str, device: &str, deployment: &str) -> String {
+    format!(
+        "CASE WHEN {target}.state<>'removed' AND {} THEN 'removed' ELSE {target}.state END",
+        no_longer_follows(device, deployment)
+    )
+}
+/// The device was revoked (or no longer exists), or the deployment's
+/// assignment was removed: whatever the target's stored state, the device no
+/// longer follows the deployment.
+fn no_longer_follows(device: &str, deployment: &str) -> String {
+    format!(
+        "(COALESCE({device}.revoked,1)=1 OR {})",
+        assignment_removed(deployment)
+    )
+}
+const VERIFIED: &str = "(SELECT count(*) FROM deployment_targets st LEFT JOIN devices sv ON sv.id=st.device_id WHERE st.deployment_id=d.id AND st.state='verified_applied' AND COALESCE(sv.revoked,1)=0 AND NOT (json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.rolled_back_by') IS NOT 'text'))";
 /// Devices of deployment `d` that applied its version but aren't delivering
 /// it: `verified_applied` targets whose device has an open data-plane issue
 /// measured on that version. The rollout lanes count the same devices as
 /// failed (`degraded`); `state_counts` keeps their recorded state.
-pub(crate) const DEGRADED: &str = "(SELECT count(*) FROM deployment_targets dt JOIN devices dv ON dv.id=dt.device_id WHERE dt.deployment_id=d.id AND dt.state='verified_applied' AND json_extract(dv.data,'$.data_plane.version_id')=json_extract(d.data,'$.version_id') AND json_type(dv.data,'$.data_plane.issues[0]')='object')";
+pub(crate) const DEGRADED: &str = "(SELECT count(*) FROM deployment_targets dt JOIN devices dv ON dv.id=dt.device_id WHERE dt.deployment_id=d.id AND dt.state='verified_applied' AND dv.revoked=0 AND NOT (json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.rolled_back_by') IS NOT 'text') AND json_extract(dv.data,'$.data_plane.version_id')=json_extract(d.data,'$.version_id') AND json_type(dv.data,'$.data_plane.issues[0]')='object')";
 
 fn direction(value: Option<&str>, default: &'static str) -> Result<&'static str> {
     match value.unwrap_or(default) {
@@ -143,8 +171,9 @@ fn target_order(sort: Option<&str>, order: Option<&str>, terminal: bool) -> Resu
         "device_name" => "COALESCE(NULLIF(d.name,''),t.device_id) COLLATE NOCASE".to_owned(),
         "state" => {
             let pending = if terminal { "Not released" } else { "Waiting" };
+            let state = followed_state("t", "d", "dep.data");
             format!(
-                "CASE t.state WHEN 'verified_applied' THEN 'Applied and verified' WHEN 'desired' THEN 'Waiting for agent' WHEN 'pending' THEN '{pending}' WHEN 'written' THEN 'Applying' WHEN 'reload_requested' THEN 'Restarting Vector' WHEN 'verification_unknown' THEN 'Verification needed' WHEN 'rolled_back' THEN 'Rolled back' WHEN 'removed' THEN 'No longer targeted' ELSE replace(t.state,'_',' ') END COLLATE NOCASE"
+                "CASE {state} WHEN 'verified_applied' THEN 'Applied and verified' WHEN 'desired' THEN 'Waiting for agent' WHEN 'pending' THEN '{pending}' WHEN 'written' THEN 'Applying' WHEN 'reload_requested' THEN 'Restarting Vector' WHEN 'verification_unknown' THEN 'Verification needed' WHEN 'rolled_back' THEN 'Rolled back' WHEN 'removed' THEN 'No longer targeted' ELSE replace({state},'_',' ') END COLLATE NOCASE"
             )
         }
         "generation" => "t.generation".to_owned(),
@@ -208,7 +237,9 @@ fn count_query(
 fn projection(q: &mut QueryBuilder<'_, Sqlite>, order: &str) {
     // CROSS JOIN pins the bounded page as the outer loop, so target aggregation
     // uses (deployment_id,state) lookups instead of scanning the whole fleet.
-    q.push(", counts AS MATERIALIZED (SELECT t.deployment_id,t.state,count(*) AS n FROM page p CROSS JOIN deployment_targets t ON t.deployment_id=p.id GROUP BY t.deployment_id,t.state) SELECT json_object(\
+    q.push(", counts AS MATERIALIZED (SELECT t.deployment_id,")
+        .push(followed_state("t", "dv", "p.data"))
+        .push(" AS state,count(*) AS n FROM page p CROSS JOIN deployment_targets t ON t.deployment_id=p.id LEFT JOIN devices dv ON dv.id=t.device_id GROUP BY 1,2) SELECT json_object(\
         'id',d.id,'rollback_idempotency',json('true'),'rollback_review',json('true'),'request_correlation',json('true'),'name',CASE WHEN json_type(d.data,'$.name')='text' THEN substr(json_extract(d.data,'$.name'),1,120) ELSE NULL END,\
         'configuration_id',json_extract(v.data,'$.configuration_id'),'configuration_name',json_extract(c.data,'$.name'),\
         'version_id',CASE WHEN json_type(d.data,'$.version_id')='text' THEN json_extract(d.data,'$.version_id') ELSE NULL END,'version_number',json_extract(v.data,'$.number'),\
@@ -372,8 +403,17 @@ pub async fn summary(
 }
 fn target_filter(q: &mut QueryBuilder<'_, Sqlite>, id: &str, state: &str, search: &str) {
     q.push(" WHERE t.deployment_id=").push_bind(id.to_owned());
-    if state != "all" {
-        q.push(" AND t.state=").push_bind(state.to_owned());
+    // The stored state still narrows the read to an index range, except for
+    // `removed`, which also holds every device that no longer follows.
+    if state == "removed" {
+        q.push(" AND (t.state='removed' OR ")
+            .push(no_longer_follows("d", "dep.data"))
+            .push(")");
+    } else if state != "all" {
+        q.push(" AND t.state=")
+            .push_bind(state.to_owned())
+            .push(" AND NOT ")
+            .push(no_longer_follows("d", "dep.data"));
     }
     if !search.is_empty() {
         q.push(" AND (instr(lower(t.device_id),lower(")
@@ -390,19 +430,21 @@ fn target_query(
     page: Option<(i64, i64)>,
     order: &str,
 ) -> QueryBuilder<'static, Sqlite> {
+    let followed = followed_state("t", "d", "dep.data");
     let mut q = QueryBuilder::new(if page.is_some() {
-        "SELECT json_object('device_id',t.device_id,'device_name',d.name,'state',t.state,'generation',t.generation,'error',t.error,'original',json(CASE WHEN t.original=1 THEN 'true' ELSE 'false' END),\
+        "SELECT json_object('device_id',t.device_id,'device_name',d.name,'state',@STATE@,'generation',t.generation,'error',t.error,'original',json(CASE WHEN t.original=1 THEN 'true' ELSE 'false' END),\
         'released_at',t.released_at,'verified_at',t.verified_at,'last_seen',CASE WHEN json_type(d.data,'$.last_seen')='text' THEN substr(json_extract(d.data,'$.last_seen'),1,64) END,\
-        'replaced_by',CASE WHEN t.state='removed' THEN (SELECT json_extract(e.value,'$.deployment_id') FROM records rp,json_each(rp.data,'$.replaced_by') e JOIN deployment_targets rn ON rn.deployment_id=json_extract(e.value,'$.deployment_id') AND rn.device_id=t.device_id WHERE rp.kind='deployment' AND rp.id=t.deployment_id AND json_type(rp.data,'$.replaced_by')='array' LIMIT 1) END,\
+        'replaced_by',CASE WHEN @STATE@='removed' THEN (SELECT json_extract(e.value,'$.deployment_id') FROM records rp,json_each(rp.data,'$.replaced_by') e JOIN deployment_targets rn ON rn.deployment_id=json_extract(e.value,'$.deployment_id') AND rn.device_id=t.device_id WHERE rp.kind='deployment' AND rp.id=t.deployment_id AND json_type(rp.data,'$.replaced_by')='array' LIMIT 1) END,\
         'next_release_at',(SELECT min(x.released_at) FROM deployment_targets x WHERE x.device_id=t.device_id AND x.deployment_id<>t.deployment_id AND x.released_at>t.released_at),\
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
         '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
-        '_data_plane',CASE WHEN t.state='verified_applied' AND json_type(d.data,'$.data_plane.issues')='array' AND json_extract(d.data,'$.data_plane.version_id')=(SELECT json_extract(p.data,'$.version_id') FROM records p WHERE p.kind='deployment' AND p.id=t.deployment_id) THEN json_extract(d.data,'$.data_plane.issues[0]') END)"
+        '_data_plane',CASE WHEN @STATE@='verified_applied' AND json_type(d.data,'$.data_plane.issues')='array' AND json_extract(d.data,'$.data_plane.version_id')=(SELECT json_extract(p.data,'$.version_id') FROM records p WHERE p.kind='deployment' AND p.id=t.deployment_id) THEN json_extract(d.data,'$.data_plane.issues[0]') END)"
+            .replace("@STATE@", &followed)
     } else {
-        "SELECT count(*)"
+        "SELECT count(*)".to_owned()
     });
-    q.push(" FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id");
+    q.push(" FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id JOIN records dep ON dep.kind='deployment' AND dep.id=t.deployment_id");
     target_filter(&mut q, id, state, search);
     if let Some((size, offset)) = page {
         q.push(" ORDER BY ")
@@ -674,13 +716,14 @@ pub async fn rollout(
     if context.is_null() {
         return Err(ApiError::missing());
     }
-    let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('device_id',t.device_id,'device_name',substr(d.name,1,240),'state',t.state,'generation',t.generation,'released_at',t.released_at,'verified_at',t.verified_at,'error',t.error,\
+    let followed = followed_state("t", "d", "dep.data");
+    let rows: Vec<String> = sqlx::query_scalar(&"SELECT json_object('device_id',t.device_id,'device_name',substr(d.name,1,240),'state',@STATE@,'generation',t.generation,'released_at',t.released_at,'verified_at',t.verified_at,'error',t.error,\
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
         '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
-        '_data_plane',CASE WHEN t.state='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END,\
+        '_data_plane',CASE WHEN @STATE@='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END,\
         '_buffer',(SELECT json_extract(c.value,'$.buffer_utilization') FROM json_each(d.data,'$.telemetry.components') c WHERE json_type(c.value,'$.id')='text' AND json_extract(c.value,'$.id')=json_extract(d.data,'$.data_plane.issues[0].component_id') LIMIT 1)) \
-        FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=? ORDER BY t.device_id LIMIT 10001")
+        FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id JOIN records dep ON dep.kind='deployment' AND dep.id=t.deployment_id WHERE t.deployment_id=? ORDER BY t.device_id LIMIT 10001".replace("@STATE@", &followed))
         .bind(context["version_id"].as_str())
         .bind(&id)
         .fetch_all(&mut *tx)

@@ -296,6 +296,8 @@ From a deployment, **Roll back** prepares this for you. **Review rollback** says
 
 A canary that's still running rolls back in the same step: confirming stops the rollout and returns the devices it reached. If stopping it would switch a device it never reached to another version, or leave one without a pipeline, the review names that device and offers **Cancel rollout, then review rollback**.
 
+Each device returns to the version it ran before this deployment first reached it, even if other deployments held it in between. When devices would return to different versions, the review names each device and its version. Deploy each version to its own devices.
+
 Devices that ran their own local configuration before this deployment have nothing to roll back to. For them, **Remove assignment** returns them to that configuration.
 
 After a failed attempt, fix the cause, then use **Retry application** on the device or deploy a corrected version. A device doesn't retry a failed version by itself, so it can't restart Vector in a loop. Retrying one device doesn't restart a canary that stopped; deploy again with the rollout you want.

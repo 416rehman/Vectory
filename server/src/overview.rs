@@ -155,9 +155,10 @@ async fn rollouts(conn: &mut SqliteConnection) -> Result<Vec<Value>> {
             WHERE kind='deployment' AND json_extract(data,'$.status') IN ('active','paused','scheduled')
             ORDER BY created_at DESC,id ASC LIMIT 50
          ), counts AS MATERIALIZED (
-            SELECT t.deployment_id,t.state,count(*) AS n
+            SELECT t.deployment_id,{followed} AS state,count(*) AS n
             FROM page p CROSS JOIN deployment_targets t ON t.deployment_id=p.id
-            GROUP BY t.deployment_id,t.state
+            LEFT JOIN devices dv ON dv.id=t.device_id
+            GROUP BY 1,2
          )
          SELECT json_object(
             'id',d.id,
@@ -181,7 +182,8 @@ async fn rollouts(conn: &mut SqliteConnection) -> Result<Vec<Value>> {
          LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id')
          LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')
          ORDER BY d.created_at DESC,d.id ASC",
-        crate::deployment_history::DEGRADED
+        crate::deployment_history::DEGRADED,
+        followed = crate::deployment_history::followed_state("t", "dv", "p.data")
     ))
     .fetch_all(&mut *conn)
     .await?;

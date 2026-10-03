@@ -1421,6 +1421,208 @@ async fn offline_alerts_go_out_once_per_outage_and_back_online_once() {
     let _ = ancient;
 }
 
+async fn checked_in(f: &Fixture, device: &str, at: DateTime<Utc>) {
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.last_seen',?) WHERE id=?")
+        .bind(stamp(at))
+        .bind(device)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+}
+fn texts_of(hook: &Receiver) -> Vec<String> {
+    hook.requests()
+        .iter()
+        .map(|r| r.json()["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn devices_get_time_to_reconnect_after_the_server_starts_before_any_offline_alert() {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let f = fixture().await;
+    // Both devices last checked in just before the server went down for seven
+    // minutes. Agents back off for up to five minutes after refused
+    // connections, so neither can have been back at the moment of the start.
+    let went_down = Utc::now();
+    let started = went_down + Duration::minutes(7);
+    let mut body = webhook(
+        &hook.url("/o"),
+        true,
+        &["device.offline", "device.recovered"],
+    );
+    body["rules"]["offline_minutes"] = json!(5);
+    channel(&f, body).await;
+    let back = device(&f, "edge-back", went_down).await;
+    let gone = device(&f, "edge-gone", went_down).await;
+    f.s.notifier.begin_recovery_window(started);
+    drain(&f, started).await;
+    drain(&f, started + Duration::minutes(2)).await;
+    assert!(
+        texts_of(&hook).is_empty(),
+        "stale check-ins from before the start are not silence: {:?}",
+        texts_of(&hook)
+    );
+    // One device reconnects after its backoff and keeps checking in.
+    let half_past = |minute: i64| started + Duration::minutes(minute) + Duration::seconds(30);
+    for minute in 3..=9 {
+        checked_in(&f, &back, started + Duration::minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+    }
+    assert!(
+        texts_of(&hook).is_empty(),
+        "the other device is past the window but not yet silent for the channel's five minutes: {:?}",
+        texts_of(&hook)
+    );
+    // The other stays silent after the window: reported once the channel's
+    // minutes have passed, counted from the end of the window.
+    checked_in(&f, &back, started + Duration::minutes(10)).await;
+    drain(&f, half_past(10)).await;
+    assert_eq!(texts_of(&hook), ["edge-gone is offline"]);
+    let offline = hook.requests()[0].json();
+    assert_eq!(offline["event"]["device"]["id"], gone);
+    assert!(
+        offline["event"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("No check-in for 17 min"),
+        "the message still counts from the last check-in: {offline}"
+    );
+    checked_in(&f, &back, started + Duration::minutes(39)).await;
+    drain(&f, started + Duration::minutes(40)).await;
+    assert_eq!(texts_of(&hook), ["edge-gone is offline"], "once per outage");
+}
+
+#[tokio::test]
+async fn a_device_reported_offline_before_a_restart_is_not_reported_again() {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let f = fixture().await;
+    let t0 = Utc::now() + Duration::seconds(5);
+    let mut body = webhook(
+        &hook.url("/o"),
+        true,
+        &["device.offline", "device.recovered"],
+    );
+    body["rules"]["offline_minutes"] = json!(5);
+    channel(&f, body).await;
+    let returns = device(&f, "edge-returns", t0).await;
+    let silent = device(&f, "edge-silent", t0).await;
+    drain(&f, t0 + Duration::minutes(6)).await;
+    let mut paged = texts_of(&hook);
+    paged.sort();
+    assert_eq!(paged, ["edge-returns is offline", "edge-silent is offline"]);
+    // The server restarts while both are still gone.
+    let started = t0 + Duration::minutes(20);
+    f.s.notifier.begin_recovery_window(started);
+    drain(&f, started).await;
+    drain(&f, started + Duration::minutes(2)).await;
+    // The first check-in after the outage is not "back online" yet, even
+    // though nothing in the window counted the device as silent.
+    checked_in(&f, &returns, started + Duration::minutes(3)).await;
+    drain(&f, started + Duration::minutes(4)).await;
+    assert_eq!(texts_of(&hook).len(), 2, "one check-in is not back yet");
+    checked_in(&f, &returns, started + Duration::minutes(5)).await;
+    drain(&f, started + Duration::minutes(6)).await;
+    // The silent device stays silent through and after the window.
+    checked_in(&f, &returns, started + Duration::minutes(29)).await;
+    drain(&f, started + Duration::minutes(30)).await;
+    let all = texts_of(&hook);
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert_eq!(all[2], "edge-returns is back online");
+    let mut first_two = all[..2].to_vec();
+    first_two.sort();
+    assert_eq!(first_two, paged);
+    let _ = silent;
+}
+
+#[tokio::test]
+async fn a_rollback_names_the_pipeline_it_restored_when_that_differs() {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let f = fixture().await;
+    channel(&f, webhook(&hook.url("/r"), true, &["rollout.rolled_back"])).await;
+    // "Web access logs v4" was rolled back, once to a version of another
+    // pipeline and once to an earlier version of itself.
+    let (web, rolled) = version(&f, "Web access logs").await;
+    let edge = db::id();
+    let edge_v1 = db::id();
+    let web_v3 = db::id();
+    let admin: String = sqlx::query_scalar("SELECT id FROM users WHERE role='admin'")
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap();
+    let mut conn = f.s.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "configuration",
+        &json!({"id":edge,"name":"Edge syslog processing (synthetic demo)","created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    for (id, configuration, number) in [(&edge_v1, &edge, 1), (&web_v3, &web, 3)] {
+        db::insert(&mut conn, "version", &json!({"id":id,"configuration_id":configuration,"number":number,"artifact":"{}\n","sha256":db::hash("{}\n"),"size":3,"created_at":db::now()})).await.unwrap();
+    }
+    let selector = json!({"device_ids":[],"group_ids":[],"exclude_ids":[]});
+    let mut sources = Vec::new();
+    for restored in [&edge_v1, &web_v3] {
+        let replacement = db::id();
+        db::insert(&mut conn, "deployment", &json!({"id":replacement,"version_id":restored,"status":"active","selector":selector,"created_at":db::now()})).await.unwrap();
+        let source = db::id();
+        db::insert(&mut conn, "deployment", &json!({"id":source,"version_id":rolled,"status":"cancelled","rolled_back_by":replacement,"selector":selector,"created_at":db::now()})).await.unwrap();
+        db::audit(&mut conn, &admin, "deployment.rollback", &source, "success")
+            .await
+            .unwrap();
+        sources.push(source);
+    }
+    drop(conn);
+    drain(&f, Utc::now() + Duration::seconds(5)).await;
+    let sent: Vec<Value> = hook.requests().iter().map(Captured::json).collect();
+    assert_eq!(sent.len(), 2);
+    let event = |deployment: &str| {
+        sent.iter()
+            .map(|body| &body["event"])
+            .find(|event| event["deployment"]["id"] == deployment)
+            .unwrap()
+    };
+    let other = event(&sources[0]);
+    assert_eq!(
+        other["message"],
+        "Synthetic admin rolled it back to Edge syslog processing (synthetic demo) v1."
+    );
+    assert_eq!(
+        other["restored"],
+        json!({"id":edge,"name":"Edge syslog processing (synthetic demo)","version_number":1})
+    );
+    let same = event(&sources[1]);
+    assert_eq!(same["message"], "Synthetic admin rolled it back to v3.");
+    assert_eq!(
+        same["restored"],
+        json!({"id":web,"name":"Web access logs","version_number":3})
+    );
+    assert_eq!(same["pipeline"]["version_number"], 4);
+}
+
+#[tokio::test]
+async fn recoveries_say_resolved_or_back_online_instead_of_a_severity() {
+    let f = fixture().await;
+    let now = Utc::now();
+    for (kind, last) in [
+        ("issue.resolved", "Resolved"),
+        ("device.recovered", "Back online"),
+        ("issue.opened", "Error"),
+        ("device.offline", "Warning"),
+    ] {
+        let preview = notifier::preview(&f.s, "On-call", &notifier::example_notice(kind, now));
+        let line = preview["context"].as_str().unwrap();
+        assert!(
+            line.ends_with(&format!(" · {last} · Notification tests")),
+            "{kind}: {line}"
+        );
+        assert_eq!(
+            preview["webhook"]["blocks"][1]["elements"][0]["text"], line,
+            "{kind}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn rollout_failures_come_from_the_audit_trail() {
     let hook = receiver(Reply::Status(200, "ok".into())).await;
