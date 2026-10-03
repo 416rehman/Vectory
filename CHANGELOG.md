@@ -49,6 +49,8 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - **One row per device's last state in the audit log.** A run of one device's results reads **edge-nyc-02 · rolled back**, with its steps behind the row, instead of a count of every step.
 - **A tab strip that scrolls says so.** Where tabs don't fit (Activity on a phone cut **Audit log** off), the strip fades at the end that hides tabs and shows a chevron.
 - **The generation picker says what it holds.** When a device was offered more generations than the 50 the picker lists, it reads **Showing the newest 50 of 212**.
+- **Starters write what Vector reads.** A new HTTP Server decodes JSON with `decoding.codec` and its card reads **JSON decoding**; it used to write an `encoding` that Vector doesn't have there and ignores, so events arrived as text under a card that said JSON. A new HTTP destination, Grafana Loki, Elasticsearch or Log files step no longer starts with an empty URL, endpoint list or path list that passed the local check and failed later in Vector: **Problems** says **Enter uri.** and jumps to the field. A test fails for any option a starter writes that the pinned Vector's schema doesn't declare.
+- **Vector's refusals land on their step.** A refusal that names a step, such as `Failed to validate sink "http_out": uri must not be empty`, is listed under that step and, when its first word names a setting of it, beside that setting, with a jump to it. It used to be listed under **Pipeline settings**, which opened the settings dialog.
 
 ### Publishing and rollouts
 

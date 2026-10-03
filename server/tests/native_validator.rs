@@ -454,6 +454,62 @@ async fn real_vector_worker_reports_precise_diagnostics() {
     child.kill().await.unwrap();
 }
 
+/// Vector's own `Failed to validate sink "<id>": <reason>` refusals belong to
+/// their step, and to the setting the reason names, as the editor's Problems
+/// panel uses them to jump there. Without it they read as pipeline-wide.
+#[tokio::test]
+async fn vectors_validation_refusals_belong_to_their_step_and_setting() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; refusal placement unverified");
+        return;
+    };
+    let (mut child, url, client) = start_worker(&vector).await;
+    let json_codec = json!({"codec":"json"});
+    let source = json!({"in":{"type":"demo_logs","format":"json"}});
+    let (_state_dir, state) = public_state(&url).await;
+    for (id, sink, field, message) in [
+        (
+            "http_out",
+            json!({"type":"http","inputs":["in"],"uri":"","encoding":json_codec}),
+            "uri",
+            "`uri` must not be empty",
+        ),
+        (
+            "out_http",
+            json!({"type":"http","inputs":["in"],"uri":"http://127.0.0.1:9/ingest","encoding":json_codec,"batch":{"max_events":0}}),
+            "batch.max_events",
+            "`max_events` must be greater than zero",
+        ),
+    ] {
+        let config = json!({"sources":source,"sinks":{id:sink}});
+        for result in [
+            post(&client, &url, "validate", json!({"config":config})).await,
+            vectory_server::validation::validate_isolated(&state, &config)
+                .await
+                .unwrap(),
+        ] {
+            assert_eq!(result["valid"], false, "{id}: {result}");
+            let refusal = diagnostic(&result, id);
+            assert_eq!(refusal["section"], "sinks", "{id}: {result}");
+            assert_eq!(refusal["field"], field, "{id}: {result}");
+            assert_eq!(refusal["code"], "invalid_value", "{id}: {result}");
+            assert!(
+                refusal["message"].as_str().unwrap().starts_with(message),
+                "{id}: {result}"
+            );
+            assert!(
+                !result["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["section"] == "global"),
+                "{id}: nothing is left for Pipeline settings: {result}"
+            );
+        }
+    }
+    child.kill().await.unwrap();
+}
+
 /// Apply every "Treat errors as no match" fix the way the editor does (one
 /// span at a time, checking again after each), then run the result natively.
 #[tokio::test]

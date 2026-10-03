@@ -82,7 +82,7 @@ const curatedCatalog: Component[] = [
     label: "Log files",
     kind: "sources",
     description: "Read log files from approved paths on your device.",
-    defaults: { include: [] },
+    defaults: {},
     fields: [
       {
         key: "include",
@@ -109,10 +109,12 @@ const curatedCatalog: Component[] = [
     label: "HTTP endpoint",
     kind: "sources",
     description: "Accept events through a local HTTP endpoint.",
-    defaults: { address: "127.0.0.1:8088", encoding: "json" },
+    // A source reads `decoding`. Vector has no `encoding` here, and ignores
+    // one without a word, so JSON would arrive as undecoded text.
+    defaults: { address: "127.0.0.1:8088", decoding: { codec: "json" } },
     fields: [
       { key: "address", label: "Listen address", required: true },
-      { key: "encoding", label: "Encoding", required: true },
+      { key: "decoding.codec", label: "Decoding" },
     ],
   },
   {
@@ -195,7 +197,9 @@ const curatedCatalog: Component[] = [
     label: "HTTP destination",
     kind: "sinks",
     description: "Deliver events to an approved HTTPS endpoint.",
-    defaults: { uri: "", encoding: { codec: "json" } },
+    // The URL is left out, never written as "": an empty string passes the
+    // required-option check and is refused later, by Vector.
+    defaults: { encoding: { codec: "json" } },
     fields: [
       { key: "uri", label: "Destination URL", required: true },
       { key: "encoding.codec", label: "Encoding", required: true },
@@ -206,10 +210,7 @@ const curatedCatalog: Component[] = [
     label: "Elasticsearch",
     kind: "sinks",
     description: "Index events in an Elasticsearch cluster.",
-    defaults: {
-      endpoints: [],
-      mode: "bulk",
-    },
+    defaults: { mode: "bulk" },
     fields: [
       { key: "endpoints", label: "Endpoints", type: "array", required: true },
     ],
@@ -220,7 +221,6 @@ const curatedCatalog: Component[] = [
     kind: "sinks",
     description: "Ship labeled logs to a Loki endpoint.",
     defaults: {
-      endpoint: "",
       encoding: { codec: "json" },
       labels: { job: "vector" },
     },
