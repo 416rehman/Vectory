@@ -106,6 +106,8 @@ func executeGroup(group *command, args []string, stdout, stderr io.Writer) int {
 	case "-h", "-help", "--help":
 		printCommandHelp(stdout, group, nil, nil)
 		return exitOK
+	case "help":
+		return helpForGroup(group, args[1:], stdout, stderr)
 	}
 	if strings.HasPrefix(args[0], "-") {
 		fmt.Fprintf(stderr, "vectory %s: put the verb first, as in vectory %s <verb> [flags].\nRun 'vectory help %s' for the list of verbs.\n", group.name, group.name, group.name)

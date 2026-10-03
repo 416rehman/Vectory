@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,16 @@ func TestGroupHelpEveryWay(t *testing.T) {
 			!strings.Contains(stdout, "--name NAME  Who to greet (default world)") || !strings.Contains(stdout, "Examples:\n  vectory demo alpha --name x") {
 			t.Errorf("%v: %d %q %q", args, code, stdout, stderr)
 		}
+	}
+	// `vectory demo help [verb]` is `vectory help demo [verb]`.
+	for _, args := range [][]string{{"demo", "help"}, {"demo", "help", "alpha"}} {
+		want := map[bool]string{true: "vectory demo alpha: ", false: "vectory demo: "}[len(args) == 3]
+		if code, stdout, stderr := invoke(args...); code != 0 || stderr != "" || !strings.HasPrefix(stdout, want) {
+			t.Errorf("%v: %d %q %q", args, code, stdout, stderr)
+		}
+	}
+	if code, _, stderr := invoke("demo", "help", "nope"); code != 2 || !strings.Contains(stderr, `unknown verb "nope"`) {
+		t.Errorf("%d %q", code, stderr)
 	}
 	// A verb's operands are in its usage, and a hidden verb has no help.
 	if _, stdout, _ := invoke("help", "demo", "beta"); !strings.Contains(stdout, "vectory demo beta [--flag] FILE") {
@@ -163,5 +174,52 @@ func TestCommandsWithoutOperandsStillTakeFlagsOnly(t *testing.T) {
 	// A group's name is not a verb of another command.
 	if code, _, stderr := invoke("status", "release"); code != 2 || !strings.Contains(stderr, "status accepts flags only") {
 		t.Errorf("%d %q", code, stderr)
+	}
+}
+
+// A command whose help group is not in the list would be missing from the
+// general help, and a verb without a summary or a usage line would print a bare
+// help page: every command and verb that ships is described.
+func TestEveryCommandAndVerbIsListedAndDescribed(t *testing.T) {
+	seen := map[string]bool{}
+	for _, cmd := range commands {
+		if seen[cmd.name] {
+			t.Errorf("the command %q is defined twice", cmd.name)
+		}
+		seen[cmd.name] = true
+		if cmd.hidden {
+			continue
+		}
+		if !slices.Contains(groups, cmd.group) {
+			t.Errorf("%s is in the help group %q, which the general help doesn't list (%v)", cmd.name, cmd.group, groups)
+		}
+		if cmd.summary == "" || cmd.usage == "" {
+			t.Errorf("%s has no summary or no usage", cmd.name)
+		}
+		if len(cmd.verbs) > 0 && (cmd.define != nil || !strings.HasPrefix(cmd.usage, cmd.name+" <verb>")) {
+			t.Errorf("the group %s has no flags or action of its own, and its usage is %q", cmd.name, cmd.usage)
+		}
+		names := map[string]bool{}
+		for _, verb := range cmd.verbs {
+			if names[verb.name] {
+				t.Errorf("%s has the verb %q twice", cmd.name, verb.name)
+			}
+			names[verb.name] = true
+			if verb.parent != cmd.name {
+				t.Errorf("the verb %s of %s isn't linked to its group", verb.name, cmd.name)
+			}
+			if verb.hidden {
+				continue
+			}
+			if verb.summary == "" || verb.define == nil || !strings.HasPrefix(verb.usage, cmd.name+" "+verb.name) {
+				t.Errorf("the verb %s %s needs a summary, an action and a usage that starts with its words (%q)", cmd.name, verb.name, verb.usage)
+			}
+			// Every verb's help is reachable the two ways the usage errors point to.
+			for _, args := range [][]string{{"help", cmd.name, verb.name}, {cmd.name, verb.name, "--help"}} {
+				if code, stdout, stderr := invoke(args...); code != 0 || stderr != "" || !strings.HasPrefix(stdout, "vectory "+cmd.name+" "+verb.name+": ") {
+					t.Errorf("%v: %d %q %q", args, code, stdout, stderr)
+				}
+			}
+		}
 	}
 }
