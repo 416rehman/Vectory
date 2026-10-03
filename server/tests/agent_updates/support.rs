@@ -366,8 +366,11 @@ pub async fn release_with(
 /// Puts builds in the release mirror, the catalog this server ships agents
 /// from: `(version, os, arch, bytes)`. Returns the catalog entries.
 pub fn mirror(f: &Fixture, builds: &[(&str, &str, &str, Vec<u8>)]) -> Vec<Value> {
-    let dir = f.temp.path().join("releases");
-    std::fs::create_dir_all(&dir).unwrap();
+    catalog_in(&f.temp.path().join("releases"), builds)
+}
+/// ... in any directory: the bundled catalog is one, the mirror another.
+pub fn catalog_in(dir: &std::path::Path, builds: &[(&str, &str, &str, Vec<u8>)]) -> Vec<Value> {
+    std::fs::create_dir_all(dir).unwrap();
     let mut entries = Vec::new();
     for (version, os, arch, bytes) in builds {
         let name = format!("vectory-{version}-{os}-{arch}");

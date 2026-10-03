@@ -140,6 +140,66 @@ async fn a_device_that_holds_the_offer_gets_exactly_the_build() {
 }
 
 #[tokio::test]
+async fn the_build_comes_from_the_store_whatever_became_of_the_catalog() {
+    let _turn = TURN.lock().await;
+    let w = world(1, 60_000).await;
+    // The mirror the release was made from is emptied, and another build takes
+    // its place.
+    let dir = w.f.temp.path().join("releases");
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        std::fs::remove_file(entry.path()).unwrap();
+    }
+    mirror(&w.f, &[("0.1.2", "linux", "amd64", vec![1u8; 10])]);
+    let id = w.release["id"].as_str().unwrap();
+    // The release is what it was, with its file in the store, and the catalog
+    // no longer holds its version.
+    let shown = ok(
+        &w.f,
+        "GET",
+        &format!("/api/v1/agent-releases/{id}"),
+        Value::Null,
+        &w.f.viewer,
+    )
+    .await;
+    for member in [
+        "id",
+        "version",
+        "counter",
+        "manifest_sha256",
+        "artifacts",
+        "state",
+    ] {
+        assert_eq!(shown[member], w.release[member], "{member}");
+    }
+    assert_eq!(shown["state"], "ready");
+    let setting = ok(
+        &w.f,
+        "GET",
+        "/api/v1/agent-updates",
+        Value::Null,
+        &w.f.viewer,
+    )
+    .await;
+    let versions: Vec<&str> = setting["catalog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["version"].as_str().unwrap())
+        .collect();
+    assert_eq!(versions, ["0.1.2"], "{setting}");
+    // The device is still offered the file and gets exactly the bytes it was
+    // offered, from the store.
+    let response = fetch(&w.f, &w.devices[0], &w.sha256).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await.unwrap(), w.bytes);
+    // The prune keeps what a release names.
+    vectory_server::rollout::prune(&w.f.state).await.unwrap();
+    let again = fetch(&w.f, &w.devices[0], &w.sha256).await;
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(body(again).await.unwrap(), w.bytes);
+}
+
+#[tokio::test]
 async fn nothing_is_served_without_a_current_offer_for_that_digest() {
     let _turn = TURN.lock().await;
     let w = world(2, 50_000).await;
