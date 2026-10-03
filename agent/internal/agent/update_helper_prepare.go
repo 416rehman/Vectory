@@ -194,10 +194,14 @@ func (s *updateStep) prepareUntilSwap(ctx context.Context, j *updateJournal, req
 	}
 	j.Signers = fingerprintsOf(verified.Signers)
 
-	// The floor, then the journal. Both are on disk before anything stops, and the
-	// floor first: from the moment the journal says swapping, this release has been
-	// attempted and can never be tried again on this host.
-	s.counters.HighestCounters = floorsBeforeSwap(s.counters.HighestCounters, s.policy.PinnedKeys(), envelopes, verified.Signers, verified.Manifest.Counter)
+	// The floors, then the journal. Both are on disk before anything stops, and the
+	// floors first: from the moment the journal says swapping, this release has been
+	// attempted and can never be tried again on this host. The floors only go up: what
+	// is on disk is raised to what the library says a host holds after the release
+	// (the signers' floors at the release's counter), and a key the release's
+	// statements replace keeps its floor beside its successor's, because the host
+	// still pins it until the build has proven itself.
+	s.counters.HighestCounters = raiseFloors(s.counters.HighestCounters, verified.Floors, append(s.policy.Fingerprints(), fingerprintsOf(verified.Pins)...))
 	if err := writeUpdateCounters(s.private, s.counters); err != nil {
 		return err
 	}

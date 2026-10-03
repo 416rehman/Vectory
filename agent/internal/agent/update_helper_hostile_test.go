@@ -7,9 +7,11 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -513,6 +515,7 @@ func TestAnOfferSignedByTheSuccessorOfAPinnedKeyMovesThePinsOnlyWhenItCommits(t 
 		t.Fatal(err)
 	}
 	f.setPolicy(func(p *UpdatePolicy) { p.Windows = []string{"daily 00:00-23:59 UTC"}; p.Track = UpdateTrackMinor })
+	f.setFloor(5)
 	release := f.newRelease("0.1.1", "good", releaseOptions{signer: &next, signerKey: &nextKey, rollovers: []RolloverEnvelope{statement}})
 	f.stage(release)
 	var pinsInTrial []string
@@ -525,8 +528,10 @@ func TestAnOfferSignedByTheSuccessorOfAPinnedKeyMovesThePinsOnlyWhenItCommits(t 
 	}
 	f.mustRun()
 	// During the trial the host still pins the old key, and the attempt is on disk
-	// under it: if the build is taken back, the host is where it was.
-	if len(pinsInTrial) != 1 || pinsInTrial[0] != f.public.Fingerprint() || floorsInTrial[f.public.Fingerprint()] != 7 || len(floorsInTrial) != 1 {
+	// under the successor, beside the old key's own floor: if the build is taken back,
+	// the host is where it was, with both.
+	floors := map[string]uint64{f.public.Fingerprint(): 5, nextKey.Fingerprint(): 7}
+	if len(pinsInTrial) != 1 || pinsInTrial[0] != f.public.Fingerprint() || !maps.Equal(floorsInTrial, floors) {
 		t.Errorf("during the trial the pins were %v and the floors %v", pinsInTrial, floorsInTrial)
 	}
 	if f.status().Last.Outcome != UpdateOutcomeCommitted {
@@ -539,10 +544,10 @@ func TestAnOfferSignedByTheSuccessorOfAPinnedKeyMovesThePinsOnlyWhenItCommits(t 
 	if policy.Consent != UpdateConsentAuto || policy.Track != UpdateTrackMinor || len(policy.Windows) != 1 || policy.Paused {
 		t.Errorf("the commit changed more than the pins: %+v", policy)
 	}
-	if floors := f.counters().HighestCounters; len(floors) != 1 || floors[nextKey.Fingerprint()] != 7 {
-		t.Errorf("after the commit the floors are %v: the old key's floor moves to its successor", floors)
+	if got := f.counters().HighestCounters; !maps.Equal(got, floors) {
+		t.Errorf("after the commit the floors are %v, want %v: the old key keeps its floor beside its successor's", got, floors)
 	}
-	if got := f.status().HighestCounters; got[nextKey.Fingerprint()] != 7 || len(got) != 1 {
+	if got := f.status().HighestCounters; !maps.Equal(got, floors) {
 		t.Errorf("status.json reports %v", got)
 	}
 }
@@ -556,6 +561,7 @@ func TestARolledBackReleaseOfASuccessorKeyStaysTriedUnderTheKeyTheHostStillPins(
 		t.Fatal(err)
 	}
 	oldDigest := f.executableDigest()
+	f.setFloor(5)
 	release := f.newRelease("0.1.2", "crash", releaseOptions{signer: &next, signerKey: &nextKey, rollovers: []RolloverEnvelope{statement}})
 	f.stage(release)
 	f.mustRun()
@@ -563,12 +569,13 @@ func TestARolledBackReleaseOfASuccessorKeyStaysTriedUnderTheKeyTheHostStillPins(
 	if got := f.policy().Fingerprints(); len(got) != 1 || got[0] != f.public.Fingerprint() {
 		t.Fatalf("a rollback moved the pins: %v", got)
 	}
-	if got := f.counters().HighestCounters; got[f.public.Fingerprint()] != 7 {
-		t.Fatalf("the floor of the key the host still pins: %v", got)
+	floors := map[string]uint64{f.public.Fingerprint(): 5, nextKey.Fingerprint(): 7}
+	if got := f.counters().HighestCounters; !maps.Equal(got, floors) {
+		t.Fatalf("the floors after a rollback are %v, want %v", got, floors)
 	}
 	history := len(f.service().History)
-	// The server offers the same release again: the successor's floor is what the old
-	// key's carries, and the host refuses it as tried.
+	// The server offers the same release again: the successor's floor, and the old
+	// key's carried over to it for the decision, refuse it as tried.
 	f.clock.advance(time.Hour)
 	f.stage(release)
 	f.request(release.manifestSHA(), release.buildSHA(), f.clock.Now())
@@ -576,6 +583,203 @@ func TestARolledBackReleaseOfASuccessorKeyStaysTriedUnderTheKeyTheHostStillPins(
 	f.requireAnswered(release, UpdateOutcomeRefused, "RELEASE_ALREADY_TRIED")
 	if len(f.service().History) != history {
 		t.Error("the service was touched again")
+	}
+}
+
+// The floors on disk when the service stops are the ones the host has if the trial
+// fails, so they only go up. A release tried here and rolled back (counter 10, the
+// pinned key's) is followed by one the successor signs (11, with the statement that
+// replaces the pinned key): the file then holds both keys' floors, and when that
+// trial fails too, the host, which still pins the old key, refuses both releases
+// however they are offered.
+func TestAReleaseOfASuccessorKeyIsOnDiskBesideTheReplacedKeysFloorAndARollbackLeavesBoth(t *testing.T) {
+	f := newStepFixture(t)
+	next := testPrivateKey(t, 31)
+	nextKey := testPublicKey(t, next, "team-next")
+	statement, err := SignRollover(f.private, nextKey, f.start.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDigest := f.executableDigest()
+	a, b := f.public.Fingerprint(), nextKey.Fingerprint()
+
+	tenth := f.newRelease("0.1.1", "crash", releaseOptions{counter: 10})
+	f.stage(tenth)
+	f.mustRun()
+	f.requireTakenBack(oldDigest, tenth, "START_FAILED")
+	if got := f.counters().HighestCounters; !maps.Equal(got, map[string]uint64{a: 10}) {
+		t.Fatalf("the floors after the first rollback: %v", got)
+	}
+
+	f.clock.advance(time.Hour)
+	eleventh := f.newRelease("0.1.2", "crash", releaseOptions{counter: 11, signer: &next, signerKey: &nextKey, rollovers: []RolloverEnvelope{statement}})
+	f.stage(eleventh)
+	var atSwap map[string]uint64
+	updateFault = func(point string) {
+		if point == "swapping" && atSwap == nil {
+			atSwap = f.counters().HighestCounters
+		}
+	}
+	f.mustRun()
+	floors := map[string]uint64{a: 10, b: 11}
+	if !maps.Equal(atSwap, floors) {
+		t.Errorf("when the service stopped the floors were %v, want %v", atSwap, floors)
+	}
+	f.requireTakenBack(oldDigest, eleventh, "START_FAILED")
+	if got := f.policy().Fingerprints(); len(got) != 1 || got[0] != a {
+		t.Fatalf("a rollback moved the pins: %v", got)
+	}
+	if got := f.counters().HighestCounters; !maps.Equal(got, floors) {
+		t.Fatalf("the floors after the second rollback are %v, want %v", got, floors)
+	}
+
+	history := len(f.service().History)
+	// The eleventh again: its manifest is the last result's, so the host says it tried it.
+	f.clock.advance(time.Hour)
+	f.stage(eleventh)
+	f.request(eleventh.manifestSHA(), eleventh.buildSHA(), f.clock.Now())
+	f.mustRun()
+	f.requireAnswered(eleventh, UpdateOutcomeRefused, "RELEASE_ALREADY_TRIED")
+	// The tenth again: the last result is another's by now, so it is a replay.
+	f.clock.advance(time.Hour)
+	f.stage(tenth)
+	f.request(tenth.manifestSHA(), tenth.buildSHA(), f.clock.Now())
+	f.mustRun()
+	f.requireAnswered(tenth, UpdateOutcomeRefused, "COUNTER_REPLAYED")
+	if len(f.service().History) != history {
+		t.Error("the service was touched again")
+	}
+	if got := f.counters().HighestCounters; !maps.Equal(got, floors) {
+		t.Errorf("the floors after the refusals are %v, want %v", got, floors)
+	}
+}
+
+// The same offer, when the trial passes: the host pins the successor, both floors stay,
+// and a release the successor signs with a counter below its floor is refused, as is
+// one the old key signs, which the host no longer pins.
+func TestWhenTheSuccessorsReleaseCommitsBothFloorsStayAndOlderCountersAreRefused(t *testing.T) {
+	f := newStepFixture(t)
+	next := testPrivateKey(t, 31)
+	nextKey := testPublicKey(t, next, "team-next")
+	statement, err := SignRollover(f.private, nextKey, f.start.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := f.public.Fingerprint(), nextKey.Fingerprint()
+	f.setFloor(10)
+	eleventh := f.newRelease("0.1.1", "good", releaseOptions{counter: 11, signer: &next, signerKey: &nextKey, rollovers: []RolloverEnvelope{statement}})
+	f.stage(eleventh)
+	f.mustRun()
+	f.requireAnswered(eleventh, UpdateOutcomeCommitted, "")
+	floors := map[string]uint64{a: 10, b: 11}
+	if got := f.policy().Fingerprints(); len(got) != 1 || got[0] != b {
+		t.Fatalf("after the commit the host pins %v", got)
+	}
+	if got := f.counters().HighestCounters; !maps.Equal(got, floors) {
+		t.Fatalf("the floors after the commit are %v, want %v", got, floors)
+	}
+
+	f.clock.advance(time.Hour)
+	ninth := f.newRelease("0.1.2", "good", releaseOptions{counter: 9, signer: &next, signerKey: &nextKey})
+	f.stage(ninth)
+	f.mustRun()
+	f.requireAnswered(ninth, UpdateOutcomeRefused, "COUNTER_REPLAYED")
+
+	f.clock.advance(time.Hour)
+	byTheOldKey := f.newRelease("0.1.3", "good", releaseOptions{counter: 12})
+	f.stage(byTheOldKey)
+	f.mustRun()
+	f.requireAnswered(byTheOldKey, UpdateOutcomeRefused, "KEY_NOT_PINNED")
+	if got := f.counters().HighestCounters; !maps.Equal(got, floors) {
+		t.Errorf("the floors after the refusals are %v, want %v", got, floors)
+	}
+}
+
+// A person who pins the host to other keys while the trial runs (vectory setup writes
+// the whole policy) is not undone by the commit: the pins are edited on the policy as it
+// is then, so that each statement whose key is pinned replaces it with its successor
+// in its place, and every other pin and every setting stays.
+func TestAPersonWhoPinsTheHostToOtherKeysWhileTheTrialRunsIsNotUndoneByTheCommit(t *testing.T) {
+	next := testPrivateKey(t, 31)
+	nextKey := testPublicKey(t, next, "team-next")
+	third := testPublicKey(t, testPrivateKey(t, 32), "third")
+
+	type repin func(f *stepFixture) []PinnedKey
+	cases := map[string]struct {
+		pins repin
+		// want is the pins after the commit, in order.
+		want func(f *stepFixture) []ReleaseKey
+	}{
+		"a third key is added": {
+			func(f *stepFixture) []PinnedKey {
+				return []PinnedKey{{Key: f.public, PinnedAt: f.start}, {Key: third, PinnedAt: f.start.Add(2 * time.Hour)}}
+			},
+			func(f *stepFixture) []ReleaseKey { return []ReleaseKey{nextKey, third} },
+		},
+		"a third key goes first": {
+			func(f *stepFixture) []PinnedKey {
+				return []PinnedKey{{Key: third, PinnedAt: f.start.Add(2 * time.Hour)}, {Key: f.public, PinnedAt: f.start}}
+			},
+			func(f *stepFixture) []ReleaseKey { return []ReleaseKey{third, nextKey} },
+		},
+		"the old key is gone": {
+			func(f *stepFixture) []PinnedKey {
+				return []PinnedKey{{Key: third, PinnedAt: f.start.Add(2 * time.Hour)}}
+			},
+			func(f *stepFixture) []ReleaseKey { return []ReleaseKey{third} },
+		},
+		"the successor is pinned already": {
+			func(f *stepFixture) []PinnedKey {
+				return []PinnedKey{{Key: f.public, PinnedAt: f.start}, {Key: nextKey, PinnedAt: f.start.Add(2 * time.Hour)}}
+			},
+			func(f *stepFixture) []ReleaseKey { return []ReleaseKey{nextKey} },
+		},
+	}
+	// The person pins the host while the trial runs, or in the moment between the
+	// step's read of the policy and its edit of it.
+	for _, when := range []struct{ name, point string }{
+		{"while the trial runs", "trial"},
+		{"between the step's read of the policy and its edit", "commit:policy_read"},
+	} {
+		for name, c := range cases {
+			t.Run(when.name+": "+name, func(t *testing.T) {
+				f := newStepFixture(t)
+				statement, err := SignRollover(f.private, nextKey, f.start.Add(-time.Hour))
+				if err != nil {
+					t.Fatal(err)
+				}
+				release := f.newRelease("0.1.1", "good", releaseOptions{signer: &next, signerKey: &nextKey, rollovers: []RolloverEnvelope{statement}})
+				f.stage(release)
+				repinned := false
+				updateFault = func(point string) {
+					if point == when.point && !repinned {
+						repinned = true
+						f.setPolicy(func(p *UpdatePolicy) {
+							p.Consent, p.Track, p.Windows = UpdateConsentAsk, UpdateTrackMinor, []string{"daily 00:00-23:59 UTC"}
+							p.Keys = c.pins(f)
+						})
+					}
+				}
+				f.mustRun()
+				if !repinned {
+					t.Fatalf("the step never reached %s", when.point)
+				}
+				f.requireAnswered(release, UpdateOutcomeCommitted, "")
+				policy := f.policy()
+				want := c.want(f)
+				if got := policy.Fingerprints(); !slices.Equal(got, fingerprintsOf(want)) {
+					t.Errorf("after the commit the host pins %v, want %v", shortList(got), shortList(fingerprintsOf(want)))
+				}
+				if policy.Consent != UpdateConsentAsk || policy.Track != UpdateTrackMinor || len(policy.Windows) != 1 || policy.Paused {
+					t.Errorf("the commit changed more than the pins: %+v", policy)
+				}
+				for _, pinned := range policy.Keys {
+					if pinned.Key.Fingerprint() == third.Fingerprint() && !pinned.PinnedAt.Equal(f.start.Add(2*time.Hour)) {
+						t.Errorf("the key a person pinned lost the time it was pinned: %v", pinned.PinnedAt)
+					}
+				}
+			})
+		}
 	}
 }
 

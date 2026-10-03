@@ -36534,7 +36534,7 @@
           },
           "highest_counters": {
             "type": "object",
-            "maxProperties": 4,
+            "maxProperties": 16,
             "propertyNames": {
               "pattern": "^[a-f0-9]{64}$"
             },
@@ -36543,7 +36543,7 @@
               "minimum": 0,
               "maximum": 9007199254740991
             },
-            "description": "Fingerprint to the highest counter attempted from that key."
+            "description": "Fingerprint to the highest counter attempted from that key, for every key the host pins and for the keys it pinned before."
           },
           "rollover_conflict": {
             "anyOf": [
@@ -36562,7 +36562,7 @@
           "rollover_conflict"
         ],
         "additionalProperties": false,
-        "description": "private/counters.json: the counter floors the privileged step keeps, raised and synced when it journals swapping and never lowered, and the fork it found, cleared only by re-pinning."
+        "description": "private/counters.json: the counter floors the privileged step keeps, raised and synced when it journals swapping and never lowered, moved or removed (at most 16 keys, the lowest going first), and the fork it found, cleared only by re-pinning."
       },
       "UpdateInstalled": {
         "type": "object",

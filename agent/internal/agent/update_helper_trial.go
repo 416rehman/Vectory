@@ -399,13 +399,19 @@ func (s *updateStep) finishCommit(ctx context.Context, j *updateJournal, firstCh
 	return nil
 }
 
-// applyPinsAndFloors makes the pins and the floors what the release's rollover
-// statements say, now that the build has committed. It follows the statements with
-// the pins the policy has now, not the ones the update began with, so that a person
-// who pinned the host to other keys in the meantime is never undone, and it writes
-// the pins as an edit of the policy that leaves everything a person set (consent,
-// track, windows, pause) as it is. A release signed by a key the host pinned
-// directly has nothing to follow, and only the floors move.
+// errNoPinChange says an edit of the policy found nothing to change.
+var errNoPinChange = errors.New("the policy already pins what the release's statements lead to")
+
+// applyPinsAndFloors does what the release's rollover statements say, now that the
+// build has committed. The pins are edited and never written over: against the
+// policy as it is on disk at that moment, each statement whose from key is pinned
+// there puts its successor in that key's place, and every other pin, and the
+// consent, track, windows and pause a person set, stay as they are. A person who
+// pinned the host to other keys while the trial ran is therefore never undone. The
+// floors are raised to what the release library says a host holds after the release
+// and are otherwise left alone, so that the replaced key keeps its floor beside its
+// successor's. A release signed by a key the host pinned directly has no statement
+// to follow.
 func (s *updateStep) applyPinsAndFloors(j *updateJournal) error {
 	manifest, found, err := readStepFile(s.staging, UpdateReleaseFile, MaxReleaseManifest)
 	if err != nil || !found {
@@ -439,23 +445,40 @@ func (s *updateStep) applyPinsAndFloors(j *updateJournal) error {
 		s.logf("the pins stay as they are: %v", err)
 		return nil
 	}
+	faultPoint("commit:policy_read")
 	if !sameFingerprints(taken.Pins, policy.PinnedKeys()) {
-		errStay := errors.New("the policy's pins changed under the step")
+		errStay := errors.New("the statements don't lead where the release library says")
+		var after []ReleaseKey
 		changeErr := ChangeUpdatePolicy(func(p *UpdatePolicy) error {
+			// The edit is made on the pins the policy has now, which may not be the ones
+			// it had a moment ago, and checked against the library's own reading of the
+			// same statements before anything is written.
 			again, err := take(p.PinnedKeys())
 			if err != nil {
 				return errStay
 			}
-			p.SetPinnedKeys(again.Pins)
+			edited := replacePins(p.PinnedKeys(), envelopes)
+			if !sameFingerprints(edited, again.Pins) {
+				return errStay
+			}
+			if sameFingerprints(edited, p.PinnedKeys()) {
+				return errNoPinChange
+			}
+			p.SetPinnedKeys(edited)
+			after = edited
 			return nil
 		})
-		if changeErr != nil {
+		switch {
+		case changeErr == nil:
+			s.logf("the host now pins %s", joinShort(fingerprintsOf(after)))
+		case errors.Is(changeErr, errNoPinChange):
+		default:
 			s.logf("the pins stay as they are: %v", changeErr)
 			return nil
 		}
-		s.logf("the host now pins %s", joinShort(fingerprintsOf(taken.Pins)))
 	}
-	floors := floorsAtCommit(s.counters.HighestCounters, policy.PinnedKeys(), taken)
+	keep := append(policy.Fingerprints(), fingerprintsOf(taken.Pins)...)
+	floors := raiseFloors(s.counters.HighestCounters, taken.Floors, keep)
 	if maps.Equal(floors, s.counters.HighestCounters) {
 		return nil
 	}

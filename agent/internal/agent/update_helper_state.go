@@ -314,8 +314,10 @@ func marshalUpdateJournal(j updateJournal) ([]byte, error) {
 // each key, and the fork it found. A floor is the highest counter of a release
 // signed by that key that the step attempted on this host. The step raises the
 // floors of the keys that signed a release, and syncs the file, before it stops the
-// service; a rollback never lowers a floor. A rollover moves the old key's floor to
-// its successor when the pins change. RolloverConflict is the fork the step's own
+// service. A floor is only ever raised: a rollback, a rollover and a change of the
+// pins leave every floor where it is, and the file keeps the floor of a key the host
+// no longer pins (at most maxStoredFloors keys, the lowest, which were raised
+// longest ago, going first). RolloverConflict is the fork the step's own
 // verification found: it refuses every update until the host is pinned again.
 type updateCounters struct {
 	HighestCounters  map[string]uint64
@@ -336,7 +338,7 @@ func parseUpdateCounters(data []byte) (updateCounters, error) {
 	if wire.Schema != updateCountersSchema {
 		return updateCounters{}, fmt.Errorf("counters.json: the schema is %q, and this agent reads %q", wire.Schema, updateCountersSchema)
 	}
-	if err := checkCounterFloors("highest_counters", wire.HighestCounters); err != nil {
+	if err := checkCounterFloorsUpTo("highest_counters", wire.HighestCounters, maxStoredFloors); err != nil {
 		return updateCounters{}, fmt.Errorf("counters.json: %v", err)
 	}
 	return updateCounters{HighestCounters: wire.HighestCounters, RolloverConflict: wire.RolloverConflict}, nil

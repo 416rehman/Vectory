@@ -2,111 +2,85 @@ package agent
 
 import (
 	"maps"
+	"slices"
 	"sort"
 )
 
 // Counter floors and rollovers.
 //
 // A floor is the highest counter of a release signed by a key that the step
-// attempted. counters.json holds one for each key, at most four (the contract's
-// bound), and a floor is never lowered: a release at or below a signer's floor is
-// refused, which is what stops a server from making a host try a release twice.
+// attempted. counters.json holds one for each key the host pins and for the keys it
+// pinned before, and a floor is only ever raised: a release at or below a signer's
+// floor is refused, which is what stops a server from making a host try a release
+// twice. Nothing lowers a floor, moves it from one key to another or removes it,
+// whatever happens to the pins.
 //
-// A rollover replaces a pinned key with its successor, and the successor takes the
-// old key's floor. The step moves the pins only at commit, when the build that
-// came with the statement has proven itself, so for the whole trial (and for ever
-// after a rollback, which leaves the pins where they were) the host still pins the
-// key that was replaced, and a release signed by its successor is checked, by
-// followRollovers, against the floor the old key carries over. The step therefore
-// records an attempt on the keys the host pins now:
-//
-//   - before the swap, the floor of every pinned key that the signer descends from
-//     through the statements is raised to the release's counter, so that the
-//     attempt is on disk under the key the host will still pin if the trial rolls
-//     back, and the successor's own floor needs no entry yet;
-//   - at commit, when the pins become what the statements say, the floors become
-//     what VerifyReleaseFiles says a host holds after the release: the old key's
-//     floor moved to the successor and raised to the counter.
-//
-// Floors of keys that were never pinned together with a release (left from an
-// earlier set of pins) are kept until there is no room, and are the first to go.
+// A rollover replaces a pinned key with its successor. The release library decides
+// with the larger of the old key's floor and the successor's, and says what a host
+// holds after a release in Verified.Floors, which leaves out the key the chain
+// replaces. The step doesn't write that map in place of the file's floors: it
+// raises the file's floors to it (raiseFloors), and the file keeps both keys'. The
+// pins move at commit, when the build that came with the statement has proven
+// itself, so for the whole trial, and for ever after a rollback, the host pins the
+// key that was replaced; the floors on disk when the service stops are the ones the
+// host has if the trial fails, and the old key's is among them. Without it a release
+// the old key signed, tried here and rolled back, would be accepted again.
 
-// rolloverLineage follows the offer's statements as VerifyRelease does (a
-// statement counts when it parses, replaces a key that is pinned at that point of
-// the chain and verifies under that key) and says, for each key pinned afterwards,
-// which of the keys pinned before it descends from, sorted. A key that was pinned
-// and not replaced descends from itself.
-func rolloverLineage(pinned []ReleaseKey, envelopes []RolloverEnvelope) map[string][]string {
-	pins := make(map[string]ReleaseKey, len(pinned))
-	origin := make(map[string]map[string]bool, len(pinned))
-	for _, key := range pinned {
-		if key.IsZero() {
-			continue
+// maxStoredFloors bounds counters.json: the floors of the keys a host pins (at most
+// four) and of the keys it pinned before. Beyond it the lowest go first. Counters
+// come from one sequence, so the lowest floor is the one raised longest ago, and the
+// floor of a key the host pins is never dropped for another's.
+const maxStoredFloors = 16
+
+// raiseFloors is the floors after an attempt: every floor that is stored, with each
+// floor in taken (what the release library says a host holds after the release) at
+// least that high. A floor is never lowered, removed or moved to another key. At most
+// maxStoredFloors are kept, those of the keys in keep last to go.
+func raiseFloors(stored, taken map[string]uint64, keep []string) map[string]uint64 {
+	raised := make(map[string]uint64, len(stored)+len(taken))
+	maps.Copy(raised, stored)
+	for fingerprint, floor := range taken {
+		if floor > raised[fingerprint] {
+			raised[fingerprint] = floor
 		}
-		fingerprint := key.Fingerprint()
-		pins[fingerprint] = key
-		origin[fingerprint] = map[string]bool{fingerprint: true}
+	}
+	return trimFloors(raised, keep, maxStoredFloors)
+}
+
+// replacePins is the pins after the statements of an offer: a statement that
+// parses, replaces a key pinned at that point of the chain and verifies under that
+// key puts its successor in that key's place, and every other pin stays where it is.
+// It follows the statements as the release library does, which has already refused a
+// fork and said what the pins are after them; the step compares the two before it
+// writes anything.
+func replacePins(pinned []ReleaseKey, envelopes []RolloverEnvelope) []ReleaseKey {
+	pins := make([]ReleaseKey, 0, len(pinned))
+	for _, key := range pinned {
+		if !key.IsZero() {
+			pins = append(pins, key)
+		}
+	}
+	indexOf := func(fingerprint string) int {
+		return slices.IndexFunc(pins, func(key ReleaseKey) bool { return key.Fingerprint() == fingerprint })
 	}
 	for _, envelope := range envelopes {
 		statement, err := envelope.Parse()
 		if err != nil {
 			continue
 		}
-		replaced, isPinned := pins[statement.From]
-		if !isPinned || !statement.VerifiedBy(replaced) {
+		at := indexOf(statement.From)
+		if at < 0 || !statement.VerifiedBy(pins[at]) {
 			continue
 		}
-		successor := statement.To.Fingerprint()
-		merged := map[string]bool{}
-		maps.Copy(merged, origin[successor])
-		maps.Copy(merged, origin[statement.From])
-		delete(pins, statement.From)
-		delete(origin, statement.From)
-		pins[successor] = statement.To
-		origin[successor] = merged
-	}
-	lineage := make(map[string][]string, len(origin))
-	for fingerprint, from := range origin {
-		for ancestor := range from {
-			lineage[fingerprint] = append(lineage[fingerprint], ancestor)
+		if indexOf(statement.To.Fingerprint()) >= 0 {
+			// The successor is pinned already: it stays where it is, and the key it
+			// replaces goes.
+			pins = slices.Delete(pins, at, at+1)
+			continue
 		}
-		sort.Strings(lineage[fingerprint])
+		pins[at] = statement.To
 	}
-	return lineage
-}
-
-// floorsBeforeSwap are the floors the step writes before it stops the service:
-// every floor already there, with the floor of each key the host pins now that a
-// signer descends from raised to the release's counter. It never lowers a floor.
-func floorsBeforeSwap(floors map[string]uint64, pinned []ReleaseKey, envelopes []RolloverEnvelope, signers []ReleaseKey, counter uint64) map[string]uint64 {
-	lineage := rolloverLineage(pinned, envelopes)
-	raised := make(map[string]uint64, len(floors)+1)
-	maps.Copy(raised, floors)
-	for _, signer := range signers {
-		for _, ancestor := range lineage[signer.Fingerprint()] {
-			raised[ancestor] = max(raised[ancestor], counter)
-		}
-	}
-	return trimFloors(raised, fingerprintsOf(pinned))
-}
-
-// floorsAtCommit are the floors once the pins are what the release's statements
-// say: what VerifyReleaseFiles says a host holds (the floors of the keys pinned
-// afterwards, the old key's moved to its successor), and the floors the step kept
-// for keys that were not pinned before or after.
-func floorsAtCommit(current map[string]uint64, pinnedBefore []ReleaseKey, taken Verified) map[string]uint64 {
-	was := map[string]bool{}
-	for _, fingerprint := range fingerprintsOf(pinnedBefore) {
-		was[fingerprint] = true
-	}
-	floors := make(map[string]uint64, len(taken.Floors))
-	maps.Copy(floors, taken.Floors)
-	for fingerprint, floor := range current {
-		if _, pinnedNow := floors[fingerprint]; !pinnedNow && !was[fingerprint] {
-			floors[fingerprint] = floor
-		}
-	}
-	return trimFloors(floors, fingerprintsOf(taken.Pins))
+	return pins
 }
 
 func fingerprintsOf(keys []ReleaseKey) []string {
@@ -119,10 +93,10 @@ func fingerprintsOf(keys []ReleaseKey) []string {
 	return out
 }
 
-// trimFloors keeps at most maxUpdateFingerprints floors: those of the keys in keep
-// first, then the highest of the others.
-func trimFloors(floors map[string]uint64, keep []string) map[string]uint64 {
-	if len(floors) <= maxUpdateFingerprints {
+// trimFloors keeps at most limit floors: those of the keys in keep first, then the
+// highest of the others.
+func trimFloors(floors map[string]uint64, keep []string, limit int) map[string]uint64 {
+	if len(floors) <= limit {
 		return floors
 	}
 	kept := map[string]bool{}
@@ -143,8 +117,8 @@ func trimFloors(floors map[string]uint64, keep []string) map[string]uint64 {
 		}
 		return a < b
 	})
-	trimmed := make(map[string]uint64, maxUpdateFingerprints)
-	for _, fingerprint := range order[:maxUpdateFingerprints] {
+	trimmed := make(map[string]uint64, limit)
+	for _, fingerprint := range order[:limit] {
 		trimmed[fingerprint] = floors[fingerprint]
 	}
 	return trimmed
