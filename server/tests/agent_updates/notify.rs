@@ -1083,6 +1083,75 @@ async fn a_rollout_that_stalled_says_it_made_no_progress_for_a_day() {
 }
 
 #[tokio::test]
+async fn a_rollback_names_the_version_it_went_back_to_only_when_it_is_one() {
+    let r = Rig::build_with(4, |s| s.public_url = Some(ORIGIN.into())).await;
+    let hook = Hook::new().await;
+    channel(
+        &r.f,
+        &hook,
+        "/all",
+        json!({"events":["agent_update.rolled_back"]}),
+    )
+    .await;
+    let refs: Vec<&String> = r.ids.iter().collect();
+    let rollout = r
+        .start(&refs, json!({"canary_size":4,"failure_threshold":10}))
+        .await;
+    // What a host says it ran before is its own word: a version, or anything.
+    let cases = [
+        (&r.ids[0], Some("0.1.0")),
+        (&r.ids[1], Some("https://evil.example/claim-your-prize")),
+        (&r.ids[2], Some("v0.1.0")),
+        (&r.ids[3], None),
+    ];
+    let mut conn = r.f.state.pool.acquire().await.unwrap();
+    let mut want = Vec::new();
+    for (device, from) in cases {
+        let mut details = json!({
+            "rollout_id":rollout,"release_id":r.release.id,"version":"0.1.1",
+            "manifest_sha256":r.release.manifest_sha256,"to_version":"0.1.1",
+            "state":"rolled_back","code":"UNHEALTHY"
+        });
+        if let Some(from) = from {
+            details["from_version"] = json!(from);
+        }
+        vectory_server::agent_updates::audit(
+            &mut conn,
+            device,
+            "device.agent_update",
+            device,
+            "rolled_back",
+            details,
+        )
+        .await
+        .unwrap();
+        let went = match from {
+            Some("0.1.0") => "0.1.0",
+            Some(_) => "an unreadable version",
+            None => "its previous agent",
+        };
+        want.push(format!(
+            "{} went back to {went} after trying 0.1.1. The new agent started but didn't pass its health check, so the previous build was put back.",
+            name_of(&r.f, device).await
+        ));
+    }
+    drop(conn);
+    drain(&r.f, later()).await;
+    let mut got: Vec<String> = hook
+        .of("/all", "agent_update.rolled_back")
+        .iter()
+        .map(|event| event["message"].as_str().unwrap().to_owned())
+        .collect();
+    got.sort();
+    want.sort();
+    assert_eq!(got, want);
+    for event in hook.events("/all") {
+        assert!(!event.to_string().contains("evil"), "{event}");
+        hostile_free(&event);
+    }
+}
+
+#[tokio::test]
 async fn a_stop_the_restore_made_is_announced_with_who_and_why() {
     let r = Rig::build(2).await;
     let hook = Hook::new().await;

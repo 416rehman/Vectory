@@ -14,7 +14,7 @@
 //! A pipeline filter matches none of them. A group filter matches a rollback by
 //! its device and a failure by the rollout's selector groups or its targets'
 //! groups; a stop and a key change match only a rule that has no filter.
-use super::fingerprint;
+use super::{fingerprint, parse_version};
 use crate::{
     agent_update_rollouts::detail,
     error::Result,
@@ -112,6 +112,17 @@ pub fn fact(event: &Value) -> Option<(&'static str, Value)> {
     })
 }
 
+/// A version as a message says it: only when it is one. What a host reports of
+/// the build it ran is its own word, and a message is read, and linked, by
+/// people and channels that trust it.
+fn shown(version: &str) -> &str {
+    if parse_version(version).is_some() {
+        version
+    } else {
+        "an unreadable version"
+    }
+}
+
 fn plural(count: u64, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
@@ -132,7 +143,11 @@ async fn rollout(db: &mut SqliteConnection, id: &str) -> Result<Option<Rollout>>
     .await?;
     Ok(
         row.map(|(name, version, failure_reason, selector)| Rollout {
-            name: named(name.as_deref(), 120, &format!("Update to {version}")),
+            name: named(
+                name.as_deref(),
+                120,
+                &format!("Update to {}", shown(&version)),
+            ),
             version,
             failure_reason,
             selector: serde_json::from_str(&selector).unwrap_or(Value::Null),
@@ -188,7 +203,7 @@ pub async fn context(
             });
             let mut lines = vec![format!("Agent update: {name}")];
             if let Some(found) = &found {
-                lines.push(format!("Release: {}", found.version));
+                lines.push(format!("Release: {}", shown(&found.version)));
                 update["release_version"] = json!(found.version);
                 update["rollout"] = json!({"id": id, "name": found.name});
                 for group in found.selector["group_ids"].as_array().into_iter().flatten() {
@@ -220,15 +235,12 @@ pub async fn context(
                 .or_else(|| found.as_ref().map(|r| r.version.clone()));
             let code = data["code"].as_str();
             let went_back = match data["from_version"].as_str() {
-                Some(from) => format!(
-                    "went back to {}",
-                    named(Some(from), 40, "its previous agent")
-                ),
+                Some(from) => format!("went back to {}", shown(from)),
                 None => "went back to its previous agent".to_owned(),
             };
             let tried = version
                 .as_deref()
-                .map(|version| format!(" after trying {version}"))
+                .map(|version| format!(" after trying {}", shown(version)))
                 .unwrap_or_default();
             let why = detail::message(code).map(|sentence| format!(" {sentence}"));
             notice["headline"] = json!(format!("Agent rolled back on {name}"));
@@ -242,7 +254,7 @@ pub async fn context(
                 update["rollout"] = json!({"id": rollout_id, "name": found.name});
             }
             if let Some(version) = &version {
-                lines.push(format!("Release: {version}"));
+                lines.push(format!("Release: {}", shown(version)));
                 update["release_version"] = json!(version);
             }
             if let Some(code) = code {
