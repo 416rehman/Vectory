@@ -33,7 +33,7 @@ Runs only when dispatched; [packaging/README.md](../../packaging/README.md#relea
 
 ## platforms.yml
 
-Runs when dispatched (`gh workflow run platforms.yml --ref <branch>`) and when the workflow or a script it runs changes, not on every push. Each job keeps its evidence as the `platforms-<job>` artifact: one JSON file per phase (the checks in order, how long each took, what it observed) and the logs. The scripts are in `tests/platform/`; `node --test tests/platform/lib.test.mjs`, an early step of each service job, unit-tests the parsers they rely on against the text the tools print.
+Runs when dispatched (`gh workflow run platforms.yml --ref <branch>`) and when the workflow or a script it runs changes, not on every push. A newer run cancels the Linux and browser jobs it replaces; a Windows or macOS job that is under way finishes and the newest one waits for its turn, because those proofs take longer than changes come. Each job keeps its evidence as the `platforms-<job>` artifact: one JSON file per phase (the checks in order, how long each took, what it observed) and the logs. The scripts are in `tests/platform/`; `node --test tests/platform/lib.test.mjs`, an early step of each service job, unit-tests the parsers they rely on against the text the tools print.
 
 | Job | Runs | A green run shows | It does not show |
 | --- | --- | --- | --- |
