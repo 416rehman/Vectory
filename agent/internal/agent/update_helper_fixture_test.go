@@ -123,7 +123,21 @@ type fakeConfig struct {
 	// TwoRenames makes the install swap the way Windows does: the executable steps
 	// aside and the staged file takes its place, with no executable in between.
 	TwoRenames bool `json:"two_renames"`
+	// SlowStopOf names a version whose stop takes the service manager's whole stop
+	// limit of the clock: a build that ignores the signal to stop is ended only when
+	// the manager's timeout runs out.
+	SlowStopOf string `json:"slow_stop_of"`
+	// SlowStartOf names a version whose start waits for the system before the process
+	// begins: a unit that is ordered after the network is started only when it is up.
+	SlowStartOf string `json:"slow_start_of"`
 }
+
+const (
+	// fakeSlowStop is how long a slow stop takes: the stop timeout of the agent's unit.
+	fakeSlowStop = 330 * time.Second
+	// fakeSlowStart is how long a slow start waits before the process begins.
+	fakeSlowStart = 120 * time.Second
+)
 
 const fakeBigDisk = 1 << 40
 
@@ -236,6 +250,8 @@ func behaviorDelay(behavior string) time.Duration {
 	switch behavior {
 	case "slow":
 		return 400 * time.Second
+	case "late":
+		return 200 * time.Second
 	case "good", "novector", "wrongsha", "wrongboot", "future",
 		"healthversion", "staletime", "futurerecord", "futurefile", "restarted", "activating":
 		return 3 * time.Second
@@ -337,6 +353,9 @@ func (h *fakeHost) StopService(ctx context.Context) error {
 	}
 	s := h.loadService()
 	h.evolve(&s, h.clock.Now())
+	if h.cfg.SlowStopOf != "" && s.Version == h.cfg.SlowStopOf && s.Started != 0 {
+		h.clock.advance(fakeSlowStop)
+	}
 	s.State, s.Started, s.Restarts = "inactive", 0, 0
 	s.History = append(s.History, "stop")
 	h.saveService(s)
@@ -353,6 +372,9 @@ func (h *fakeHost) StartService(ctx context.Context) error {
 		return err
 	}
 	version, behavior := classifyFakeBuild(content)
+	if h.cfg.SlowStartOf != "" && version == h.cfg.SlowStartOf {
+		h.clock.advance(fakeSlowStart)
+	}
 	s.Starts++
 	s.State, s.Restarts, s.Started = "active", 0, h.clock.Now().UnixNano()
 	s.Digest, s.Version, s.Behavior, s.Checkins, s.Vector = digestOf(content), version, behavior, 0, ""

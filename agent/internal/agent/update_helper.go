@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 )
@@ -26,7 +27,11 @@ import (
 //
 // The order of a request, and the invariant each step protects:
 //
-//	consent      the root-owned policy says off, paused, ask or auto (and a window)  I1
+//	consent      the root-owned policy says off, paused, ask or auto (and a window);
+//	             a host held by `vectory pause` leaves the request waiting           I1
+//	fork         the offer's small files are read, with no copy and no build, and two
+//	             statements of a pinned key that name different successors are
+//	             recorded before any wait; nothing else is touched                   I2
 //	eligibility  a service that runs this executable, no package, a root-owned
 //	             install directory and room for two copies                           I1
 //	preparing    the journal is written; the offer's small files are copied and the
@@ -45,6 +50,14 @@ import (
 // The journal is written and synced before each step it names. A step that fails
 // before the swap leaves nothing but its own files and a temporary file beside the
 // executable, which the next run removes.
+//
+// Who settles what. The run that makes a swap settles it: the timer's run is the
+// helper copy, and `vectory update apply` is the agent that was installed before
+// the swap, which keeps running from its own file when the swap replaces the name.
+// An update that was interrupted after the swap (swapping, trial, rolling_back) is
+// settled only by the timer's run, from the helper copy, which is still the last
+// build proven on this host. A run that is the installed agent never settles it,
+// because after the swap that agent is the build under trial.
 
 const (
 	// The trial lasts five minutes from the start of the service, and so does the
@@ -226,9 +239,48 @@ func (s *updateStep) run(ctx context.Context) error {
 	faultPoint("run:started")
 
 	if s.haveJournal && s.journal.active() {
+		// An update that has swapped is judged and undone by the update step's own
+		// run, never by the installed agent, which after the swap is the build under
+		// trial (I3). A journal in preparing has swapped nothing, so any run may end it.
+		if s.journal.Stage != UpdateStagePreparing && s.runsAsInstalledBuild() {
+			return UpdateBeingSettledError(s.stateDir)
+		}
 		return s.resume(ctx)
 	}
 	return s.idle(ctx)
+}
+
+// runsAsInstalledBuild says whether this run is the agent that is installed.
+// `vectory update apply` always is: it is the executable at the install path, which
+// once a swap has happened is the build under trial. The timer's run is the helper
+// copy, another file; a run of `update-helper` that someone starts by hand from the
+// installed executable is the installed build too, and is told apart by its file.
+func (s *updateStep) runsAsInstalledBuild() bool {
+	if s.mode == stepApply {
+		return true
+	}
+	self, err := os.Executable()
+	return err == nil && sameFile(self, s.service.Executable)
+}
+
+// sameFile reports whether two paths name one file.
+func sameFile(a, b string) bool {
+	first, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	second, err := os.Stat(b)
+	return err == nil && os.SameFile(first, second)
+}
+
+// UpdateBeingSettledError is what a run that must not settle an update that has
+// swapped says, and does: it writes nothing, and leaves the update to the update
+// step. `vectory update apply` says it before it asks anything, when the step's
+// status shows such an update, and the step says it again to a run that finds one
+// in its journal.
+func UpdateBeingSettledError(stateDir string) error {
+	return errors.New("an update that already began is being settled by the background update step. This command leaves it to that step, which finishes it by itself, usually within a minute or two. See where it stands: " +
+		AdminCommandFor(stateDir, "vectory update status"))
 }
 
 // load reads what the step keeps and what the root-owned policy says. A counters.json
@@ -523,6 +575,17 @@ func (s *updateStep) consider(ctx context.Context, request UpdateRequest, modifi
 	if code, detail := s.consentRefusal(); code != "" {
 		return s.finishWithout(request.ManifestSHA256, code, detail)
 	}
+	if detail, waiting := s.pauseWait(); waiting {
+		s.logf("%s", detail)
+		return s.writeStatus(nil)
+	}
+	// The host that is off, paused or held verifies nothing, so this is after those
+	// three. It is before the waits for a person and for a window: what the offer's
+	// statements say about the keys is a fact about the offer, whenever consent lets it
+	// through.
+	if recorded, err := s.recordFork(request); recorded || err != nil {
+		return err
+	}
 	if code, detail, waiting := s.consentWait(); waiting {
 		s.logf("%s", detail)
 		return s.writeStatus(nil)
@@ -531,9 +594,7 @@ func (s *updateStep) consider(ctx context.Context, request UpdateRequest, modifi
 	}
 	if s.counters.RolloverConflict != nil {
 		if s.conflictStillApplies() {
-			return s.finishWithout(request.ManifestSHA256, "KEY_ROLLOVER_CONFLICT", fmt.Sprintf(
-				"two statements from key %s name different successors, %s and %s: this host takes no update until it is pinned again",
-				shortFingerprint(s.counters.RolloverConflict.From), shortFingerprint(s.counters.RolloverConflict.To[0]), shortFingerprint(s.counters.RolloverConflict.To[1])))
+			return s.finishWithout(request.ManifestSHA256, "KEY_ROLLOVER_CONFLICT", forkWords(s.counters.RolloverConflict))
 		}
 		s.counters.RolloverConflict = nil
 		if err := writeUpdateCounters(s.private, s.counters); err != nil {
@@ -590,10 +651,21 @@ func (s *updateStep) consentRefusal() (code, detail string) {
 	return "", ""
 }
 
+// pauseWait says whether `vectory pause` makes the request wait. A pause is not a
+// decision about a release, so the request waits and is never refused: it stays as
+// the agent wrote it, and nothing on the host changes until the host is resumed. A
+// person at the keyboard is the consent itself, so apply ignores it.
+func (s *updateStep) pauseWait() (detail string, waiting bool) {
+	if s.mode == stepApply || !s.localPauseHolds() {
+		return "", false
+	}
+	return "a staged update waits while `vectory pause` holds this host: run `" + AdminCommandFor(s.stateDir, "vectory resume") + "` to take updates again", true
+}
+
 // consentWait says whether the host's consent makes the request wait: an ask host
 // waits for a person to run `vectory update apply`, and an automatic host with
-// windows waits for one to open. A person at the keyboard is the consent itself,
-// so apply waits for nothing.
+// windows waits for one to open. A person at the keyboard is the consent itself, so
+// apply waits for nothing.
 func (s *updateStep) consentWait() (code, detail string, waiting bool) {
 	if s.mode == stepApply {
 		return "", "", false
@@ -611,6 +683,24 @@ func (s *updateStep) consentWait() (code, detail string, waiting bool) {
 		}
 	}
 	return "", "", false
+}
+
+// localPauseHolds says whether `vectory pause` is in force: the marker it leaves in
+// the agent's state directory is there. That directory is the service account's, so
+// the marker is looked for the way the step opens every other file from that tree,
+// through a walk that follows no link at any depth and waits for no writer, and what
+// is found is never read: that it is there is all it says. Anything but "it isn't
+// there" counts as a pause, as the agent's own check does, so a marker that is a
+// directory, a link or a file the step can't open holds the host. The marker is
+// advice and not authority: the service account can set it, and all that gains it
+// is a delay of its own updates.
+func (s *updateStep) localPauseHolds() bool {
+	file, err := openPlainFile(filepath.Join(s.stateDir, localPauseMarker))
+	if err == nil {
+		_ = file.Close()
+		return true
+	}
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // finishWithout ends a request that never started: nothing but status.json

@@ -98,15 +98,17 @@ func updateUnitValue(what, value string) (string, error) {
 //     every update would end READ_ONLY.
 //   - It does no network I/O: AF_UNIX is all it may open, and systemctl reaches the
 //     service manager over one.
-//   - CapabilityBoundingSet is the design's list and one more. The step runs the
-//     probe as the service account (CAP_SETUID, CAP_SETGID), reads that account's
-//     private directory (CAP_DAC_OVERRIDE), and ends a probe that doesn't answer in
-//     ten seconds (CAP_KILL: a process may signal another account's process only
-//     with it, and the probe is the service account's). CAP_CHOWN and CAP_FOWNER
-//     are the design's, for the files it makes in the install directory: the step
-//     calls no chown, and its links, renames and modes are of files that root owns,
-//     so the native sandbox check is what says whether they can go. A capability is
-//     added only when a native test shows the step needs it.
+//   - CapabilityBoundingSet is the four capabilities the step uses, each for one
+//     thing. It runs the probe as the service account (CAP_SETUID, CAP_SETGID),
+//     reads that account's private directory and the files in it, which the account
+//     owns and closes to everyone else (CAP_DAC_OVERRIDE), and ends a probe that
+//     doesn't answer in ten seconds (CAP_KILL: a process may signal another
+//     account's process only with it, and the probe is the service account's).
+//     It has no CAP_CHOWN and no CAP_FOWNER. Everything it makes, root makes and
+//     keeps: it changes no file's owner, the only modes it sets are on files
+//     and directories it has just made, and its links, renames and removals are of
+//     names root made in directories root owns. A capability is added only when a
+//     native test shows the step needs it.
 //
 // The step has no User=: it runs as root.
 func systemdUpdateUnits(spec updateUnitSpec) (service, timer string, err error) {
@@ -130,7 +132,7 @@ func systemdUpdateUnits(spec updateUnitSpec) (service, timer string, err error) 
 		"ProtectSystem=strict\nProtectHome=true\nPrivateTmp=true\nNoNewPrivileges=true\nProtectControlGroups=true\n" +
 		"RestrictAddressFamilies=AF_UNIX\nSystemCallFilter=@system-service\n" +
 		"ReadWritePaths=" + values[2] + " " + values[3] + " " + values[4] + "\n" +
-		"CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_KILL\n"
+		"CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_KILL\n"
 	timer = "[Unit]\nDescription=Vectory agent update step schedule\n\n" +
 		"[Timer]\nOnBootSec=15s\nOnUnitInactiveSec=30s\nAccuracySec=5s\n\n" +
 		"[Install]\nWantedBy=timers.target\n"

@@ -265,8 +265,14 @@ func LoadSettings(dir string) (Settings, error) {
 	return s, e
 }
 func SaveState(dir string, s State) error { return WriteJSON(filepath.Join(dir, "state.json"), s) }
+
+// localPauseMarker is the file `vectory pause` leaves in the state directory. A
+// pause is in force while it is there, and for as long as it can't be shown not to
+// be: LocalPaused counts any error but "does not exist" as a pause.
+const localPauseMarker = "paused"
+
 func LocalPaused(dir string) bool {
-	_, e := os.Stat(filepath.Join(dir, "paused"))
+	_, e := os.Stat(filepath.Join(dir, localPauseMarker))
 	return e == nil || !os.IsNotExist(e)
 }
 func SetPause(dir string, paused bool) error {
@@ -295,9 +301,9 @@ func SetPause(dir string, paused bool) error {
 		return errors.New("local pause requires existing agent state")
 	}
 	if paused {
-		return AtomicWrite(filepath.Join(dir, "paused"), []byte("local emergency pause\n"))
+		return AtomicWrite(filepath.Join(dir, localPauseMarker), []byte("local emergency pause\n"))
 	}
-	e := os.Remove(filepath.Join(dir, "paused"))
+	e := os.Remove(filepath.Join(dir, localPauseMarker))
 	if os.IsNotExist(e) {
 		return nil
 	}

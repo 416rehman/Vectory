@@ -144,7 +144,10 @@ func (s *updateStep) resume(ctx context.Context) error {
 
 // ---------------------------------------------------------------- the trial
 
-// trial starts the new build and watches it for five minutes.
+// trial starts the new build and watches it for five minutes. The deadline the
+// journal carries when it says trial is provisional, as a journal in trial needs
+// one before anything starts; the five minutes count from the start of the service
+// (openWatchWindow).
 func (s *updateStep) trial(ctx context.Context, j *updateJournal) error {
 	j.Stage = UpdateStageTrial
 	j.Deadline = s.now().Add(updateTrialDuration)
@@ -198,6 +201,7 @@ func (s *updateStep) runTrial(ctx context.Context, j *updateJournal, fresh bool)
 		return s.rollBack(ctx, j, "START_FAILED")
 	}
 	faultPoint("started")
+	s.openWatchWindow(j)
 	before, _ := s.healthBefore()
 	outcome, err := s.watch(ctx, j, watchSpec{
 		build: *j.To, notBoot: j.BootIDBefore, since: started, deadline: j.Deadline,
@@ -371,7 +375,7 @@ func (s *updateStep) commit(ctx context.Context, j *updateJournal, firstCheckInM
 //     then. If there is no room the files stay, and the next run tries again;
 //  6. the staging directory is emptied.
 func (s *updateStep) finishCommit(ctx context.Context, j *updateJournal, firstCheckInMS *uint32) error {
-	_ = s.host.RemoveFrom(s.staging, UpdateBuildFile(runtime.GOOS))
+	s.freeStagedBuild()
 	s.installed = updateInstalled{Version: j.To.Version, SHA256: j.To.SHA256, Release: j.Release, RecordedAt: j.FinishedAt}
 	s.haveInstalled = true
 	if err := writeUpdateInstalled(s.private, s.installed); err != nil {
@@ -513,8 +517,17 @@ func (s *updateStep) placeNewHelper(digest string) error {
 // build under trial. The journal says rolling_back, with the code, first.
 func (s *updateStep) rollBack(ctx context.Context, j *updateJournal, code string) error {
 	s.logf("taking the new build back: %s", code)
+	// The step's file system may be full, and that can be why the build under trial
+	// couldn't check in. The rollback's executable is a rename and needs no room, but
+	// its journal and its status are new files, so the step's copy of the build, which
+	// has nothing left to do, goes first and gives its room back. A crash after that
+	// leaves the journal saying trial, which needs none of the copy.
+	s.freeStagedBuild()
+	faultPoint("rollback:build_freed")
 	j.Stage = UpdateStageRollingBack
 	j.Code = code
+	// A journal in rolling_back has a deadline. This one only keeps the format
+	// whole: the end of the previous build's watch is set when that build starts.
 	j.Deadline = s.now().Add(updateTrialDuration)
 	if err := writeUpdateJournal(s.private, *j); err != nil {
 		return err
@@ -523,6 +536,35 @@ func (s *updateStep) rollBack(ctx context.Context, j *updateJournal, code string
 	faultPoint("rolling_back")
 	s.status(j)
 	return s.continueRollback(ctx, j)
+}
+
+// freeStagedBuild removes the step's copy of the build under trial from its staging
+// directory. It is the one large file in the step's directory, and once the new
+// build is installed it is not read again: a commit removes it first, and a rollback
+// uses the previous build kept beside the executable and the helper copy. The small
+// files of the request stay until the request ends: the health the trial compares
+// with and the statements a commit follows are read from them.
+func (s *updateStep) freeStagedBuild() {
+	if err := s.host.RemoveFrom(s.staging, UpdateBuildFile(runtime.GOOS)); err != nil {
+		s.logf("couldn't remove the step's copy of the build: %v", err)
+	}
+}
+
+// openWatchWindow gives the build that has just been started its five minutes from
+// now, and records when they end in the journal and the status. The service manager's
+// calls before it may have taken long: a stop waits for Vector to drain, up to the
+// stop limit, and a start can wait for the network. None of that time is the
+// build's, and a window taken before it would be spent by it. The journal can't
+// always be written (the step's file system may be full); the window then lives in
+// memory only, and a run that continues after a crash gives its own.
+func (s *updateStep) openWatchWindow(j *updateJournal) {
+	j.Deadline = s.now().Add(updateTrialDuration)
+	if err := writeUpdateJournal(s.private, *j); err != nil {
+		s.logf("couldn't record when the watch ends: %v", err)
+	} else {
+		s.journal = *j
+	}
+	s.status(j)
 }
 
 // continueRollback stops the service, puts the previous build back after checking
@@ -588,6 +630,7 @@ func (s *updateStep) continueRollback(ctx context.Context, j *updateJournal) err
 		return s.endRolledBack(j, "ROLLBACK_UNHEALTHY")
 	}
 	faultPoint("rollback:started")
+	s.openWatchWindow(j)
 	before, _ := s.healthBefore()
 	outcome, err := s.watch(ctx, j, watchSpec{
 		build: *j.From, notBoot: j.BootIDBefore, since: started, deadline: j.Deadline,
