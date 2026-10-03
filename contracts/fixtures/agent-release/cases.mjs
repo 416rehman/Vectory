@@ -2256,6 +2256,13 @@ addBundle(
   refuse("RELEASE_KEY_INVALID"),
 );
 addBundle(
+  "refused-fingerprint-member-absent",
+  "An entry without its fingerprint member is malformed: the server always writes it, and a bundle that leaves it out is not one this contract describes.",
+  bundleOf([{ public_key: KEYS.team.line, state: "current" }]),
+  FINGERPRINT("team"),
+  refuse("RELEASE_KEY_INVALID"),
+);
+addBundle(
   "refused-fingerprint-member-in-uppercase",
   "The fingerprint member is lowercase hexadecimal.",
   bundleOf([
