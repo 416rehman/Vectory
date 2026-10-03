@@ -11,8 +11,9 @@ import (
 // ReadSecretBindings is the shared operator-input boundary for install and
 // configure-secrets. It never normalizes ambiguous JSON into another intent.
 // The returned nonnil empty map deliberately removes all existing bindings.
-// A path that can't be what the operator meant says which it is; what a file
-// holds is never echoed, because the bindings point at secrets.
+// A path or a name that can't be what the operator meant is named, bounded and
+// without control characters, so the entry can be found. Nothing else a file
+// holds is echoed, because the bindings point at secrets.
 func ReadSecretBindings(path string) (*map[string]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, inputError("--secret-files " + safeText(path, 120) + " isn't an absolute path: give the whole path of the JSON file, such as /etc/vectory/secret-bindings.json")

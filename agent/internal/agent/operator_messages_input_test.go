@@ -93,8 +93,9 @@ func TestSecretBindingMessagesSayWhichPathOrNameIsWrong(t *testing.T) {
 		bindings map[string]string
 		want     string
 	}{
-		"name": {map[string]string{"9lives": "/etc/vectory/db-password"}, "9lives isn't a secret name"},
-		"path": {map[string]string{"DB_PASSWORD": "db-password"}, "the file for DB_PASSWORD must be an absolute local path, and db-password isn't one"},
+		"name":  {map[string]string{"9lives": "/etc/vectory/db-password"}, "9lives isn't a secret name"},
+		"path":  {map[string]string{"DB_PASSWORD": "db-password"}, "the file for DB_PASSWORD must be an absolute local path, and db-password isn't one"},
+		"empty": {map[string]string{"DB_PASSWORD": ""}, "the file for DB_PASSWORD is empty: bind each name to the absolute path of a file"},
 	} {
 		if err := validateSecretFiles(test.bindings); err == nil || !strings.Contains(err.Error(), test.want) || IsInputError(err) {
 			t.Errorf("%s: %v", name, err)
