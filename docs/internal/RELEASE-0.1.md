@@ -8,7 +8,7 @@ A **developer preview**, as the [roadmap](../ROADMAP.md) and the README already 
 
 ## Scope is frozen
 
-Only these may change before the tag: fixes for defects the pre-release review finds, documentation, and release plumbing (versions, changelog, notes). No new features.
+Only these may change before the tag: fixes for defects the pre-release review finds, documentation, release plumbing (versions, changelog, notes), and one feature: operator-issued agent updates ([ADR 0015](../adr/0015-operator-issued-agent-updates.md)), which are off by default, opt-in on each host and accepted only as signed builds. No other new features.
 
 Designed and recorded for the next release, not built now:
 
@@ -20,7 +20,6 @@ Designed and recorded for the next release, not built now:
 | Authoring gaps (secrets in headers and URLs, merge-aware conflicts, Vector warnings as problems) | [AUTHORING-GAPS.md](AUTHORING-GAPS.md), [WORK-QUEUE.md](WORK-QUEUE.md) item 8 |
 | Step-up authentication, labels and selectors, single sign-on, Kubernetes | [WORK-QUEUE.md](WORK-QUEUE.md) item 11 |
 | Signed releases, published images and packages | [packaging/README.md](../../packaging/README.md), [HANDOFF.md](HANDOFF.md) |
-| Operator-issued agent updates (opt-in per host, signed builds, staged installs that roll back) | [ADR 0015](../adr/0015-operator-issued-agent-updates.md) |
 
 ## Gates
 
@@ -35,6 +34,7 @@ Every gate is a command or a check anyone can repeat. A gate is **Done** only wi
 | 5 | One version everywhere | `node scripts/check-versions.mjs` (it runs in CI) finds `0.1.0` in `agent/internal/agent/types.go`, `server/Cargo.toml` and its lock file, the dashboard and Help center packages and their lock files, `contracts/openapi.json` and the newest changelog heading; the Help center reads its package; `packaging/build-release.py` refuses a mismatch with the agent | Open |
 | 6 | Documentation matches behavior | `node scripts/check-doc-links.mjs`, `check-requirements.mjs`, `check-ci-table.mjs`, the Help center build and its tests; README, `CHANGELOG.md`, `docs/user/whats-new.md` and the known limits say the same thing | Open |
 | 7 | No private details in the tree or the history | `node scripts/check-writing-rules.mjs` passes; a scan of the final tree and of every commit message for personal paths, links to private pages and internal identifiers; one squashed commit with a single `Co-Authored-By` trailer | Open |
+| 8 | Agent updates are proven and reviewed | `platforms` updates a real agent service on Linux, macOS and Windows from one build to the next and rolls back a build that fails; refuses unsigned, wrongly signed, replayed, expired, corrupted and wrong-platform builds; an independent review of the update path finds nothing open at P0 or P1 | Open |
 
 ## Publication (maintainer steps)
 
