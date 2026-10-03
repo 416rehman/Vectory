@@ -438,6 +438,7 @@ The bootstrap secret only creates the first administrator; it can't sign anyone 
 | `RELEASE_NOT_IN_CATALOG`, `RELEASE_EXISTS`, `RELEASE_NOT_READY`, `RELEASE_STORAGE_FULL` | The catalog has no such build, the release exists, it isn't signed, withdrawn or expired, or 20 releases (or the release store's space) are in use. | Choose a build from **Newer builds**, sign or prepare the release again, or withdraw releases you no longer need. |
 | `UPDATE_REVIEW_CHANGED` (409) | A device, the release or the key changed since you reviewed. Nothing started. | Review again, then start. |
 | `UPDATE_ROLLOUT_OVERLAP`, `NOTHING_TO_UPDATE` (409) | A device is already in an update rollout, or the review has nobody who will update. | Wait for the other rollout, or fix what the review's **Won't update** list names. |
+| `UPDATE_ROLLOUT_LIMIT` (409) | 200 update rollouts are active or paused. | Cancel one, or wait for one to finish, then start the rollout again. |
 
 ## Prepare a useful problem report
 

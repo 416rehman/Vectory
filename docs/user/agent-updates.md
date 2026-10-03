@@ -313,6 +313,7 @@ In **Settings → Agent updates**, choose **Turn off…** and enter your passwor
 - **A release names only the platforms in this server's catalog.** A host whose platform isn't in it is listed as **Not in this release**: update it by hand. That is what macOS and Windows hosts do when their builds aren't in the release.
 - **Updates only move forward.** A host never takes an older build. Going back is its own automatic rollback, or an upgrade by hand.
 - **A rollout targets the devices the review found.** A device that joins a group afterwards isn't added, and a device is in at most one unfinished update rollout.
+- **At most 200 update rollouts are active or paused at once.** The server reads every active one every two seconds, so the 201st is refused (`UPDATE_ROLLOUT_LIMIT`) until you cancel one or one finishes. A rollout takes up to 10,000 devices, so this is no limit on the fleet.
 - **Expiry uses each host's clock.** A host whose clock is far behind accepts a release that has expired, and one far ahead refuses valid ones.
 - **Vector isn't updated.** Agent updates replace the agent only. Replacing Vector stays a local act: [Replace the Vector binary](agents.md#replace-the-vector-binary).
 

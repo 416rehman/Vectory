@@ -6,8 +6,9 @@
 //! deployments, desired generations, policy generations or deployment targets,
 //! so a pipeline rollout and an update rollout cannot gate, supersede or roll
 //! back each other. It targets a fixed set of at most 10,000 devices that the
-//! review resolved, and it counts a device as updated only from the server's own
-//! observation of the new build (`engine`).
+//! review resolved, at most 200 rollouts are active or paused at once, and it
+//! counts a device as updated only from the server's own observation of the new
+//! build (`engine`).
 use crate::{
     State, agent_releases,
     agent_updates::{self, RolloutSettings, instant, review},
@@ -35,6 +36,10 @@ pub use engine::{
 
 /// Devices one rollout targets.
 pub const MAX_TARGETS: usize = 10_000;
+/// Update rollouts that are active or paused at once. Every active rollout is
+/// read at each scheduler tick, under the writer lock the check-ins share, so
+/// nobody can make the server too busy for its fleet by starting rollouts.
+pub const MAX_OPEN_ROLLOUTS: i64 = 200;
 /// The fourteen states of a target.
 pub const STATES: [&str; 14] = [
     "pending",
@@ -83,6 +88,15 @@ fn changed() -> ApiError {
         StatusCode::CONFLICT,
         "UPDATE_REVIEW_CHANGED",
         "The review changed since you made it. Review the update rollout again before you start it.",
+    )
+}
+fn too_many() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "UPDATE_ROLLOUT_LIMIT",
+        format!(
+            "At most {MAX_OPEN_ROLLOUTS} update rollouts can be active or paused at once. Cancel or finish one first."
+        ),
     )
 }
 fn conflicting_request() -> ApiError {
@@ -512,6 +526,14 @@ pub async fn create(
     }
     if setting.stopped.is_some() {
         return Err(agent_updates::stopped());
+    }
+    let open: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agent_update_rollouts WHERE status IN ('active','paused')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if open >= MAX_OPEN_ROLLOUTS {
+        return Err(too_many());
     }
     let release = agent_releases::load(&mut tx, &request.release_id).await?;
     let now = db::now();
