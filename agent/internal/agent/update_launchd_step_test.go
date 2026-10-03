@@ -51,7 +51,9 @@ const (
 // as it does on a Mac: exit 113, and a first line that says the request was bad.
 var agentNotLoaded = launchctlResult{status: 113, stderr: "Bad request.\nCould not find service \"io.vectory.agent\" in domain for system\n"}
 
-// launchdListing is what `launchctl print` shows of the agent's job.
+// launchdListing is what `launchctl print` shows of the agent's job: its state, the process
+// it has (none when pid is 0), the count of its runs, and how its process last ended ("" for
+// a job that never exited, which launchd prints as "(never exited)").
 type launchdListing struct {
 	state    string
 	pid      int
@@ -70,6 +72,11 @@ type launchdOverMachine struct {
 	loaded   bool
 	removing int
 	departed launchdListing
+
+	// stepLoaded says launchd knows the step's own job, io.vectory.update, which setup loads
+	// and which launchd starts at load and then every 30 seconds; stepRuns counts its runs.
+	stepLoaded bool
+	stepRuns   int
 
 	// What a test sets.
 	//
@@ -98,17 +105,26 @@ func (m *launchdOverMachine) run(ctx context.Context, args ...string) launchctlR
 	m.calls = append(m.calls, strings.Join(args, " "))
 	switch args[0] {
 	case "print":
-		if args[1] == machineAgentTarget {
+		switch args[1] {
+		case machineAgentTarget:
 			return m.print(ctx)
+		case machineStepTarget:
+			return m.printStep()
 		}
 		return notLoaded
 	case "bootout":
-		if args[1] == machineAgentTarget {
+		switch args[1] {
+		case machineAgentTarget:
 			return m.bootout(ctx)
+		case machineStepTarget:
+			return m.bootoutStep()
 		}
 	case "bootstrap":
-		if strings.HasSuffix(args[len(args)-1], "io.vectory.agent.plist") {
+		switch {
+		case strings.HasSuffix(args[len(args)-1], "io.vectory.agent.plist"):
 			return m.bootstrap(ctx)
+		case strings.HasSuffix(args[len(args)-1], "io.vectory.update.plist"):
+			return m.bootstrapStep()
 		}
 	case "kickstart":
 		if args[len(args)-1] == machineAgentTarget {
@@ -132,24 +148,110 @@ func (m *launchdOverMachine) listing(ctx context.Context) launchdListing {
 		return launchdListing{state: "spawn scheduled", runs: 1 + int(elapsed/machineThrottle), lastExit: exit}
 	}
 	if state.State == "active" {
-		return launchdListing{state: "running", pid: state.PID, runs: state.Restarts + 1}
+		running := launchdListing{state: "running", pid: state.PID, runs: state.Restarts + 1}
+		if running.runs > 1 {
+			// A job launchd has started again has exited before, and says how.
+			running.lastExit = "1"
+		}
+		return running
 	}
 	return launchdListing{state: "spawn scheduled", runs: state.Restarts + 1, lastExit: "1"}
 }
 
-// launchdPrintText is `launchctl print system/io.vectory.agent` for a job.
+// launchdPrintText is `launchctl print system/io.vectory.agent` for a job, in the words launchd
+// uses: the text a Mac printed for the agent's job, started at load and never exited
+// (testdata/update/launchctl-print-running.txt), with what depends on the job filled in. A job
+// with a process that is running has an active count of 1; a job that never exited says so, and
+// any other says the code; launchd gave "speculative" as the reason it started a job that was
+// loaded and has never exited; the pid is printed only while the job has a process.
 func launchdPrintText(l launchdListing) launchctlResult {
 	var b strings.Builder
-	b.WriteString("system/io.vectory.agent = {\n\tactive count = 0\n\tstate = " + l.state + "\n\n\tprogram = /usr/local/bin/vectory\n")
+	active := 0
+	if l.state == "running" && l.pid > 0 {
+		active = 1
+	}
+	fmt.Fprintf(&b, "system/io.vectory.agent = {\n\tactive count = %d\n", active)
+	b.WriteString("\tpath = /Library/LaunchDaemons/io.vectory.agent.plist\n\ttype = LaunchDaemon\n")
+	fmt.Fprintf(&b, "\tstate = %s\n\n", l.state)
+	b.WriteString("\tprogram = /usr/local/bin/vectory\n\targuments = {\n\t\t/usr/local/bin/vectory\n\t\trun\n\t\t--state-dir\n\t\t/Library/Application Support/Vectory/agent\n\t}\n\n")
+	b.WriteString("\tstdout path = /dev/null\n\tstderr path = /dev/null\n")
+	b.WriteString("\tdefault environment = {\n\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin\n\t}\n\n")
+	b.WriteString("\tenvironment = {\n\t\tXPC_SERVICE_NAME => io.vectory.agent\n\t}\n\n")
+	b.WriteString("\tdomain = system\n\tusername = _vectory\n\n")
+	b.WriteString("\tumask = 77\n\tminimum runtime = 10\n\texit timeout = 330\n")
 	fmt.Fprintf(&b, "\truns = %d\n", l.runs)
 	if l.pid > 0 {
 		fmt.Fprintf(&b, "\tpid = %d\n", l.pid)
 	}
-	if l.lastExit != "" {
+	if l.runs == 1 && l.lastExit == "" {
+		b.WriteString("\timmediate reason = speculative\n")
+	}
+	b.WriteString("\tforks = 2\n\texecs = 1\n\tinitialized = 1\n\ttrampolined = 1\n\tstarted suspended = 0\n\tproxy started suspended = 0\n")
+	if l.lastExit == "" {
+		b.WriteString("\tlast exit code = (never exited)\n")
+	} else {
 		fmt.Fprintf(&b, "\tlast exit code = %s\n", l.lastExit)
 	}
-	b.WriteString("}\n")
+	b.WriteString("\n" + launchdJobTail + "\tproperties = keepalive | runatload | inferred program | system service | tle system\n}\n")
 	return launchctlResult{stdout: b.String()}
+}
+
+// launchdJobTail is the lines launchd prints for every job after the ones that say what it did:
+// how it was spawned, its jetsam limits and the block of probabilistic guard malloc settings,
+// which has lines of its own that look like the job's.
+const launchdJobTail = "\tspawn type = daemon (3)\n\tjetsam priority = 40\n\tjetsam memory limit (active) = (unlimited)\n\tjetsam memory limit (inactive) = (unlimited)\n\tjetsamproperties category = daemon\n\tjetsam thread limit = 32\n\tcpumon = default\n" +
+	"\tprobabilistic guard malloc policy = {\n\t\tactivation rate = 1/1000\n\t\tsample rate = 1/0\n\t}\n\n"
+
+// stepPrintText is `launchctl print system/io.vectory.update` for the step's own job as launchd
+// printed it on a Mac (testdata/update/launchctl-print-not-running.txt): loaded, not running
+// between two runs, started every 30 seconds, with the count of its runs and the code its last
+// run ended with filled in.
+func stepPrintText(runs int) launchctlResult {
+	var b strings.Builder
+	b.WriteString("system/io.vectory.update = {\n\tactive count = 0\n\tpath = /Library/LaunchDaemons/io.vectory.update.plist\n\ttype = LaunchDaemon\n\tstate = not running\n\n")
+	b.WriteString("\tprogram = /Library/Application Support/Vectory/update-state/private/helper/vectory\n\targuments = {\n\t\t/Library/Application Support/Vectory/update-state/private/helper/vectory\n\t\tupdate-helper\n\t\t--state-dir\n\t\t/Library/Application Support/Vectory/agent\n\t}\n\n")
+	b.WriteString("\tstdout path = /dev/null\n\tstderr path = /Library/Application Support/Vectory/update-state/private/step.log\n")
+	b.WriteString("\tdefault environment = {\n\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin\n\t}\n\n")
+	b.WriteString("\tenvironment = {\n\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin\n\t\tXPC_SERVICE_NAME => io.vectory.update\n\t}\n\n")
+	b.WriteString("\tdomain = system\n\tminimum runtime = 10\n\texit timeout = 5\n")
+	fmt.Fprintf(&b, "\truns = %d\n", runs)
+	if runs > 0 {
+		b.WriteString("\tlast exit code = 0\n")
+	} else {
+		b.WriteString("\tlast exit code = (never exited)\n")
+	}
+	b.WriteString("\n\tspawn type = daemon (3)\n\tjetsam priority = 40\n\tjetsam memory limit (active) = (unlimited)\n\tjetsam memory limit (inactive) = (unlimited)\n\tjetsamproperties category = daemon\n\tjetsam thread limit = 32\n\tcpumon = default\n")
+	b.WriteString("\trun interval = 30 seconds\n\tprobabilistic guard malloc policy = {\n\t\tactivation rate = 1/1000\n\t\tsample rate = 1/0\n\t}\n\n")
+	b.WriteString("\tproperties = runatload | inferred program | system service | tle system\n}\n")
+	return launchctlResult{stdout: b.String()}
+}
+
+// printStep is print of the step's job: launchd knows it from the time setup loads it.
+func (m *launchdOverMachine) printStep() launchctlResult {
+	if !m.stepLoaded {
+		return notLoaded
+	}
+	return stepPrintText(m.stepRuns)
+}
+
+// bootstrapStep loads the step's job, which launchd starts at once (RunAtLoad); a job it
+// already has is refused, as the agent's is.
+func (m *launchdOverMachine) bootstrapStep() launchctlResult {
+	if m.stepLoaded {
+		return m.refused()
+	}
+	m.stepLoaded, m.stepRuns = true, 1
+	return launchctlResult{}
+}
+
+// bootoutStep unloads the step's job: it has no Vector to drain and no process the tests need,
+// so launchd is done at once.
+func (m *launchdOverMachine) bootoutStep() launchctlResult {
+	if !m.stepLoaded {
+		return launchctlResult{status: 3, stderr: "Boot-out failed: 3: No such process"}
+	}
+	m.stepLoaded = false
+	return launchctlResult{}
 }
 
 func (m *launchdOverMachine) print(ctx context.Context) launchctlResult {
@@ -252,21 +354,33 @@ func (h *launchdHost) ReloadService(ctx context.Context) (bool, error) {
 func (h *launchdHost) InstallUnits(spec updateUnitSpec) error { return h.mac.InstallUnits(spec) }
 func (h *launchdHost) RemoveUnits() (string, bool, error)     { return h.mac.RemoveUnits() }
 
-// useLaunchd makes the fixture's step reach its service through launchd.
-func (f *stepFixture) useLaunchd() (*launchdOverMachine, *macosUpdateHost) {
+// macOSHostOver is the macOS host as one process of the step has it, over a machine's
+// launchctl: with nothing in its memory, a pause between two tries of a bootstrap being time
+// that passes on the machine's clock.
+func (f *stepFixture) macOSHostOver(machine *launchdOverMachine) *macosUpdateHost {
 	f.t.Helper()
 	root := filepath.Dir(filepath.Dir(filepath.Dir(f.paths.PolicyDir)))
-	daemons := filepath.Join(root, "Library", "LaunchDaemons")
-	mkdirMode(f.t, daemons, 0o755)
-	machine := &launchdOverMachine{f: f, loaded: true}
 	mac := newMacOSUpdateHost(machine.run)
-	mac.daemonDir = daemons
+	mac.daemonDir = filepath.Join(root, "Library", "LaunchDaemons")
 	mac.receipt = filepath.Join(root, "receipts", "com.vectory.agent.bom")
 	mac.agent = mac.job("", machine.run)
 	mac.step = mac.job(updateLaunchdLabel, machine.run)
 	mac.alive = machine.processIsThere
-	// The agent's definition is there, as setup left it, and a pause between two
-	// tries of a bootstrap is time that passes on the machine's clock.
+	for _, job := range []*launchdJob{&mac.agent, &mac.step} {
+		job.sleep = func(d time.Duration) { f.clock.advance(d) }
+		job.now = f.clock.Now
+	}
+	return mac
+}
+
+// useLaunchd makes the fixture's step reach its service through launchd.
+func (f *stepFixture) useLaunchd() (*launchdOverMachine, *macosUpdateHost) {
+	f.t.Helper()
+	root := filepath.Dir(filepath.Dir(filepath.Dir(f.paths.PolicyDir)))
+	mkdirMode(f.t, filepath.Join(root, "Library", "LaunchDaemons"), 0o755)
+	machine := &launchdOverMachine{f: f, loaded: true}
+	mac := f.macOSHostOver(machine)
+	// The agent's definition is there, as setup left it.
 	definition, err := launchdPlist(f.exe, f.stateDir, "_vectory")
 	if err != nil {
 		f.t.Fatal(err)
@@ -277,12 +391,18 @@ func (f *stepFixture) useLaunchd() (*launchdOverMachine, *macosUpdateHost) {
 	if err := os.Chmod(mac.agent.definition, 0o644); err != nil {
 		f.t.Fatal(err)
 	}
-	for _, job := range []*launchdJob{&mac.agent, &mac.step} {
-		job.sleep = func(d time.Duration) { f.clock.advance(d) }
-		job.now = f.clock.Now
-	}
 	updateHostOverride = &launchdHost{fakeHost: f.host, mac: mac}
 	return machine, mac
+}
+
+// anotherStepProcess is the next run of the step: the update step is a new process every
+// 30 seconds and at boot, and what the previous one held in memory is gone. The machine, its
+// files and launchd are the same.
+func (f *stepFixture) anotherStepProcess(machine *launchdOverMachine) *macosUpdateHost {
+	f.t.Helper()
+	mac := f.macOSHostOver(machine)
+	updateHostOverride = &launchdHost{fakeHost: f.host, mac: mac}
+	return mac
 }
 
 // launchctlChanges are the calls that changed something, in order.
@@ -301,6 +421,37 @@ func (m *launchdOverMachine) bootoutByAPerson(t *testing.T) {
 	t.Helper()
 	if result := m.run(context.Background(), "bootout", machineAgentTarget); result.status != 0 {
 		t.Fatalf("bootout: %+v", result)
+	}
+}
+
+// ---------------------------------------------------------------- the simulated print
+
+// What the step and the tests read of `launchctl print` is the text launchd printed on a Mac.
+// The simulation renders it for the same job and the same state as the text the Mac printed,
+// to the byte, and the other states are that text with the lines that depend on the state.
+func TestTheSimulatedPrintIsWhatLaunchdPrintedForTheSameJobInTheSameState(t *testing.T) {
+	for name, c := range map[string]struct {
+		got  string
+		file string
+	}{
+		"the agent's job, started at load":       {launchdPrintText(launchdListing{state: "running", pid: realAgentPID, runs: 1}).stdout, "launchctl-print-running.txt"},
+		"the agent's job, started again":         {launchdPrintText(launchdListing{state: "running", pid: 34455, runs: 3, lastExit: "1"}).stdout, "launchctl-print-restarted.txt"},
+		"the agent's job, waiting for a restart": {launchdPrintText(launchdListing{state: "spawn scheduled", runs: 2, lastExit: "2"}).stdout, "launchctl-print-waiting.txt"},
+		"the step's job, between two runs":       {stepPrintText(13).stdout, "launchctl-print-not-running.txt"},
+	} {
+		if want := readTestdata(t, c.file); c.got != want {
+			t.Errorf("%s: the simulated print differs from %s:\n%s\nwant:\n%s", name, c.file, c.got, want)
+		}
+	}
+	// The lines the step depends on come out as the step reads them, whatever else is printed.
+	printed, err := parseLaunchdPrint(launchdPrintText(launchdListing{state: "running", pid: 77, runs: 4, lastExit: "78"}).stdout)
+	if err != nil || printed != (launchdPrinted{State: "running", PID: 77, Runs: 4, LastExit: "78"}) {
+		t.Errorf("%+v, %v", printed, err)
+	}
+	// A job that never exited says so, and one that was never started has no process line.
+	never := launchdPrintText(launchdListing{state: "spawn scheduled", runs: 0}).stdout
+	if !strings.Contains(never, "\tlast exit code = (never exited)\n") || strings.Contains(never, "\tpid = ") || !strings.Contains(never, "\tactive count = 0\n") {
+		t.Errorf("a job that never ran:\n%s", never)
 	}
 }
 
@@ -883,6 +1034,11 @@ func TestInstallingAndRemovingTheStepRegistersAndUnregistersItsLaunchDaemonWithI
 	if got := machine.changes(); strings.Join(got, "|") != "enable "+machineStepTarget+"|bootstrap system "+definition {
 		t.Errorf("launchd was asked %v", got)
 	}
+	// launchd knows the step's job from then on, and prints that it runs it every 30 seconds.
+	step := machine.run(context.Background(), "print", machineStepTarget)
+	if step.status != 0 || !strings.Contains(step.stdout, "\trun interval = 30 seconds\n") || !strings.Contains(step.stdout, "\texit timeout = 5\n") || !strings.Contains(step.stdout, "\tstate = not running\n") {
+		t.Errorf("launchd's print of the step's job: %+v", step)
+	}
 
 	// The build the step kept beside the executable, and a half-made copy, go with it.
 	for _, name := range []string{updatePreviousName, updatePreviousName + ".new"} {
@@ -896,6 +1052,9 @@ func TestInstallingAndRemovingTheStepRegistersAndUnregistersItsLaunchDaemonWithI
 	}
 	if _, err := os.Lstat(definition); !os.IsNotExist(err) {
 		t.Errorf("the definition is still there: %v", err)
+	}
+	if got := machine.changes(); strings.Join(got, "|") != "bootout "+machineStepTarget || machine.stepLoaded {
+		t.Errorf("launchd was asked %v, and it still lists the step's job: %v", got, machine.stepLoaded)
 	}
 	if _, err := os.Lstat(f.paths.StepDir); !os.IsNotExist(err) {
 		t.Errorf("the step's directory is still there: %v", err)

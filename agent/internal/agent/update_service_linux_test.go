@@ -563,9 +563,6 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 	for _, executable := range []string{
 		"/usr/bin/vectory", "/usr/sbin/vectory", "/bin/vectory", "/sbin/vectory", "/usr/lib/vectory/vectory",
 		"/opt/homebrew/bin/vectory", "/usr/local/Cellar/vectory/0.1.0/bin/vectory", "/usr/bin/deeper/still/vectory",
-		// The prefix MacPorts installs into; the list of package directories is one for
-		// every system.
-		"/opt/local/bin/vectory",
 	} {
 		if reason, managed := host.PackageManaged(executable); !managed || reason == "" {
 			t.Errorf("%s isn't taken for a package's", executable)
@@ -574,6 +571,8 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 	for _, executable := range []string{
 		"/usr/local/bin/vectory", "/opt/vectory/vectory", "/usr/binary/vectory", "/usr/libexec/vectory", "/binary/vectory",
 		"/srv/usr/bin/vectory", "/usr/local/Cellar2/vectory", "/home/you/vectory", "/opt/localbin/vectory", "/opt/local2/bin/vectory",
+		// MacPorts' prefix is a package manager's only on a Mac.
+		"/opt/local/bin/vectory", "/opt/local/libexec/vectory/vectory",
 	} {
 		if reason, managed := host.PackageManaged(executable); managed {
 			t.Errorf("%s is taken for a package's: %s", executable, reason)
@@ -611,6 +610,35 @@ func TestAnExecutableAPackageOwnsIsNotUpdatedBehindItsBack(t *testing.T) {
 	}
 	if _, managed := host.PackageManaged("/srv/vectory/bin/vectory"); managed {
 		t.Error("a list too large to read was taken for one that names the executable")
+	}
+}
+
+// MacPorts installs into /opt/local, so an agent there is a package's on a Mac. On Linux
+// the same path is a directory like any other: an agent installed with --install-dir
+// /opt/local/bin belongs to nobody but its owner, and must not report PACKAGE_MANAGED.
+// Every other package directory is one on both systems.
+func TestTheMacPortsPrefixIsAPackageDirectoryOnAMacAndOnNoOtherSystem(t *testing.T) {
+	mac, _, _ := newTestMacOSHost(t)
+	linux, _ := newTestLinuxHost(t)
+	for _, executable := range []string{"/opt/local/bin/vectory", "/opt/local/libexec/vectory/vectory"} {
+		if reason, managed := mac.PackageManaged(executable); !managed || !strings.Contains(reason, "/opt/local") {
+			t.Errorf("on a Mac, %s: %q, %v", executable, reason, managed)
+		}
+		if reason, managed := linux.PackageManaged(executable); managed {
+			t.Errorf("on Linux, %s is taken for a package's: %s", executable, reason)
+		}
+	}
+	for _, executable := range []string{"/usr/bin/vectory", "/opt/homebrew/bin/vectory", "/usr/local/Cellar/vectory/0.1.0/bin/vectory", "/usr/lib/vectory/vectory"} {
+		if _, managed := mac.PackageManaged(executable); !managed {
+			t.Errorf("on a Mac, %s isn't a package's", executable)
+		}
+		if _, managed := linux.PackageManaged(executable); !managed {
+			t.Errorf("on Linux, %s isn't a package's", executable)
+		}
+	}
+	// The Mac's list is the shared one and one more, and reading either changes neither.
+	if len(macosPackageDirectories) != len(packageDirectories)+1 || macosPackageDirectories[len(macosPackageDirectories)-1] != "/opt/local" {
+		t.Errorf("the Mac's package directories: %v, the shared ones: %v", macosPackageDirectories, packageDirectories)
 	}
 }
 

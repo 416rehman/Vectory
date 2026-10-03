@@ -256,7 +256,7 @@ func (r *setupRun) preflightWithdraw(dir string) error {
 	if !updatesInstalled(dir) {
 		return nil
 	}
-	if err := updateInProgress(); err != nil {
+	if _, err := updateInProgress(); err != nil {
 		return r.refuseUpdates(sentence(err.Error()), "Run the command again after that.")
 	}
 	if !r.options.DryRun && !r.host.isElevated() {
