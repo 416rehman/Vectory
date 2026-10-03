@@ -68,7 +68,8 @@ func TestPrivateKeyFileRefusesLinksAndOtherFiles(t *testing.T) {
 	if err := os.Link(real, hard); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadReleasePrivateKey(hard); err == nil || !strings.Contains(err.Error(), "hard links") {
+	// The fix the shared wording gives for a second name is said for a key, not a token.
+	if _, err := ReadReleasePrivateKey(hard); err == nil || !strings.Contains(err.Error(), "hard links") || !strings.Contains(err.Error(), "Save the key in a new file") || strings.Contains(err.Error(), "token") {
 		t.Errorf("a second name for the file: %v", err)
 	}
 	_ = os.Remove(hard)
