@@ -43,6 +43,8 @@ Draft text and configuration values are separate. A partially typed number, inva
 
 Restricted devices accept the reviewed component subset and locally permitted resources. A host operator can explicitly enable **full Vector mode** using the installation workflow. That local grant permits all components supported by the adopted Vector build, native globals, providers, environment references and exec within the process's OS permissions. The dashboard reports the mode and reviews eligible targets; it cannot remotely grant it.
 
+Restricted mode also refuses a VRL call that passes a file to `parse_groks` (`alias_sources`) or `parse_etld` (`psl`), because Vector opens that file when it compiles the program. The server, the agent and the dashboard each scan for such a call. `fixtures/vrl-file-arguments.json` holds the programs all three must judge alike, and `tests/security/test_vrl_function_lists.py` keeps their tables and bounds equal.
+
 A custom component definition can be added in the picker or imported. Vectory preserves its fields, but the corresponding component must already exist in the target's Vector build. Adding JSON does not compile or install a new Vector plugin. See the bundled [installation](../docs/user/installation.md), [pipeline](../docs/user/pipelines.md) and [resources](../docs/user/resources.md) guides.
 
 The [official Vector reference](https://vector.dev/docs/reference/configuration/) governs native semantics. Platform-specific types and device resources may defer server native validation to the target. Deferred validation is explicit; it never claims that Vector ran successfully on the server.

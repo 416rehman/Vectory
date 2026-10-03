@@ -540,6 +540,8 @@ const deferralPhrases: Record<string, string> = {
   "device secrets": "secrets",
   "VRL access to device resources": "VRL that reads device resources",
   "Lua runs on devices": "Lua code",
+  "The AWS instance metadata step is checked on devices":
+    "the AWS instance metadata step",
   "native configuration provider": "the configuration provider",
   "device enrichment data": "enrichment data files",
   "Enrichment tables are read on devices": "enrichment data files",

@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/hex"
 	"path/filepath"
+	"strings"
 )
 
 // LocalDiagnostics is a read-only snapshot, not a new manifest authorization,
@@ -121,6 +122,12 @@ func capabilityDiagnostic(reason string) ConfigurationDiagnostic {
 	case "capability denied: console requires explicit stderr target to isolate JSON startup logs":
 		d.Reason = "CONSOLE_TARGET_DENIED"
 		d.NextAction = "Set the restricted-mode console sink target to stderr so event output cannot impersonate Vector startup logs."
+	default:
+		// The category names the function and its argument, both from the table.
+		if strings.HasPrefix(reason, fileArgumentCategory+" (") {
+			d.Reason = "DYNAMIC_CAPABILITY_DENIED"
+			d.NextAction = "Restricted mode denies VRL that passes a file to a function, because Vector reads any file the service account can read. Remove the file argument, or review the explicit local full-configuration trust grant, which only the host operator can choose. No allowance on a restricted host can permit it."
+		}
 	}
 	return d
 }

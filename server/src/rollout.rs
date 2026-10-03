@@ -699,10 +699,12 @@ fn requires_full_mode(config: &Value) -> bool {
             _ => false,
         }
     }
-    // VRL functions that reach outside the event (the agent refuses them in
-    // restricted mode too).
+    // VRL functions that reach outside the event, and calls that pass a file to
+    // a function that reads it when Vector compiles the program (the agent
+    // refuses both in restricted mode too).
     fn external_vrl(value: &str) -> bool {
         crate::validation::calls_device_function(value)
+            || !crate::validation::file_argument_calls(value).is_empty()
     }
     fn test_vrl(value: &Value) -> bool {
         match value {
