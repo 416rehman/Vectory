@@ -98,16 +98,17 @@ A host that already takes updates shows **This device takes updates from the das
 
 ### What a host needs to take an update
 
+<!-- verify-after-merge: that a Mac takes updates in this release (the macos job of platforms.yml is green and macosUpdatesInRelease is true), and that setup's refusal for a Mac names the access list entry -->
 Even with consent, a host takes an update only where it is safe to replace the agent. The dashboard shows what a host can't do, in words, on its page and in the review:
 
 | The host says | What to do |
 | --- | --- |
 | **Installed by a package manager** (`PACKAGE_MANAGED`) | Update it with the package manager. |
 | **No service keeps the agent running** (`NO_SERVICE`) | Run it under a service, then upgrade it with its **Upgrade agent** command. |
-| **Install path others can write** (`UNTRUSTED_LOCATION`), **Install directory is read-only** (`READ_ONLY`) | Change who owns them or their permissions: only root may own and write the agent's directories and every directory above them. |
+| **Install path others can write** (`UNTRUSTED_LOCATION`), **Install directory is read-only** (`READ_ONLY`) | Change who owns them or their permissions: only root may own and write the agent's directories and every directory above them. On a Mac, an access list entry that lets another account write, delete or add files counts too: `ls -led /usr/local/bin` shows the entries and `sudo chmod -N /usr/local/bin` removes them. Homebrew on an Intel Mac owns `/usr/local/bin`, so install the agent in another directory only root can write, with the installer's `--install-dir`. |
 | **Update step isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. |
 | **Service definition is older than this release needs** (`SERVICE_DEFINITION_OUTDATED`) | Run the **Upgrade agent** command once. |
-| **Not in this release** (`PLATFORM_NOT_IN_RELEASE`) | Update this host by hand. A release carries only the platforms in this server's catalog. |
+| **Not in this release** (`PLATFORM_NOT_IN_RELEASE`) | Update this host by hand. A release carries only the platforms in this server's catalog. An agent built without updates for its operating system says the same and refuses `setup --updates`. |
 
 ## Prepare a release
 
