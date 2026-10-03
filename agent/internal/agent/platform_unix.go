@@ -15,6 +15,9 @@ import (
 	"syscall"
 )
 
+// openNoFollow makes an open fail on a symbolic link rather than follow it.
+const openNoFollow = unix.O_NOFOLLOW
+
 func protect(path string, dir bool) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -92,7 +95,7 @@ func privateFileProblem(path string, openErr error) (problem, fix string) {
 	if !ok {
 		return "isn't private", ""
 	}
-	quoted := quoteArg(path)
+	quoted := ShellQuote(path)
 	var problems, fixes []string
 	if stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 {
 		owner := "uid " + strconv.FormatUint(uint64(stat.Uid), 10)
@@ -267,7 +270,7 @@ func checkServiceCanReach(path, account string, uid, gid int) error {
 		return err
 	}
 	if closed != "" {
-		return fmt.Errorf("%s (mode %04o) is closed to the service account %s, so it could not reach %s. Run `chmod o+x %s`, then run this command again", closed, mode, account, path, quoteArg(closed))
+		return fmt.Errorf("%s (mode %04o) is closed to the service account %s, so it could not reach %s. Run `chmod o+x %s`, then run this command again", closed, mode, account, path, ShellQuote(closed))
 	}
 	return nil
 }

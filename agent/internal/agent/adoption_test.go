@@ -46,7 +46,7 @@ func renderAdoption(result SetupResult, replace map[string]string) string {
 	out := strings.ReplaceAll(b.String(), stopVector(), "<stop>")
 	replacements := map[string]string{}
 	for value, placeholder := range replace {
-		for _, form := range []string{value, quoteArg(value), displayArg(value)} {
+		for _, form := range []string{value, ShellQuote(value), displayArg(value)} {
 			replacements[form] = placeholder
 		}
 	}

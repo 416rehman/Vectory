@@ -22,7 +22,7 @@ type NotInstalledError struct {
 func (e *NotInstalledError) Error() string {
 	message := "No agent is installed at " + e.StateDir + "."
 	if e.Legacy != "" {
-		return message + " An installation exists at " + e.Legacy + " (an earlier default); pass --state-dir " + quoteArg(e.Legacy) + "."
+		return message + " An installation exists at " + e.Legacy + " (an earlier default); pass --state-dir " + ShellQuote(e.Legacy) + "."
 	}
 	return message + " Set one up with the command from Add device (vectory setup ...), or pass --state-dir."
 }

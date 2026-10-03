@@ -247,7 +247,7 @@ func NoteLocally(dir, title string) {
 			return
 		}
 	case os.IsExist(err):
-		if f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0); err != nil {
+		if f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY|openNoFollow, 0); err != nil {
 			return
 		}
 	default:

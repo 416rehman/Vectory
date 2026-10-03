@@ -167,7 +167,7 @@ func TestSetupWithoutAServiceManagerSaysTheAgentStopped(t *testing.T) {
 	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
 		executable = resolved
 	}
-	run := quoteArg(executable) + " run --state-dir " + quoteArg(dir)
+	run := ShellQuote(executable) + " run --state-dir " + ShellQuote(dir)
 	last := result.Steps[len(result.Steps)-1]
 	if last.ID != "service" || last.Status != "warn" || last.Detail != "No supported service manager here (systemd isn't running), so the agent stopped after its first check-in." || last.Fix != "Keep it running with your own supervisor: "+run {
 		t.Fatalf("service row: %+v", last)

@@ -884,7 +884,7 @@ func displayArg(arg string) string {
 	if runtime.GOOS == "windows" {
 		return escapeWindowsArgument(arg)
 	}
-	return quoteArg(arg)
+	return ShellQuote(arg)
 }
 
 // displayCommand is a command as one line an operator can read.

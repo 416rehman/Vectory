@@ -489,7 +489,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		r.add("agent", "ok", "Agent", agentPath+" "+Version, "")
 	}
 	// The exact command that keeps this agent running without a service.
-	runCommand := quoteArg(agentPath) + " run --state-dir " + quoteArg(dir)
+	runCommand := ShellQuote(agentPath) + " run --state-dir " + ShellQuote(dir)
 
 	var origin string
 	if enrolled {
@@ -1215,17 +1215,7 @@ func differentServerAddress(enrolled, requested string, err error) (detail, fix 
 	} else {
 		detail = "This host is enrolled with " + enrolled + "; this command names " + requested + "."
 	}
-	fix = "If it is the same server, run the command again with `--server " + quoteArg(enrolled) + "`.\n" +
+	fix = "If it is the same server, run the command again with `--server " + ShellQuote(enrolled) + "`.\n" +
 		"To move this host to another server, run `vectory unenroll`, revoke the old device in the dashboard, then run setup again."
 	return detail, fix
-}
-
-func quoteArg(s string) string {
-	if s != "" && !strings.ContainsAny(s, " \t'\"$`\\") {
-		return s
-	}
-	if runtime.GOOS == "windows" {
-		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
