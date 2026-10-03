@@ -177,7 +177,7 @@ The review lists every device you chose exactly once:
 | --- | --- |
 | **Updates are off on the host** (`UPDATES_OFF`) | Its consent is **Off**, or it never agreed. Run **Upgrade agent** with updates on, once. |
 | **Agent too old, or no update report** (`AGENT_TOO_OLD`) | It predates updates, or runs a version below the release's minimum. Run **Upgrade agent** once. |
-| **Doesn't pin this release's key** (`KEY_NOT_PINNED`) | No key it pins reaches the release's signer. Run **Upgrade agent** with the current key. |
+| **Doesn't pin this release's key** (`KEY_NOT_PINNED`) | No key it pins reaches the release's signer. Run **Upgrade agent** with the current key. If a key that is no longer current signed the release, the review says so: a host follows keys forward only, so withdraw the release and prepare it again, and the current key signs it. |
 | **Tried this release and rolled back** (`RELEASE_ALREADY_TRIED`) | It takes the next release, never this one again. |
 | **Already tried a newer release** (`COUNTER_REPLAYED`) | This release's counter is at or below one the host tried. Prepare a new release. |
 | **Outside the host's track** (`VERSION_NOT_ON_TRACK`) | It takes patch releases only. Run **Upgrade agent** with **Minor releases too**. |
