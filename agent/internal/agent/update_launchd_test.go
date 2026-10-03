@@ -79,9 +79,16 @@ func newTestMacOSHost(t *testing.T) (*macosUpdateHost, *launchctlRecorder, *[]ti
 	host.receipt = filepath.Join(root, "receipts", "com.vectory.agent.bom")
 	host.agent = host.job("", recorder.run)
 	host.step = host.job(updateLaunchdLabel, recorder.run)
+	// A pause is recorded and time that passes on a clock the test owns, so that a wait
+	// for a job that never goes ends at its limit at once.
 	var slept []time.Duration
+	begun, passed := time.Now(), time.Duration(0)
 	for _, job := range []*launchdJob{&host.agent, &host.step} {
-		job.sleep = func(d time.Duration) { slept = append(slept, d) }
+		job.now = func() time.Time { return begun.Add(passed) }
+		job.sleep = func(d time.Duration) {
+			slept = append(slept, d)
+			passed += d
+		}
 	}
 	return host, recorder, &slept
 }
@@ -335,7 +342,8 @@ func TestRemovingTheStepUnloadsItFirstSaysWhereTheInstallDirectoryWasAndLeavesNo
 	}
 	writeAgentDefinition(t, host, "/opt/vectory/bin/vectory", "/var/lib/vectory-agent", "_vectory")
 	recorder.calls = nil
-	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"})
+	// Loaded for the check before the bootout, and gone by the first print after it.
+	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"}, notLoaded)
 	dir, removed, err := host.RemoveUnits()
 	if err != nil || !removed || dir != "/opt/vectory/bin" {
 		t.Fatalf("removing: %q, %v, %v", dir, removed, err)
