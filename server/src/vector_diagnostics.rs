@@ -1413,7 +1413,7 @@ mod tests {
             },
             "enrichment_tables": {"recent": {"type": "memory", "inputs": ["seed"], "ttl": 0}}
         });
-        // The strings the review of this found, and the ones Vector 0.58 prints.
+        // The refusal as a short message reads, and as Vector 0.58 prints it.
         for line in [
             "Failed to validate sink \"http_out\": uri must not be empty",
             "Failed to validate sink \"http_out\": uri must not be empty, e.g. `https://example.com/endpoint`",

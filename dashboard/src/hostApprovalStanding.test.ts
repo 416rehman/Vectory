@@ -82,8 +82,8 @@ describe("what a restricted host is asked to allow", () => {
       "refuses it unless its host allows destination 127.0.0.1:8678",
     );
     expect(row).not.toMatch(/until|approves/);
-    expect(approvalHeadline(["qa-restr-01"])).toBe(
-      "qa-restr-01 runs in restricted mode and needs its host to allow what this version uses",
+    expect(approvalHeadline(["edge-restr-01"])).toBe(
+      "edge-restr-01 runs in restricted mode and needs its host to allow what this version uses",
     );
     expect(approvalHeadline(["a", "b", "c"])).toBe(
       "3 selected devices run in restricted mode and need their hosts to allow what this version uses",
