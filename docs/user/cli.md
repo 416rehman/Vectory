@@ -542,7 +542,7 @@ A host's level, releases, windows and pinned keys change only when someone runs 
 
 ### The update step
 
-`vectory update-helper [--state-dir PATH]` is one run of the privileged update step: it applies a staged build, watches the trial and takes a build back when it doesn't check in healthy. The service manager runs it every 30 seconds as root (a systemd timer on Linux, a launchd job on macOS, a Windows service), so you don't run it yourself. `vectory update status` shows when it last ran, and `vectory update apply` asks it to run now.
+`vectory update-helper [--state-dir PATH]` is one run of the privileged update step: it applies a staged build, watches the trial and takes a build back when it doesn't check in healthy. The service manager runs it every 30 seconds as root (a systemd timer on Linux, a launchd job on macOS, and on Windows the `VectoryUpdate` service, which runs as SYSTEM and does the run itself every 30 seconds), so you don't run it yourself. `vectory update status` shows when it last ran, and `vectory update apply` asks it to run now.
 
 ## Service commands
 

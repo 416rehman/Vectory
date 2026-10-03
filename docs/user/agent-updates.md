@@ -84,7 +84,7 @@ sudo sh "$dir/vectory-install.sh" \
   --update-window 'Mon-Fri 02:00-04:00'
 ```
 
-The host's choices live in a file only root can write, `/etc/vectory/updates/policy.json` on Linux. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again. That command keeps what the host chose: with no update flag it changes nothing about updates, and to change one thing it carries only that thing, such as the key to pin or the releases to take. The host applies it to what it already agreed to, so a command never has to state the host's choices again. See [Change what a host agreed to](cli.md#change-what-a-host-agreed-to).
+The host's choices live in a file only root can write (SYSTEM and the Administrators on Windows): `/etc/vectory/updates/policy.json` on Linux, `/Library/Application Support/Vectory/updates/policy.json` on macOS and `%ProgramData%\Vectory\updates\policy.json` on Windows. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again. That command keeps what the host chose: with no update flag it changes nothing about updates, and to change one thing it carries only that thing, such as the key to pin or the releases to take. The host applies it to what it already agreed to, so a command never has to state the host's choices again. See [Change what a host agreed to](cli.md#change-what-a-host-agreed-to).
 
 ### A host that was installed without consent
 
@@ -96,17 +96,21 @@ A host you added before you turned updates on has agreed to nothing, and so has 
 
 A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**. Its **Upgrade agent** command carries no update choice: running it upgrades the agent and leaves what the host agreed to as it is. When something about updates needs fixing on that host, such as the key it pins or the releases it takes, the command carries only that fix.
 
+<!-- verify-after-merge: that a Windows host takes updates in this release (windowsUpdatesInRelease is true in update_gate.go), and that the dashboard still writes no Upgrade agent command for Windows (canOptIn in dashboard/src/AgentUpgrade.tsx); if it now does, say so here -->
+The dashboard writes the **Upgrade agent** command for Linux and macOS hosts. For a Windows host, **Add device** carries the choice about updates when you add it. A Windows host added before agrees with `setup`, run in an elevated PowerShell on the host with the flags of the command above, and the same command with one flag changes one thing it agreed to. See [Agent updates in setup](cli.md#agent-updates-in-setup).
+
 ### What a host needs to take an update
 
 <!-- verify-after-merge: that a Mac takes updates in this release (the macos job of platforms.yml is green and macosUpdatesInRelease is true), and that setup's refusal for a Mac names the access list entry -->
+<!-- verify-after-merge: that a Windows host takes updates in this release (the windows job of platforms.yml is green, agent-update.mjs phases included, and windowsUpdatesInRelease is true in update_gate.go), and that the Windows advice in the table below matches what the first run printed -->
 Even with consent, a host takes an update only where it is safe to replace the agent. The dashboard shows what a host can't do, in words, on its page and in the review:
 
 | The host says | What to do |
 | --- | --- |
 | **Installed by a package manager** (`PACKAGE_MANAGED`) | Update it with the package manager. |
 | **No service keeps the agent running** (`NO_SERVICE`) | Run it under a service, then upgrade it with its **Upgrade agent** command. |
-| **Install path others can write** (`UNTRUSTED_LOCATION`), **Install directory is read-only** (`READ_ONLY`) | Change who owns them or their permissions: only root may own and write the agent's directories and every directory above them. On a Mac, an access list entry that lets another account write, delete or add files counts too: `ls -led /usr/local/bin` shows the entries and `sudo chmod -N /usr/local/bin` removes them. Homebrew on an Intel Mac owns `/usr/local/bin`, so install the agent in another directory only root can write, with the installer's `--install-dir`. |
-| **Update step isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. |
+| **Install path others can write** (`UNTRUSTED_LOCATION`), **Install directory is read-only** (`READ_ONLY`) | Change who owns them or their permissions: only root may own and write the agent's directories and every directory above them. On a Mac, an access list entry that lets another account write, delete or add files counts too: `ls -led /usr/local/bin` shows the entries and `sudo chmod -N /usr/local/bin` removes them. Homebrew on an Intel Mac owns `/usr/local/bin`, so install the agent in another directory only root can write, with the installer's `--install-dir`. On Windows, only SYSTEM, the Administrators and TrustedInstaller may own or change the agent's directory, the agent and every directory above them: `icacls "C:\Program Files\Vectory"` shows who can, and the message names an account that holds a right to write, delete, add files or take ownership. Setup closes `%ProgramData%\Vectory`, where the update policy and the update step keep their files, to every other account. A folder in it that another account made is refused with that account's name: look at what it holds before you remove it, because that account could have changed it. |
+| **Update step isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. On Windows the step is the `VectoryUpdate` service: run `vectory doctor` in an elevated PowerShell, and `sc.exe query VectoryUpdate` shows whether it runs. |
 | **Service definition is older than this release needs** (`SERVICE_DEFINITION_OUTDATED`) | Run the **Upgrade agent** command once. |
 | **Not in this release** (`PLATFORM_NOT_IN_RELEASE`) | Update this host by hand. A release carries only the platforms in this server's catalog. An agent built without updates for its operating system says the same and refuses `setup --updates`. |
 
