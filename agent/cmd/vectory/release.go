@@ -88,7 +88,7 @@ func releaseClock() time.Time { return time.Now().UTC().Truncate(time.Second) }
 
 func defineReleaseKeygen(c *cli) func() int {
 	out := c.String("out", "", "FILE", "The file for the private key; it must not exist")
-	name := c.String("name", "release", "NAME", "Display name in the public key line, 1 to 64 printable characters")
+	name := c.String("name", "", "NAME", "Display name in the public key line, 1 to 64 printable characters (default: release- and the first 8 characters of the fingerprint)")
 	return func() int {
 		if *out == "" {
 			fmt.Fprintln(c.stderr, "vectory release keygen: --out is required. Name the file for the private key, such as team.key.")
@@ -98,7 +98,17 @@ func defineReleaseKeygen(c *cli) func() int {
 		if err != nil {
 			return c.fail(err)
 		}
-		public, err := private.Public(*name)
+		display := *name
+		if !c.supplied("name") {
+			// The same name the server gives a key it makes, so that the public
+			// key line says nothing about who holds the private key.
+			unnamed, err := private.Public("release")
+			if err != nil {
+				return c.fail(err)
+			}
+			display = "release-" + unnamed.Fingerprint()[:8]
+		}
+		public, err := private.Public(display)
 		if err != nil {
 			return usageProblem(c, "--name", err)
 		}
