@@ -170,7 +170,7 @@ func TestRootOwnedChecksOnRealRootOwnership(t *testing.T) {
 	})
 
 	t.Run("directories and files made through the handles are root's", func(t *testing.T) {
-		made, err := ensureRootOwnedDir(filepath.Join(base, "made", "below"))
+		made, err := ensureRootOwnedDir(filepath.Join(base, "made", "below"), rootReadable)
 		if err != nil {
 			t.Fatal(err)
 		}

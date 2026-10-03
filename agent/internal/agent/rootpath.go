@@ -57,6 +57,11 @@ const (
 	rootExecutable
 )
 
+// createSpec says how the walk makes the directories that are missing, for
+// ensureRootOwnedDir: the one at the end of the path has the access leaf names,
+// and the ones above it are readable by everyone.
+type createSpec struct{ leaf rootFilePerm }
+
 // errRootOwnedTooLarge is what a bounded read says when the file is longer than
 // its bound.
 var errRootOwnedTooLarge = errors.New("is larger than its bound")
