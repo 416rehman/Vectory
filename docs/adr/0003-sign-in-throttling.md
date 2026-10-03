@@ -2,7 +2,7 @@
 
 Accepted 2026-09-29. Revised 2026-09-29 after review: failures are reserved before the password check,
 the failure ledger has its own bounded memory that never fails open, and IPv6 clients count per /64.
-Revised again after a second review: the request limiter evicts instead of refusing when full, and
+Revised again after review: the request limiter evicts instead of refusing when full, and
 unauthenticated agent-listener keys have their own capped partition.
 
 Revised a third time: a client's own budget is charged before the budget every client shares, part

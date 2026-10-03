@@ -78,7 +78,7 @@ A name, unique ignoring case and matching `^[A-Za-z][A-Za-z0-9_.-]{0,63}$` like 
 
 ## 3. Server storage, quota and retention
 
-**Tables** (migrations `0151_managed_assets.sql` and `0152_managed_asset_indexes.sql`; the [plan](../internal/CAPABILITY-IMPLEMENTATION-PLAN.md#wp7-managed-assets-on-the-server-backend-agent) has the sketch):
+**Tables** (migrations `0151_managed_assets.sql` and `0152_managed_asset_indexes.sql`; the [plan](../internal/CAPABILITY-IMPLEMENTATION-PLAN.md#step-7-managed-assets-on-the-server) has the sketch):
 
 - `asset_blobs(sha256, size, bytes, created_at)`: immutable; a trigger refuses an update, and refuses a delete while a version pins the blob or an asset's current revision is it. A blob has no kind, since two names of different kinds may hold the same bytes.
 - `assets(name, kind, current_sha256, revision, description, created_by, created_at, updated_by, updated_at, deleted_at)`: the mutable pointer. Deleting a name leaves a tombstone, so revision numbers keep counting if the name returns.

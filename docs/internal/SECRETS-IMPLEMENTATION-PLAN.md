@@ -1,35 +1,35 @@
 # Device secrets in headers and URLs: implementation plan
 
-Status: proposed, 2026-10-02, for the release after the current one. Nothing here is built. The decision is [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md); the attacker table is in the [threat model](../security/THREAT-MODEL.md#device-secrets-in-headers-and-urls). This plan orders the work, names the files each package owns, states every wire and storage change, lists the tests each package needs and what an independent reviewer must attack. Ownership follows `AGENTS.md`: the lead owns `dashboard/`, `contracts/`, `vector-catalog/` and the generators in `scripts/` that write it, plus integration tests; the backend agent `server/`; the agent workstream `agent/`; security and release `deploy/`, `packaging/`, `.github/`, operational docs and the independent review. A route or wire change needs the lead's agreement first.
+Status: proposed, 2026-10-02, for the release after the current one. Nothing here is built. The decision is [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md); the attacker table is in the [threat model](../security/THREAT-MODEL.md#device-secrets-in-headers-and-urls). This plan orders the work, names the files each step changes, states every wire and storage change, lists the tests each step needs and what an independent review must attack. A route or wire change updates `contracts/CONTRACT.md` first.
 
-## Start here (for the reviewer)
+## Start here (for the independent review)
 
 Each question has a one-line answer in the ADR and a test below.
 
-1. Can anything a server sends make the agent substitute a secret at a use the host didn't bind? (WP3; ADR sections 2 and 3.)
-2. Can a name bound with `send_to` fill a credential field, or a plain binding fill a header or URL? (WP3.)
-3. Can a template trick the destination check: a templated path, `..`, an encoded slash, a missing destination field, a proxy? (WP3, WP6.)
-4. Can a substituted value reach the server, a diagnostic, a log summary or the local Vector log? (WP4.)
-5. Does a refused import stay in its dialog with the field named, and does an uncertain one still ask for review? (WP5.)
-6. Do the server and the dashboard give the same detector answer for every fixture? (WP1, run in WP2 and WP5.)
-7. Can a restricted pipeline read a bound secret file through a file root? (WP3.)
+1. Can anything a server sends make the agent substitute a secret at a use the host didn't bind? (Step 3; ADR sections 2 and 3.)
+2. Can a name bound with `send_to` fill a credential field, or a plain binding fill a header or URL? (Step 3.)
+3. Can a template trick the destination check: a templated path, `..`, an encoded slash, a missing destination field, a proxy? (Steps 3 and 6.)
+4. Can a substituted value reach the server, a diagnostic, a log summary or the local Vector log? (Step 4.)
+5. Does a refused import stay in its dialog with the field named, and does an uncertain one still ask for review? (Step 5.)
+6. Do the server and the dashboard give the same detector answer for every fixture? (Step 1, run in Steps 2 and 5.)
+7. Can a restricted pipeline read a bound secret file through a file root? (Step 3.)
 
 ## Prerequisites and ordering
 
-| Order | Package | Depends on | Ships |
+| Order | Step | Depends on | Ships |
 | --- | --- | --- | --- |
-| 0 | Native probe of Vector's URL and header exposure | nothing | first; its result can change WP3 and WP4 |
+| 0 | Native probe of Vector's URL and header exposure | nothing | first; its result can change Steps 3 and 4 |
 | 1 | Contract, generated site table, detector fixtures | 0 agreed | before code in 2 to 5 |
 | 2 | Server: sites, detector, structured refusals, report | 1 | with 3 |
 | 3 | Agent: bindings, use check, file-root rule | 1 | with 2 and 4 |
 | 4 | Agent: redaction by value | 3 | with 3 |
 | 5 | Dashboard: insert secret, binding steps, detector, import dialog | 1, 2 | with 2 to 4 |
-| 6 | Docs, operations, CI | each package | with each package |
+| 6 | Docs, operations, CI | each step | with each step |
 | 7 | Integration tests and independent review | all | gate |
 
-**Release gates, all required:** the generator's `--check` and completeness green; the detector fixtures pass in Rust and TypeScript; the native probe green on Linux; the adversarial tests of WP3 and WP7 green; the independent review finished with its findings resolved; documentation matches behavior.
+**Release gates, all required:** the generator's `--check` and completeness green; the detector fixtures pass in Rust and TypeScript; the native probe green on Linux; the adversarial tests of Steps 3 and 7 green; the independent review finished with its findings resolved; documentation matches behavior.
 
-**A smaller first step.** The detector, the structured refusal and the import dialog (WP1 fixtures, the detector half of WP2, WP5's import and Apply scan) don't depend on the agent and can ship alone. They close authoring findings 4 (the four plaintext cases) and 5 without opening any new place a secret can go.
+**A smaller first step.** The detector, the structured refusal and the import dialog (Step 1 fixtures, the detector half of Steps 2 and 5's import and Apply scan) don't depend on the agent and can ship alone. They close authoring findings 4 (the four plaintext cases) and 5 without opening any new place a secret can go.
 
 ## Wire and storage changes
 
@@ -65,22 +65,22 @@ The server rejects unknown keys and enforces: at most 64 entries with names matc
 
 **No migration.** The report rides the device record's JSON.
 
-## WP0: native probe (agent workstream)
+## Step 0: native probe
 
-`agent/tests/native-secret-exposure-probe.py`, run against `VECTOR_TEST_BINARY` with a closed port and a local HTTP listener in a private network namespace: does Vector 0.58 quote the request URL (path and query) or a header value in error lines, health-check failures, `vector validate` output or internal metric labels; does its HTTP client follow a redirect, and does it forward custom headers when it does. Record the answers in ADR 0014 as an appendix. A followed redirect makes WP3 refuse open-site secrets on components that follow it; a quoted URL is covered by WP4 either way.
+`agent/tests/native-secret-exposure-probe.py`, run against `VECTOR_TEST_BINARY` with a closed port and a local HTTP listener in a private network namespace: does Vector 0.58 quote the request URL (path and query) or a header value in error lines, health-check failures, `vector validate` output or internal metric labels; does its HTTP client follow a redirect, and does it forward custom headers when it does. Record the answers in ADR 0014 as an appendix. A followed redirect makes Step 3 refuse open-site secrets on components that follow it; a quoted URL is covered by Step 4 either way.
 
-## WP1: contract, table, fixtures (lead)
+## Step 1: contract, table, fixtures
 
 | File | Work |
 | --- | --- |
 | `contracts/CONTRACT.md`, `contracts/generate.mjs`, generated `openapi.json` and `protocol.schema.json` | Everything in [Wire and storage changes](#wire-and-storage-changes), including the "Local secrets and signing continuity" section's new sites and uses. `node contracts/generate.mjs` leaves no diff. |
 | `scripts/generate-vector-catalog.mjs`, `scripts/generate-secret-fields.mjs` | The site and destination tables from the pinned schema; a completeness check that fails on an unclassified string map named `headers` or a URL-like field (`uri`, `url`, `endpoint`, `endpoints`); `--check`. |
 | `vector-catalog/fixtures/credentials/` (new) | Detector fixtures: a configuration and its expected findings by path. At least: the four cases of authoring finding 4; every rule and list entry of ADR section 9; each false-positive exclusion; references of every form at every site; tests input events (never flagged). |
-| `vector-catalog/fixtures/secret-uses/` (new) | Use fixtures for WP3: a template, bindings and the expected outcome per reference. |
+| `vector-catalog/fixtures/secret-uses/` (new) | Use fixtures for Step 3: a template, bindings and the expected outcome per reference. |
 
 **Tests.** The generator's `--check` and completeness in CI; a schema with one new header map fails the completeness check naming it.
 
-## WP2: server (backend agent)
+## Step 2: server
 
 | Files | Work |
 | --- | --- |
@@ -92,7 +92,7 @@ The server rejects unknown keys and enforces: at most 64 entries with names matc
 
 **Tests.** Every detector fixture through the Rust detector. Every site and shape: accepted forms, `${vectory-secret:NAME}` as a whole value refused with its fix, two references in one value, references in scheme, host, port, userinfo, fragment, header names and parameter names refused. The draft, create, duplicate, restore and publish paths refuse plain text with `reason` and `problems` and store nothing (assert the plain value is absent from every table, the WAL and an export). An older client's view: the message alone. Report parsing: unknown keys, bounds, a path in `origin`, control characters reject the heartbeat atomically. The preview blocker for an older agent, including later waves. `uses_local_secrets` for open-site references.
 
-## WP3: agent bindings and the use check (agent workstream)
+## Step 3: agent bindings and the use check
 
 | Files | Work |
 | --- | --- |
@@ -105,7 +105,7 @@ The server rejects unknown keys and enforces: at most 64 entries with names matc
 
 **Tests (adversarial ones first).** Every use fixture. A compromised-server suite feeding signed manifests whose templates try, against bindings for `HONEYCOMB_KEY` (header at `api.honeycomb.io`) and a plain `DD_API_KEY`: another host; another port or scheme; `http` for an `https` use; another header name; the same header at another destination; a query tag (`?ddtags=${...}`) and a path segment at the bound host; a whole-URL use with a lookalike host (`api.honeycomb.io.evil.example`, a trailing dot, uppercase, an IDN); `..` and `%2e%2e` and `%2f` against a path prefix; a templated path whose static prefix leaves the prefix; a missing destination field; a second destination in `endpoints`; a proxy for an `http` destination; `verify_certificate: false`; `HONEYCOMB_KEY` in a credential field; `DD_API_KEY` in a header. Each refuses with the right code, writes nothing, keeps last-known-good, and the managed file's bytes are unchanged. Settings bytes are identical after every hostile manifest. Values with `#`, `?`, `&`, spaces and fewer than 8 bytes refused per site. A file root covering a bound file refused by `allow`, `install` and `configure-secrets`, and resolution refused with `SECRET_FILE_EXPOSED` when settings overlap by hand. An older settings file and a newer one read by a build that predates uses. Native, with the pinned Vector: a header secret and a query secret reach a local collector (the collector sees the value; the managed file holds it; nothing else does).
 
-## WP4: redaction by value (agent workstream)
+## Step 4: redaction by value
 
 | Files | Work |
 | --- | --- |
@@ -115,7 +115,7 @@ The server rejects unknown keys and enforces: at most 64 entries with names matc
 
 **Tests.** A canary value substituted into a path, a query and a header, then forced into: a validation failure, a start failure, a policy refusal for an invalid destination, a Vector error line quoting the URL, a log summary, a device validation result, `vectory status`, `vectory doctor` and `vectory logs`; the canary and its encoded forms appear in none, before and after an agent restart, and after a rotation whose new value failed to apply.
 
-## WP5: dashboard (lead)
+## Step 5: dashboard
 
 | Files | Work |
 | --- | --- |
@@ -124,20 +124,20 @@ The server rejects unknown keys and enforces: at most 64 entries with names matc
 | `PipelineLibrary.tsx`, `configurationSource.ts`, the import dialog and Code view Apply | Scan before sending with line numbers; definitive refusals (ADR section 9) clear the reminder and keep the form with problems inline; uncertain outcomes unchanged. |
 | `DeviceSecrets.tsx`, `TargetDialog.tsx`, `api.ts` | Bound, Not bound, "Bound, but not for this use", Not reported; the `DEVICE_SECRET_SITES_UNSUPPORTED` blocker copy. |
 
-**Tests.** Vitest: every detector fixture through the TypeScript detector (the same files WP2 runs); the insertion model for each site; the bindings file for each use; the definitive-or-uncertain decision for each status and code. Playwright, with the shared fleet replies (`dashboard/tests/fleet-replies.mjs`): importing a file with a token stays in the dialog, names the field and needs no recovery step; a lost response still asks for review; inserting a secret into a header and a URL; the device card states. Axe; screenshots in light, dark and 390 px.
+**Tests.** Vitest: every detector fixture through the TypeScript detector (the same files Step 2 runs); the insertion model for each site; the bindings file for each use; the definitive-or-uncertain decision for each status and code. Playwright, with the shared fleet replies (`dashboard/tests/fleet-replies.mjs`): importing a file with a token stays in the dialog, names the field and needs no recovery step; a lost response still asks for review; inserting a secret into a header and a URL; the device card states. Axe; screenshots in light, dark and 390 px.
 
-## WP6: docs, operations, CI (security and release)
+## Step 6: docs, operations, CI
 
 - `docs/user/resources.md` (sites, uses, the bindings file, both modes, what full mode doesn't protect), `pipelines.md`, `cli.md` (`configure-secrets`), `security.md`, `troubleshooting.md` (a row per new code), `glossary.md`, `whats-new.md`, `CHANGELOG.md` (the file-root tightening).
-- `docs/product-specification.md` section 4: the binding-file sentence, with the maintainer's agreement (lead).
-- `docs/security/OPEN-FINDINGS.md`: record the file-root gap until WP3 closes it.
+- `docs/product-specification.md` section 4: the binding-file sentence, with the maintainer's agreement.
+- `docs/security/OPEN-FINDINGS.md`: record the file-root gap until Step 3 closes it.
 - `.github/workflows/ci.yml` and `docs/internal/CI.md`: the probe on Linux, the fixture runs, the new harness (`timeout-minutes: 10`).
 
-## WP7: integration tests and independent review (lead, security)
+## Step 7: integration tests and independent review
 
-`tests/security/protocol_test.go` gains a subtest per hostile template of WP3 through the real server and agent; `tests/contracts.mjs` validates the new bodies. On a live preview with the demo fleet: bind a header secret on one device and not another, deploy, see one apply and one refuse with the exact binding; rotate the file and see the materialization counter rise; import a configuration with a token and see it refused in the dialog. The independent review starts from a build that has passed every test above.
+`tests/security/protocol_test.go` gains a subtest per hostile template of Step 3 through the real server and agent; `tests/contracts.mjs` validates the new bodies. On a live preview with the demo fleet: bind a header secret on one device and not another, deploy, see one apply and one refuse with the exact binding; rotate the file and see the materialization counter rise; import a configuration with a token and see it refused in the dialog. The independent review starts from a build that has passed every test above.
 
-## What an independent reviewer must attack in the finished code
+## What an independent review must attack in the finished code
 
 1. **Where uses come from.** Every path from network-decoded data to `settings.json`, by search and by test; whether a heartbeat report can become a grant.
 2. **URL parsing.** The agent's URL parser against Vector's (IPv6 literals, userinfo, percent-encoding, `@` and `\` in paths, empty and default ports, uppercase schemes, trailing dots, IDN), so the destination checked is the one Vector connects to.
