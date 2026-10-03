@@ -457,6 +457,15 @@ async fn device_groups(db: &mut SqliteConnection, device: &str) -> Result<BTreeS
         .into_iter()
         .collect())
 }
+/// A stored name as one line of a message, bounded to `max` characters. Names
+/// saved before the write rules refused line breaks and text-direction
+/// controls can still hold them, so every name that reaches a message passes
+/// through here. A name with nothing printable left is `fallback`.
+fn named(name: Option<&str>, max: usize, fallback: &str) -> String {
+    name.map(|name| bounded(&db::one_line(name), max))
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
+}
 async fn device_name(
     db: &mut SqliteConnection,
     device: &str,
@@ -466,7 +475,8 @@ async fn device_name(
     )
     .bind(device)
     .fetch_optional(&mut *db)
-    .await?)
+    .await?
+    .map(|(name, version)| (named(Some(&name), 120, "A device"), version)))
 }
 /// `{id,name,version_number}` of the pipeline a version belongs to.
 async fn pipeline(db: &mut SqliteConnection, version: Option<&str>) -> Result<Option<Value>> {
@@ -480,7 +490,7 @@ async fn pipeline(db: &mut SqliteConnection, version: Option<&str>) -> Result<Op
     .fetch_optional(&mut *db)
     .await?;
     Ok(row.and_then(|(id, name, number)| {
-        Some(json!({"id": id?, "name": name.unwrap_or_else(|| "A pipeline".into()), "version_number": number}))
+        Some(json!({"id": id?, "name": named(name.as_deref(), 120, "A pipeline"), "version_number": number}))
     }))
 }
 fn pipeline_label(p: &Value) -> String {
@@ -540,16 +550,14 @@ async fn context(
             groups = device_groups(db, device).await?;
             let p = pipeline(db, data["version_id"].as_str()).await?;
             pipeline_id = p.as_ref().and_then(|p| p["id"].as_str().map(str::to_owned));
-            let title = data["title"]
-                .as_str()
-                .unwrap_or("A device reported a problem");
+            let title = named(data["title"].as_str(), 160, "A device reported a problem");
             notice["device"] = json!({"id": device, "name": name});
             notice["pipeline"] = p.clone().unwrap_or(Value::Null);
             notice["issue"] = json!({"id": data["issue_id"], "code": data["code"], "resolved_reason": data["resolved_reason"]});
             notice["path"] = json!(format!("/#/issues?device={device}"));
             if kind == "issue.opened" {
                 notice["headline"] = json!(format!("Issue on {name}: {title}"));
-                notice["message"] = data["message"].clone();
+                notice["message"] = json!(named(data["message"].as_str(), 400, ""));
             } else {
                 notice["headline"] = json!(format!("Resolved on {name}: {title}"));
                 notice["message"] = json!(match data["resolved_reason"].as_str() {
@@ -574,13 +582,17 @@ async fn context(
                 None => None,
             };
             pipeline_id = p.as_ref().and_then(|p| p["id"].as_str().map(str::to_owned));
-            let name = match (&record, &p) {
-                (Some(r), _) if r["name"].as_str().is_some_and(|n| !n.trim().is_empty()) => {
-                    bounded(r["name"].as_str().unwrap_or(""), 120)
+            let given = record
+                .as_ref()
+                .map(|r| named(r["name"].as_str(), 120, ""))
+                .filter(|name| !name.is_empty());
+            let name = match (given, &p) {
+                (Some(name), _) => name,
+                (None, Some(p)) => pipeline_label(p),
+                (None, None) if record.as_ref().is_some_and(|r| r["policy"].is_object()) => {
+                    "Agent settings".to_owned()
                 }
-                (_, Some(p)) => pipeline_label(p),
-                (Some(r), None) if r["policy"].is_object() => "Agent settings".to_owned(),
-                _ => "A deployment".to_owned(),
+                (None, None) => "A deployment".to_owned(),
             };
             if let Some(r) = &record {
                 for group in r["selector"]["group_ids"].as_array().into_iter().flatten() {
@@ -609,10 +621,11 @@ async fn context(
                     "Devices that applied it stopped delivering events, so the next wave waits. Resume it once delivery is fixed.".to_owned(),
                 ),
                 ("rollout.rolled_back", _) => {
-                    let actor: Option<String> = sqlx::query_scalar("SELECT substr(name,1,120) FROM users WHERE id=?")
+                    let actor: Option<String> = sqlx::query_scalar::<_, String>("SELECT substr(name,1,120) FROM users WHERE id=?")
                         .bind(data["actor"].as_str().unwrap_or(""))
                         .fetch_optional(&mut *db)
-                        .await?;
+                        .await?
+                        .map(|name| named(Some(&name), 120, "Someone"));
                     // What the rollback restored: the version its replacement deploys.
                     restored = match record.as_ref().and_then(|r| r["rolled_back_by"].as_str()) {
                         Some(replacement) => match db::record(db, "deployment", replacement).await {
@@ -1196,7 +1209,7 @@ pub fn test_notice(channel: &Channel, now: DateTime<Utc>) -> Value {
         "test": true,
         "occurred_at": stamp(now),
         "headline": "Test message from Vectory",
-        "message": format!("This is a test from the “{}” channel. Nothing happened in your fleet: if you can read this, notifications reach you here.", bounded(&channel.name, 80)),
+        "message": format!("This is a test from the “{}” channel. Nothing happened in your fleet: if you can read this, notifications reach you here.", named(Some(&channel.name), 80, "Channel")),
         "context": ["Test message"],
         "path": "/#/notifications",
         "device": Value::Null, "pipeline": Value::Null, "deployment": Value::Null, "issue": Value::Null,
@@ -1370,7 +1383,7 @@ pub fn webhook_body(s: &crate::App, notice: &Value) -> Value {
 pub fn email_content(s: &crate::App, channel_name: &str, notice: &Value) -> (String, String) {
     let headline = notice["headline"].as_str().unwrap_or("");
     let subject = bounded(
-        &format!("[{}] {headline}", s.settings.instance_name).replace(['\r', '\n'], " "),
+        &db::one_line(&format!("[{}] {headline}", s.settings.instance_name)),
         200,
     );
     let mut body = format!(
@@ -1395,7 +1408,7 @@ pub fn email_content(s: &crate::App, channel_name: &str, notice: &Value) -> (Str
     }
     body.push_str(&format!(
         "\n—\nSent by the “{}” channel in {}. Change what it sends in Settings → Notifications.\n",
-        bounded(channel_name, 80),
+        named(Some(channel_name), 80, "Channel"),
         s.settings.instance_name
     ));
     (subject, body)

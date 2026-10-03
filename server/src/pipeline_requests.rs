@@ -91,7 +91,7 @@ pub async fn execute(
     let mut configuration = if let Some(source) = source {
         crate::pipelines::action(conn, source, "duplicate", &payload, actor).await?
     } else {
-        let name = db::string(&payload, "name", 120)?;
+        let name = db::name(&payload, "name", 120, "a pipeline name")?;
         api::validate_draft(&payload)?;
         let variables = crate::variables::declarations(
             &payload["config"],

@@ -745,7 +745,7 @@ pub async fn draft(
         ));
     }
     if v.get("name").is_some() {
-        c["name"] = json!(db::string(&v, "name", 120)?);
+        c["name"] = json!(db::name(&v, "name", 120, "a pipeline name")?);
     }
     if v.get("description").is_some() {
         if !v["description"].is_string() {
@@ -811,6 +811,7 @@ pub async fn edit_group(
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let previous = db::record(&mut tx, "group", &id).await?;
     let next_revision = crate::groups::check_revision(&previous, &v)?;
+    db::name(&v, "name", 120, "a group name")?;
     let mut g = group(&mut tx, &v, Some(&id)).await?;
     g["created_at"] = previous["created_at"].clone();
     g["revision"] = json!(next_revision);
