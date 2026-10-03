@@ -499,6 +499,14 @@ func TestTheProbeRunsTheBuildAndReadsWhatItPrints(t *testing.T) {
 	if err != nil || string(viaHost) != string(output) {
 		t.Errorf("RunProbe: %q, %v", viaHost, err)
 	}
+	// The step probes the build under the name it staged it by, a dot and no extension
+	// (the system runs the file it is given, whatever it is called).
+	staged := filepath.Join(dir, stagedBuildName)
+	copyTestBinary(t, staged)
+	viaStagedName, err := runProbe(context.Background(), staged, 20*time.Second)
+	if err != nil || string(viaStagedName) != string(output) {
+		t.Errorf("the probe of a build named %s: %q, %v", stagedBuildName, viaStagedName, err)
+	}
 }
 
 func TestTheProbeEndsABuildThatDoesNotAnswerPrintsTooMuchOrFails(t *testing.T) {
