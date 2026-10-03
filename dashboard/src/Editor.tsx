@@ -104,6 +104,7 @@ import {
   Field,
   Modal,
   Spinner,
+  useTabTitle,
 } from "./ui";
 import TargetDialog from "./LazyTargetDialog";
 
@@ -619,6 +620,8 @@ export default function Editor({
     importGeneration = useRef(0),
     dragDepth = useRef(0),
     importContext = useRef({ config, code, pending: false, allowed: false });
+  // The tab names the pipeline, as a device's page names the device.
+  useTabTitle(doc?.name || null);
   // The draft's own tests, run each time the publish review opens.
   const publishTests = usePublishTests(config, publishOpen && !publishedResult);
   const publishTestsRef = useRef(publishTests);
