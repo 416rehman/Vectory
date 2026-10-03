@@ -7,7 +7,7 @@ See which devices are healthy, what they run and how much data flows through the
 [**Devices**](/#/devices) lists your fleet a page at a time, so it opens as quickly with thousands of devices as with ten. The server searches, filters, sorts and counts; the page only holds the rows you're looking at.
 
 - **Search** matches a device's name, platform, pipeline, Vector and agent versions, and the names of its groups. Type a few letters; the list follows a moment after you stop. Labels aren't searched.
-- **Quick filters** (**Failing**, **Not on desired version**, **Offline**, **Paused**, **No telemetry**) and the **Status** column filter show how many devices each holds. The counts follow your search, and a device counts in every filter that fits it.
+- **Quick filters** (**Needs attention**, **Not on desired version**, **Offline**, **Paused**, **No telemetry**) and the **Status** column filter show how many devices each holds. The counts follow your search, and a device counts in every filter that fits it.
 - **Group** shows one group's devices. A group name in a row does the same.
 - **Sort** by name, status, pipeline, Vector version, events per second or last seen. Names sort the way people read them, so `edge-2` comes before `edge-10`, and a device with no value sorts last in both directions.
 - Devices you have revoked are hidden. Choose **Status → Revoked** to list them.

@@ -22,7 +22,7 @@ Editor and Operator are separate jobs, not levels. Someone who both builds and s
 
 ## Change access or offboard a person
 
-In **People & security**, find the person and choose **Edit access**. You can change their name, role or whether they can sign in. Confirm with your own password and choose **Save access**.
+In **People & security**, find the person and choose **Edit**. You can change their name, role or whether they can sign in. The dialog lists what saving will do. Confirm with your own password and choose **Save changes**.
 
 - Changing someone's role or turning off their access signs them out everywhere and cancels their unused reset links. Changing only their name doesn't.
 - Their pipelines, deployments and history stay.
@@ -52,18 +52,18 @@ A reset link changes only the password. Disabled accounts can't use reset links.
 ## Set up an authenticator
 
 <!-- steps -->
-1. In **People & security**, choose **Set up authenticator** and confirm your password.
-2. Scan the QR code with your authenticator app, or expand **Can't scan the code?** and choose **Copy setup key**. The QR code is generated in your browser, without any outside service.
-3. Enter the app's current six-digit code and choose **Enable two-factor authentication**. The setup expires after 10 minutes.
-4. Save the eight single-use recovery codes somewhere safe, outside Vectory. They can't be shown again. Each shows in groups of four characters so you can type it from paper; the spaces are optional.
+1. In **People & security**, find **Two-factor authentication** under your account and choose **Set up**. Confirm your password and choose **Continue**.
+2. Scan the QR code with your authenticator app. On a phone, choose **Open authenticator app**; to type it instead, use the setup key shown below the code, which **Copy key** copies. The QR code is generated in your browser, without any outside service.
+3. Enter the app's current 6-digit code and choose **Turn on two-factor**. The QR code expires after 10 minutes; the dialog counts them down.
+4. Save the eight single-use recovery codes somewhere safe, outside Vectory, with **Copy**, **Download** or **Print**, then choose **I've saved these codes**. They can't be shown again. Each shows in groups of four characters so you can type it from paper; the spaces are optional.
 
-From then on, sign-in asks for your password, then a code from the app. If you don't have the app, choose **Use a recovery code**. After a recovery-code sign-in, Vectory says how many codes are left, for example "You used a recovery code; 7 left", and suggests generating new ones under **People & security** when two or fewer remain.
+From then on, sign-in asks for your password, then a code from the app. If you don't have the app, choose **Use a recovery code**. After a recovery-code sign-in, Vectory says how many codes are left, for example "You used a recovery code; 7 left", and suggests generating new ones under **People & security** when two or fewer remain. **New recovery codes**, next to **Two-factor authentication**, does that.
 
 > [!IMPORTANT]
 > **Keep recovery codes somewhere else**
 > If you lose both your authenticator and your recovery codes, another administrator must reset two-factor sign-in for you. Keep the server's and your phone's clocks accurate.
 
-To replace a lost authenticator, sign in with a recovery code, choose **Disable authenticator** (it asks for your password and a second unused recovery code), then set up the new one. Turning two-factor sign-in on or off signs out your other sessions.
+To replace a lost authenticator, sign in with a recovery code, then choose **Turn off** next to **Two-factor authentication**. The dialog asks for your password and a code: with no app, choose **Use a recovery code instead** and give another unused recovery code. Choose **Turn off two-factor**, then set up the new authenticator. Turning two-factor sign-in on or off signs out your other sessions.
 
 An administrator can choose **Reset two-factor** for a person who lost both, confirmed with the administrator's password. If no administrator can sign in, use [`vectory-admin disable-mfa`](vectory-admin.md#disable-mfa) on the stopped server.
 
