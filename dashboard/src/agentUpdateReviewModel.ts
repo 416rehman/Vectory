@@ -15,7 +15,11 @@ import {
   hasCommandFix,
   needsConsentChoice,
 } from "./agentUpdateModel";
-import { consentFor, type ConsentChoice } from "./agentUpdateCommands";
+import {
+  consentFor,
+  type ConsentChange,
+  type ConsentChoice,
+} from "./agentUpdateCommands";
 import { upgradeCommand } from "./agentUpgradeModel";
 import { shortKeyId } from "./releaseKey";
 import { windowsText } from "./updateWindow";
@@ -190,19 +194,38 @@ export type HostFixInput = {
 };
 
 /**
- * The command that fixes one device, made from what the device itself reported
- * and where it keeps its state, or null when no command does (Windows, a
- * state directory no command can carry, a choice still to make). A fix keeps
- * the level, windows and track a host already allows; only the key it pins is
- * this server's current one. Never a guess about the host: a value the device
- * didn't report isn't put in a command.
+ * What the command for a group changes on a host that already takes updates.
+ * The key to pin is this server's current one; a host on the wrong track takes
+ * the minor track; a service definition is rewritten by the upgrade itself.
+ */
+function fixChange(code: string, track?: "patch" | "minor"): ConsentChange {
+  switch (code) {
+    case "KEY_NOT_PINNED":
+    case "KEY_ROLLOVER_CONFLICT":
+      return { pinKey: true };
+    case "VERSION_NOT_ON_TRACK":
+      return { track: "minor" };
+    case "SERVICE_DEFINITION_OUTDATED":
+      return {};
+    default:
+      return { pinKey: true, track };
+  }
+}
+
+/**
+ * The command that fixes one device, made from where it keeps its state, or
+ * null when no command does (Windows, a state directory no command can carry,
+ * a choice still to make). A host that already takes updates keeps its level,
+ * windows and track: the command carries only what the fix changes, never a
+ * value the device reported about its own consent. A host that has none gets
+ * the choice a person made.
  */
 export function hostFixCommand(input: HostFixInput): string | null {
   const { group, device, install, key } = input;
   if (!hasCommandFix(group.code)) return null;
   const consent = consentFor(device.agent_update ?? null, key, {
     choice: input.choice,
-    track: group.code === "VERSION_NOT_ON_TRACK" ? "minor" : input.track,
+    change: fixChange(group.code, input.track),
   });
   if (!consent) return null;
   return upgradeCommand(install, device, consent);

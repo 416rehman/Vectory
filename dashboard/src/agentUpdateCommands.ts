@@ -9,6 +9,7 @@ import {
   platformDefaults,
   quote,
   unlessUnquotable,
+  type UpdateAmend,
   type UpdateConsent,
   type UpdateTrack,
 } from "./enrollmentCommands";
@@ -90,29 +91,39 @@ export type ConsentChoice = {
   windows?: readonly string[];
 };
 
+/** What a command changes on a host that already takes updates. */
+export type ConsentChange = {
+  /** Pin this server's current key, in place of the keys the host pins. */
+  pinKey?: boolean;
+  track?: UpdateTrack;
+};
+
 /**
  * The consent a command should carry for one host. A host that already takes
- * updates keeps its level, windows and (unless the fix changes it) its track;
- * only the key it pins is the server's current one. A host that is off, or
- * reported nothing, has no consent to keep, so it needs the choice a person
- * made; without one there is no command.
+ * updates keeps what it agreed to: the command carries only what it changes
+ * (the key to pin, the track), and nothing about its level or windows, because
+ * those would come from what the device reports about itself, which its own
+ * service account can write. A host that is off, or reported nothing, has no
+ * consent to keep, so it needs the choice a person made; without one there is
+ * no command.
  */
 export function consentFor(
   report: DeviceAgentUpdate | null | undefined,
   key: string,
-  options: { choice?: ConsentChoice; track?: UpdateTrack } = {},
-): UpdateConsent | null {
-  if (report && report.consent !== "off")
+  options: { choice?: ConsentChoice; change?: ConsentChange } = {},
+): UpdateConsent | UpdateAmend | null {
+  if (report && report.consent !== "off") {
+    const { pinKey, track } = options.change ?? {};
     return {
-      level: report.consent,
-      track: options.track ?? report.track,
-      windows: report.windows,
-      key,
+      level: "keep",
+      ...(pinKey ? { key } : {}),
+      ...(track ? { track } : {}),
     };
+  }
   if (!options.choice) return null;
   return {
     level: options.choice.level,
-    track: options.track ?? options.choice.track ?? "patch",
+    track: options.change?.track ?? options.choice.track ?? "patch",
     windows: options.choice.windows ?? [],
     key,
   };

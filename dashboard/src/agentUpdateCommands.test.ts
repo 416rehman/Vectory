@@ -238,20 +238,23 @@ describe("the choices a person makes", () => {
     ]);
   });
 
-  it("keeps what a host already allows, and needs a choice for one that doesn't", () => {
-    expect(
-      consentFor(report({ consent: "ask", track: "minor" }), teamFingerprint),
-    ).toEqual({
-      level: "ask",
+  it("carries only what a command changes on a host that already takes updates, and needs a choice for one that doesn't", () => {
+    // Never the level, windows or track the device reported about itself:
+    // its own service account writes that report.
+    const consenting = report({
+      consent: "ask",
       track: "minor",
-      windows: ["Mon-Fri 02:00-04:00"],
-      key: teamFingerprint,
+      windows: ["Sat 01:00-03:00"],
     });
     expect(
+      consentFor(consenting, teamFingerprint, { change: { pinKey: true } }),
+    ).toEqual({ level: "keep", key: teamFingerprint });
+    expect(
       consentFor(report({ consent: "auto" }), teamFingerprint, {
-        track: "minor",
+        change: { track: "minor" },
       }),
-    ).toMatchObject({ level: "auto", track: "minor" });
+    ).toEqual({ level: "keep", track: "minor" });
+    expect(consentFor(consenting, teamFingerprint)).toEqual({ level: "keep" });
     expect(consentFor(report({ consent: "off" }), teamFingerprint)).toBeNull();
     expect(consentFor(null, teamFingerprint)).toBeNull();
     expect(
@@ -264,6 +267,28 @@ describe("the choices a person makes", () => {
       windows: [],
       key: teamFingerprint,
     });
+  });
+
+  it("writes an amend as the flags it changes and nothing else", () => {
+    expect(updateArguments({ level: "keep" }, "linux")).toEqual([]);
+    expect(
+      updateArguments({ level: "keep", key: teamFingerprint }, "linux"),
+    ).toEqual(["--update-key-sha256", teamFingerprint]);
+    expect(
+      updateArguments({ level: "keep", track: "minor" }, "windows"),
+    ).toEqual(["--update-track", "minor"]);
+    expect(() =>
+      updateArguments({ level: "keep", key: "3f9a1c02" }, "linux"),
+    ).toThrow();
+    // An upgrade for a host that agreed already carries no update flag at all.
+    const plain = upgradeCommand(install, host, { level: "keep" })!;
+    expect(plain).not.toContain("--update");
+    expect(
+      upgradeCommand(install, host, { level: "keep", key: teamFingerprint })!,
+    ).toContain(`--update-key-sha256 ${teamFingerprint}`);
+    expect(
+      upgradeCommand(install, host, { level: "keep", key: teamFingerprint })!,
+    ).not.toContain("--updates");
   });
 });
 

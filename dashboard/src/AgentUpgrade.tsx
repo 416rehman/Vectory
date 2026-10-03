@@ -221,9 +221,12 @@ export default function AgentUpgrade({
     install && release && (!build?.current || !!optIn)
       ? upgradeCommand(install, device, optIn)
       : null;
-  // What the host already allows, with the key this server signs with now.
+  // The same command, carrying only the key this server signs with now: what
+  // the host already allows stays as it is.
   const kept =
-    optedIn && report && key ? consentFor(report, key.fingerprint) : null;
+    optedIn && report && key
+      ? consentFor(report, key.fingerprint, { change: { pinKey: true } })
+      : null;
   const pinAgain =
     install && release && kept ? upgradeCommand(install, device, kept) : null;
   return (
@@ -292,9 +295,9 @@ export default function AgentUpgrade({
                   >
                     <summary>Pin this server&apos;s current key again</summary>
                     <p className="agent-upgrade-note">
-                      The same command, keeping what this host already allows,
-                      with the key this server signs with now. It is how a host
-                      takes a new key, or leaves a fork.
+                      The same command with only the key this server signs with
+                      now. The host keeps what it already allows. It is how a
+                      host takes a new key, or leaves a fork.
                     </p>
                     <CommandBlock
                       command={pinAgain}

@@ -7,6 +7,7 @@ import {
   unlessUnquotable,
   updateArguments,
   type HostOS,
+  type UpdateAmend,
   type UpdateConsent,
 } from "./enrollmentCommands";
 
@@ -90,7 +91,7 @@ export function runningBuild(
 export function upgradeCommand(
   install: AgentInstall,
   device: Pick<Device, "os" | "state_dir" | "service_manager">,
-  updates?: UpdateConsent,
+  updates?: UpdateConsent | UpdateAmend,
 ): string | null {
   if (device.os !== "linux" && device.os !== "darwin") return null;
   const os: HostOS = device.os;
