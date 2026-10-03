@@ -71,15 +71,15 @@ For **Automatic** and **Ask on the host** you also choose:
 
 - **Which releases?** **Patch releases** (the default) takes new patch versions of the version it runs now. **Minor releases too** also takes new minor versions. A host never takes a new major version: upgrade to one by hand.
 - **Update windows (optional).** When an update may start, one window per line, such as `Mon-Fri 02:00-04:00` or `Sat,Sun 01:00-03:00 UTC`. Times are the host's own unless `UTC` follows. A window decides when an install starts; a trial that began inside it can end after it. Empty means any time.
-- **The key it pins.** The step shows it, for example `Pins key 05cc6c02351af0cb · kept offline`, so whoever runs the command sees what the host will trust. The command carries the key's full fingerprint, never a shortened one.
+- **The key it pins.** The step shows it, for example `Pins key 3f9a1c0277de9b41 · kept offline`, so whoever runs the command sees what the host will trust. The command carries the key's full fingerprint, never a shortened one.
 
-The command passes your choices to `vectory setup`. For example, **Automatic** with a window adds:
+The command passes your choices to `vectory setup`. For example, **Automatic** with a window adds the last four lines below. Copy the real command from the dashboard: it carries your key's fingerprint, and nothing here is one to paste.
 
 ```sh
 sudo sh "$dir/vectory-install.sh" \
   --mode restricted \
   --updates auto \
-  --update-key-sha256 05cc6c02351af0cb1be9877e7cdcd326c68310018746cb7bbbf6beb29392618b \
+  --update-key-sha256 <64-hex-fingerprint> \
   --update-track patch \
   --update-window 'Mon-Fri 02:00-04:00'
 ```
@@ -324,4 +324,4 @@ Each change is recorded in the [audit log](administer.md#review-and-export-audit
 - [Alerts and notifications](notifications.md#choose-what-each-channel-sends): hear about rollbacks and stops.
 - [Troubleshooting](troubleshooting.md#an-agent-update-doesnt-happen): when a device doesn't update.
 - [Security model](security.md#agent-updates): what each side can and can't do.
-- [Agent CLI](cli.md#release): every `vectory release` and `vectory update` command.
+- [Agent CLI](cli.md#update): the `vectory update` commands on a host, and the `vectory release` commands for keys and signatures.
