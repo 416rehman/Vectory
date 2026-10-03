@@ -183,7 +183,9 @@ impl Drop for Written<'_> {
 }
 
 /// A key the server generated and holds: its name carries the start of its
-/// fingerprint, so two of them are told apart in a listing.
+/// fingerprint, so two of them are told apart in a listing. The name is in the
+/// key line the unauthenticated key bundle serves, so it says nothing of who
+/// holds the key.
 fn generate_key() -> Result<(Seed, ReleaseKey)> {
     let seed = Seed::generate();
     let failed = |error: agent_release::KeyError| {
@@ -194,8 +196,8 @@ fn generate_key() -> Result<(Seed, ReleaseKey)> {
             "A release key couldn't be generated.",
         )
     };
-    let probe = ReleaseKey::from_seed(seed.bytes(), "server").map_err(failed)?;
-    let name = format!("server-{}", &probe.fingerprint()[..8]);
+    let probe = ReleaseKey::from_seed(seed.bytes(), "release").map_err(failed)?;
+    let name = format!("release-{}", &probe.fingerprint()[..8]);
     let key = ReleaseKey::from_seed(seed.bytes(), &name).map_err(failed)?;
     Ok((seed, key))
 }
