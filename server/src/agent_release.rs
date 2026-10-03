@@ -1925,7 +1925,7 @@ mod tests {
         // A file that lost cases would pass quietly otherwise.
         assert!(key_lines.len() >= 48, "{} key lines", key_lines.len());
         assert!(bundles.len() >= 13, "{} bundles", bundles.len());
-        assert!(cases.len() >= 261, "{} cases", cases.len());
+        assert!(cases.len() >= 320, "{} cases", cases.len());
     }
 
     #[test]
