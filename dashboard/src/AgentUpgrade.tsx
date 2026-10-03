@@ -12,6 +12,7 @@ import {
 } from "./api";
 import {
   agentUpgradeRelease,
+  hasConsentCommand,
   hasUpgradeCommand,
   runningBuild,
   upgradeCommand,
@@ -20,7 +21,7 @@ import {
 import { Button, CopyButton, ErrorBox, Modal, Spinner } from "./ui";
 import DocLink from "./DocLink";
 import { forkSentence, updatesLine } from "./agentUpdateModel";
-import { consentFor } from "./agentUpdateCommands";
+import { consentFor, windowsConsentCommand } from "./agentUpdateCommands";
 import {
   emptyConsent,
   readConsent,
@@ -147,12 +148,16 @@ export default function AgentUpgrade({
   const key = settings.updates?.current_key ?? null;
   const report = device.agent_update ?? null;
   const optedIn = settings.on && !!report && report.consent !== "off";
-  const canOptIn =
+  const canConsent =
     settings.on &&
     !optedIn &&
     device.status !== "revoked" &&
     updatesShip(device.os) &&
-    hasUpgradeCommand(device.os);
+    hasConsentCommand(device.os);
+  // Linux and macOS take their consent in the upgrade command; a Windows host in
+  // a `setup` command of its own, which replaces nothing.
+  const canOptIn = canConsent && hasUpgradeCommand(device.os);
+  const windowsConsent = canConsent && device.os === "windows";
   const noService = device.service_manager === "none";
   const [consent, setConsent] = useState<ConsentForm>(emptyConsent);
   const consentRead = readConsent(consent, key?.fingerprint ?? null);
@@ -230,8 +235,17 @@ export default function AgentUpgrade({
     optedIn && report && key
       ? consentFor(report, key.fingerprint, { change: { pinKey: true } })
       : null;
-  const pinAgain =
-    install && release && kept ? upgradeCommand(install, device, kept) : null;
+  const pinAgain = !kept
+    ? null
+    : device.os === "windows"
+      ? windowsConsentCommand(device, kept)
+      : install && release
+        ? upgradeCommand(install, device, kept)
+        : null;
+  const windowsCommand =
+    windowsConsent && report && !noService && consentRead.consent
+      ? windowsConsentCommand(device, consentRead.consent)
+      : null;
   return (
     <>
       <button
@@ -307,6 +321,65 @@ export default function AgentUpgrade({
                       label={`Command to pin the current key on ${device.name}`}
                     />
                   </details>
+                )}
+              </section>
+            )}
+            {windowsConsent && (
+              <section
+                className="update-upgrade-step"
+                aria-labelledby="agent-upgrade-windows-updates-title"
+              >
+                <h3 id="agent-upgrade-windows-updates-title">Agent updates</h3>
+                {noService ? (
+                  <p className="agent-upgrade-note">
+                    {device.name}&apos;s agent isn&apos;t kept running by a
+                    service, so it can&apos;t take agent updates. Run it under a
+                    service first.
+                  </p>
+                ) : !report ? (
+                  <p className="agent-upgrade-note">
+                    Its last check-in carried no update report, so its agent
+                    predates agent updates. Upgrade it by hand first (the steps
+                    are below), then come back for the command.
+                  </p>
+                ) : (
+                  <>
+                    <p className="agent-upgrade-note">
+                      Updates are off on this host. One run of the command
+                      below, with a choice made here, lets the dashboard update
+                      it. It runs the agent that is installed there and replaces
+                      no file.
+                    </p>
+                    <UpdateConsentFields
+                      value={consent}
+                      onChange={(patch) =>
+                        setConsent((previous) => ({ ...previous, ...patch }))
+                      }
+                      read={consentRead}
+                      signingKey={key}
+                      name="upgrade-update-level"
+                      columns={1}
+                    />
+                    {windowsCommand ? (
+                      <CommandBlock
+                        command={windowsCommand}
+                        label={`Command to turn on agent updates on ${device.name}`}
+                        heading={`On ${device.name}`}
+                      />
+                    ) : (
+                      <p className="agent-upgrade-note">
+                        Choose how this host takes agent updates to get its
+                        command.
+                      </p>
+                    )}
+                    <DocLink
+                      topic="agent-updates"
+                      section="what-a-host-agrees-to"
+                      className="doc-term-link update-doc"
+                    >
+                      What a host agrees to
+                    </DocLink>
+                  </>
                 )}
               </section>
             )}

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { upgradeCommand } from "./agentUpgradeModel";
+import { hasConsentCommand, upgradeCommand } from "./agentUpgradeModel";
 import {
   consentChoices,
   consentFor,
   trackChoices,
   updateVerbCommand,
+  windowsConsentCommand,
 } from "./agentUpdateCommands";
 import {
   installerCommand,
@@ -319,5 +320,101 @@ describe("what to run on a host about an update", () => {
     expect(
       updateVerbCommand("apply", { ...host, state_dir: "/srv/a\nb" }),
     ).toBeNull();
+  });
+});
+
+describe("the command that gives an enrolled Windows host its consent", () => {
+  const windows = {
+    os: "windows",
+    state_dir: "C:\\ProgramData\\Vectory\\agent",
+    service_manager: "windows" as const,
+  };
+
+  it("runs the agent that is installed, in an elevated PowerShell, with only the update flags", () => {
+    const command = windowsConsentCommand(windows, automatic)!;
+    const [comment, run] = command.split("\n");
+    expect(comment).toBe("# In an elevated PowerShell:");
+    expect(run).toBe(
+      `& 'C:\\Program Files\\Vectory\\vectory.exe' setup --updates auto --update-key-sha256 ${teamFingerprint} --update-track patch --update-window 'Mon-Fri 02:00-04:00'`,
+    );
+    // The window reaches setup as one argument, with its space.
+    expect(powerShellWords(run).slice(-2)).toEqual([
+      "--update-window",
+      "Mon-Fri 02:00-04:00",
+    ]);
+    // It replaces no file, and names no server: setup keeps the address the host enrolled with.
+    for (const word of [
+      "sudo",
+      "--server",
+      "curl",
+      "Get-FileHash",
+      "--state-dir",
+    ])
+      expect(command).not.toContain(word);
+  });
+
+  it("names the state directory only when the agent keeps it elsewhere, quoted", () => {
+    const command = windowsConsentCommand(
+      { ...windows, state_dir: "D:\\Vectory data\\agent" },
+      automatic,
+    )!;
+    expect(command.split("\n")[1]).toContain(
+      "setup --state-dir 'D:\\Vectory data\\agent' --updates auto",
+    );
+    expect(powerShellWords(command.split("\n")[1]).slice(3, 5)).toEqual([
+      "--state-dir",
+      "D:\\Vectory data\\agent",
+    ]);
+  });
+
+  it("changes one part of what the host agreed to, and nothing else", () => {
+    expect(
+      windowsConsentCommand(windows, {
+        level: "keep",
+        key: teamFingerprint,
+      })!.split("\n")[1],
+    ).toBe(
+      `& 'C:\\Program Files\\Vectory\\vectory.exe' setup --update-key-sha256 ${teamFingerprint}`,
+    );
+    expect(
+      windowsConsentCommand(windows, { level: "keep", track: "minor" })!.split(
+        "\n",
+      )[1],
+    ).toContain("setup --update-track minor");
+    expect(
+      windowsConsentCommand(windows, { level: "off" })!.split("\n")[1],
+    ).toContain("setup --updates off");
+  });
+
+  it("is for Windows hosts only, and refuses what can't be quoted or isn't a whole fingerprint", () => {
+    expect(windowsConsentCommand(host, automatic)).toBeNull();
+    expect(
+      windowsConsentCommand({ ...windows, os: "darwin" }, automatic),
+    ).toBeNull();
+    expect(
+      windowsConsentCommand(
+        { ...windows, state_dir: "C:\\data\\\u0007" },
+        automatic,
+      ),
+    ).toBeNull();
+    expect(
+      windowsConsentCommand(windows, { ...automatic, key: "3f9a1c02" }),
+    ).toBeNull();
+    expect(
+      windowsConsentCommand(windows, {
+        ...automatic,
+        windows: ["Mon-Fri 02:00-04:00'; reboot #"],
+      }),
+    ).toBeNull();
+  });
+
+  it("is offered where a command can be made: Linux and macOS by the upgrade command, and Windows by this one", () => {
+    expect(["linux", "darwin", "windows"].map(hasConsentCommand)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    for (const other of ["freebsd", "", null, undefined])
+      expect(hasConsentCommand(other)).toBe(false);
   });
 });

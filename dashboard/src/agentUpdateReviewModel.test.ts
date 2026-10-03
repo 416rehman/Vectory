@@ -275,12 +275,82 @@ describe("the command that fixes a device that won't update", () => {
     expect(command).toContain("--service none");
   });
 
-  it("makes no command where none fits: Windows, a refusal with no command, a host nobody can quote", () => {
+  it("gives a Windows host its consent from the agent that is installed there, in PowerShell", () => {
+    const windows = (over: Record<string, unknown>) =>
+      device({
+        os: "windows",
+        state_dir: "C:\\ProgramData\\Vectory\\agent",
+        service_manager: "windows",
+        ...over,
+      });
+    const off = hostFixCommand({
+      group: group("UPDATES_OFF"),
+      device: windows({ agent_update: report({ consent: "off" }) }),
+      install,
+      key,
+      choice: { level: "auto", windows: ["Sat,Sun 01:00-03:00 UTC"] },
+    })!;
+    expect(off.split("\n")[0]).toBe("# In an elevated PowerShell:");
+    expect(off).toContain(
+      "& 'C:\\Program Files\\Vectory\\vectory.exe' setup --updates auto",
+    );
+    expect(off).toContain(`--update-key-sha256 ${key}`);
+    expect(off).toContain("--update-window 'Sat,Sun 01:00-03:00 UTC'");
+    // It replaces no file and needs no download, token or server address.
+    for (const word of [
+      "sudo",
+      "--server",
+      "curl",
+      "Get-FileHash",
+      "--state-dir",
+    ])
+      expect(off).not.toContain(word);
+    const pin = hostFixCommand({
+      group: group("KEY_NOT_PINNED"),
+      device: windows({
+        state_dir: "D:\\Vectory data\\agent",
+        agent_update: report({ consent: "ask", track: "minor" }),
+      }),
+      install,
+      key,
+    })!;
+    expect(pin).toContain(
+      "setup --state-dir 'D:\\Vectory data\\agent' --update-key-sha256 " + key,
+    );
+    expect(pin).not.toContain("--updates");
+    expect(pin).not.toContain("--update-track");
+    expect(
+      hostFixCommand({
+        group: group("VERSION_NOT_ON_TRACK"),
+        device: windows({ agent_update: report({ consent: "auto" }) }),
+        install,
+        key,
+      }),
+    ).toContain("setup --update-track minor");
+  });
+
+  it("makes no command where none fits: a Windows host that needs a new agent, a refusal with no command, a host nobody can quote", () => {
     const reported = report({ consent: "auto" });
+    // A new agent writes a service definition, and an agent that predates updates
+    // can't take the flags: both are an upgrade by hand first.
+    for (const code of ["SERVICE_DEFINITION_OUTDATED", "AGENT_TOO_OLD"])
+      expect(
+        hostFixCommand({
+          group: group(code),
+          device: device({ os: "windows", agent_update: reported }),
+          install,
+          key,
+          choice: { level: "auto" },
+        }),
+      ).toBeNull();
     expect(
       hostFixCommand({
         group: group("KEY_NOT_PINNED"),
-        device: device({ os: "windows", agent_update: reported }),
+        device: device({
+          os: "windows",
+          state_dir: "C:\\data\\\u0007",
+          agent_update: reported,
+        }),
         install,
         key,
       }),

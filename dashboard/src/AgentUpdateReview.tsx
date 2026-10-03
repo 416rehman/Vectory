@@ -884,7 +884,8 @@ function HostFixes({
       </summary>
       <div className="update-fixes-body">
         <p className="control-muted">
-          Each command is the Upgrade agent command for that host, with only the
+          Each command is the Upgrade agent command for that host (for a Windows
+          host, the setup command that gives it its consent), with only the
           change this fix needs, such as the key to pin. The host keeps what it
           already allows. Run it on the host, as shown.
         </p>
@@ -928,9 +929,9 @@ function HostFixes({
             ))}
             {without.length > 0 && (
               <p className="control-muted">
-                No command for {without.join(", ")}: its host isn&apos;t a Linux
-                or macOS host this page can make one for, or a path it reported
-                can&apos;t go in a command. Open its page for the steps.
+                No command for {without.join(", ")}: its agent has to be
+                upgraded by hand first, or a path it reported can&apos;t go in a
+                command. Open its page for the steps.
               </p>
             )}
             {inputs.some((item) => item.failed) && (
