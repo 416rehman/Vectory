@@ -62,7 +62,9 @@ pub fn message(code: Option<&str>) -> Option<&'static str> {
         }
         "RELEASE_ALREADY_TRIED" => "The host already tried this build and rolled back.",
         "COUNTER_REPLAYED" => "The host already attempted a release at least as new.",
-        "DOWNGRADE_REFUSED" => "The host runs a newer agent, and a host never goes back.",
+        "DOWNGRADE_REFUSED" => {
+            "The host runs a newer agent, or one whose version can't be compared, and a host never goes back."
+        }
         "VERSION_NOT_ON_TRACK" => "The build isn't on the update track the host allowed.",
         "AGENT_TOO_OLD" => "The host's agent is too old to take this build.",
         "ALREADY_RUNNING" => "The host already runs this version.",

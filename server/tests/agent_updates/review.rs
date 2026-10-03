@@ -206,6 +206,18 @@ async fn every_device_is_in_one_place_and_the_first_reason_in_the_contracts_orde
         .await,
     );
     expected.insert("other-major".into(), Some("DOWNGRADE_REFUSED"));
+    // A running version that is not a plain `major.minor.patch` one cannot be
+    // compared with the release's: a downgrade, never a guess.
+    for (name, version) in [
+        ("dev-build", "0.1.0-dev"),
+        ("prefixed", "v0.1.0"),
+        ("no-version", ""),
+        ("padded", "0.01.0"),
+        ("four-parts", "0.1.0.1"),
+    ] {
+        ids.push(host(&f, name, version, Some(good.clone())).await);
+        expected.insert(name.into(), Some("DOWNGRADE_REFUSED"));
+    }
     // Will update.
     ids.push(host(&f, "will-auto", "0.1.0", Some(good.clone())).await);
     expected.insert("will-auto".into(), None);
