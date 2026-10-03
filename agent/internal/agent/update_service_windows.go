@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -258,6 +259,14 @@ func registerUpdateService(manager *mgr.Mgr, name string, spec updateUnitSpec) (
 		service.Close()
 		return nil, err
 	}
+	// The step's service ends with an error of its own when the helper copy it runs
+	// from was replaced (updateServiceRestartCode), and the manager is to start it
+	// again from the new one: it restarts a service that ends that way only when it is
+	// asked to treat such an end as a failure too.
+	if err := service.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		service.Close()
+		return nil, err
+	}
 	return service, nil
 }
 
@@ -357,10 +366,61 @@ func redirectStepLog() func() {
 	}
 }
 
+// updateServiceRestartCode is the error of its own with which the step's service ends
+// when the helper copy it runs from has been replaced by the one of a build that
+// committed. A process that runs forever would otherwise keep running the step of the
+// build that was the helper when it started, never the one that was proven last, and
+// the old copy it was renamed aside from could never be removed.
+const updateServiceRestartCode = 2
+
+// helperWatch notices that the helper copy has become another program than the one
+// this process runs. The service's own program was the helper copy when it started,
+// and the step replaces that file when a build commits, by renaming the running copy
+// aside; the process goes on running from the file it has, whatever the name holds now.
+type helperWatch struct {
+	path   string // the helper copy
+	digest string // of the program this process was started from
+}
+
+// newHelperWatch reads the program this process runs from. When it can't be read
+// there is nothing to compare, and the watch never says the helper was replaced.
+func newHelperWatch(helper string) helperWatch {
+	own, err := os.Executable()
+	if err != nil {
+		return helperWatch{}
+	}
+	digest, err := digestOfFile(own)
+	if err != nil {
+		return helperWatch{}
+	}
+	return helperWatch{path: helper, digest: digest}
+}
+
+// replaced says whether the file at the helper path is another program. A file that
+// can't be read now is not an answer.
+func (w helperWatch) replaced() bool {
+	if w.digest == "" {
+		return false
+	}
+	now, err := digestOfFile(w.path)
+	return err == nil && now != w.digest
+}
+
+func digestOfFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return digestOfReader(f)
+}
+
 // updateServiceHandler is the step's service for the Service Control Manager: it
 // runs the step every 30 seconds until it is told to stop, and a run that is under way
 // is ended at its next look (the trial polls every two seconds), leaving its journal
-// for the next run, as a crash would.
+// for the next run, as a crash would. When a run has replaced the helper copy it ends
+// itself with updateServiceRestartCode, and the manager starts it again from the new
+// copy; the next run, in the new process, removes the old copy.
 type updateServiceHandler struct{ dir string }
 
 func (h updateServiceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
@@ -368,17 +428,30 @@ func (h updateServiceHandler) Execute(_ []string, requests <-chan svc.ChangeRequ
 	defer redirectStepLog()()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	watch := newHelperWatch(UpdateLocations().HelperExecutable)
+	var restart atomic.Bool
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
 		runUpdateLoop(ctx, currentUpdateClock(), updateRunInterval,
-			func(ctx context.Context) error { return RunUpdateHelper(ctx, h.dir) },
+			func(ctx context.Context) error {
+				err := RunUpdateHelper(ctx, h.dir)
+				if watch.replaced() {
+					fmt.Fprintln(os.Stderr, "update step: the helper copy was replaced; this service ends so that the manager starts it again from the new one")
+					restart.Store(true)
+					cancel()
+				}
+				return err
+			},
 			func(err error) { fmt.Fprintf(os.Stderr, "update step: %v\n", err) })
 	}()
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	for {
 		select {
 		case <-finished:
+			if restart.Load() {
+				return true, updateServiceRestartCode
+			}
 			return false, 0
 		case request := <-requests:
 			switch request.Cmd {

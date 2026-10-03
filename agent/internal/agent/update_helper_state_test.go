@@ -312,6 +312,7 @@ func TestInstalledRecordsAnythingTheBuildSaysItsVersionIsAndNothingThatIsntText(
 
 func privateStepDir(t *testing.T) (*rootOwned, string) {
 	t.Helper()
+	requireRootOwnedWriter(t) // the step's directory is made with an access list that is root's alone
 	root := ownTree(t)
 	path := filepath.Join(root, "var", "lib", "vectory-update", "private")
 	dir, err := ensureRootOwnedDir(path, rootPrivate)
@@ -346,11 +347,10 @@ func TestTheStepsFilesAreWrittenAtomicallyAndPrivately(t *testing.T) {
 	if err := writeUpdateInstalled(private, installed); err != nil {
 		t.Fatal(err)
 	}
+	// Private is what the system decides: a Unix file's mode, a Windows file's access
+	// list (its permission bits say nothing about who can read it).
 	for _, name := range []string{updateJournalFile, updateCountersFile, updateInstalledFile} {
-		info, err := os.Stat(filepath.Join(path, name))
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Errorf("%s: %v, %v", name, info, err)
-		}
+		requireStepFilePrivate(t, filepath.Join(path, name))
 	}
 	got, found, err := readUpdateJournal(private)
 	if err != nil || !found || got.Stage != UpdateStageTrial || got.Counter != 7 || !got.StartedAt.Equal(journal.StartedAt) {

@@ -211,6 +211,92 @@ func TestTheStepServiceTellsTheManagerWhatItIsDoingAndStopsWhenAsked(t *testing.
 	}
 }
 
+// The step replaces the helper copy when a build commits, by renaming the running
+// copy aside, and the process goes on running from the file it has. Left like that it
+// would run the step of the build that was the helper when it started for as long as
+// the host stays up, and the old copy could never be removed, so the service ends with
+// an error of its own for the manager to start it again from the new copy.
+func TestAHelperWatchSaysWhenTheHelperCopyIsNoLongerTheProgramThatRuns(t *testing.T) {
+	helper := filepath.Join(t.TempDir(), "vectory.exe")
+	copyTestBinary(t, helper)
+	watch := newHelperWatch(helper)
+	if watch.replaced() {
+		t.Error("the helper copy that is this program was taken for a replacement")
+	}
+	writeText(t, helper, "the helper copy of the build that committed")
+	if !watch.replaced() {
+		t.Error("a helper copy that is another program wasn't noticed")
+	}
+	if err := os.Remove(helper); err != nil {
+		t.Fatal(err)
+	}
+	if watch.replaced() {
+		t.Error("a helper copy that can't be read counts as a replacement")
+	}
+	if (helperWatch{}).replaced() || newHelperWatch(filepath.Join(t.TempDir(), "nothing.exe")).replaced() {
+		t.Error("a watch with nothing to compare says the helper was replaced")
+	}
+}
+
+func TestTheStepServiceEndsWithAnErrorOfItsOwnWhenItsHelperCopyWasReplaced(t *testing.T) {
+	paths := isolatedStepLocations(t)
+	mkdirAll(t, filepath.Dir(paths.HelperExecutable))
+	writeText(t, paths.HelperExecutable, "the helper copy of another build")
+	requests := make(chan svc.ChangeRequest)
+	status := make(chan svc.Status, 32)
+	type result struct {
+		specific bool
+		code     uint32
+	}
+	done := make(chan result, 1)
+	go func() {
+		specific, code := updateServiceHandler{dir: t.TempDir()}.Execute(nil, requests, status)
+		done <- result{specific, code}
+	}()
+	<-status // StartPending
+	<-status // Running
+	select {
+	case r := <-done:
+		if !r.specific || r.code != updateServiceRestartCode {
+			t.Errorf("the service ended with (%v, %d), want its own error %d", r.specific, r.code, updateServiceRestartCode)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the service didn't end after its helper copy was replaced")
+	}
+	log, err := os.ReadFile(filepath.Join(paths.Private, updateStepLogFile))
+	if err != nil || !strings.Contains(string(log), "the helper copy was replaced") {
+		t.Errorf("the step's log is %q, %v", log, err)
+	}
+}
+
+// A helper copy that is the program the service runs from is no reason to end: the
+// service goes on until it is stopped.
+func TestTheStepServiceStaysUpWhileItsHelperCopyIsTheProgramItRuns(t *testing.T) {
+	paths := isolatedStepLocations(t)
+	mkdirAll(t, filepath.Dir(paths.HelperExecutable))
+	copyTestBinary(t, paths.HelperExecutable)
+	requests := make(chan svc.ChangeRequest)
+	status := make(chan svc.Status, 32)
+	done := make(chan struct{})
+	go func() {
+		updateServiceHandler{dir: t.TempDir()}.Execute(nil, requests, status)
+		close(done)
+	}()
+	<-status // StartPending
+	<-status // Running
+	select {
+	case <-done:
+		t.Fatal("the service ended with no reason")
+	case <-time.After(3 * time.Second):
+	}
+	requests <- svc.ChangeRequest{Cmd: svc.Stop}
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the service didn't return after it was stopped")
+	}
+}
+
 func TestAShutdownStopsTheStepServiceToo(t *testing.T) {
 	isolatedStepLocations(t)
 	requests := make(chan svc.ChangeRequest)
@@ -320,6 +406,10 @@ func TestTheStepServiceIsRegisteredAsTheDesignSaysAndTheRegistrationIsMended(t *
 		if period, err := service.ResetPeriod(); err != nil || period != 24*60*60 {
 			t.Errorf("%s: the failure count resets after %d s (%v)", when, period, err)
 		}
+		// The step's service ends with an error of its own to be started again.
+		if nonCrash, err := service.RecoveryActionsOnNonCrashFailures(); err != nil || !nonCrash {
+			t.Errorf("%s: the recovery actions don't apply to a service that stops with an error (%v, %v)", when, nonCrash, err)
+		}
 	}
 
 	service, err := registerUpdateService(manager, name, spec)
@@ -347,6 +437,9 @@ func TestTheStepServiceIsRegisteredAsTheDesignSaysAndTheRegistrationIsMended(t *
 		t.Fatal(err)
 	}
 	if err := service.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.NoAction}}, 60); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetRecoveryActionsOnNonCrashFailures(false); err != nil {
 		t.Fatal(err)
 	}
 	mended, err := registerUpdateService(manager, name, spec)
