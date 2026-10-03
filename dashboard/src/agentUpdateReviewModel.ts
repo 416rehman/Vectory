@@ -212,7 +212,7 @@ export type HostFixBlock = { devices: string[]; command: string };
 /**
  * Devices that share one command (the same state directory and service) share
  * one block, so a group of fifty hosts with default installs reads as one
- * command "On each host" rather than fifty.
+ * command "On these hosts" rather than fifty.
  */
 export function hostFixBlocks(
   inputs: { name: string; command: string | null }[],

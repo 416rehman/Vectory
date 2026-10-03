@@ -921,7 +921,7 @@ function HostFixes({
                   blocks.length === 1 && !without.length
                     ? group.devices.length === 1
                       ? `On ${block.devices[0]}`
-                      : "On each host"
+                      : "On these hosts"
                     : `On ${block.devices.join(", ")}`
                 }
               />
