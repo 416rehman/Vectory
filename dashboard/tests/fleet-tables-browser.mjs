@@ -124,7 +124,7 @@ const tokens = [
   },
 ];
 let context, page, state;
-async function load(name, props = {}) {
+async function load(name, props = {}, seed = {}) {
   if (context) await context.close();
   context = await browser.newContext({
     viewport: { width: 1280, height: 960 },
@@ -144,6 +144,8 @@ async function load(name, props = {}) {
     failDevices: false,
     refreshProposed: 3,
     refreshBlockers: [],
+    history: [],
+    ...seed,
   };
   const replies = fleetReplies({ devices, groups: () => state.groups });
   await context.route("**/*", async (route) => {
@@ -301,7 +303,12 @@ async function load(name, props = {}) {
     // Agent settings also lists settings that were applied without saving.
     if (method === "GET" && path === "/deployments/history")
       return route.fulfill({
-        json: { items: [], total: 0, page: 1, page_size: 50 },
+        json: {
+          items: state.history,
+          total: state.history.length,
+          page: 1,
+          page_size: 50,
+        },
       });
     // Add device lists the last day's enrollment attempts.
     if (method === "GET" && path === "/agent-install/activity")
@@ -670,6 +677,93 @@ try {
           exact: true,
         }),
       ).toHaveCount(0);
+      expect(state.writes).toEqual([]);
+    },
+  );
+  await check(
+    "agent settings applied without saving list every deployment that applies the same values",
+    async () => {
+      const applied = (n, count, policy, by) => ({
+        id: id(9000 + n),
+        name: null,
+        version_id: null,
+        policy,
+        policy_id: null,
+        status: "completed",
+        target_count: count,
+        verified_count: count,
+        state_counts: { verified_applied: count },
+        created_by_name: by,
+        created_at: `2026-09-${20 + n}T10:15:00Z`,
+      });
+      const fast = {
+        heartbeat_seconds: 15,
+        sync_paused: false,
+        telemetry_enabled: true,
+      };
+      // Three devices run the fast values through two deployments; a third
+      // deployment applies other values.
+      const history = [
+        applied(3, 1, fast, "Demo operator"),
+        applied(
+          2,
+          4,
+          {
+            heartbeat_seconds: 300,
+            sync_paused: true,
+            telemetry_enabled: false,
+          },
+          "Demo operator",
+        ),
+        applied(1, 2, fast, "Demo operator"),
+      ];
+      for (const width of [1280, 390])
+        for (const theme of ["light", "dark"]) {
+          await load("policies", {}, { history });
+          await page.setViewportSize({ width, height: 900 });
+          await page.evaluate(
+            (t) => (document.documentElement.dataset.theme = t),
+            theme,
+          );
+          const card = page.getByRole("region", {
+            name: "Applied without saving",
+            exact: true,
+          });
+          await expect(card.getByRole("listitem")).toHaveCount(2);
+          const fastEntry = card.getByRole("listitem").first();
+          await expect(fastEntry).toContainText("Check-ins every 15 s");
+          await expect(
+            fastEntry.getByRole("link", { name: "Applied to 1 device" }),
+          ).toHaveAttribute("href", `#/deployments/${id(9003)}?page=1`);
+          await expect(
+            fastEntry.getByRole("link", { name: "Applied to 2 devices" }),
+          ).toHaveAttribute("href", `#/deployments/${id(9001)}?page=1`);
+          await expect(
+            fastEntry.getByRole("button", { name: "Save as settings…" }),
+          ).toHaveCount(1);
+          await expect(card.getByRole("listitem").nth(1)).toContainText(
+            "Applied to 4 devices",
+          );
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const audit = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            theme,
+            view: `unsaved-settings-${width}`,
+            violations: audit.violations.map((v) => v.id),
+          });
+          expect(audit.violations).toEqual([]);
+          await page.screenshot({
+            path: resolve(
+              output,
+              `agent-settings-unsaved-${width}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+        }
       expect(state.writes).toEqual([]);
     },
   );
