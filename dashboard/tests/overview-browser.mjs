@@ -1118,7 +1118,7 @@ try {
     });
   const metricsOff = {
     fleet: [
-      device(10, "qa-linux-1", {
+      device(10, "edge-linux-1", {
         effective_policy: {
           heartbeat_seconds: 15,
           sync_paused: false,
@@ -1138,9 +1138,9 @@ try {
           "First pipeline",
         ),
       }),
-      idle(11, "qa-linux-2"),
-      idle(12, "qa-linux-3"),
-      idle(13, "qa-linux-4"),
+      idle(11, "edge-linux-2"),
+      idle(12, "edge-linux-3"),
+      idle(13, "edge-linux-4"),
     ],
     versions: {
       [uuid(71)]: publishedVersion(uuid(71), uuid(72), 2, exporting),
@@ -1179,7 +1179,7 @@ try {
       const steps = howTo.getByRole("listitem");
       await expect(steps).toHaveCount(1);
       await expect(steps.first()).toHaveText(
-        "Turn on Collect operational metrics for qa-linux-1 in its agent settings (“No metrics”).",
+        "Turn on Collect operational metrics for edge-linux-1 in its agent settings (“No metrics”).",
       );
       await expect(
         steps.first().getByRole("link", { name: "its agent settings" }),
@@ -1411,7 +1411,7 @@ try {
     "When the only verified device goes offline the checklist stays done and the tile says it is offline, not unverified",
     async () => {
       const offline = [
-        device(30, "qa-linux-1", {
+        device(30, "edge-linux-1", {
           status: "offline",
           last_seen: ago(7200),
           running_version: runningVersion(
