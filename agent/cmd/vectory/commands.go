@@ -97,6 +97,7 @@ func init() {
 			examples: []string{"sudo vectory service-uninstall", "sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent"},
 			define:   defineUninstall},
 	}
+	linkVerbs(commands)
 }
 
 func defineStatus(c *cli) func() int {
