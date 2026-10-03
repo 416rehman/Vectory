@@ -108,8 +108,8 @@ func TestNativeFirstVersionThatCannotStartIsWithdrawn(t *testing.T) {
 	if _, err := os.Stat(e.Settings.ManagedConfig); !os.IsNotExist(err) {
 		t.Fatal("the failed first version stayed in the managed path")
 	}
-	if applyNextAction(e.State) != firstVersionFailed {
-		t.Fatalf("next: %q", applyNextAction(e.State))
+	if applyNextAction("", e.State) != firstVersionFailed {
+		t.Fatalf("next: %q", applyNextAction("", e.State))
 	}
 	found := false
 	for _, d := range e.State.Error.Diagnostics {

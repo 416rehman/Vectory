@@ -52,14 +52,39 @@ func RunCommandFor(dir string) string {
 	} else if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	command := quoteArg(exe) + " run"
-	if filepath.Clean(dir) != filepath.Clean(DefaultPaths().StateDir) {
-		command += " --state-dir " + quoteArg(dir)
-	}
+	command := CommandFor(dir, ShellQuote(exe)+" run")
 	if runtime.GOOS == "windows" {
 		return command
 	}
 	return "sudo " + command
+}
+
+// CommandFor is a command to print for an operator to run against the agent
+// installed at dir. words is the command and its flags, such as
+// "sudo vectory resume". The command names its state directory, quoted for the
+// shell, when dir isn't this platform's default: copied as it stands, it would
+// otherwise act on the default agent, or on none. An empty dir means the
+// state directory isn't known, and the command stays as written. The service
+// commands act on the one registered service and refuse --state-dir, so they
+// are never passed through it.
+func CommandFor(dir, words string) string {
+	if dir == "" || filepath.Clean(dir) == filepath.Clean(DefaultPaths().StateDir) {
+		return words
+	}
+	return words + " --state-dir " + ShellQuote(dir)
+}
+
+// ShellQuote keeps a value bare only when every character in it is one no
+// shell reads specially: a path with a semicolon, an ampersand or a bracket
+// would run as something else when pasted.
+func ShellQuote(s string) string {
+	if s != "" && strings.Trim(s, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:+-") == "" {
+		return s
+	}
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 // StatusView gathers everything status shows, read-only.
@@ -226,36 +251,36 @@ func (v *StatusView) checkInFailure() *CheckInFailure {
 }
 
 func (v *StatusView) nextStep(now time.Time) string {
-	dir := quoteArg(v.StateDir)
+	command := func(words string) string { return CommandFor(v.StateDir, words) }
 	switch {
 	case v.DeviceID == "" && v.Pending != nil && v.Pending.Delivery == "refused":
 		return "The server refused the last enrollment. Ask an administrator for the reason (Add device page), then run setup again; a new token is fine."
 	case v.DeviceID == "" && v.Pending != nil && v.Pending.Delivery == "no":
-		return "The last enrollment never reached the server. Fix the connection (vectory doctor), then run the command again."
+		return "The last enrollment never reached the server. Fix the connection (" + command("vectory doctor") + "), then run the command again."
 	case v.DeviceID == "" && v.Pending != nil:
 		return "Finish enrolling: run the same command again with --name " + v.Pending.Name + " (a new token is fine)."
 	case v.DeviceID == "":
 		return "Enroll this host: copy the command from Add device in the dashboard."
 	case !v.BinaryOK:
-		return "The adopted Vector binary changed. Restore it, or stop the agent and approve it with `vectory re-adopt --expected-sha256 SHA256`."
+		return "The adopted Vector binary changed. Restore it, or stop the agent and approve it with `" + command("vectory re-adopt --expected-sha256 SHA256") + "`."
 	case v.Service.Installed && !v.Service.Running():
 		return "Start the agent: sudo vectory service-start"
 	case !v.running():
-		return "Start the agent: " + RunCommandFor(v.StateDir) + " (or register a service with vectory setup)."
+		return "Start the agent: " + RunCommandFor(v.StateDir) + " (or register a service with " + command("vectory setup") + ")."
 	case v.LocalPaused:
-		return "Configuration sync is paused on this host. Resume it with: sudo vectory resume --state-dir " + dir
+		return "Configuration sync is paused on this host. Resume it with: " + command("sudo vectory resume")
 	case v.State.LastHeartbeat == nil:
-		return "Waiting for the first check-in. If it doesn't arrive within a minute, run `sudo vectory doctor`."
+		return "Waiting for the first check-in. If it doesn't arrive within a minute, run `" + command("sudo vectory doctor") + "`."
 	case v.checkInFailure() != nil:
 		return v.checkInFailure().Message
 	case now.Sub(*v.State.LastHeartbeat) > v.heartbeatLimit():
-		return "No check-in for " + humanDuration(now.Sub(*v.State.LastHeartbeat)) + ". Run `sudo vectory doctor` to check the connection."
+		return "No check-in for " + humanDuration(now.Sub(*v.State.LastHeartbeat)) + ". Run `" + command("sudo vectory doctor") + "` to check the connection."
 	case v.State.Error != nil:
-		return applyNextAction(v.State)
+		return applyNextAction(v.StateDir, v.State)
 	case v.Delivery != nil:
 		// Applied and verified is not delivering: Vector's own log says a
 		// sink fails its requests.
-		return v.Delivery.Next()
+		return v.Delivery.Next(v.StateDir)
 	case v.State.Desired == nil:
 		return "Nothing to do here. Deploy a pipeline to " + v.Settings.Name + " from the dashboard."
 	}

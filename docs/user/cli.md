@@ -21,6 +21,8 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 | `--state-dir PATH` | The agent's private state: identity, settings and recovery copies. Defaults: `/var/lib/vectory-agent` on Linux, `/Library/Application Support/Vectory/agent` on macOS, `C:\ProgramData\Vectory\agent` on Windows. Must be absolute. |
 | `--json` | Print machine-readable JSON instead of text. |
 
+When the state directory isn't the default, every command the agent prints for you to run, in `status`, `doctor`, `pause` and the fix of a refused version, includes `--state-dir` with your directory. Copy it as printed.
+
 ## Commands at a glance
 
 | Command | What it does | Agent must be stopped |

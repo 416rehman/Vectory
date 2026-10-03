@@ -249,9 +249,11 @@ func prepareFailure(code, message, hint string) *VectorFailure {
 
 // binaryUnavailable is what every check and every start says when the Vector
 // binary on disk is not the one the agent approved. Vector never ran, so the
-// finding names the binary and the way out, not the pipeline.
-func binaryUnavailable() *VectorFailure {
-	return prepareFailure("VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", "Run vectory doctor on the host. Restore the binary, or stop the agent and approve a new one with vectory re-adopt.")
+// finding names the binary and the way out, not the pipeline. The fix is a
+// command, which names the state directory of the agent at dir when it isn't
+// the default.
+func binaryUnavailable(dir string) *VectorFailure {
+	return prepareFailure("VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", "Restore the binary, or stop the agent and approve a new one with "+CommandFor(dir, "vectory re-adopt --expected-sha256 SHA256")+".")
 }
 
 func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (candidateRun, error) {
@@ -272,7 +274,7 @@ func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (
 		if !mode.dryRun {
 			d.Log.note("Vector was not run", []byte(e.Error()))
 		}
-		return run, binaryUnavailable()
+		return run, binaryUnavailable(d.Dir)
 	}
 	if e := SafePath(path); e != nil {
 		return unready(e, "CHECK_UNAVAILABLE", "The agent couldn't prepare this check.", "Run it again. If it keeps failing, run vectory doctor on the host.")
@@ -419,7 +421,7 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 		return errors.New("Vector instance has not been explicitly adopted")
 	}
 	if e := d.checkBinary(); e != nil {
-		return binaryUnavailable()
+		return binaryUnavailable(d.Dir)
 	}
 	if d.Log == nil {
 		d.Log = newVectorLog(d.Dir)

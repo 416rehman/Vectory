@@ -202,7 +202,7 @@ func TestChangedVectorBinaryFailsAnApplyWithoutRunningIt(t *testing.T) {
 	if driver.activations != 0 {
 		t.Fatal("a version was activated")
 	}
-	if next := applyNextAction(d.e.State); !strings.Contains(next, "vectory re-adopt") || strings.Contains(next, "vectory logs") {
+	if next := applyNextAction("", d.e.State); !strings.Contains(next, "vectory re-adopt") || strings.Contains(next, "vectory logs") {
 		t.Fatalf("the next step is for a pipeline problem: %q", next)
 	}
 	if line := problemText(issue); !strings.Contains(line, "VECTOR_BINARY_UNAVAILABLE") || !strings.Contains(line, "re-adopt") {
