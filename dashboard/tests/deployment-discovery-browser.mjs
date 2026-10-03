@@ -670,6 +670,7 @@ async function lost({
   app = false,
   mode = "lost",
   scheduled = false,
+  both = true,
   ...options
 } = {}) {
   await load({ kind, app, ...options });
@@ -677,7 +678,7 @@ async function lost({
     await page
       .getByRole("button", { name: "Choose devices", exact: true })
       .click();
-  await preview({ scheduled });
+  await preview({ scheduled, both });
   state.createMode = mode;
   state.lookupMode = "failed";
   await send(
@@ -793,6 +794,21 @@ async function remountApp() {
 }
 
 try {
+  await check(
+    "The confirmation of a lost reply counts two devices in the plural",
+    async () => {
+      await lost({ app: true, kind: "version" });
+      await expect(recovery()).toContainText("2 devices · Priority");
+    },
+  );
+  await check(
+    "The confirmation of a lost reply counts one device in the singular",
+    async () => {
+      await lost({ app: true, kind: "version", both: false });
+      await expect(recovery()).toContainText("1 device · Priority");
+      await expect(recovery()).not.toContainText("1 devices");
+    },
+  );
   await check(
     "Closing the original tab preserves the frozen request and exact recovered result",
     async () => {
