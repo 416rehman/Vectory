@@ -42,7 +42,6 @@ When the state directory isn't the default, every command the agent prints for y
 | [`re-adopt`](#re-adopt) | Approve a Vector binary you replaced on purpose. | Yes |
 | [`recover-enrollment`](#recover-enrollment) | Replace a lost identity with an administrator's recovery token. | Yes |
 | [`update`](#update) | Show a host's update choices and what it is doing, apply a staged build, pause or resume updates. | No |
-| [`release`](#release) | Make a release key, sign an agent build and check a release the way a host does. | No (it needs no agent on the machine) |
 | [`service-install`, `service-start`, `service-stop`, `service-uninstall`](#service-commands) | Manage the agent's operating-system service. | Varies |
 | [`unenroll`](#unenroll) | Delete this host's credentials. | Yes |
 | [`uninstall`](#uninstall) | Delete the agent's state with `--purge`. | Yes |
@@ -368,26 +367,6 @@ sudo vectory update resume
 `apply` checks one thing first. The agent writes a small health file after each check-in. `apply` reads it, and stops when it says the dashboard withdrew the offer, or when the agent last checked in more than five minutes ago. `--force` applies anyway, after it asks you to confirm on a terminal. The file is written by the agent's own account, so the check is advice: it can warn you that an offer is gone, and it can't prove an offer is still good. What authorizes an install is the signed release, the pinned key and the host's own choices, which the update step verifies itself.
 
 A host's level, releases, windows and pinned keys change only when someone runs `setup` again on it: the **Upgrade agent** command carries them. Nothing the server sends changes them.
-
-## release
-
-The team's side of agent updates: make a release key, sign an agent build and check a signature. These commands read and write files only. They need no network, no running agent and no administrator rights, and they use the check a host uses. Run them on the machine that holds the private key.
-
-```sh
-vectory release keygen --out team.key --name team
-vectory release sign --key team.key --checksums SHA256SUMS release.json
-vectory release rollover --key team.key --to team-next.pub
-vectory release verify --key team.pub release.json
-```
-
-| Verb | What it does |
-| --- | --- |
-| `keygen --out FILE [--name NAME]` | Makes a release key. The private half goes in `FILE`, which `keygen` creates closed to other accounts and never replaces. The public key line and the key's fingerprint are printed: give the line to the server and save it in a file such as `team.pub`. `--name` is shown in the key line (1 to 64 printable characters, default `release`). |
-| `sign --key FILE --checksums FILE [--yes] [--out FILE] release.json` | Signs the exact bytes of `release.json`, the file the server prepared. It signs only when every build's file name and SHA-256 in `release.json` appear unchanged in `SHA256SUMS`, a list you got without the server. It shows the version, counter, expiry and each platform, and asks before it signs; without a terminal it needs `--yes`. The signature is written to `release.json.sig` beside the file, or to `--out`. |
-| `rollover --key FILE --to FILE [--out FILE]` | Writes a statement, signed by the key being replaced, that names its successor. `--key` is the old private key and `--to` a file holding the new public key line. The statement is written to `rollover.json`, or to `--out`, which must not exist. Upload it in **Settings → Agent updates**. |
-| `verify --key FILE [--signatures FILE] release.json` | Checks `release.json` and its signatures against the public key in `FILE`, the way a host does: the signature, the format and the expiry. It has no counter floors or running version of its own, so it doesn't check them, nor the platform, the track or the service definition. It exits `1`, with the code a host would report, when it refuses. |
-
-Keep the private key off the server. Whoever holds it can sign builds that every host pinning its fingerprint installs as root. See [Sign a release you keep offline](agent-updates.md#sign-a-release-you-keep-offline).
 
 ## Service commands
 
