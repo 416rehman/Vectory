@@ -2126,6 +2126,69 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
     assert_eq!(disable_audits, 2);
 }
 
+// What an enrollment says about the host and the request names or identifies
+// something, so it refuses every character that can't be shown safely, in one
+// line, and leaves the token unused. A real release candidate, with build
+// metadata, enrolls.
+#[tokio::test]
+async fn enrollment_refuses_what_cannot_be_shown_in_the_members_that_identify_a_device() {
+    let (_temp, s) = state().await;
+    let app = api::router(s.clone());
+    let (cookie, csrf) = admin(&s).await;
+    let (_, token, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/tokens",
+        json!({"name":"Test enrollment","expires_hours":1,"max_uses":1}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    let device_api = device::router(s.clone());
+    let key = rcgen::KeyPair::generate().unwrap();
+    let csr = rcgen::CertificateParams::default()
+        .serialize_request(&key)
+        .unwrap()
+        .pem()
+        .unwrap();
+    let request = json!({"protocol_version":1,"request_id":"hostile-members","token":token["token"],"name":"edge-02","csr_pem":csr,"os":"linux","arch":"amd64","agent_version":"0.58.1-rc.1+build.5","vector_version":"0.58.0"});
+    let hostile = [0x1b, 0x0a, 0x2028, 0x202e, 0x2066, 0xfeff].map(|c| char::from_u32(c).unwrap());
+    for member in [
+        "os",
+        "arch",
+        "agent_version",
+        "vector_version",
+        "request_id",
+    ] {
+        for c in hostile {
+            let mut bad = request.clone();
+            bad[member] = json!(format!("x{c}y"));
+            let (status, body, _) =
+                call(device_api.clone(), "POST", "/agent/v1/enroll", bad, "", "").await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{member} with U+{:04X}: {body}",
+                c as u32
+            );
+        }
+    }
+    let devices: i64 = sqlx::query_scalar("SELECT count(*) FROM devices")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(devices, 0, "a refused enrollment leaves no device");
+    let (status, enrolled, _) = call(device_api, "POST", "/agent/v1/enroll", request, "", "").await;
+    assert_eq!(status, StatusCode::OK, "{enrolled}");
+    let version: String =
+        sqlx::query_scalar("SELECT json_extract(data,'$.agent_version') FROM devices WHERE id=?")
+            .bind(enrolled["device_id"].as_str().unwrap())
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(version, "0.58.1-rc.1+build.5");
+}
+
 #[tokio::test]
 async fn authorized_recovery_retires_old_identity_without_inheriting_assignments() {
     let (_temp, s) = state().await;

@@ -9015,11 +9015,17 @@
         },
         "component_id": {
           "type": "string",
-          "maxLength": 100
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?![A-Za-z]:)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff/\\\\]+$",
+          "description": "A component ID, or the name of a route output, as a device reports it: 1 to 128 UTF-8 bytes (maxLength counts characters; the server counts bytes) with no / or \\, no control character, no drive letter and colon at the start, and no line or paragraph separator, text-direction control or byte order mark. Any other letter, digit, space or punctuation Vector accepts is allowed."
         },
         "route_output": {
           "type": "string",
-          "maxLength": 100
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?![A-Za-z]:)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff/\\\\]+$",
+          "description": "A component ID, or the name of a route output, as a device reports it: 1 to 128 UTF-8 bytes (maxLength counts characters; the server counts bytes) with no / or \\, no control character, no drive letter and colon at the start, and no line or paragraph separator, text-direction control or byte order mark. Any other letter, digit, space or punctuation Vector accepts is allowed."
         },
         "field": {
           "type": "string",
@@ -9385,7 +9391,8 @@
         "request_id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "token": {
           "type": "string",
@@ -9403,16 +9410,28 @@
           "maxLength": 16384
         },
         "os": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "arch": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "agent_version": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "vector_version": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "service_manager": {
           "enum": [
@@ -9482,7 +9501,10 @@
           "const": 1
         },
         "request_id": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "nonce": {
           "type": "string",
@@ -9490,13 +9512,22 @@
           "description": "Exactly 32 unpredictable decoded bytes"
         },
         "boot_id": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "agent_version": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "vector_version": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "reported_generation": {
           "type": "integer",
@@ -9644,7 +9675,9 @@
         },
         "state_dir": {
           "type": "string",
+          "minLength": 1,
           "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$",
           "description": "The agent state directory, an absolute local path (POSIX, or a Windows drive path) and not a secret. Sent only to servers that list the state_dir feature."
         },
         "agent_features": {
@@ -9871,7 +9904,8 @@
         "data_dir": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 4096
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+$"
         },
         "data_dir_source": {
           "enum": [
@@ -9924,7 +9958,10 @@
         },
         "component_id": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_.-]{1,100}$"
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?![A-Za-z]:)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff/\\\\]+$",
+          "description": "A component ID, or the name of a route output, as a device reports it: 1 to 128 UTF-8 bytes (maxLength counts characters; the server counts bytes) with no / or \\, no control character, no drive letter and colon at the start, and no line or paragraph separator, text-direction control or byte order mark. Any other letter, digit, space or punctuation Vector accepts is allowed."
         },
         "component_kind": {
           "enum": [

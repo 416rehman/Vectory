@@ -40,6 +40,12 @@ type Engine struct {
 	supervisor     *workloadSupervisor
 	// validation is what the engine keeps about checks on request.
 	validation validationState
+	// Notice receives what the agent says about a check-in while it runs: the
+	// run loop's report. Nil where nothing reads it.
+	Notice func(string)
+	// saidLeftOut holds the kinds of report the log has already said a refused
+	// check-in went through without (sayLeftOut): each is said once in a run.
+	saidLeftOut map[string]bool
 }
 
 func (e *Engine) now() time.Time {
@@ -335,32 +341,56 @@ func (e *Engine) poll(ctx context.Context) error {
 }
 
 // exchange sends the heartbeat and returns the server's answer with the nonce
-// of the request it answers. What a server that lists "validation" asks for is
-// advisory, so it can never take the device offline: a server that refuses a
-// heartbeat as invalid (400) while it carries a result is never sent that
-// result again, and one that refuses the announcements themselves gets none for
-// the rest of this process. Each retry has its own nonce and request id.
+// of the request it answers. What a heartbeat carries beyond the identity and
+// the state of the apply is a report, and no report may take the device off the
+// control plane: a server that refuses the heartbeat as invalid (400) is sent it
+// again with fewer of them, each retry with its own nonce and request id. In
+// this order, each step only when the heartbeat still carries something of it:
+//
+//   - the result of a check on request, which is then never sent again;
+//   - the reports of what Vector logged and found (the log summary and the
+//     diagnostics), the likeliest to hold something a server refuses: they echo
+//     what a pipeline and its events say;
+//   - the other reports (host runtime, state directory, secret names, metrics);
+//   - the announcements of what this agent can check, which a server that
+//     refuses them doesn't get for the rest of this process.
+//
+// A report the server keeps refusing then costs one more request on each
+// check-in for each step it takes to leave it out: one for the log reports, two
+// for the others. Announcements the server refuses are not sent again in this
+// process. The first time a report is left out of a check-in that goes through,
+// the log says so (Notice). The agent can't tell which of the reports left out
+// in one step the server refused, so it names all it left out, not the culprit.
+// A refusal that leaving all of them out doesn't end is a failed check-in.
 func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, error) {
 	announcementsDropped := false
+	// What the check-in that goes through lacks: said once it has.
+	var left []string
 	for {
 		b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", h)
 		if err == nil {
 			if announcementsDropped {
 				e.validation.optionalRefused = true
 			}
+			e.sayLeftOut(left)
 			return b, h.Nonce, nil
 		}
 		if ce, ok := AsConnectionError(err); !ok || ce.Status != http.StatusBadRequest {
 			return nil, h.Nonce, err
 		}
-		switch {
-		case h.ValidationResult != nil:
+		if h.ValidationResult != nil {
 			e.dropValidationResult()
 			h.ValidationResult = nil
-		case h.AgentFeatures != nil || h.Readiness != nil:
+			left = append(left, reportCheckResult)
+		} else if kinds := h.withoutLogReports(); len(kinds) > 0 {
+			left = append(left, kinds...)
+		} else if kinds := h.withoutOtherReports(); len(kinds) > 0 {
+			left = append(left, kinds...)
+		} else if h.AgentFeatures != nil || h.Readiness != nil {
 			h.AgentFeatures, h.Readiness = nil, nil
 			announcementsDropped = true
-		default:
+			left = append(left, reportAnnouncements)
+		} else {
 			return nil, h.Nonce, err
 		}
 		var raw [32]byte
@@ -368,6 +398,92 @@ func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, err
 			return nil, h.Nonce, err
 		}
 		h.Nonce, h.RequestID = base64.StdEncoding.EncodeToString(raw[:]), RandomID()
+	}
+}
+
+// The kinds of report exchange leaves out of a check-in the server refused, as
+// the log names them.
+const (
+	reportCheckResult   = "Check on devices result"
+	reportAnnouncements = "Check on devices announcement"
+	reportLogSummary    = "Vector log summary"
+	reportDiagnostics   = "diagnostics"
+	reportHostRuntime   = "host runtime settings"
+	reportStateDir      = "state directory"
+	reportSecretNames   = "secret names"
+	reportMetrics       = "metrics"
+)
+
+// withoutLogReports removes the log summary and the diagnostics of an apply
+// error (the heartbeat's and its attempt's) and names what it removed. The
+// issues are copies (cloneIssue), so removing their diagnostics changes nothing
+// the agent keeps.
+func (h *Heartbeat) withoutLogReports() []string {
+	var kinds []string
+	if h.VectorLogSummary != nil {
+		h.VectorLogSummary = nil
+		kinds = append(kinds, reportLogSummary)
+	}
+	bare := func(issue *Issue) *Issue {
+		if issue == nil || len(issue.Diagnostics) == 0 {
+			return issue
+		}
+		copy := *issue
+		copy.Diagnostics = nil
+		return &copy
+	}
+	hadDiagnostics := h.Error != nil && len(h.Error.Diagnostics) > 0
+	h.Error = bare(h.Error)
+	if h.ConfigurationAttempt != nil && h.ConfigurationAttempt.Error != nil && len(h.ConfigurationAttempt.Error.Diagnostics) > 0 {
+		hadDiagnostics = true
+		attempt := *h.ConfigurationAttempt
+		attempt.Error = bare(attempt.Error)
+		h.ConfigurationAttempt = &attempt
+	}
+	if hadDiagnostics {
+		kinds = append(kinds, reportDiagnostics)
+	}
+	return kinds
+}
+
+// withoutOtherReports removes the reports about the host and the agent that are
+// not about Vector's output, and names what it removed.
+func (h *Heartbeat) withoutOtherReports() []string {
+	var kinds []string
+	if h.HostRuntime != nil {
+		h.HostRuntime = nil
+		kinds = append(kinds, reportHostRuntime)
+	}
+	if h.StateDir != "" {
+		h.StateDir = ""
+		kinds = append(kinds, reportStateDir)
+	}
+	if h.SecretNames != nil {
+		h.SecretNames = nil
+		kinds = append(kinds, reportSecretNames)
+	}
+	if h.Telemetry != nil {
+		h.Telemetry = nil
+		kinds = append(kinds, reportMetrics)
+	}
+	return kinds
+}
+
+// sayLeftOut tells the operator, once for each kind in a run of the agent, that
+// a check-in the server refused went through without it. The words are fixed:
+// nothing the server or Vector said is in them.
+func (e *Engine) sayLeftOut(kinds []string) {
+	for _, kind := range kinds {
+		if e.saidLeftOut[kind] {
+			continue
+		}
+		if e.saidLeftOut == nil {
+			e.saidLeftOut = map[string]bool{}
+		}
+		e.saidLeftOut[kind] = true
+		if e.Notice != nil {
+			e.Notice("The server refused a check-in; the agent sent it again without the " + kind + ".")
+		}
 	}
 }
 
@@ -1020,6 +1136,7 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		return err
 	}
 	e.State.Agent = build
+	e.Notice = report
 	e.ServiceManager = options.serviceManager
 	if e.ServiceManager == "" {
 		e.ServiceManager = runningServiceManager()
