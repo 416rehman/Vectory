@@ -455,29 +455,25 @@ async fn open_delivery_issues(
 /// device was released: a build that starts and checks in but stops Vector
 /// delivering. An issue that was already open then, or an occurrence of it
 /// already counted, is not the build's.
+///
+/// It reads the open data-plane issues, through the index of an issue's state,
+/// and looks each one's device up among the rollout's verified targets: the
+/// cost follows the problems there are, not the devices that updated.
 pub async fn degraded(conn: &mut SqliteConnection, rollout: &str) -> Result<i64> {
-    let verified: Vec<(String, String)> = sqlx::query_as(
-        "SELECT device_id,baseline_issues FROM agent_update_targets WHERE rollout_id=? AND state='verified'",
+    let open: Vec<(String, String, i64, String)> = sqlx::query_as(
+        "SELECT t.device_id,i.id,COALESCE(json_extract(i.data,'$.count'),0),t.baseline_issues FROM records i JOIN agent_update_targets t ON t.device_id=json_extract(i.data,'$.device_id') WHERE i.kind='issue' AND (CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'resolved' WHEN json_type(i.data,'$.acknowledged')='true' THEN 'acknowledged' ELSE 'open' END) IN ('open','acknowledged') AND COALESCE(json_extract(i.data,'$.code'),'') GLOB 'DATA_PLANE_*' AND t.rollout_id=? AND t.state='verified'",
     )
     .bind(rollout)
     .fetch_all(&mut *conn)
     .await?;
-    let devices: Vec<&str> = verified.iter().map(|(device, _)| device.as_str()).collect();
-    let open = open_delivery_issues(conn, &devices).await?;
-    let mut degraded = 0;
-    for (device, baseline) in &verified {
-        let Some(now_open) = open.get(device) else {
-            continue;
-        };
+    let mut degraded: BTreeSet<&str> = BTreeSet::new();
+    for (device, issue, count, baseline) in &open {
         let baseline: BTreeMap<String, i64> = serde_json::from_str(baseline).unwrap_or_default();
-        if now_open
-            .iter()
-            .any(|(id, count)| baseline.get(id).is_none_or(|before| count > before))
-        {
-            degraded += 1;
+        if baseline.get(issue).is_none_or(|before| count > before) {
+            degraded.insert(device);
         }
     }
-    Ok(degraded)
+    Ok(i64::try_from(degraded.len()).unwrap_or(i64::MAX))
 }
 
 /// Whether the device can be released a build now: nothing in the review
