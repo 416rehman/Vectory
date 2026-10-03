@@ -868,6 +868,23 @@ const INSTALL_SH: &str = r#"#!/bin/sh
 # or --ca-file= (this host's trusted certificates), the download and setup
 # trust the server that way instead of the pin. No option turns off
 # certificate verification.
+#
+# Agent updates are the host's own choice, made here and nowhere else. These
+# four setup options pass through too:
+#
+#   --updates auto|ask|off        auto applies an update the server offers, inside
+#                                 the window if there is one; ask waits for
+#                                 `sudo vectory update apply`; off takes nothing
+#   --update-key-sha256 HEX       the SHA-256 fingerprint of a release key to
+#                                 trust (64 hex digits, up to 4); required with
+#                                 auto or ask. Setup checks it against the keys
+#                                 this server offers and pins only that key
+#   --update-track patch|minor    patch (the default) stays on the running
+#                                 major.minor; minor stays on the running major
+#   --update-window 'DAYS HH:MM-HH:MM [UTC]'
+#                                 when an update may start, in this host's time
+#                                 unless UTC follows (repeatable, such as
+#                                 'Mon-Fri 02:00-04:00'; none means any time)
 set -eu
 
 vectory_install() {

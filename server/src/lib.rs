@@ -150,8 +150,8 @@ pub const DEVICE_LIMIT_KEYS: usize = 40000;
 /// windows: about 45,000 live keys at the cap, so nothing live is evicted.
 pub const SIGN_IN_FAILURE_KEYS: usize = 65536;
 /// Key prefixes of unauthenticated requests outside sign-in: the agent
-/// listener's installer, agent downloads and enrollment, and invitation
-/// previews. Each namespace has a global per-minute cap behind its
+/// listener's installer, agent downloads, the release key bundle and
+/// enrollment, and invitation previews. Each namespace has a global per-minute cap behind its
 /// per-address key, charged only for what the address's own budget lets
 /// through. A flood from very many addresses can fill this partition with
 /// its own keys; it evicts only keys of this partition, so traffic here
