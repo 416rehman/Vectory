@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use vectory_server::{
     agent_release::{self, ReleaseKey, RolloverEnvelope, Track, VerifyInput},
-    db,
+    agent_releases, db,
 };
 
 const RELEASES: &str = "/api/v1/agent-releases";
@@ -1102,6 +1102,52 @@ async fn files_another_release_still_names_stay_when_one_is_withdrawn() {
     )
     .await;
     assert!(stored_files(&f).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_release_names_only_files_the_store_still_holds_at_the_size_it_copied() {
+    let f = fixture().await;
+    enable_server(&f).await;
+    mirror(&f, &builds("0.1.1"));
+    let release = prepare(&f, "0.1.1").await;
+    let files: Vec<(String, u64)> = release["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|artifact| {
+            (
+                artifact["sha256"].as_str().unwrap().to_owned(),
+                artifact["size"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(files.len(), 4);
+    assert!(agent_releases::store_holds(&f.state, &files));
+    // Nothing held is a release with no files, and a file that is one byte
+    // short, removed, or a directory where the file should be, is not held.
+    assert!(agent_releases::store_holds(&f.state, &[]));
+    let (digest, size) = files[0].clone();
+    let mut changed = files.clone();
+    changed[0].1 = size + 1;
+    assert!(!agent_releases::store_holds(&f.state, &changed));
+    std::fs::remove_file(stored_path(&f, &digest)).unwrap();
+    assert!(!agent_releases::store_holds(&f.state, &files));
+    std::fs::create_dir(stored_path(&f, &digest)).unwrap();
+    assert!(!agent_releases::store_holds(&f.state, &files));
+    // A release prepared again copies what went missing before it names it.
+    std::fs::remove_dir(stored_path(&f, &digest)).unwrap();
+    let id = release["id"].as_str().unwrap();
+    ok(
+        &f,
+        "POST",
+        &format!("{RELEASES}/{id}/withdraw"),
+        json!({"reason":"Redo"}),
+        &f.admin,
+    )
+    .await;
+    let again = prepare(&f, "0.1.1").await;
+    assert_eq!(again["artifacts"], release["artifacts"]);
+    assert!(agent_releases::store_holds(&f.state, &files));
 }
 
 #[tokio::test]
