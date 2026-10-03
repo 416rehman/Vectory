@@ -983,12 +983,14 @@ try {
             await expect(cancel).toHaveCount(0);
 
             await load({ width, theme, status: "cancelled" });
-            await expect(
-              details().getByRole("button", {
-                name: "Remove assignment",
-                exact: true,
-              }),
-            ).toBeVisible();
+            const remove = details().getByRole("button", {
+              name: "Remove assignment",
+              exact: true,
+            });
+            await expect(remove).toBeVisible();
+            // A short label keeps its one line beside the title; it never
+            // wraps because the heading squeezed it.
+            expect((await remove.boundingBox()).height).toBeLessThan(48);
             await expect(
               details().getByRole("button", { name: /^Roll back/ }),
             ).toHaveCount(0);
