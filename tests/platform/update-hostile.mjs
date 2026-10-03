@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { agentPort, previewDir, webPort } from "./instance.mjs";
 import { outputRoot, root, run, sleep, until, windows } from "./lib.mjs";
 
@@ -76,15 +76,37 @@ const windowsInstance = {
     );
   },
   async start() {
-    run(
-      "pwsh",
-      [
-        "-NoProfile",
-        "-File",
-        path.join(root, "packaging", "Start-LocalPreview.ps1"),
-      ],
-      { cwd: root, timeoutMs: 180000 },
-    );
+    // The script starts the server and returns, and the server it started inherits
+    // whatever the script's standard output is: a pipe that this process reads would
+    // stay open as long as the server runs and the call would never end. A file has
+    // no end to wait for.
+    fs.mkdirSync(outputRoot, { recursive: true });
+    const log = fs.openSync(path.join(outputRoot, "instance-restart.log"), "a");
+    let result;
+    try {
+      result = spawnSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-File",
+          path.join(root, "packaging", "Start-LocalPreview.ps1"),
+        ],
+        {
+          cwd: root,
+          stdio: ["ignore", log, log],
+          timeout: 180000,
+          windowsHide: true,
+        },
+      );
+    } finally {
+      fs.closeSync(log);
+    }
+    if (result.error || result.status !== 0)
+      throw new Error(
+        `Start-LocalPreview.ps1 ${result.error ? result.error.message : `exited ${result.status}`}:\n${fs
+          .readFileSync(path.join(outputRoot, "instance-restart.log"), "utf8")
+          .slice(-2000)}`,
+      );
     // The script returns once the process starts: wait until it answers.
     await until(
       "the server answers",
