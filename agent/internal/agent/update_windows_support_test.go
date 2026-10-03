@@ -146,6 +146,16 @@ func privateAccess() map[string]uint32 {
 	return map[string]uint32{sidSystem: fullControl, sidAdministrators: fullControl}
 }
 
+// requireStepFilePrivate checks that a file the step wrote is its own. What decides
+// who can read a Windows file is its access list: its permission bits say nothing (a
+// file is 0666, or 0444 when it is read-only, whoever can open it). The step's files
+// are SYSTEM's and the Administrators' alone, owned by the Administrators, protected
+// from what the directory gives, with no entry that was inherited.
+func requireStepFilePrivate(t *testing.T, path string) {
+	t.Helper()
+	requireOnlyRootAndThese(t, path, privateAccess())
+}
+
 // holdFile opens path the way a program that reads a file and lets others write it
 // does (a virus scanner, an indexer): without sharing deletion, so that a rename or a
 // removal of the file is refused until the handle is let go. The returned function
