@@ -217,6 +217,18 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
             "Active credentials reference missing manifest signing keys; restore the matching keys/signing-history directory"
         )
     }
+    // A release key the server holds must be able to sign. This runs before the
+    // scheduler, so the prune of sealed seeds can't have removed anything first.
+    let mut conn = pool.acquire().await?;
+    if let Ok(Some(fingerprint)) =
+        agent_release_keys::current_seed_unavailable(&mut conn, &keys, &settings.data_dir).await
+    {
+        let short = &fingerprint[..16];
+        tracing::warn!(
+            "Agent updates are on and this server holds release key {short}, but its sealed private half can't be read or opened, so no release can be signed. Restore the keys directory from a backup that holds both the sealed key and the sealing key."
+        );
+    }
+    drop(conn);
     let audit_exports = audit_exports::Store::initialize(&settings.data_dir)?;
     let wake = wake::Registry::new(settings.wake.clone());
     Ok(Arc::new(App {

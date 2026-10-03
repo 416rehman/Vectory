@@ -139,8 +139,13 @@ async fn rollout(db: &mut SqliteConnection, id: &str) -> Result<Option<Rollout>>
         }),
     )
 }
-/// The name of the person whose action it was.
+/// The name of the person whose action it was. The commands an administrator
+/// runs on the server itself, such as the one that follows a restore, act as
+/// `local-admin`, which is no account.
 async fn actor(db: &mut SqliteConnection, id: &Value) -> Result<String> {
+    if id.as_str() == Some("local-admin") {
+        return Ok("A local administrator".to_owned());
+    }
     let name: Option<String> =
         sqlx::query_scalar("SELECT substr(name,1,120) FROM users WHERE id=?")
             .bind(id.as_str().unwrap_or(""))
@@ -258,7 +263,13 @@ pub async fn context(
             let cancelled = data["cancelled_rollouts"].as_u64().unwrap_or(0);
             let mut message = format!("{who} stopped all agent updates.");
             if !reason.is_empty() {
-                message.push_str(&format!(" Reason: “{reason}”."));
+                // A reason that is a sentence keeps its own full stop.
+                let end = if reason.ends_with(['.', '!', '?']) {
+                    ""
+                } else {
+                    "."
+                };
+                message.push_str(&format!(" Reason: “{reason}”{end}"));
             }
             message.push_str(" No host is offered a build until an administrator ends the stop.");
             if cancelled > 0 {

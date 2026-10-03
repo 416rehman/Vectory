@@ -228,6 +228,8 @@ On the rollout page, an Operator or Administrator can:
 
 It cancels every update rollout, withdraws every offer and refuses new rollouts until an administrator chooses **Clear the stop** in **Settings → Agent updates**. Devices already trying a build finish. A device that already downloaded one may still start within about a minute, because it learns of the stop at its next check-in. Clearing the stop resumes nothing: the rollouts it cancelled stay cancelled.
 
+A server restored from a backup stops all updates too, as a local administrator, until an administrator has reviewed what the backup brought back. See [Restore a backup](administer.md#restore-a-backup).
+
 ## When a host rolls back
 
 The host takes a build back when the new agent doesn't start, doesn't check in within five minutes, isn't healthy or is interrupted twice. It restores the previous build from a copy it kept, and reports the reason. The device shows **Rolled back** with that reason, and the dashboard opens an issue (**AGENT_UPDATE_ROLLED_BACK**) that appears in **Needs you** on the Overview.
