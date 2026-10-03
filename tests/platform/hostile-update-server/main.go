@@ -474,8 +474,9 @@ func (s *server) controlHandler(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, map[string]string{"mode": body.Mode})
 	case r.Method == http.MethodGet && r.URL.Path == "/state":
 		s.mu.Lock()
+		// A list that is empty is [], so a check can compare it with one.
 		state := map[string]any{
-			"scenario": s.scenario, "heartbeats": s.total, "recent": s.beats, "downloads": s.downloads,
+			"scenario": s.scenario, "heartbeats": s.total, "recent": nonNil(s.beats), "downloads": nonNil(s.downloads),
 			"bundle_mode": s.bundleMode, "bundle_requests": s.bundleHits,
 		}
 		if s.scenario != "" {
@@ -495,4 +496,12 @@ func (s *server) controlHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// nonNil makes a list that has nothing in it encode as [] and not as null.
+func nonNil[T any](list []T) []T {
+	if list == nil {
+		return []T{}
+	}
+	return list
 }
