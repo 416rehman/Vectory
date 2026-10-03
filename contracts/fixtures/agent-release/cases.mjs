@@ -144,6 +144,30 @@ export const envelopeFor = (
 export const rollover = (fromName, toName, issuedAt) =>
   envelopeFor(fromName, text(statementText(fromName, toName, issuedAt)));
 
+// The same file written another way: every object's members in the opposite
+// order, and a space on each side of every token that is not inside a string.
+// A signed file keeps its meaning under both, and a reader that accepts one
+// must accept the other.
+const reverseMembers = (value) =>
+  Array.isArray(value)
+    ? value.map(reverseMembers)
+    : value && typeof value === "object"
+      ? Object.fromEntries(
+          Object.entries(value)
+            .reverse()
+            .map(([name, member]) => [name, reverseMembers(member)]),
+        )
+      : value;
+const spaced = (json) => {
+  let inString = false;
+  let out = "";
+  for (const character of json) {
+    if (character === '"') inString = !inString;
+    out += !inString && "{}[]:,".includes(character) ? ` ${character} ` : character;
+  }
+  return out.trim();
+};
+
 // A signature that a verifier without the small-order check accepts for any
 // message: R is the identity point and S is k times the secret scalar, the
 // value that makes the verification equation hold (RFC 8032 section 5.1.7).
@@ -535,6 +559,43 @@ valid(
   );
 }
 
+// The profile of the signed files says what is refused, and these cases say what
+// is not: a file may list its members in any order, may put spaces between any
+// two tokens, and may end in one line feed. Each is signed as written.
+{
+  const value = JSON.parse(BASE_TEXT);
+  const reordered = text(JSON.stringify(reverseMembers(value)));
+  const respaced = text(spaced(BASE_TEXT));
+  const both = text(`${spaced(JSON.stringify(reverseMembers(value)))}\n`);
+  for (const [name, about, manifest] of [
+    [
+      "valid-members-in-another-order",
+      "A manifest lists its members, and each artifact its own, in any order: here the opposite of the order the contract shows.",
+      reordered,
+    ],
+    [
+      "valid-spaces-between-every-token",
+      "A space may stand on each side of every brace, bracket, colon and comma that is not inside a string.",
+      respaced,
+    ],
+    [
+      "valid-another-order-spaces-and-a-final-line-feed",
+      "The three together: opposite order, spaces between every token and one final line feed.",
+      both,
+    ],
+  ])
+    valid(
+      name,
+      about,
+      { manifest, signatures: signedBy(["team"], manifest) },
+      "team",
+      ["team"],
+      TEAM_7,
+    );
+  if (reordered.equals(BASE_BYTES) || respaced.equals(BASE_BYTES))
+    throw new Error("the written-another-way manifests must differ");
+}
+
 // -- rollovers
 
 valid(
@@ -635,6 +696,78 @@ valid(
   ["team-next"],
   { "team-next": 7 },
 );
+{
+  // The floors of a chain. Neither key signs the release (project does), so the
+  // floors the host holds afterwards show what the chain did to them.
+  const throughChain = {
+    pins: ["team", "team-next", "project"],
+    rollovers: [rollover("team", "team-next")],
+    signatures: signedBy(["project"], BASE_BYTES),
+  };
+  valid(
+    "valid-pinned-successor-keeps-the-higher-floor-it-had",
+    "The host pins team and team-next and follows team to team-next. The successor's own floor, 9, is higher than the replaced key's, 3, and stays 9.",
+    { ...throughChain, floors: { team: 3, "team-next": 9 } },
+    "project",
+    ["project", "team-next"],
+    { project: 7, "team-next": 9 },
+  );
+  valid(
+    "valid-pinned-successor-takes-the-higher-floor-of-the-replaced-key",
+    "The replaced key's floor, 9, is higher than the successor's own, 3: the successor holds 9.",
+    { ...throughChain, floors: { team: 9, "team-next": 3 } },
+    "project",
+    ["project", "team-next"],
+    { project: 7, "team-next": 9 },
+  );
+  valid(
+    "valid-successor-that-inherits-no-floor-has-none-after",
+    "Neither team nor its successor has attempted anything: the successor holds no floor, and a floor of 0 is not listed.",
+    { ...throughChain, pins: ["team", "project"] },
+    "project",
+    ["project", "team-next"],
+    { project: 7 },
+  );
+}
+valid(
+  "valid-floor-of-zero-is-not-listed",
+  "A pinned key whose floor is 0, nothing attempted, has no floor after the release; the signer's is the counter.",
+  { pins: ["team", "project"], floors: { project: 0 } },
+  "team",
+  ["project", "team"],
+  TEAM_7,
+);
+{
+  const value = JSON.parse(statementText("team", "team-next"));
+  for (const [name, about, written] of [
+    [
+      "valid-statement-members-in-another-order",
+      "A rollover statement lists its members in any order.",
+      JSON.stringify(reverseMembers(value)),
+    ],
+    [
+      "valid-statement-spaces-between-every-token",
+      "A space may stand between any two tokens of a statement.",
+      spaced(JSON.stringify(value)),
+    ],
+    [
+      "valid-statement-with-a-final-line-feed",
+      "One final line feed may end a statement; the signature covers it, as it covers every delivered byte.",
+      `${JSON.stringify(value)}\n`,
+    ],
+  ])
+    valid(
+      name,
+      about,
+      {
+        rollovers: [envelopeFor("team", text(written))],
+        signatures: signedBy(["team-next"], BASE_BYTES),
+      },
+      "team-next",
+      ["team-next"],
+      { "team-next": 7 },
+    );
+}
 notPinned(
   "refused-rollover-from-an-unpinned-key",
   "The release is signed by the successor in a statement the host cannot accept.",
@@ -660,6 +793,36 @@ notPinned(
   {
     rollovers: [
       envelopeFor("outsider", text(statementText("team", "team-next"))),
+    ],
+    signatures: signedBy(["team-next"], BASE_BYTES),
+  },
+);
+notPinned(
+  "refused-rollover-signed-by-another-pinned-key",
+  "team's statement is signed by project, which the host pins too. The signature verifies under project and not under team, the key the statement says it replaces, so the statement is ignored and the release signed by the successor finds no pinned key.",
+  {
+    pins: ["team", "project"],
+    rollovers: [
+      envelopeFor("project", text(statementText("team", "team-next"))),
+    ],
+    signatures: signedBy(["team-next"], BASE_BYTES),
+  },
+);
+notPinned(
+  "refused-rollover-from-the-second-pin-signed-by-the-first",
+  "project's statement is signed by team, which the host pins too: a statement is judged by the key it names as from, whichever pinned key signed it.",
+  {
+    pins: ["team", "project"],
+    rollovers: [envelopeFor("team", text(statementText("project", "outsider")))],
+    signatures: signedBy(["outsider"], BASE_BYTES),
+  },
+);
+notPinned(
+  "refused-rollover-signed-by-its-own-successor",
+  "The new key vouches for itself: the statement is signed by team-next, not by team, so it is ignored.",
+  {
+    rollovers: [
+      envelopeFor("team-next", text(statementText("team", "team-next"))),
     ],
     signatures: signedBy(["team-next"], BASE_BYTES),
   },
@@ -750,6 +913,34 @@ notPinned(
       envelopeFor(
         "team",
         text(statementJson(KEYS.team.fingerprint, KEYS.team.line)),
+      ),
+    ],
+    signatures: signedBy(["team-next"], BASE_BYTES),
+  },
+);
+notPinned(
+  "refused-rollover-statement-as-an-array",
+  "A statement is one object. The four values in an array are not a statement, though they are in the order of its members.",
+  {
+    rollovers: [
+      envelopeFor(
+        "team",
+        text(
+          JSON.stringify(Object.values(JSON.parse(statementText("team", "team-next")))),
+        ),
+      ),
+    ],
+    signatures: signedBy(["team-next"], BASE_BYTES),
+  },
+);
+notPinned(
+  "refused-rollover-statement-member-name-in-another-case",
+  "Member names are matched exactly: From is not from, so from is missing and From is an unknown member.",
+  {
+    rollovers: [
+      envelopeFor(
+        "team",
+        text(statementText("team", "team-next").replace('"from":', '"From":')),
       ),
     ],
     signatures: signedBy(["team-next"], BASE_BYTES),
@@ -1212,6 +1403,24 @@ badSignature(
       ]),
     ],
     [
+      "entry-as-an-array",
+      "An entry is an object with key and signature, not an array of the two values in that order.",
+      file({
+        schema: "vectory.agent-release-signatures.v1",
+        signatures: [[KEYS.team.fingerprint, base64(goodSignature)]],
+      }),
+    ],
+    [
+      "member-name-in-another-case",
+      "Member names are matched exactly: Schema is not schema, so schema is missing and Schema is an unknown member.",
+      mutated((good) => good.replace('"schema":', '"Schema":')),
+    ],
+    [
+      "entry-member-name-in-another-case",
+      "Member names are matched exactly in an entry too: Key is not key.",
+      mutated((good) => good.replace('"key":', '"Key":')),
+    ],
+    [
       "over-4-kib",
       "At most 4,096 bytes.",
       text(goodFile.slice(0, -1) + " ".repeat(4097 - goodFile.length) + "}"),
@@ -1231,6 +1440,30 @@ badSignature(
     ["team"],
     TEAM_7,
   );
+  const goodValue = JSON.parse(goodFile);
+  for (const [name, about, written] of [
+    [
+      "valid-signature-file-members-in-another-order",
+      "A signature file lists its members, and each entry its own, in any order.",
+      JSON.stringify(reverseMembers(goodValue)),
+    ],
+    [
+      "valid-signature-file-spaces-between-every-token",
+      "A space may stand between any two tokens of a signature file.",
+      spaced(goodFile),
+    ],
+    [
+      "valid-signature-file-with-a-final-line-feed",
+      "One final line feed may end a signature file.",
+      `${goodFile}\n`,
+    ],
+    [
+      "valid-signature-file-another-order-spaces-and-a-final-line-feed",
+      "The three together.",
+      `${spaced(JSON.stringify(reverseMembers(goodValue)))}\n`,
+    ],
+  ])
+    valid(name, about, { signatures: text(written) }, "team", ["team"], TEAM_7);
 }
 
 // -- manifests
@@ -1417,6 +1650,16 @@ badSignature(
       "No boolean.",
       edit('"service_definition":1', '"service_definition":true'),
     ],
+    [
+      "member-name-in-another-case",
+      "Member names are matched exactly: Schema is not schema, so schema is missing and Schema is an unknown member.",
+      edit('"schema":', '"Schema":'),
+    ],
+    [
+      "member-name-in-another-case-in-an-artifact",
+      "Member names are matched exactly in an artifact too: OS is not os.",
+      edit('"os":', '"OS":'),
+    ],
   ];
   for (const [name, about, bytes] of syntax)
     manifestCase(`syntax-${name}`, about, bytes);
@@ -1457,6 +1700,21 @@ badSignature(
       "service-definition-fraction",
       '"service_definition":1',
       '"service_definition":1.0',
+    ],
+    [
+      "service-definition-2-to-the-53",
+      '"service_definition":1',
+      '"service_definition":9007199254740992',
+    ],
+    [
+      "service-definition-20-digits",
+      '"service_definition":1',
+      '"service_definition":99999999999999999999',
+    ],
+    [
+      "service-definition-as-a-string",
+      '"service_definition":1',
+      '"service_definition":"1"',
     ],
   ];
   for (const [name, from, to] of numbers)
@@ -1591,6 +1849,11 @@ badSignature(
       about,
       text(manifestText({ artifacts: list })),
     );
+  artifacts(
+    "artifact-entry-as-an-array",
+    "An artifact is an object. Its six values in an array, in the order of its members, are not an artifact.",
+    [Object.values(BASE.artifacts[0])],
+  );
   artifacts("artifacts-empty", "At least one artifact.", []);
   artifacts("artifacts-two-for-one-platform", "One artifact per platform.", [
     BASE.artifacts[0],
@@ -1711,6 +1974,60 @@ refused("COUNTER_REPLAYED")(
     floors: { team: 7, project: 3 },
   },
 );
+{
+  // Two signers, listed project first. The floor that refuses the release is
+  // the first signer's in one case and the second's in the other, and a host
+  // that looks at only one of them passes one case and fails the other.
+  const twoSigners = {
+    pins: ["team", "project"],
+    signatures: signedBy(["project", "team"], BASE_BYTES),
+  };
+  refused("COUNTER_REPLAYED")(
+    "refused-when-the-first-signer-in-the-file-has-attempted-it",
+    "project signs first and its floor is the counter; team's is below it. Every verifying pinned signer is checked.",
+    { ...twoSigners, floors: { project: 7, team: 3 } },
+  );
+  refused("COUNTER_REPLAYED")(
+    "refused-when-the-second-signer-in-the-file-has-attempted-it",
+    "project signs first and its floor is below the counter; the second signer, team, has attempted it. Checking only the first signer would take this release.",
+    { ...twoSigners, floors: { project: 3, team: 7 } },
+  );
+  valid(
+    "valid-the-floor-of-a-pinned-key-whose-signature-fails-is-not-checked",
+    "project's entry does not verify, so project is not a signer: its floor, 9, does not refuse the release, and it keeps that floor. team signs.",
+    {
+      pins: ["team", "project"],
+      signatures: signatureFile([
+        [KEYS.team.fingerprint, releaseSignature("team", BASE_BYTES)],
+        [KEYS.project.fingerprint, Buffer.alloc(64, 7)],
+      ]),
+      floors: { project: 9 },
+    },
+    "team",
+    ["project", "team"],
+    { project: 9, team: 7 },
+  );
+}
+refused("COUNTER_REPLAYED")(
+  "refused-pinned-successor-keeps-the-floor-it-had",
+  "The host pins team and team-next and follows team to team-next, which signs the release. The successor's own floor, 9, is above the counter although the replaced key's, 3, is not.",
+  {
+    pins: ["team", "team-next"],
+    rollovers: [rollover("team", "team-next")],
+    signatures: signedBy(["team-next"], BASE_BYTES),
+    floors: { team: 3, "team-next": 9 },
+  },
+);
+refused("COUNTER_REPLAYED")(
+  "refused-pinned-successor-takes-the-floor-of-the-replaced-key",
+  "The replaced key's floor, 9, is above the counter and the successor's own, 3, is not: the successor holds 9.",
+  {
+    pins: ["team", "team-next"],
+    rollovers: [rollover("team", "team-next")],
+    signatures: signedBy(["team-next"], BASE_BYTES),
+    floors: { team: 9, "team-next": 3 },
+  },
+);
 refused("ALREADY_RUNNING")(
   "refused-same-version-as-running",
   "The release is the running version.",
@@ -1736,6 +2053,117 @@ refused("DOWNGRADE_REFUSED")(
   "0.1.9 is older than 0.1.10 although it sorts after it as text.",
   { manifest: releaseOf("0.1.9"), running_version: "0.1.10" },
 );
+{
+  // A running version that is not major.minor.patch cannot be compared with the
+  // release's, so the host refuses it as it refuses a downgrade and never
+  // guesses which of the two is newer. Read leniently, most of these are 0.1.0:
+  // older than the release 0.1.1 and on the patch track, so a host that guesses
+  // takes the release.
+  const unreadable = [
+    [
+      "refused-running-version-with-a-pre-release-suffix",
+      "0.1.0-dev, the version of a development build, has a suffix.",
+      "0.1.0-dev",
+    ],
+    [
+      "refused-running-version-with-build-metadata",
+      "0.1.0+5 carries build metadata.",
+      "0.1.0+5",
+    ],
+    [
+      "refused-running-version-with-a-leading-v",
+      "v0.1.0 is a tag, not a version.",
+      "v0.1.0",
+    ],
+    [
+      "refused-running-version-that-is-empty",
+      "An empty string is not a version.",
+      "",
+    ],
+    [
+      "refused-running-version-that-is-a-word",
+      "dev is not a version.",
+      "dev",
+    ],
+    [
+      "refused-running-version-with-two-numbers",
+      "0.1 has two numbers.",
+      "0.1",
+    ],
+    [
+      "refused-running-version-with-four-numbers",
+      "0.1.0.0 has four numbers.",
+      "0.1.0.0",
+    ],
+    [
+      "refused-running-version-with-an-empty-number",
+      "0.1. has no patch number.",
+      "0.1.",
+    ],
+    [
+      "refused-running-version-with-a-leading-zero",
+      "0.01.0 writes the number 1 with a leading zero.",
+      "0.01.0",
+    ],
+    [
+      "refused-running-version-with-a-plus-sign",
+      "0.1.+0 puts a sign on a number, which a function that parses integers takes.",
+      "0.1.+0",
+    ],
+    [
+      "refused-running-version-with-a-minus-sign",
+      "0.1.-0 puts a sign on a number, which a function that parses integers takes.",
+      "0.1.-0",
+    ],
+    [
+      "refused-running-version-with-a-letter-after-a-number",
+      "0.1.0a: a reader that stops at the first character that is not a digit takes 0.1.0.",
+      "0.1.0a",
+    ],
+    [
+      "refused-running-version-with-a-letter-for-a-number",
+      "0.1.x has no patch number.",
+      "0.1.x",
+    ],
+    [
+      "refused-running-version-with-a-leading-space",
+      "A space before 0.1.0 is not trimmed.",
+      " 0.1.0",
+    ],
+    [
+      "refused-running-version-with-a-trailing-space",
+      "A space after 0.1.0 is not trimmed.",
+      "0.1.0 ",
+    ],
+    [
+      "refused-running-version-with-a-trailing-line-feed",
+      "A line feed after 0.1.0 is not trimmed.",
+      "0.1.0\n",
+    ],
+    [
+      "refused-running-version-with-digits-that-are-not-ascii",
+      "The numbers are written with the full-width digits 0, 1 and 0.",
+      [0, 1, 0].map((digit) => String.fromCharCode(0xff10 + digit)).join("."),
+    ],
+  ];
+  for (const [name, about, running] of unreadable)
+    refused("DOWNGRADE_REFUSED")(
+      name,
+      `${about} It cannot be compared with the release's, so it is refused as a downgrade.`,
+      { running_version: running },
+    );
+  // Ten digits is one too many. The release is newer than 0.0.1000000000 on the
+  // minor track and has no minimum, so a host that reads the number takes it.
+  refused("DOWNGRADE_REFUSED")(
+    "refused-running-version-with-a-ten-digit-number",
+    "A version number has at most nine digits, so 0.0.1000000000 cannot be compared with the release's and is refused as a downgrade.",
+    {
+      manifest: releaseOf("0.1.1"),
+      running_version: "0.0.1000000000",
+      track: "minor",
+    },
+  );
+}
 refused("VERSION_NOT_ON_TRACK")(
   "refused-patch-track-newer-minor",
   "The patch track keeps the running major and minor.",
@@ -1784,6 +2212,19 @@ valid(
   "team",
   ["team"],
   TEAM_7,
+);
+valid(
+  "valid-a-host-with-a-newer-service-definition",
+  "The host's definition, 2, is ahead of the 1 the release needs: a release is refused only when its definition is newer than the host's.",
+  { service_definition: 2 },
+  "team",
+  ["team"],
+  TEAM_7,
+);
+refused("SERVICE_DEFINITION_OUTDATED")(
+  "refused-service-definition-at-the-largest-safe-integer",
+  "2^53-1 is the largest service definition a manifest may need: the manifest is valid, and the host's 1 is older.",
+  { manifest: text(manifestText({ service_definition: MAX_SAFE })) },
 );
 
 // -- the order the rules apply in: each case breaks two rules, and the first
@@ -1859,6 +2300,49 @@ refused("AGENT_TOO_OLD")(
   {
     manifest: releaseOf("0.3.0", { min_from: "0.2.0", service_definition: 2 }),
     track: "minor",
+  },
+);
+
+// An unreadable running version is judged where the versions are compared, no
+// earlier and no later.
+refused("SIGNATURE_INVALID")(
+  "order-signature-before-an-unreadable-running-version",
+  "A signature that does not cover the manifest and an unreadable running version: the signature is judged first.",
+  {
+    signatures: signedBy(["team"], brokenManifest),
+    running_version: "0.1.0-dev",
+  },
+);
+refused("PLATFORM_NOT_IN_RELEASE")(
+  "order-platform-before-an-unreadable-running-version",
+  "A release without this platform and an unreadable running version: the platform is judged first.",
+  { arch: "arm64", running_version: "0.1.0-dev" },
+);
+refused("COUNTER_REPLAYED")(
+  "order-counter-before-an-unreadable-running-version",
+  "A replayed counter and an unreadable running version: the counter is judged first.",
+  { floors: { team: 9 }, running_version: "dev" },
+);
+refused("DOWNGRADE_REFUSED")(
+  "order-an-unreadable-running-version-before-the-track",
+  "Off the patch track and an unreadable running version: the version is judged first.",
+  { manifest: releaseOf("0.2.0"), running_version: "0.1.0-dev" },
+);
+refused("DOWNGRADE_REFUSED")(
+  "order-an-unreadable-running-version-before-the-minimum",
+  "Below the minimum and an unreadable running version: the version is judged first, and the running version is not guessed to be 0.0.0.",
+  {
+    manifest: releaseOf("0.3.0", { min_from: "0.2.0" }),
+    track: "minor",
+    running_version: "dev",
+  },
+);
+refused("DOWNGRADE_REFUSED")(
+  "order-an-unreadable-running-version-before-the-service-definition",
+  "An outdated service definition and an unreadable running version: the version is judged first.",
+  {
+    manifest: releaseOf("0.1.1", { service_definition: 2 }),
+    running_version: "0.1.0-dev",
   },
 );
 

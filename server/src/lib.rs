@@ -1,5 +1,6 @@
 pub mod access_requests;
 pub mod accounts;
+pub mod agent_release;
 pub mod api;
 pub mod assignment_removal;
 pub mod audit;
