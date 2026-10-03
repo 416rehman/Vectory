@@ -48,6 +48,7 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - **Applied without saving counts every deployment.** The card kept one deployment for each set of values and hid the rest, so three devices that ran the same values through two deployments read "Applied to 1 device". Each deployment now appears under its values, with its own count and link, and one **Save as settings…**.
 - **Refusals the agent decides read as their own cause.** An `api` block (restricted mode only) and a component ID that names a path (both modes) now say so, with the next step, on the device page, in the deployment's failure reasons and in the issue, instead of "restricted mode doesn't allow it". **Fix in pipeline** leads for an `api` block, as it does for a port in use.
 - **One row per device's last state in the audit log.** A run of one device's results reads **edge-nyc-02 · rolled back**, with its steps behind the row, instead of a count of every step.
+- **Audit details name the device.** The **Device** row of an event about a device shows the name the device has now, and its ID only when the server has no name for it.
 - **A tab strip that scrolls says so.** Where tabs don't fit (Activity on a phone cut **Audit log** off), the strip fades at the end that hides tabs and shows a chevron.
 - **The generation picker says what it holds.** When a device was offered more generations than the 50 the picker lists, it reads **Showing the newest 50 of 212**.
 

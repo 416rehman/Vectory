@@ -1077,7 +1077,7 @@ function AuditInspector({
                       <ResourceLink
                         kind="device"
                         id={data.device_id}
-                        name={data.device_id}
+                        name={data.device_name || data.device_id}
                         navigate={navigate}
                       />
                     </dd>

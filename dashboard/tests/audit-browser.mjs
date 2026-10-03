@@ -105,6 +105,9 @@ const event = (number) => ({
   target_kind: number % 2 ? "configuration" : "issue",
   target_name: `Synthetic ${number < 25 ? "Alpha" : "Beta"} ${number}`,
   device_id: id(number % 2 ? 800 : 801),
+  // The server names a device by its current name; a device that no longer
+  // exists has none.
+  device_name: number % 2 ? "Synthetic edge 800" : null,
   outcome: number % 7 ? "success" : "denied",
   created_at: "2026-09-26T12:00:00Z",
   request_id: `synthetic-request-${number}`,
@@ -878,6 +881,37 @@ try {
         expect(
           f.state.calls.filter((c) => c.method !== "GET").map((c) => c.path),
         ).toEqual(["/login"]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "the detail names the device an event is about, and falls back to its ID when the server gives no name",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.render();
+        // Event 3 is about a device the server names; event 2 about one it does not.
+        await f.page
+          .getByRole("link", { name: "Pipeline published", exact: true })
+          .first()
+          .click();
+        const dialog = f.page.getByRole("dialog", { name: "Event details" });
+        const named = dialog.getByRole("link", {
+          name: "Synthetic edge 800",
+          exact: true,
+        });
+        await expect(named).toHaveAttribute("href", `#/devices/${id(800)}`);
+        await expect(dialog).not.toContainText(id(800));
+        await f.page.keyboard.press("Escape");
+        await f.page
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
+          .first()
+          .click();
+        await expect(
+          dialog.getByRole("link", { name: id(801), exact: true }),
+        ).toHaveAttribute("href", `#/devices/${id(801)}`);
       } finally {
         await f.close();
       }
