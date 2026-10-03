@@ -10,8 +10,8 @@ import (
 )
 
 // Every way an offer can be wrong is refused before one byte of a build is
-// downloaded, with the code of the contract, and leaves nothing staged. The host
-// tells the server which release it refused and why.
+// downloaded, with the code of the contract, and a build is never staged for it. The
+// host tells the server which release it refused and why.
 
 func otherPlatform() ReleaseArtifact {
 	build := []byte("a build for another platform")
@@ -22,21 +22,9 @@ func otherPlatform() ReleaseArtifact {
 	return artifact
 }
 
+// Every refusal but one stages nothing at all. The one is a fork of a pinned key, which
+// is handed to the update step as evidence with no build: see update_offer_fork_test.go.
 func TestEveryRefusalHappensBeforeAnyDownloadAndStagesNothing(t *testing.T) {
-	forkTo := func(t *testing.T, rig *offerRig) []RolloverEnvelope {
-		t.Helper()
-		var envelopes []RolloverEnvelope
-		issued := time.Now().UTC().Truncate(time.Second)
-		for _, seed := range []byte{3, 4} {
-			private := testPrivateKey(t, seed)
-			envelope, err := SignRollover(rig.private, testPublicKey(t, private, "successor"), issued)
-			if err != nil {
-				t.Fatal(err)
-			}
-			envelopes = append(envelopes, envelope)
-		}
-		return envelopes
-	}
 	attempted := func(rig *offerRig) map[string]uint64 { return map[string]uint64{rig.public.Fingerprint(): 7} }
 	for _, tc := range []struct {
 		name  string
@@ -102,9 +90,6 @@ func TestEveryRefusalHappensBeforeAnyDownloadAndStagesNothing(t *testing.T) {
 			}
 			r.offer(r.manifest, r.signatures, envelopes)
 		}, "MANIFEST_INVALID", false},
-		{"two statements from the pinned key name different successors", func(t *testing.T, r *offerRig) {
-			r.offer(r.manifest, r.signatures, forkTo(t, r))
-		}, "KEY_ROLLOVER_CONFLICT", false},
 		{"the release has no build for this platform", func(t *testing.T, r *offerRig) {
 			r.release(func(m *ReleaseManifest) { m.Artifacts = []ReleaseArtifact{otherPlatform()} })
 			// The server still names a build; it can't be this platform's.

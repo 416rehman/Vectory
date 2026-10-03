@@ -970,7 +970,7 @@ async function update(evidence) {
   const rollout = await startRollout(evidence, s, release, device.deviceId);
 
   await evidence.softStep(
-    "While it tries the new build, the step runs under its sandbox: six capabilities, no new ones, a system call filter, a read-only system",
+    "While it tries the new build, the step runs under its sandbox: four capabilities, no new ones, a system call filter, a read-only system",
     async () => {
       await host.waitForStage("trial", { timeoutMs: minutes(6) });
       const pid = Number(host.stepService().MainPID);
@@ -1702,6 +1702,8 @@ async function offerAndExpectRefusal(listener, name, expected = null) {
   return listener.state();
 }
 
+// Offers that leave nothing behind but a refusal. A fork is not one of them: it freezes
+// the host until it is pinned again, so it goes last, with its own steps.
 const HOSTILE = [
   "wrong_key",
   "flipped_byte",
@@ -1713,9 +1715,11 @@ const HOSTILE = [
   "artifact_disagrees",
   "old_statement",
   "unpinned_rollover",
-  // A fork freezes the host until it is pinned again, so it goes last.
-  "fork",
 ];
+const FORK = "fork";
+// A good release signed by one of the fork's two successors, with one of its two
+// statements: refused only because the host remembers the fork.
+const AFTER_FORK = "after_fork";
 
 async function hostile(evidence) {
   const host = updateHostFor();
@@ -1745,15 +1749,85 @@ async function hostile(evidence) {
             about: scenarioAbout(name),
           });
         });
+      // A fork. The agent verifies every offer itself, so it refuses this one at once and
+      // downloads nothing. What makes the host remember is the update step: the agent hands
+      // it the offer's files and a request, with no build, and the step verifies them
+      // again, writes the fork into root's files and answers the request.
+      await evidence.softStep(
+        "A fork is refused with nothing downloaded, and the agent hands the update step the evidence and no build",
+        async () => {
+          const before = snapshot(host);
+          const state = await offerAndExpectRefusal(listener, FORK);
+          assertEqual(state.downloads, [], "the downloads the agent asked for");
+          // What the agent staged for the update step comes and goes: the step answers the
+          // request within 30 seconds and the agent clears it at its next check-in. It is
+          // the one thing this doesn't hold to what it was.
+          requireUnchanged(before, snapshot(host), `The offer ${FORK}`, [
+            "incoming",
+          ]);
+          evidence.observe(FORK, {
+            code: state.expected_code,
+            about: scenarioAbout(FORK),
+          });
+        },
+      );
       await evidence.softStep(
         "After a fork the host says so, and takes nothing more until it is pinned again",
-        () => {
-          const status = host.status();
-          assert(
-            status?.rollover_conflict,
-            `status.json shows no fork: ${JSON.stringify(status)}`,
+        async () => {
+          const incoming = path.join(host.paths.updatesDir, "incoming");
+          const request = path.join(host.paths.updatesDir, "request.json");
+          const status = await until(
+            "the update step records the fork",
+            () => {
+              const current = host.status();
+              return current?.rollover_conflict ? current : null;
+            },
+            {
+              timeoutMs: minutes(3),
+              intervalMs: 3000,
+              describe: () => JSON.stringify(host.status()),
+            },
           );
           evidence.observe("rollover_conflict", status.rollover_conflict);
+          assertEqual(
+            host.counters()?.rollover_conflict,
+            status.rollover_conflict,
+            "the fork in the update step's own counters.json, which outlives status.json",
+          );
+          assertEqual(
+            [status.last?.outcome, status.last?.code],
+            ["refused", "KEY_ROLLOVER_CONFLICT"],
+            "the result the update step gave the request",
+          );
+          await until(
+            "the agent clears what it handed the update step, now that the step has answered",
+            () => host.list(incoming).length === 0 && !host.exists(request),
+            {
+              timeoutMs: minutes(3),
+              intervalMs: 3000,
+              describe: () =>
+                JSON.stringify({
+                  incoming: host.list(incoming),
+                  request: host.exists(request),
+                }),
+            },
+          );
+
+          // A good release, signed by one of the two successors and carrying one of the
+          // two statements, verifies for a host that never saw the fork. This host saw it.
+          const before = snapshot(host);
+          const state = await offerAndExpectRefusal(listener, AFTER_FORK);
+          assertEqual(state.downloads, [], "the downloads the agent asked for");
+          requireUnchanged(before, snapshot(host), `The offer ${AFTER_FORK}`);
+          assertEqual(
+            host.status()?.rollover_conflict,
+            status.rollover_conflict,
+            "the fork the update step still holds",
+          );
+          evidence.observe(AFTER_FORK, {
+            code: state.expected_code,
+            about: scenarioAbout(AFTER_FORK),
+          });
         },
       );
       await evidence.step(

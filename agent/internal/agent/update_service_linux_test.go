@@ -106,7 +106,7 @@ func TestTheStepsServiceIsTheSandboxOfTheDesignAndNothingElse(t *testing.T) {
 		"[Service] RestrictAddressFamilies": "AF_UNIX",
 		"[Service] SystemCallFilter":        "@system-service",
 		"[Service] ReadWritePaths":          `"/usr/local/bin" "` + paths.StepDir + `" "` + paths.PolicyDir + `"`,
-		"[Service] CapabilityBoundingSet":   "CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_KILL",
+		"[Service] CapabilityBoundingSet":   "CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_KILL",
 	}
 	got := unitSettings(service)
 	for name, want := range golden {

@@ -443,7 +443,7 @@ Staged       0.1.1 (14.5 MB) · offered 01:58
 | **Update step** | Whether the update step ran in the last two minutes (it runs every 30 seconds), and when. |
 | **Stopped** | Two successors of a pinned key were seen (a fork), with their short IDs. The host takes no update until it is pinned again with `setup --update-key-sha256`. |
 | **In progress** | A build being applied, tried (with when the trial ends) or taken back. |
-| **Staged** | The build the agent staged for the update step, and when it was offered. |
+| **Staged** | The build the agent staged for the update step, and when it was offered. It says `no build is staged for it` for the minute or so in which the update step reads an offer that has none, which is how the agent hands it the evidence of a fork. |
 | **Last result** | How the last update ended, such as `rolled back from 0.1.1 at 02:19: it didn't check in within 5 minutes; this host won't try 0.1.1 again`. |
 
 With `--json`, `status` prints one document: `state_dir`, `consent`, `paused`, `local_pause`, `track`, `windows`, `window_open`, `next_window_at`, `keys` (each with `fingerprint`, `short_id`, `name` and `pinned_at`), `policy_problem`, `eligibility`, `step`, `staged`, `in_progress`, `last`, `rollover_conflict` and `line`, the text `vectory status` shows. Every member is present, `null` where nothing applies.
@@ -466,7 +466,17 @@ The dashboard shows this device as updated once the server has seen the new buil
 
 When the report says the server no longer offers the build (a paused or cancelled rollout, or **Stop all updates**) or is more than 5 minutes old, `apply` refuses, says what the report said and how old it is, and says to run it again with `--force` if you know the offer stands. Check **Devices → Agent updates** first. That check is advice: the report is a file the agent's account writes. Whatever you confirm, the update step verifies the signed release, the pinned keys and this host's policy again before it installs anything.
 
-`apply` also refuses, with the reason, when updates are off, when the policy can't be used, when updates or `vectory pause` hold the host, when nothing is staged and when the staged build isn't complete. What it prints at the end is what the update step recorded: a build that was taken back says so and exits `1`.
+`apply` also refuses, with the reason, when updates are off, when the policy can't be used, when updates or `vectory pause` hold the host, when nothing is staged and when no build is staged for the offer. What it prints at the end is what the update step recorded: a build that was taken back says so and exits `1`.
+
+`apply` doesn't take over an update that already began. If an earlier `apply` was interrupted after the swap (Ctrl-C, a crash or a power cut), the host is trying or taking back a build, and only the update step settles that, from the last build proven on the host. A second `apply` says so before it asks anything, writes nothing and exits `1`:
+
+```text
+vectory: an update that already began is being settled by the background update step. This command leaves it
+         to that step, which finishes it by itself, usually within a minute or two. See where it stands:
+         sudo vectory update status
+```
+
+**In progress** in `sudo vectory update status` shows what the step is doing. An `apply` that was interrupted while it only prepared the build is ended by the next `apply`.
 
 ### update pause and resume
 

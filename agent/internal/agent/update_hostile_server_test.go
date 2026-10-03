@@ -168,13 +168,15 @@ func TestEveryOfferTheHostileServerCraftsIsRefusedByTheVerificationAHostRunsWith
 		}
 		pins = append(pins, key)
 	}
-	if len(dump.Scenarios) < 14 {
+	if len(dump.Scenarios) < 15 {
 		t.Fatalf("the dump holds %d scenarios", len(dump.Scenarios))
 	}
 
 	seen := map[string]bool{}
+	statements := map[string][]RolloverEnvelope{}
 	for _, scenario := range dump.Scenarios {
 		seen[scenario.Name] = true
+		statements[scenario.Name] = scenario.Offer.Rollovers
 		offer := scenario.Offer
 		manifestBytes, err := DecodeCanonicalBase64(offer.Manifest)
 		if err != nil {
@@ -195,6 +197,15 @@ func TestEveryOfferTheHostileServerCraftsIsRefusedByTheVerificationAHostRunsWith
 			input.Last = &ReleaseResult{Release: dump.Tried, Outcome: "rolled_back"}
 		}
 		verified, err := VerifyRelease(input)
+		if scenario.Name == "after_fork" {
+			// A good release: a host that never saw the fork verifies it and takes it. What
+			// refuses it is the fork the update step recorded, which is the point of the
+			// scenario, and which a platform run shows.
+			if err != nil {
+				t.Errorf("%s: the verification refused it: %v", scenario.Name, err)
+			}
+			continue
+		}
 		switch scenario.Code {
 		case "", "UPDATES_OFF", "MANIFEST_INVALID":
 			// The first two are a good release (the host's consent, not the release,
@@ -218,13 +229,37 @@ func TestEveryOfferTheHostileServerCraftsIsRefusedByTheVerificationAHostRunsWith
 		}
 	}
 	for _, name := range []string{"genuine", "wrong_key", "flipped_byte", "lower_counter", "expired", "issued_ahead", "wrong_platform", "artifact_path_elsewhere", "artifact_disagrees",
-		"old_statement", "unpinned_rollover", "already_tried", "consent_off", "fork"} {
+		"old_statement", "unpinned_rollover", "already_tried", "consent_off", "fork", "after_fork"} {
 		if !seen[name] {
 			t.Errorf("the dump has no %s", name)
 		}
 	}
-	if last := dump.Scenarios[len(dump.Scenarios)-1].Name; last != "fork" {
-		t.Errorf("the last scenario is %s: a fork freezes the host, so nothing may follow it", last)
+	if count := len(dump.Scenarios); dump.Scenarios[count-2].Name != "fork" || dump.Scenarios[count-1].Name != "after_fork" {
+		t.Errorf("the last scenarios are %s and %s: a fork freezes the host, so only what is offered after it may follow it",
+			dump.Scenarios[count-2].Name, dump.Scenarios[count-1].Name)
+	}
+
+	// What is offered after the fork hands the pinned key to one of the two successors the
+	// fork named, with that one statement: for a host that never saw the fork it is an
+	// ordinary rollover, and for one that did it is refused.
+	fork, after := statements["fork"], statements["after_fork"]
+	if len(fork) != 2 || len(after) != 1 {
+		t.Fatalf("the fork carries %d statements and what follows it %d, want 2 and 1", len(fork), len(after))
+	}
+	successors := map[string]bool{}
+	var from string
+	for _, envelope := range fork {
+		statement, err := envelope.Parse()
+		if err != nil {
+			t.Fatal(err)
+		}
+		successors[statement.To.Fingerprint()], from = true, statement.From
+	}
+	if len(successors) != 2 || from != keys.pinned.Fingerprint() {
+		t.Errorf("the fork's successors %v from %s: want two, from the pinned key", successors, from)
+	}
+	if statement, err := after[0].Parse(); err != nil || statement.From != from || !successors[statement.To.Fingerprint()] {
+		t.Errorf("the statement after the fork: %+v, %v: want one from the pinned key to one of the fork's successors", statement, err)
 	}
 
 	// The key bundle that lies names the operator's fingerprint over another key.

@@ -292,6 +292,21 @@ func (v UpdateView) lastWords() (words string, ok bool) {
 // or reports false when there is no result worth a line.
 func (v UpdateView) LastResultWords() (string, bool) { return v.lastWords() }
 
+// StepIsSettlingAnUpdate says the step's status shows an update that has begun to
+// swap, is on trial or is being taken back. The update step's own run settles it; a
+// person at the keyboard can't, because the installed agent is the build under trial.
+// An update that is only being prepared has swapped nothing, and isn't one.
+func (v UpdateView) StepIsSettlingAnUpdate() bool {
+	if v.Status == nil {
+		return false
+	}
+	switch v.Status.Stage {
+	case UpdateStageSwapping, UpdateStageTrial, UpdateStageRollingBack:
+		return true
+	}
+	return false
+}
+
 // busyWords says what the step is doing, or "" while it is idle.
 func (v UpdateView) busyWords() string {
 	s := v.Status
@@ -431,7 +446,7 @@ func (v UpdateView) stagedRow() string {
 	}
 	state := "offered " + humanDayClock(staged.OfferedAt, v.ReadAt)
 	if !staged.Complete {
-		state += " · the build isn't complete"
+		state += " · no build is staged for it"
 	}
 	return what + " · " + state
 }
