@@ -43,7 +43,7 @@ func TestTheAgentServiceCommandIsWhatServiceInstallWrites(t *testing.T) {
 	for _, tc := range []struct{ executable, stateDir string }{
 		{`C:\Program Files\Vectory\vectory.exe`, `C:\ProgramData\Vectory`},
 		{`C:\Vectory\vectory.exe`, `D:\state with "quotes" and spaces`},
-		{`C:\Users\a b\vectory.exe`, `C:\x\`},
+		{`C:\Vectory Agent\vectory.exe`, `C:\x\`},
 	} {
 		executable, stateDir, err := agentServiceCommand(agentRegistration(tc.executable, tc.stateDir).BinaryPathName)
 		if err != nil || executable != tc.executable || stateDir != tc.stateDir {
