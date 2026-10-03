@@ -26,6 +26,20 @@ const device = z
     status: z.string().min(1).max(64),
   })
   .strict();
+// A compatibility blocker (full mode, Vector version) also says which devices
+// it affects and for which resource; the other blockers speak for the whole
+// schedule and carry a code and a reason only.
+const blocker = z
+  .object({
+    code: z.string().min(1).max(64),
+    reason: z.string().min(1).max(1000),
+    resource: z.enum(["configuration", "policy"]).optional(),
+    device_ids: ids.optional(),
+  })
+  .strict()
+  .refine((value) => !value.device_ids || distinct(value.device_ids), {
+    message: "A blocker names each device once.",
+  });
 
 export const ScheduledAssignmentRefreshPreviewSchema = z
   .object({
@@ -39,16 +53,7 @@ export const ScheduledAssignmentRefreshPreviewSchema = z
     saved_devices: z.array(device).max(10000),
     devices: z.array(device).max(10000),
     warnings: z.array(z.string().min(1).max(1000)).max(10000),
-    blockers: z
-      .array(
-        z
-          .object({
-            code: z.string().min(1).max(64),
-            reason: z.string().min(1).max(1000),
-          })
-          .strict(),
-      )
-      .max(10000),
+    blockers: z.array(blocker).max(10000),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -181,6 +186,16 @@ export function assertScheduledAssignmentRefreshStatus(
       "The current status could not be confirmed for this schedule. Check again before making another change.",
     );
   return result.data;
+}
+/**
+ * What the review calls a device: the name it carries now, else the name it
+ * was saved under, and only when neither is known its identity.
+ */
+export function reviewedDeviceName(preview: ScheduledAssignmentRefreshPreview) {
+  const names = new Map<string, string>();
+  for (const row of [...preview.saved_devices, ...preview.devices])
+    if (row.name) names.set(normalized(row.id), row.name);
+  return (id: string) => names.get(normalized(id)) ?? id;
 }
 export type ScheduleSelectionRow = z.infer<typeof device> & {
   change: "added" | "kept" | "removed";

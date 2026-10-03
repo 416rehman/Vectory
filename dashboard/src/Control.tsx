@@ -340,29 +340,41 @@ function settingsName(policy: Policy) {
     .filter(Boolean)
     .join(", ");
 }
+/** A set of agent-settings values that devices run with no saved record. */
+export type UnsavedSetting = {
+  policy: Policy;
+  /** Every deployment that applies these values, newest first. */
+  deployments: DeploymentSummary[];
+};
+/** The devices a deployment still follows: its targets, less those that left. */
+const followedDevices = (d: DeploymentSummary) =>
+  d.target_count - (d.state_counts.removed || 0);
 /**
- * Settings deployments without a saved record that still reach devices,
- * newest first, one per distinct set of values.
+ * Settings deployments without a saved record that still reach devices: one
+ * entry per distinct set of values, newest first. An entry keeps every
+ * deployment that applies its values, so a device that runs them through an
+ * older deployment is not left out of the count.
  */
-export function unsavedSettings(items: DeploymentSummary[]) {
-  const seen = new Set<string>();
-  return items.filter((d) => {
-    if (!d.policy || d.policy_id || d.rolled_back_by) return false;
+export function unsavedSettings(items: DeploymentSummary[]): UnsavedSetting[] {
+  const groups = new Map<string, UnsavedSetting>();
+  for (const d of items) {
+    if (!d.policy || d.policy_id || d.rolled_back_by) continue;
     if (!["active", "paused", "completed", "scheduled"].includes(d.status))
-      return false;
-    if (d.target_count - (d.state_counts.removed || 0) <= 0) return false;
+      continue;
+    if (followedDevices(d) <= 0) continue;
     const key = JSON.stringify(d.policy);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const group = groups.get(key);
+    if (group) group.deployments.push(d);
+    else groups.set(key, { policy: d.policy, deployments: [d] });
+  }
+  return [...groups.values()];
 }
 function UnsavedSettings({
   items,
   canSave,
   onSave,
 }: {
-  items: DeploymentSummary[];
+  items: UnsavedSetting[];
   canSave: boolean;
   onSave(opener: HTMLElement, policy: Policy): void;
 }) {
@@ -376,34 +388,36 @@ function UnsavedSettings({
         Devices run these settings, but no saved record holds them.
       </p>
       <ul>
-        {items.map((d) => {
-          const devices = d.target_count - (d.state_counts.removed || 0);
-          return (
-            <li key={d.id}>
-              <span className="agent-settings-unsaved-copy">
-                <strong>{settingsName(d.policy!)}</strong>
-                <small>
-                  <a
-                    href={`#/${deploymentRoute(false, d.id, { search: "", status: "all", page: 1 })}`}
-                  >
-                    Applied to{" "}
-                    {devices === 1 ? "1 device" : `${devices} devices`}
-                  </a>
-                  {d.created_by_name ? ` by ${d.created_by_name}` : ""} ·{" "}
-                  <DateCell value={d.created_at} />
-                </small>
-              </span>
-              {canSave && (
-                <Button
-                  variant="secondary compact"
-                  onClick={(event) => onSave(event.currentTarget, d.policy!)}
-                >
-                  Save as settings…
-                </Button>
-              )}
-            </li>
-          );
-        })}
+        {items.map(({ policy, deployments }) => (
+          <li key={deployments[0].id}>
+            <span className="agent-settings-unsaved-copy">
+              <strong>{settingsName(policy)}</strong>
+              {deployments.map((d) => {
+                const devices = followedDevices(d);
+                return (
+                  <small key={d.id}>
+                    <a
+                      href={`#/${deploymentRoute(false, d.id, { search: "", status: "all", page: 1 })}`}
+                    >
+                      Applied to{" "}
+                      {devices === 1 ? "1 device" : `${devices} devices`}
+                    </a>
+                    {d.created_by_name ? ` by ${d.created_by_name}` : ""} ·{" "}
+                    <DateCell value={d.created_at} />
+                  </small>
+                );
+              })}
+            </span>
+            {canSave && (
+              <Button
+                variant="secondary compact"
+                onClick={(event) => onSave(event.currentTarget, policy)}
+              >
+                Save as settings…
+              </Button>
+            )}
+          </li>
+        ))}
       </ul>
     </section>
   );

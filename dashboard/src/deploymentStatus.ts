@@ -170,6 +170,26 @@ export function isLive(status: string) {
   return status === "active" || status === "paused" || status === "scheduled";
 }
 
+/**
+ * Whether a schedule was cancelled before its start. Every device it names
+ * still waits, so it released nothing and holds nothing to roll back.
+ */
+export function releasedNothing(
+  d: Pick<
+    DeploymentSummary,
+    "status" | "scheduled_at" | "target_count" | "state_counts"
+  >,
+) {
+  const counts = d.state_counts || {};
+  const current = (d.target_count ?? 0) - (counts.removed ?? 0);
+  return (
+    d.status === "cancelled" &&
+    !!d.scheduled_at &&
+    current > 0 &&
+    counts.pending === current
+  );
+}
+
 /** The status.ts target state for a device's progress within one rollout. */
 export function targetState(
   state: string,

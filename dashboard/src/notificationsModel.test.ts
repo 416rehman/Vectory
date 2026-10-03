@@ -252,6 +252,13 @@ describe("delivery log", () => {
         time,
       ).detail,
     ).toBe("Timed out. No more tries after 4 attempts.");
+    // One attempt is one attempt.
+    expect(
+      attemptView(
+        attempt({ outcome: "gave_up", attempt: 1, error: "Timed out." }),
+        time,
+      ).detail,
+    ).toBe("Timed out. No more tries after 1 attempt.");
     expect(
       attemptView(
         attempt({

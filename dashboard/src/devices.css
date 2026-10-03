@@ -35,6 +35,14 @@
   overflow-wrap: anywhere;
   cursor: pointer;
 }
+/* A retired identity's name keeps the name's own look, with its badge beside
+   it. */
+.device-name-cell > .retired-name {
+  align-self: flex-start;
+}
+.retired-name > .device-name {
+  align-self: auto;
+}
 .device-name:hover,
 .groups-name:hover {
   color: var(--accent-text);

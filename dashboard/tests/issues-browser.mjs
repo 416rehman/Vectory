@@ -1381,6 +1381,32 @@ try {
       }
     },
   );
+  await check(
+    "an issue of a retired identity shows the device's own name with a badge",
+    async () => {
+      const f = await fixture();
+      try {
+        // What a recovery stores: the old record keeps its name with its own
+        // id appended, so the new identity can take the name.
+        const record = f.state.records[4];
+        record.device_name = `${deviceName(4)}#retired-${record.device_id}`;
+        await f.mount();
+        const row = f.page.locator(".issue-table tbody tr").filter({
+          has: f.page.getByRole("link", {
+            name: deviceName(4),
+            exact: true,
+          }),
+        });
+        await expect(row).toContainText("Retired identity");
+        await expect(row).toContainText("Device access revoked");
+        await expect(f.page.locator(".issue-table")).not.toContainText(
+          "#retired-",
+        );
+      } finally {
+        await f.close();
+      }
+    },
+  );
   const person = (role) => ({
     id: `synthetic-${role}`,
     name: `Synthetic ${role}`,

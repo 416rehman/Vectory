@@ -4,6 +4,7 @@ import { Button, ErrorBox, Pagination, SearchBox, Spinner } from "./ui";
 import {
   excludedDetail,
   locallyConfigured,
+  nothingReleased,
   nothingToRollBackTo,
   restoredName,
   rollbackStory,
@@ -102,6 +103,7 @@ export default function RollbackReviewPanel({
     );
   const query = search.trim().toLocaleLowerCase();
   const empty = preview ? nothingToRollBackTo(preview) : false;
+  const releasedNone = preview && !empty ? nothingReleased(preview) : null;
   const local = preview ? locallyConfigured(preview) : [];
   const otherBlockers = preview
     ? preview.blockers.filter((b) => b.code !== "PRIOR_VERSION_UNKNOWN")
@@ -158,7 +160,13 @@ export default function RollbackReviewPanel({
           </p>
         </div>
       )}
-      {preview && !empty && (
+      {preview && releasedNone && (
+        <div className="rollback-nothing" role="status">
+          <strong>Nothing to roll back</strong>
+          <p>{releasedNone.reason}</p>
+        </div>
+      )}
+      {preview && !empty && !releasedNone && (
         <>
           <div className="rollback-review-heading">
             <div>

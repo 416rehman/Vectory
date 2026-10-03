@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { APIError, api, withRequestDeadline } from "./api";
 import { Button, ErrorBox, Modal, RefreshButton, Spinner } from "./ui";
 import { DataTable } from "./DataTable";
+import { namedDevices } from "./deploymentReviewModel";
 import {
   assertScheduledAssignmentRefreshPreview,
   assertScheduledAssignmentRefreshReceipt,
   assertScheduledAssignmentRefreshStatus,
   getScheduleRefreshUncertainty,
+  reviewedDeviceName,
   setScheduleRefreshUncertainty,
   sameScheduleSelection,
   scheduleSelectionRows,
@@ -24,6 +26,30 @@ export type ScheduledAssignmentRefreshProps = {
   onCommittingChange?(busy: boolean): void;
   returnFocusRef?: RefObject<HTMLElement | null>;
 };
+
+/** Why the selection cannot be updated, with the blocked devices by name. */
+function Blockers({ preview }: { preview: ScheduledAssignmentRefreshPreview }) {
+  const nameOf = useMemo(() => reviewedDeviceName(preview), [preview]);
+  return (
+    <div className="scheduled-refresh-notice" role="status">
+      <strong>Selection cannot be updated</strong>
+      <ul>
+        {preview.blockers.map((blocker, index) => (
+          <li key={`${blocker.code}-${index}`}>
+            {blocker.reason}
+            {!!blocker.device_ids?.length && (
+              <span className="scheduled-refresh-blocked">
+                {blocker.device_ids.length.toLocaleString()} affected{" "}
+                {blocker.device_ids.length === 1 ? "device" : "devices"}:{" "}
+                {namedDevices(blocker.device_ids, nameOf)}.
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export default function ScheduledAssignmentRefresh({
   deploymentId,
@@ -401,16 +427,7 @@ export default function ScheduledAssignmentRefresh({
                 Refresh review before confirming another update.
               </p>
             )}
-            {!!preview.blockers.length && (
-              <div className="scheduled-refresh-notice" role="status">
-                <strong>Selection cannot be updated</strong>
-                <ul>
-                  {preview.blockers.map((blocker, index) => (
-                    <li key={`${blocker.code}-${index}`}>{blocker.reason}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {!!preview.blockers.length && <Blockers preview={preview} />}
             {!!preview.warnings.length && (
               <div className="scheduled-refresh-notice">
                 <ul>

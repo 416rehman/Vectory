@@ -5,6 +5,7 @@ import {
   assertScheduledAssignmentRefreshReceipt,
   assertScheduledAssignmentRefreshStatus,
   getScheduleRefreshUncertainty,
+  reviewedDeviceName,
   setScheduleRefreshUncertainty,
   sameScheduleSelection,
   scheduleSelectionRows,
@@ -32,7 +33,21 @@ const preview = () => ({
   saved_devices: [device(alpha, "Alpha")],
   devices: [device(alpha, "Alpha"), device(beta, "Beta")],
   warnings: ["Activation checks priority separately."],
-  blockers: [] as { code: string; reason: string }[],
+  blockers: [] as {
+    code: string;
+    reason: string;
+    resource?: "configuration" | "policy";
+    device_ids?: string[];
+  }[],
+});
+// The blocker the server sends when a device in the refreshed selection
+// cannot take the pipeline: it names the devices and the resource.
+const compatibilityBlocker = () => ({
+  code: "FULL_VECTOR_MODE_REQUIRED",
+  reason:
+    "This published configuration requires full Vector mode on the selected device. Only its host operator can enable that mode locally.",
+  resource: "configuration" as const,
+  device_ids: [beta],
 });
 const receipt = () => ({
   id: source,
@@ -128,6 +143,52 @@ describe("scheduled-device review", () => {
     expect(scheduleSelectionRows(inactive)).toEqual([
       { ...device(alpha, "Alpha"), change: "kept" },
     ]);
+  });
+  it("accepts a compatibility blocker with the devices and resource the server sends", () => {
+    const blocked = {
+      ...preview(),
+      ready: false,
+      blockers: [
+        compatibilityBlocker(),
+        { code: "NO_TARGETS", reason: "No eligible members" },
+      ],
+    };
+    const value = assertScheduledAssignmentRefreshPreview(source, blocked);
+    expect(value.blockers).toEqual(blocked.blockers);
+    expect(value.ready).toBe(false);
+  });
+  it.each([
+    ["a device that is not an identity", { device_ids: ["beta"] }],
+    ["a repeated device", { device_ids: [beta, beta.toUpperCase()] }],
+    [
+      "more devices than a review holds",
+      { device_ids: Array.from({ length: 10001 }, (_, n) => id(n + 100)) },
+    ],
+    ["an unknown resource", { resource: "secret" }],
+    ["a field the dashboard does not know", { extra: true }],
+  ])("rejects a blocker with %s", (_name, patch) => {
+    expect(() =>
+      assertScheduledAssignmentRefreshPreview(source, {
+        ...preview(),
+        ready: false,
+        blockers: [{ ...compatibilityBlocker(), ...patch }],
+      }),
+    ).toThrow();
+  });
+  it("names a blocked device by its current name, then its saved name, and by identity only when no name is known", () => {
+    const value = assertScheduledAssignmentRefreshPreview(source, {
+      ...preview(),
+      ready: false,
+      saved_devices: [device(alpha, "Alpha"), device(gamma, "Gamma")],
+      devices: [device(alpha, "Alpha now"), device(beta.toUpperCase(), null)],
+      blockers: [compatibilityBlocker()],
+    });
+    const name = reviewedDeviceName(value);
+    expect(name(alpha)).toBe("Alpha now");
+    expect(name(alpha.toUpperCase())).toBe("Alpha now");
+    expect(name(gamma)).toBe("Gamma");
+    expect(name(beta)).toBe(beta);
+    expect(name(id(77))).toBe(id(77));
   });
   it("bounds the combined review while permitting the same10000 identities on both sides", () => {
     const all = Array.from({ length: 10000 }, (_, n) => device(id(n + 100)));

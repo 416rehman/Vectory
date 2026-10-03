@@ -42,6 +42,8 @@ import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
 import { requestRollbackReview } from "./deploymentStatus";
+import { deviceDisplay, deviceLabel } from "./deviceName";
+import { RetiredName } from "./RetiredBadge";
 import {
   groupSubject,
   issueAction,
@@ -489,14 +491,18 @@ function DispositionBadge({ issue }: { issue: Issue }) {
 }
 
 function DeviceCell({ issue }: { issue: Issue }) {
+  const shown = issue.device_name ? deviceDisplay(issue.device_name) : null;
+  const link = (
+    <a
+      className="control-row-title"
+      href={`#/devices/${encodeURIComponent(issue.device_id)}`}
+    >
+      {shown?.name || "Open device"}
+    </a>
+  );
   return (
     <>
-      <a
-        className="control-row-title"
-        href={`#/devices/${encodeURIComponent(issue.device_id)}`}
-      >
-        {issue.device_name || "Open device"}
-      </a>
+      {shown?.retired ? <RetiredName>{link}</RetiredName> : link}
       {issue.device_revoked && <small>Device access revoked</small>}
       {issue.device_revoked === null && <small>Device no longer exists</small>}
     </>
@@ -508,7 +514,7 @@ function DeviceLine({ issue }: { issue: Issue }) {
   return (
     <>
       <a href={`#/devices/${encodeURIComponent(issue.device_id)}`}>
-        {issue.device_name || "Open device"}
+        {issue.device_name ? deviceLabel(issue.device_name) : "Open device"}
       </a>
       {issue.device_revoked && " · access revoked"}
       {issue.device_revoked === null && " · no longer exists"}
@@ -1195,7 +1201,9 @@ function IssueDisposition({
           <div>
             <dt>Device</dt>
             <dd>
-              {snapshot.device_name || "Unnamed device"}
+              {snapshot.device_name
+                ? deviceLabel(snapshot.device_name)
+                : "Unnamed device"}
               {snapshot.device_revoked && " (access revoked)"}
             </dd>
           </div>

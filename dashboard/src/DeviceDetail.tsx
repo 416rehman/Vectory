@@ -70,6 +70,8 @@ import {
 } from "./status";
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
+import { deviceDisplay } from "./deviceName";
+import { RetiredBadge } from "./RetiredBadge";
 import { reportsMetrics } from "./overviewModel";
 import { pipelineRoute } from "./SelectedDevice";
 import {
@@ -701,7 +703,7 @@ function DeviceActivity({
   const entries = (audit.data.items as unknown as ActivityItem[]).map(
     (entry) =>
       entry.device_id && entry.device_id.toLowerCase() === id.toLowerCase()
-        ? { ...entry, device_names: [device.name] }
+        ? { ...entry, device_names: [deviceDisplay(device.name).name] }
         : entry,
   );
   return (
@@ -872,7 +874,7 @@ export default function DeviceDetail({
       rememberRecent(user.id, {
         key: `device:${device.id}`,
         kind: "device",
-        title: device.name,
+        title: deviceDisplay(device.name).name,
         href: `#/devices/${device.id}`,
       });
   }, [device?.id, device?.name, user.id]);
@@ -984,7 +986,7 @@ export default function DeviceDetail({
   return (
     <div className="device-page">
       <PageHeader
-        title={device.name}
+        title={deviceDisplay(device.name).name}
         breadcrumb={breadcrumb}
         live={live}
         description={[
@@ -1002,6 +1004,7 @@ export default function DeviceDetail({
         meta={
           <>
             <StatusBadge domain="device" value={display} />
+            {deviceDisplay(device.name).retired && <RetiredBadge />}
             {resource.error ? (
               // A stale "Online" would claim a check-in nobody can see now.
               <span className="device-meta-note">Connection unknown</span>

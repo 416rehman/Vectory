@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { countLabel } from "./countLabel";
 import type { StatusTone } from "./status";
 import { relativeTime } from "./time";
 
@@ -286,7 +287,7 @@ export function attemptView(
       return {
         tone: "danger",
         label: "Gave up",
-        detail: `${attempt.error || answered} No more tries after ${attempt.attempt} attempts.`,
+        detail: `${attempt.error || answered} No more tries after ${countLabel(attempt.attempt, "attempt")}.`,
       };
     default:
       return {

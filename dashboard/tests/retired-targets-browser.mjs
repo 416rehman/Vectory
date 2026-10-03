@@ -660,6 +660,137 @@ try {
         }
     },
   );
+  await check(
+    "A rolled-back rollout's first action wraps on a phone and never widens the page",
+    async () => {
+      for (const theme of ["light", "dark"]) {
+        const f = fixture({
+          summary: deployment(100, {
+            status: "cancelled",
+            configuration_name: "QA broken listener",
+            status_before_rollback: "completed",
+            rolled_back_by: id(101),
+            rolled_back_to_version: 2,
+            rolled_back_to_configuration_name:
+              "Edge syslog processing (synthetic demo)",
+            state_counts: { rolled_back: 1 },
+          }),
+        });
+        const app = await start(f, { width: 390, theme, role: "operator" });
+        try {
+          const { page } = app;
+          await open(page);
+          const action = dialog(page).getByRole("button", {
+            name: "Open rollback (Edge syslog processing (synthetic demo) v2)",
+            exact: true,
+          });
+          await expect(action).toBeVisible();
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const box = await action.boundingBox();
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(390);
+          const axe = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            width: 390,
+            theme,
+            view: "rolled back",
+            violations: axe.violations.map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              nodes: v.nodes.map((n) => n.target),
+            })),
+          });
+          expect(axe.violations).toEqual([]);
+          const file = `rolled-back-action-390-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          await noWrites(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+  await check(
+    "A retired identity shows the device's own name with a badge in rollout rows and on its page",
+    async () => {
+      // What a recovery stores: the old record keeps its name with its own id
+      // appended, so the new identity can take the name.
+      const stored = `Synthetic retired edge#retired-${id(1)}`;
+      for (const [width, theme] of [
+        [899, "light"],
+        [899, "dark"],
+        [390, "light"],
+        [390, "dark"],
+      ]) {
+        const f = fixture({
+          targets: [target(1, { device_name: stored })],
+          devices: [
+            device(1, { name: stored }),
+            device(2, { status: "online" }),
+          ],
+        });
+        const app = await start(f, { width, theme });
+        try {
+          const { page } = app;
+          await open(page);
+          const rows =
+            width < 640
+              ? dialog(page).getByRole("list", {
+                  name: "Device results",
+                  exact: true,
+                })
+              : table(page);
+          const link = rows.getByRole("link", {
+            name: "Synthetic retired edge",
+            exact: true,
+          });
+          await expect(link).toBeVisible();
+          await expect(rows).toContainText("Retired identity");
+          await expect(rows).not.toContainText("#retired-");
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          let file = `retired-identity-rollout-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          await link.click();
+          await expect(
+            page.getByRole("heading", {
+              name: "Synthetic retired edge",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(page.getByText("Retired identity")).toHaveCount(1);
+          await expect(page.locator("body")).not.toContainText("#retired-");
+          const axe = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            width,
+            theme,
+            view: "retired identity",
+            violations: axe.violations.map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              nodes: v.nodes.map((n) => n.target),
+            })),
+          });
+          expect(axe.violations).toEqual([]);
+          file = `retired-identity-device-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          await noWrites(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -669,9 +800,9 @@ try {
     scope:
       "Actual App deployment history/detail and exact retired-device navigation, intercepted synthetic HTTP only. No live mutation, no backend target transition, no recovery or rollout action executed.",
     passed:
-      results.length === 6 &&
+      results.length === 8 &&
       results.every((r) => r.passed) &&
-      accessibility.length === 4 &&
+      accessibility.length === 10 &&
       accessibility.every((s) => !s.violations.length),
     results,
     accessibility,
