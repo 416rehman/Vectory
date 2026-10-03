@@ -122,6 +122,9 @@ type StatusView struct {
 	// ReadAt is when the view was read; the machine-readable form measures the
 	// check-in schedule from it.
 	ReadAt time.Time
+	// Updates is what this host says about agent updates (update_view.go); nil
+	// where nothing read it, and then status says nothing about them.
+	Updates *UpdateView
 }
 
 // ReadStatus builds the status view for dir.
@@ -160,6 +163,8 @@ func ReadStatus(ctx context.Context, dir string) (*StatusView, error) {
 	now := time.Now()
 	v.ReadAt = now
 	v.Delivery = recentDeliveryProblem(dir, s.ManagedConfig, now)
+	updates := ReadUpdateView(dir, now)
+	v.Updates = &updates
 	v.Next = v.nextStep(now)
 	return v, nil
 }
@@ -484,6 +489,9 @@ func RenderStatus(v *StatusView, now time.Time) string {
 			row("", "Fix: "+problem.Hint)
 		}
 	}
+	if v.Updates != nil {
+		row("Updates", v.Updates.Headline())
+	}
 	if text, ok := v.checkInText(now); ok {
 		row("Check-in", text)
 	}
@@ -572,6 +580,9 @@ func StatusJSON(v *StatusView) map[string]any {
 			wakeUps["reason"] = wake.Reason
 		}
 		out["wake_ups"] = wakeUps
+	}
+	if v.Updates != nil {
+		out["updates"] = UpdateStatusJSON(*v.Updates)
 	}
 	return out
 }
