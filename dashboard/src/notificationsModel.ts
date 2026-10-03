@@ -31,6 +31,27 @@ export const notificationEvents = [
     description: "A canary waits because devices stopped delivering.",
   },
   {
+    value: "agent_update.failed",
+    label: "An agent update rollout stopped",
+    description: "An update rollout reached its failure threshold.",
+  },
+  {
+    value: "agent_update.rolled_back",
+    label: "A device rolled back an agent update",
+    description: "A device took its previous agent build back.",
+  },
+  {
+    value: "agent_update.stopped",
+    label: "All agent updates were stopped",
+    description: "Someone used Stop all updates.",
+  },
+  {
+    value: "agent_update.key_changed",
+    label: "The release key changed",
+    description:
+      "Updates were turned on or off, or a key was rotated, rolled over or revoked.",
+  },
+  {
     value: "device.offline",
     label: "Device offline",
     description: "No check-in for longer than you choose.",
@@ -193,6 +214,20 @@ export function rulesSummary(rules: Rules) {
       rollouts.length === 3
         ? "rollout problems"
         : `${rollouts.join(" and ")} rollouts`,
+    );
+  const updates = (
+    [
+      ["agent_update.failed", "failures"],
+      ["agent_update.rolled_back", "rollbacks"],
+      ["agent_update.stopped", "stops"],
+      ["agent_update.key_changed", "key changes"],
+    ] as const
+  ).filter(([event]) => has(event));
+  if (updates.length)
+    parts.push(
+      updates.length === 4
+        ? "agent update events"
+        : `agent update ${updates.map(([, name]) => name).join(" and ")}`,
     );
   if (has("device.offline"))
     parts.push(

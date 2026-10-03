@@ -4,7 +4,7 @@
 // from the server; nothing is inferred.
 import { useRef, useState } from "react";
 import { ArrowRight, CircleArrowUp, KeyRound, Server } from "lucide-react";
-import { can, type User } from "./api";
+import { can, when, type User } from "./api";
 import type { ReleaseKey } from "./agentUpdateModel";
 import { custodyName, stalePins } from "./agentUpdateSettings";
 import { KeyShortId, Fingerprint } from "./AgentUpdateParts";
@@ -340,7 +340,7 @@ export default function AgentUpdatesSettings({
                       ),
                       meta: [
                         custodyName(key.custody),
-                        `Made ${key.created_at.slice(0, 10)}${key.created_by_name ? ` by ${key.created_by_name}` : ""}`,
+                        `Made ${when(key.created_at)}${key.created_by_name ? ` by ${key.created_by_name}` : ""}`,
                         key.devices_pinning
                           ? `${key.devices_pinning} ${people(key.devices_pinning)} pin it`
                           : "No host pins it",

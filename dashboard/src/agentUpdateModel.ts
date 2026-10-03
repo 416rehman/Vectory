@@ -432,6 +432,26 @@ export function agentUpdateResponseSchema(
 /* ---------- Counts the fleet reports ---------- */
 
 export type LevelKey = keyof Fleet["levels"];
+export const levelKeys: readonly LevelKey[] = [
+  "automatic",
+  "ask",
+  "off",
+  "cannot_update",
+  "not_reported",
+];
+/** A level the Devices list can be filtered to; anything else in an address is ignored. */
+export const isLevelKey = (value: string): value is LevelKey =>
+  (levelKeys as readonly string[]).includes(value);
+/**
+ * An agent version as the Devices list filters on it: exactly what devices
+ * report, 1 to 128 bytes, nothing a line can't show. It is not checked against
+ * the version grammar: a development build reports what it reports.
+ */
+export const isAgentVersion = (value: string) =>
+  value.length > 0 &&
+  new TextEncoder().encode(value).length <= 128 &&
+  // eslint-disable-next-line no-control-regex
+  !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 export const levelLabels: Record<LevelKey, string> = {
   automatic: "Automatic",
   ask: "Ask",

@@ -120,6 +120,50 @@ describe("channel summaries", () => {
     );
   });
 
+  it("says what an agent update rule sends, and every event the server can send is one a channel can choose", () => {
+    expect(
+      rulesSummary(
+        rules({
+          events: [
+            "agent_update.failed",
+            "agent_update.rolled_back",
+            "agent_update.stopped",
+            "agent_update.key_changed",
+          ],
+        }),
+      ),
+    ).toBe("Agent update events");
+    expect(
+      rulesSummary(
+        rules({ events: ["agent_update.rolled_back", "agent_update.failed"] }),
+      ),
+    ).toBe("Agent update failures and rollbacks");
+    expect(
+      rulesSummary(
+        rules({ events: ["issue.opened", "agent_update.key_changed"] }),
+      ),
+    ).toBe("New issues, agent update key changes");
+    // A new rule can choose each of the four, and the request carries them.
+    const draft = {
+      ...newDraft("webhook", "UTC"),
+      name: "Updates",
+      events: [
+        "agent_update.stopped",
+        "agent_update.failed",
+        "agent_update.rolled_back",
+        "agent_update.key_changed",
+      ],
+    };
+    expect(
+      (channelRequest(draft).rules as { events: string[] }).events,
+    ).toEqual([
+      "agent_update.failed",
+      "agent_update.rolled_back",
+      "agent_update.stopped",
+      "agent_update.key_changed",
+    ]);
+  });
+
   it("lists only the filters that narrow a channel", () => {
     expect(filtersSummary(rules())).toBe("");
     expect(
@@ -280,6 +324,18 @@ describe("delivery log", () => {
     expect(eventLabel("test")).toBe("Test message");
     expect(eventLabel("digest")).toBe("Summary");
     expect(eventLabel("device.recovered")).toBe("Device back online");
+    expect(eventLabel("agent_update.failed")).toBe(
+      "An agent update rollout stopped",
+    );
+    expect(eventLabel("agent_update.rolled_back")).toBe(
+      "A device rolled back an agent update",
+    );
+    expect(eventLabel("agent_update.stopped")).toBe(
+      "All agent updates were stopped",
+    );
+    expect(eventLabel("agent_update.key_changed")).toBe(
+      "The release key changed",
+    );
   });
 });
 
