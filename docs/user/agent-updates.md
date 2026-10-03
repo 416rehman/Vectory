@@ -176,7 +176,7 @@ The review lists every device you chose exactly once:
 | Group | Means |
 | --- | --- |
 | **Updates are off on the host** (`UPDATES_OFF`) | Its consent is **Off**, or it never agreed. Run **Upgrade agent** with updates on, once. |
-| **Agent too old, or no update report** (`AGENT_TOO_OLD`) | It predates updates, or runs a version below the release's minimum. Run **Upgrade agent** once. |
+| **Agent too old, or no update report** (`AGENT_TOO_OLD`) | It predates updates and reports nothing about them. Run **Upgrade agent** once. |
 | **Doesn't pin this release's key** (`KEY_NOT_PINNED`) | No key it pins reaches the release's signer. Run **Upgrade agent** with the current key. If a key that is no longer current signed the release, the review says so: a host follows keys forward only, so withdraw the release and prepare it again, and the current key signs it. |
 | **Tried this release and rolled back** (`RELEASE_ALREADY_TRIED`) | It takes the next release, never this one again. |
 | **Already tried a newer release** (`COUNTER_REPLAYED`) | This release's counter is at or below one the host tried. Prepare a new release. |
@@ -185,7 +185,8 @@ The review lists every device you chose exactly once:
 | **Frozen on a key fork** (`KEY_ROLLOVER_CONFLICT`) | It saw two successors of its key and accepts no update. Run **Upgrade agent** with the right key. See [If a key is stolen](#if-a-key-is-stolen). |
 | **Installed by a package manager**, **No service keeps the agent running**, **Install path others can write**, **Install directory is read-only**, **Update step isn't running**, **Service definition is older than this release needs**, **Not in this release** | The host can't take an update. See [What a host needs to take an update](#what-a-host-needs-to-take-an-update). |
 | **In another update rollout** (`IN_ANOTHER_UPDATE`) | A device has at most one unfinished update at a time. Wait for that rollout or cancel it. |
-| **Access revoked** (`DEVICE_REVOKED`) | The device's access was revoked. |
+
+A device whose access was revoked can't be chosen for a rollout, and one revoked while a rollout runs is skipped.
 
 ### Watch a rollout
 
@@ -202,11 +203,13 @@ Open a rollout from **Devices → Agent updates**. The page shows how many devic
 | **Updated** | The new build checked in after the restart and is healthy. |
 | **Rolled back** | The host took the build back. It won't try this release again. |
 | **Refused**, **Failed** | The host's own rules refused it, or the update failed. The page shows the agent's reason. |
-| **Cancelled**, **Skipped** | It never started: the rollout ended first, or the device never became ready. |
+| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, or its access was revoked. |
 
 Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. The canary also needs at least one **Updated** device. A device silent for 30 minutes after it started applying becomes **Failed**.
 
-When more devices roll back or fail than **Stop if more than** allows, the rollout stops. Devices already applying finish their trial. The rollout is **Completed** when no device is pending and every released one is done or waiting.
+When more devices roll back or fail than **Stop if more than** allows, the rollout stops. Devices already applying finish their trial. The rollout is **Completed** when no device is pending or waiting and every released one is done.
+
+A device that waits for its host or its window keeps its offer, and offers come only from a rollout that is running, so the rollout stays **Active** until that device installs or you cancel the rollout. Later stages don't wait for it. You can't turn updates off while a rollout is active or paused, so cancel it first if nobody will approve the waiting hosts.
 
 ### Pause, resume or cancel
 
