@@ -80,7 +80,7 @@ export function buildExamples() {
     rollovers: [wireEnvelope],
   });
   files["team.pub"] = team.line;
-  files["team.key"] =
+  files["team-private-key.txt"] =
     `vectory-release-private-key ed25519 ${base64(team.seed)}`;
   files["release-keys.json"] = json({
     schema: "vectory.release-keys.v1",
