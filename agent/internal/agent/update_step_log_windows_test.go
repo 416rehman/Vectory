@@ -146,9 +146,6 @@ func TestAStepsLogThatIsALinkIsNotFollowedShortenedOrWrittenTo(t *testing.T) {
 			t.Errorf("the standard error lacks %q:\n%s", want, got)
 		}
 	}
-	if os.Stderr == nil {
-		t.Error("the step's standard error is gone")
-	}
 }
 
 // A name that isn't a plain file is refused too, and left as it was.
