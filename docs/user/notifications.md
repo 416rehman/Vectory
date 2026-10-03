@@ -151,7 +151,7 @@ A new channel starts with every event except **Rollout rolled back** and **Canar
 - **Severity:** **Errors only** sends issues with error severity and failed rollouts. Everything else is a warning.
 - **Pipelines** and **Groups:** send only events about these. A rollout matches the groups it targets and the groups of its devices.
 
-Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline. After the server starts, devices have five minutes to reconnect before an offline alert.
+Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline. After the server starts, no offline alert goes out for five minutes, so devices can reconnect: one that checks in during that time is never reported. Silence is counted from a device's last check-in. A device already silent for the channel's minutes when the five minutes end is reported then, and any other when its own minutes pass.
 
 ## Quiet hours
 
