@@ -290,3 +290,236 @@ async fn targets_that_already_took_their_device_keep_what_they_recorded() {
         ]
     );
 }
+
+/// Update rollouts written before they could end as stalled or because their
+/// release expired keep everything they recorded, and the table takes the new
+/// endings and still refuses others. Its targets and request keys stay attached.
+#[tokio::test]
+async fn update_rollouts_keep_what_they_recorded_and_take_the_new_endings() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings = settings(temp.path());
+    let shipped = sqlx::migrate!("./migrations");
+    let behind = Migrator {
+        migrations: Cow::Owned(
+            shipped
+                .migrations
+                .iter()
+                .filter(|migration| migration.version < 139)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    let pool = open(&settings).await;
+    behind.run(&pool).await.unwrap();
+    for (id, name) in [("d1", "edge-01"), ("d2", "edge-02")] {
+        sqlx::query("INSERT INTO devices(id,name,data) VALUES(?,?,'{}')")
+            .bind(id)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let release = db::id();
+    sqlx::query("INSERT INTO agent_releases(id,version,counter,manifest,manifest_sha256,issued_at,expires_at,state,prepared_at) VALUES(?,'0.1.1',1,x'7b7d',?,?,?,'awaiting_signature',?)")
+        .bind(&release)
+        .bind(db::hash("0.1.1"))
+        .bind(db::now())
+        .bind(db::now())
+        .bind(db::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for (status, failure, cancel) in [
+        ("failed", Some("data_plane"), None),
+        ("cancelled", None, Some("key_revoked")),
+        ("active", None, None),
+    ] {
+        let id = db::id();
+        sqlx::query("INSERT INTO agent_update_rollouts(id,release_id,selector,canary_size,batch_size,observation_seconds,failure_threshold,status,failure_reason,cancel_reason,created_at) VALUES(?,?,'{}',1,10,300,0,?,?,?,?)")
+            .bind(&id)
+            .bind(&release)
+            .bind(status)
+            .bind(failure)
+            .bind(cancel)
+            .bind(db::now())
+            .execute(&pool)
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    for (rollout, device, state) in [(&ids[0], "d1", "rolled_back"), (&ids[2], "d2", "pending")] {
+        sqlx::query("INSERT INTO agent_update_targets(rollout_id,device_id,device_name,state,created_at,updated_at) VALUES(?,?,'edge',?,?,?)")
+            .bind(rollout)
+            .bind(device)
+            .bind(state)
+            .bind(db::now())
+            .bind(db::now())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO agent_update_requests(actor_id,request_id,payload_sha256,rollout_id,created_at) VALUES('actor',?,?,?,?)")
+        .bind(db::id())
+        .bind(db::hash("payload"))
+        .bind(&ids[2])
+        .bind(db::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id,status,failure_reason,cancel_reason FROM agent_update_rollouts ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let s = initialize(settings).await.unwrap();
+    let after: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id,status,failure_reason,cancel_reason FROM agent_update_rollouts ORDER BY id",
+    )
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(after, before);
+    let progressed: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT progressed_at FROM agent_update_rollouts")
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+    assert!(progressed.iter().all(Option::is_none));
+    for (table, rows) in [("agent_update_targets", 2), ("agent_update_requests", 1)] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, rows, "{table}");
+    }
+    let broken: Vec<(String, i64, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check")
+        .fetch_all(&s.pool)
+        .await
+        .unwrap();
+    assert!(broken.is_empty(), "{broken:?}");
+    let check: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_all(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(check, ["ok"]);
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='agent_update_rollouts' AND name LIKE 'agent_update_rollouts_%' ORDER BY name",
+    )
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        indexes,
+        [
+            "agent_update_rollouts_open",
+            "agent_update_rollouts_recent",
+            "agent_update_rollouts_release"
+        ]
+    );
+    // The targets still belong to their rollout: it cannot be deleted from under
+    // them.
+    assert!(
+        sqlx::query("DELETE FROM agent_update_rollouts WHERE id=?")
+            .bind(&ids[2])
+            .execute(&s.pool)
+            .await
+            .is_err()
+    );
+    // The new endings are accepted, and anything else is still refused.
+    let insert = |status: &'static str,
+                  failure: Option<&'static str>,
+                  cancel: Option<&'static str>| {
+        let pool = s.pool.clone();
+        let release = release.clone();
+        async move {
+            sqlx::query("INSERT INTO agent_update_rollouts(id,release_id,selector,canary_size,batch_size,observation_seconds,failure_threshold,status,failure_reason,cancel_reason,created_at) VALUES(?,?,'{}',1,10,300,0,?,?,?,?)")
+                .bind(db::id())
+                .bind(release)
+                .bind(status)
+                .bind(failure)
+                .bind(cancel)
+                .bind(db::now())
+                .execute(&pool)
+                .await
+        }
+    };
+    assert!(insert("failed", Some("stalled"), None).await.is_ok());
+    assert!(
+        insert("cancelled", None, Some("release_expired"))
+            .await
+            .is_ok()
+    );
+    for reason in ["threshold", "data_plane"] {
+        assert!(
+            insert("failed", Some(reason), None).await.is_ok(),
+            "{reason}"
+        );
+    }
+    for reason in ["operator", "stop", "key_revoked", "release_withdrawn"] {
+        assert!(
+            insert("cancelled", None, Some(reason)).await.is_ok(),
+            "{reason}"
+        );
+    }
+    assert!(insert("failed", Some("expired"), None).await.is_err());
+    assert!(insert("cancelled", None, Some("stalled")).await.is_err());
+}
+
+/// What hosts reported about updates while updates were off is removed by the
+/// upgrade, so a counter one of them sent then moves no release's; what they
+/// reported while updates are on stays.
+#[tokio::test]
+async fn reports_kept_while_updates_were_off_are_removed_by_the_upgrade() {
+    for (on, kept) in [(false, 0), (true, 1)] {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = settings(temp.path());
+        let shipped = sqlx::migrate!("./migrations");
+        let behind = Migrator {
+            migrations: Cow::Owned(
+                shipped
+                    .migrations
+                    .iter()
+                    .filter(|migration| migration.version < 139)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        };
+        let pool = open(&settings).await;
+        behind.run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO devices(id,name,data) VALUES('d1','edge-01','{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_update_reports(device_id,report,reported_at) VALUES('d1',?,?)",
+        )
+        .bind(json!({"highest_counter":4242}).to_string())
+        .bind(db::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE agent_update_settings SET enabled=? WHERE id=1")
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let s = initialize(settings).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_update_reports")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, kept, "updates on: {on}");
+    }
+}

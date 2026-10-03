@@ -149,6 +149,21 @@ impl Facts {
     pub fn online(&self) -> bool {
         crate::rollout::checked_in_recently(self.last_seen.as_deref(), self.interval)
     }
+    /// The device will not come back, as far as a rollout can wait for it: its
+    /// access was revoked, or its last check-in is older than the larger of three
+    /// of its check-in intervals and `observation_seconds`. A device that never
+    /// checked in is not gone: it is waiting for its first check-in.
+    pub fn gone(&self, observation_seconds: i64) -> bool {
+        self.revoked
+            || self
+                .last_seen
+                .as_deref()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .is_some_and(|at| {
+                    let silent = chrono::Utc::now().signed_duration_since(at).num_seconds();
+                    silent > (self.interval * 3).max(observation_seconds)
+                })
+    }
     pub fn consent(&self) -> Option<&str> {
         self.report.as_ref()?.get("consent")?.as_str()
     }

@@ -85,7 +85,11 @@ async fn turning_updates_on_with_server_custody_makes_one_key_and_seals_its_seed
         fingerprint,
         "computed from the key's bytes"
     );
-    assert!(parsed.name().starts_with("server-"), "{}", parsed.name());
+    assert_eq!(
+        parsed.name(),
+        format!("release-{}", &fingerprint[..8]),
+        "a key the server made is named like any other, by the start of its fingerprint"
+    );
     assert_eq!(key["state"], "current");
     assert_eq!(key["custody"], "server");
     assert_eq!(key["created_by_name"], "Synthetic admin");
@@ -1282,6 +1286,54 @@ async fn the_key_bundle_is_public_lists_what_is_not_revoked_and_says_nothing_of_
     switch(&f, false).await;
     let (status, _, _) = bundle(&f).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_key_bundle_does_not_tell_that_the_server_holds_a_key_it_made() {
+    let f = fixture().await;
+    let on = enable_server(&f).await;
+    let first = on["current_key"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rotated = ok(
+        &f,
+        "POST",
+        "/api/v1/agent-release-keys/rotate",
+        json!({"current_password":PASSWORD}),
+        &f.admin,
+    )
+    .await;
+    let second = rotated["fingerprint"].as_str().unwrap().to_owned();
+    let (status, _, bundled) = bundle(&f).await;
+    assert_eq!(status, StatusCode::OK);
+    let lines: Vec<&str> = bundled["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| key["public_key"].as_str().unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    // Each key is named by the start of its fingerprint: a name that says nothing
+    // of who made it, to a peer that has no client certificate.
+    for fingerprint in [&first, &second] {
+        let line = lines
+            .iter()
+            .find(|line| ReleaseKey::parse(line).is_ok_and(|key| key.fingerprint() == fingerprint))
+            .expect("the bundle lists the key");
+        assert!(
+            line.ends_with(&format!(" release-{}", &fingerprint[..8])),
+            "{line}"
+        );
+    }
+    let text = bundled.to_string();
+    for word in ["server", "custody", "offline"] {
+        assert!(!text.contains(word), "{word}: {text}");
+    }
+    // The signed-in view still says who holds each key.
+    for key in keys(&f).await {
+        assert_eq!(key["custody"], "server");
+    }
 }
 
 #[tokio::test]

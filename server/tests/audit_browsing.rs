@@ -634,7 +634,7 @@ async fn action_details_are_allowlisted_and_typed_with_immutable_target_mapping(
     let data = [
         json!({"action":"configuration.publish","target":version}),
         json!({"action":"device.secret_reconciliation","actual_sha256":"a".repeat(64),"applied_template_sha256":"b".repeat(64),"secret_revision":4,"previous_secret_revision":3,"generation":999,"reason":"PRIVATE_REASON"}),
-        json!({"action":"server.restore_access.invalidate","details":{"browser_sessions":2,"password_reset_codes":3,"enrollment_tokens_to_revoke":4,"mfa_recovery_codes":5,"private":"PRIVATE_DETAILS"}}),
+        json!({"action":"server.restore_access.invalidate","details":{"browser_sessions":2,"password_reset_codes":3,"enrollment_tokens_to_revoke":4,"mfa_recovery_codes":5,"agent_update_rollouts_to_cancel":6,"agent_update_stop":1,"private":"PRIVATE_DETAILS"}}),
         json!({"action":"issue.reopen","reason":"x".repeat(2000),"issue_revision":5,"secret_revision":123,"created_at":"INVALID_PRIVATE_TIME"}),
         json!({"action":"other.unknown","reason":"PRIVATE_REASON","actual_sha256":"a".repeat(64),"details":{"browser_sessions":1}}),
     ];
@@ -665,7 +665,11 @@ async fn action_details_are_allowlisted_and_typed_with_immutable_target_mapping(
         assert!(!v.to_string().contains("PRIVATE"));
         match n {
             1 => assert_eq!(v["details"].as_object().unwrap().len(), 4),
-            2 => assert_eq!(v["details"].as_object().unwrap().len(), 4),
+            2 => {
+                assert_eq!(v["details"].as_object().unwrap().len(), 6);
+                assert_eq!(v["details"]["agent_update_rollouts_to_cancel"], 6);
+                assert_eq!(v["details"]["agent_update_stop"], 1);
+            }
             3 => {
                 assert_eq!(v["created_at"], Value::Null);
                 assert_eq!(v["details"]["reason"].as_str().unwrap().len(), 1000);
