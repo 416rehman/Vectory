@@ -110,9 +110,10 @@ func TestARefusedLogSummaryIsLeftOutWithTheDiagnosticsAndNothingElse(t *testing.
 			t.Fatalf("request %d carried %v, want %v", i+1, sent[i], want)
 		}
 	}
-	// What was left out, the log says once, in fixed words: the kinds of the
-	// step that worked.
+	// What the check-in that went through lacks, the log says once for each kind,
+	// in fixed words.
 	if !slices.Equal(said, []string{
+		"The server refused a check-in; the agent sent it again without the Check on devices result.",
 		"The server refused a check-in; the agent sent it again without the Vector log summary.",
 		"The server refused a check-in; the agent sent it again without the diagnostics.",
 	}) {
@@ -128,7 +129,7 @@ func TestARefusedLogSummaryIsLeftOutWithTheDiagnosticsAndNothingElse(t *testing.
 	if err != nil || len(sent) != 2 || slices.Contains(sent[1], reportLogSummary) || !slices.Contains(sent[1], reportHostRuntime) {
 		t.Fatalf("%v %v", sent, err)
 	}
-	if len(said) != 2 {
+	if len(said) != 3 {
 		t.Fatalf("the same kinds were said again: %q", said)
 	}
 }
@@ -155,6 +156,8 @@ func TestARefusedDiagnosticIsLeftOutAndTheLogSummaryGoes(t *testing.T) {
 func TestAHostReportIsLeftOutAfterTheLogReportsAndBeforeTheAnnouncements(t *testing.T) {
 	d := newCheckDevice(t)
 	refuseWhen(d, func(beat map[string]any) bool { return beat["host_runtime"] != nil })
+	var said []string
+	d.e.Notice = func(line string) { said = append(said, line) }
 	h := fullHeartbeat()
 	h.ValidationResult = nil
 	sent, _, err := exchanged(t, d, h)
@@ -163,6 +166,18 @@ func TestAHostReportIsLeftOutAfterTheLogReportsAndBeforeTheAnnouncements(t *test
 	}
 	if !slices.Equal(sent[2], []string{reportAnnouncements}) {
 		t.Fatalf("the last request carried %v", sent[2])
+	}
+	// The check-in that went through lacks the log reports too, though only a
+	// host report was refused: the agent can't tell which of a step's reports
+	// the server refused, so the log names everything that is missing.
+	if len(said) != 6 {
+		t.Fatalf("the log said %q", said)
+	}
+	for _, kind := range []string{reportLogSummary, reportDiagnostics, reportHostRuntime, reportStateDir, reportSecretNames, reportMetrics} {
+		want := "The server refused a check-in; the agent sent it again without the " + kind + "."
+		if !slices.Contains(said, want) {
+			t.Errorf("the log never said %q: %q", want, said)
+		}
 	}
 	if d.e.validation.optionalRefused {
 		t.Fatal("the announcements were blamed for a refusal they didn't cause")
