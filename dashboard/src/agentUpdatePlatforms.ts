@@ -27,5 +27,5 @@ export function updatesShip(os: string | null | undefined): boolean {
 
 /** What a page says where the choice of how a host takes updates would be. */
 export function updatesNotInRelease(os: HostOS): string {
-  return `Agent updates aren't in this release for ${systemName[os]} hosts. They are upgraded on the host with the Upgrade agent command.`;
+  return `Agent updates aren't in this release for ${systemName[os]} hosts. Upgrade the agent on the host instead; Upgrade agent on the device's page shows how.`;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentUpgradeRelease,
+  hasUpgradeCommand,
   runningBuild,
   upgradeCommand,
   upgradeNotes,
@@ -201,6 +202,19 @@ describe("upgrading an enrolled agent", () => {
         `  sudo sh "$dir/vectory-install.sh" \\\n    --ca-file=\n)`,
       ),
     ).toBe(true);
+  });
+
+  it("says which systems have an upgrade command, the ones the command is for", () => {
+    expect(
+      ["linux", "darwin", "windows", null, undefined, "freebsd"].map(
+        hasUpgradeCommand,
+      ),
+    ).toEqual([true, true, false, false, false, false]);
+    // Whatever has a command is exactly what upgradeCommand writes one for.
+    for (const os of ["linux", "darwin", "windows"] as const)
+      expect(upgradeCommand(install, { ...host, os }) !== null).toBe(
+        hasUpgradeCommand(os),
+      );
   });
 
   it("offers no command where the installer can't do it, and never turns verification off", () => {

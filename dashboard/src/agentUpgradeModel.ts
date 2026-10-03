@@ -76,6 +76,16 @@ export function runningBuild(
 }
 
 /**
+ * Whether the dashboard can write the command that upgrades an enrolled device of
+ * this system: a Linux or macOS host runs the installer again, and a Windows host
+ * is upgraded by hand with a download. A choice that only the command carries (the
+ * host's consent to agent updates) is offered only where there is one.
+ */
+export function hasUpgradeCommand(os: string | null | undefined): boolean {
+  return os === "linux" || os === "darwin";
+}
+
+/**
  * The Add device installer, run again on an enrolled Linux or macOS device:
  * it replaces the agent, and setup finds the enrolled state (so no token),
  * keeps the host's mode, account and service, restarts the service on the
