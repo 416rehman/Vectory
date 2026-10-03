@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -276,6 +277,11 @@ func TestSetupFailsEarlyWithoutChangesAndExplains(t *testing.T) {
 	if err == nil || stepStatus(result, "vector") != "fail" || !strings.Contains(err.Error(), "Found Vector 0.57.0") || !strings.Contains(err.Error(), "vector.dev/download") {
 		t.Fatal("old Vector accepted or unexplained", err)
 	}
+	// Someone who ran a command copied from Add device is told where its
+	// Vector path comes from.
+	if !strings.Contains(err.Error(), "or pass the right --vector-binary (Add device → Advanced → Vector binary adds it to the command).") {
+		t.Fatal("the dashboard's Vector binary field isn't mentioned", err)
+	}
 
 	options.VectorBinary = fakeVector(t, VectorVersion)
 	options.CASHA256 = Fingerprint(certificateSHA256(&x509.Certificate{Raw: []byte("another CA")}))
@@ -294,6 +300,34 @@ func TestSetupFailsEarlyWithoutChangesAndExplains(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("a failed preflight created the state directory")
+	}
+}
+
+// A token pasted short or mangled is explained once, by the refusal itself; a
+// token that couldn't be read at all still says where to get one.
+func TestSetupExplainsAnUnusableTokenOnce(t *testing.T) {
+	server := newSetupServer(t)
+	options, _, _ := setupFixture(t)
+	options.Server, options.CASHA256, options.VectorBinary = server.url, server.pin, fakeVector(t, VectorVersion)
+	options.Token = func() (string, error) { return "", CheckEnrollmentToken("abcd") }
+	_, err := Setup(context.Background(), options)
+	var failed *SetupError
+	if !errors.As(err, &failed) || failed.Step.ID != "enroll" {
+		t.Fatal("a short token wasn't refused at the token step", err)
+	}
+	if want := "That isn't a whole enrollment token: tokens are 64 characters, and this one has 4. Copy it again with Copy token on Add device."; failed.Step.Detail != want || failed.Step.Fix != "Then run the command again." {
+		t.Fatalf("detail %q, fix %q", failed.Step.Detail, failed.Step.Fix)
+	}
+	if n := strings.Count(failed.Error(), "Add device"); n != 1 {
+		t.Fatalf("the advice to get the token from Add device is given %d times: %s", n, failed.Error())
+	}
+	options.Token = func() (string, error) { return "", errors.New("the token file is empty") }
+	_, err = Setup(context.Background(), options)
+	if !errors.As(err, &failed) || failed.Step.Fix != "Copy the token from Add device, then run the command again." {
+		t.Fatal("an unreadable token lost its advice", err)
+	}
+	if server.enrolls.Load() != 0 {
+		t.Fatal("a token that was refused locally was sent")
 	}
 }
 
