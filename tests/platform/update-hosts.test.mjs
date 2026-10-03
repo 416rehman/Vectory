@@ -95,12 +95,19 @@ const WINDOWS_ONLY = [
   "bootGap",
 ];
 
+// A Windows runner has no Linux directories for the Linux host to look at and no
+// /bin/sh: what needs them is checked on the other systems, and what is Windows's
+// own is checked here by the Windows host alone.
+const onWindows = process.platform === "win32";
+const notOnWindows = onWindows
+  ? "needs the Linux host's directories or /bin/sh"
+  : false;
+
 test("every host has every member a phase calls, and every path it reads", () => {
-  for (const [name, host] of Object.entries({
-    linux: linuxHost(),
-    macos: macosHost(),
-    windows: windowsHost(),
-  })) {
+  const hosts = onWindows
+    ? { windows: windowsHost() }
+    : { linux: linuxHost(), macos: macosHost(), windows: windowsHost() };
+  for (const [name, host] of Object.entries(hosts)) {
     for (const member of MEMBERS) {
       if (name === "windows" && WINDOWS_INSTEAD[member]) {
         for (const instead of WINDOWS_INSTEAD[member])
@@ -127,40 +134,44 @@ test("every host has every member a phase calls, and every path it reads", () =>
 // measureAgentRestart and checkRefusedLocations are a Mac's; the capabilities and
 // the sandbox's readings are Linux's) when it asks first. A name that no host has,
 // a misspelling, is what this finds.
-test("a phase calls host.<member> only for a member some host has", () => {
-  const known = new Set([
-    ...Object.keys(linuxHost()),
-    ...Object.keys(macosHost()),
-    ...Object.keys(windowsHost()),
-  ]);
-  for (const [, member] of source.matchAll(/\bhost\.([A-Za-z0-9]+)/g))
-    assert.ok(
-      known.has(member),
-      `agent-update.mjs calls host.${member}, which no host has`,
-    );
-  // What a Mac's host alone has, and a Windows host's, is behind a question to the
-  // host (or, for what a host must have for the phase to make sense, a refusal).
-  for (const member of [
-    "checkUnits",
-    "whileTrying",
-    "measureAgentRestart",
-    "checkRefusedLocations",
-    "installVector",
-    "assertRootOnly",
-    "layout",
-    "besideExecutable",
-    "afterCommit",
-    "withLittleRoom",
-    "bootGap",
-  ]) {
-    assert.ok(
-      new RegExp(
-        `if \\(!?host\\.${member}\\)|host\\.${member}\\s*\\?|!host\\.${member}`,
-      ).test(source),
-      `agent-update.mjs never asks whether the host has ${member}`,
-    );
-  }
-});
+test(
+  "a phase calls host.<member> only for a member some host has",
+  { skip: notOnWindows },
+  () => {
+    const known = new Set([
+      ...Object.keys(linuxHost()),
+      ...Object.keys(macosHost()),
+      ...Object.keys(windowsHost()),
+    ]);
+    for (const [, member] of source.matchAll(/\bhost\.([A-Za-z0-9]+)/g))
+      assert.ok(
+        known.has(member),
+        `agent-update.mjs calls host.${member}, which no host has`,
+      );
+    // What a Mac's host alone has, and a Windows host's, is behind a question to the
+    // host (or, for what a host must have for the phase to make sense, a refusal).
+    for (const member of [
+      "checkUnits",
+      "whileTrying",
+      "measureAgentRestart",
+      "checkRefusedLocations",
+      "installVector",
+      "assertRootOnly",
+      "layout",
+      "besideExecutable",
+      "afterCommit",
+      "withLittleRoom",
+      "bootGap",
+    ]) {
+      assert.ok(
+        new RegExp(
+          `if \\(!?host\\.${member}\\)|host\\.${member}\\s*\\?|!host\\.${member}`,
+        ).test(source),
+        `agent-update.mjs never asks whether the host has ${member}`,
+      );
+    }
+  },
+);
 
 test("the paths of a Mac's host are the ones the product pins in its definition", () => {
   const { paths } = macosHost();
@@ -223,16 +234,20 @@ test("a timer's intervals are read from every line systemd prints for them", () 
   assert.deepEqual([none.OnBootUSec, none.OnUnitInactiveUSec], [null, null]);
 });
 
-test("a path with a space or a quote is one word for sh", () => {
-  assert.equal(quoted("/a b/c"), "'/a b/c'");
-  assert.equal(quoted("it's"), `'it'\\''s'`);
-  const out = run(
-    "/bin/sh",
-    ["-c", `printf %s ${quoted("/Library/Application Support/it's")}`],
-    { quiet: true },
-  );
-  assert.equal(out.stdout, "/Library/Application Support/it's");
-});
+test(
+  "a path with a space or a quote is one word for sh",
+  { skip: notOnWindows },
+  () => {
+    assert.equal(quoted("/a b/c"), "'/a b/c'");
+    assert.equal(quoted("it's"), `'it'\\''s'`);
+    const out = run(
+      "/bin/sh",
+      ["-c", `printf %s ${quoted("/Library/Application Support/it's")}`],
+      { quiet: true },
+    );
+    assert.equal(out.stdout, "/Library/Application Support/it's");
+  },
+);
 
 test("the files only root may read are read the same way on every host", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vectory-hosts-"));
