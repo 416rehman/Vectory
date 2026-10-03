@@ -47,7 +47,7 @@ func statusView(change func(*StatusView)) *StatusView {
 	sha := Digest([]byte("candidate"))
 	desired := &Desired{VersionID: "3f2a9c1d-5b7e-4a10-9c2d-0e8f6a7b1c3d", SHA256: sha, Size: 1200, ArtifactPath: "/agent/v1/artifacts/" + sha, VectorVersion: VectorVersion}
 	v := &StatusView{
-		StateDir: "/var/lib/vectory-agent", DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", BinaryOK: true, ReadAt: statusNow,
+		StateDir: DefaultPaths().StateDir, DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", BinaryOK: true, ReadAt: statusNow,
 		Settings: Settings{Name: "edge-nyc-02", Server: "https://vectory.example.com:8443", VectorBinary: "/usr/bin/vector", VectorVersion: "0.58.0"},
 		Service:  ServiceInfo{Manager: "systemd", Name: "vectory.service", Installed: true, State: "running", PID: 812},
 		State: State{LastHeartbeat: &last, Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}, Accepted: true, Desired: desired, HighestGeneration: 12, ReportedGeneration: 12,

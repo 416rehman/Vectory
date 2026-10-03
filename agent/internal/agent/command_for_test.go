@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -84,6 +85,9 @@ func TestStatusNextStepsNameANonDefaultStateDirectory(t *testing.T) {
 // prints from it, and the report doesn't hide the path.
 func TestRefusalFixNamesStateDir(t *testing.T) {
 	e, _, _ := fixture(t, newConfig)
+	// Temporary directories are long on some systems, and a hint that doesn't fit
+	// names the flag instead (see the test below): use a directory that fits.
+	e.Dir = filepath.FromSlash("/srv/agent")
 	data := []byte(`{"sources":{"in":{"type":"demo_logs"}},"sinks":{"out":{"type":"http","inputs":["in"],"uri":"http://127.0.0.1:8688/","encoding":{"codec":"json"}}}}`)
 	err := e.Settings.CapabilityPolicy.Check(data)
 	diagnostics := e.policyDiagnostics(err, data)
