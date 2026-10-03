@@ -22,7 +22,7 @@ import (
 // state another build of it left, and a helper copy that an interrupted commit
 // left one build behind must still read and write what the current build does. A
 // member can't be renamed, removed, added, retyped or reordered in a build of
-// generation 1: a change needs a new generation. testdata/update-*.json holds the
+// generation 1: a change needs a new generation. testdata/update/*.json holds the
 // bytes of generation 1, and a test fails when a field is renamed.
 //
 // The readers here are strict. A reader refuses a file that is not UTF-8 text, a
@@ -44,8 +44,10 @@ const (
 	// MaxUpdateRollovers bounds rollovers.json.
 	MaxUpdateRollovers = 16 * 1024
 
-	maxUpdateRolloverStatement = 1024
-	maxUpdateEnvelopes         = 8
+	// The bounds of a rollover chain are the release library's: what it refuses
+	// to verify, this file never holds.
+	maxUpdateRolloverStatement = MaxRolloverStatement
+	maxUpdateEnvelopes         = MaxRolloverChain
 	maxUpdateFingerprints      = 4
 	maxUpdateVersionBytes      = 128
 	maxUpdateServiceGeneration = 1000

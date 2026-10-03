@@ -15,9 +15,9 @@ import (
 // A POSIX access list lets root's file or directory carry a write grant for
 // another account that no owner or mode bit shows. The kernel keeps the list in
 // the attribute system.posix_acl_access, and once it names an account, the group
-// bits of the mode show the list's mask: the most that any entry but the owner's
-// grants. A named account that can write therefore shows as a mode the check
-// already refuses. These tests build such lists on trees root owns, and run the
+// bits of the mode show the list's mask: the most that any entry besides the
+// owning account's grants. A named account that can write therefore shows as a
+// mode the check already refuses. These tests build such lists on trees root owns, and run the
 // check as it ships. They need root, and a file system that keeps access lists.
 
 const posixACLAttribute = "system.posix_acl_access"
@@ -50,9 +50,10 @@ func posixACL(entries ...posixEntry) []byte {
 	return blob
 }
 
-// namedGrant is the list of a file whose owner, group and everyone else have the
-// given permissions and that also gives account 65534 (a user, or a group, by
-// tag) perm. The mask is the union of the permissions that aren't the owner's.
+// namedGrant is the list of a file whose owning account, group and everyone else
+// have the given permissions and that also gives account 65534 (a user, or a
+// group, by tag) perm. The mask is the union of the permissions of every entry
+// except the owning account's.
 func namedGrant(tag, perm, owner, group, other uint16) []byte {
 	entries := []posixEntry{{posixUserObj, owner, posixNoID}}
 	if tag == posixUser {
