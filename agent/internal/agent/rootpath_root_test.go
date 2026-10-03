@@ -13,8 +13,8 @@ import (
 )
 
 // These tests run the path check as it ships, against trees that root really
-// owns, so they need root: CI runs them with `sudo -E go test -run
-// RootOwnedChecksOnReal ./internal/agent` on Linux and macOS. Run as another
+// owns, so they need root: on Linux and macOS run `sudo -E env "PATH=$PATH" go
+// test -count=1 -run RootOwnedChecksOnReal ./internal/agent`. Run as another
 // account they skip. The unprivileged tests in rootpath_unix_test.go cover the
 // same decisions on trees the test owns.
 

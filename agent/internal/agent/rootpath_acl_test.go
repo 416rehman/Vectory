@@ -151,7 +151,7 @@ func TestWindowsRefusesWhatLetsAnotherAccountReplaceOrChange(t *testing.T) {
 		{"read and run", allow(sidUsers, maskReadRun, 0), "", ""},
 		{"generic read and execute", allow(sidUsers, 0xa0000000, 0), "", ""},
 		{"inherit only, so not this object", allow(sidUsers, maskModify, inheritObject|inheritContainer|inheritOnly), "", ""},
-		{"the owner's own entry", allow(sidCreatorOwner, maskFull, 0), "", ""},
+		{"the entry for whichever account owns it", allow(sidCreatorOwner, maskFull, 0), "", ""},
 		{"a refusal", aclEntry{SID: sidUsers, Type: aclAccessDenied, Mask: maskFull}, "", ""},
 	} {
 		entries := []aclEntry{allow(sidSystem, maskFull, 0), allow(sidAdministrators, maskFull, 0), tc.entry}

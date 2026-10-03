@@ -176,8 +176,8 @@ func accountName(sid string) string {
 	return account
 }
 
-// judgeHandle reads the owner and the access list from a handle and refuses it,
-// with UNTRUSTED_LOCATION, unless aclProblem finds nothing wrong.
+// judgeHandle reads the owning account and the access list from a handle and
+// refuses it, with UNTRUSTED_LOCATION, unless aclProblem finds nothing wrong.
 func judgeHandle(h windows.Handle, path string, role windowsRole, trust ownerTrust) error {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil || sd == nil {
