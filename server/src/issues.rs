@@ -543,12 +543,15 @@ pub(crate) fn render(mut issue: Value) -> Value {
     issue
 }
 /// "edge-02 rolled back agent 0.1.1", or "edge-02 couldn't update to agent
-/// 0.1.1", cut to 120 characters.
+/// 0.1.1", cut to 120 characters. A version is named only when it is one;
+/// otherwise the title says what happened without it.
 fn agent_update_title(code: &str, device: &str, version: &str) -> String {
-    let title = if code == "AGENT_UPDATE_ROLLED_BACK" {
-        format!("{device} rolled back agent {version}")
-    } else {
-        format!("{device} couldn't update to agent {version}")
+    let readable = crate::agent_updates::parse_version(version).is_some();
+    let title = match (code == "AGENT_UPDATE_ROLLED_BACK", readable) {
+        (true, true) => format!("{device} rolled back agent {version}"),
+        (true, false) => format!("{device} rolled back an agent update"),
+        (false, true) => format!("{device} couldn't update to agent {version}"),
+        (false, false) => format!("{device} couldn't update its agent"),
     };
     if title.chars().count() <= 120 {
         title
@@ -959,6 +962,42 @@ async fn command(
 mod tests {
     use super::*;
     use sqlx::{Execute, Row};
+
+    /// A title names the agent version only when it is a version: a stored value
+    /// that is anything else never reaches a title, which is read and linked by
+    /// people and channels.
+    #[test]
+    fn an_agent_update_title_names_a_version_only_when_it_is_one() {
+        for (code, version, title) in [
+            (
+                "AGENT_UPDATE_ROLLED_BACK",
+                "0.1.1",
+                "edge-02 rolled back agent 0.1.1",
+            ),
+            (
+                "AGENT_UPDATE_FAILED",
+                "0.1.1",
+                "edge-02 couldn't update to agent 0.1.1",
+            ),
+            (
+                "AGENT_UPDATE_ROLLED_BACK",
+                "https://example.test/claim",
+                "edge-02 rolled back an agent update",
+            ),
+            (
+                "AGENT_UPDATE_FAILED",
+                "v0.1.1",
+                "edge-02 couldn't update its agent",
+            ),
+            (
+                "AGENT_UPDATE_FAILED",
+                "",
+                "edge-02 couldn't update its agent",
+            ),
+        ] {
+            assert_eq!(agent_update_title(code, "edge-02", version), title);
+        }
+    }
 
     #[tokio::test]
     async fn issue_history_and_overview_count_use_bounded_metadata_indexes() {
