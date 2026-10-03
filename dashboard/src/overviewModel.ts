@@ -1,4 +1,5 @@
 /** Pure Overview logic: health buckets, telemetry coverage, what runs where. */
+import { nameList } from "./activityModel";
 import { countLabel } from "./countLabel";
 import { deviceStatuses } from "./status";
 import type {
@@ -133,36 +134,149 @@ export function quietSummary(unmeasured: number) {
     ? "Nothing is failing that Vectory can measure"
     : "Nothing is failing";
 }
+/** A device that sent no metrics sample lately, as the Devices read lists it. */
+export type SilentDevice = {
+  id: string;
+  name: string;
+  effective_policy?: { telemetry_enabled: boolean } | null;
+  policy_assignment?: {
+    policy_name?: string | null;
+    name?: string | null;
+  } | null;
+  /** The version it last verified; null or absent when it runs no pipeline. */
+  running_version?: {
+    id: string;
+    number: number | null;
+    configuration_id: string | null;
+    configuration_name: string | null;
+  } | null;
+};
+/** Why devices have no metrics, and what to do about each reason. */
+export type MetricsAdvice = {
+  /** Devices whose agent settings turn metrics off, with the settings each runs. */
+  settingsOff: { id: string; name: string; settings: string | null }[];
+  /** Devices that run no pipeline: nothing to read until the first deployment. */
+  noPipeline: number;
+  /** Devices whose running version has no metrics exporter. */
+  noExporter: number;
+  /** The pipeline most of those run, where "Add monitoring" belongs. */
+  monitoring: { id: string; name: string; devices: number } | null;
+  /**
+   * Exporters the versions silent devices run already have. An agent reads
+   * only one on a literal loopback address.
+   */
+  exporters: { pipeline: string; address: string; loopback: boolean }[];
+};
+/** Whether an exporter address is a literal loopback IP and port, the only kind an agent reads. */
+export const loopbackAddress = (address: string) =>
+  /^(127(\.\d{1,3}){3}|\[::1\]):\d{1,5}$/.test(address);
 /**
- * The pipeline most running devices have no metrics from, to offer "Add
- * monitoring to <pipeline>"; null when every running pipeline reports.
+ * What keeps each silent device from reporting metrics, one reason per
+ * device. `exporterOf` answers for a version it has read: the address of the
+ * exporter it has, null when it has none, undefined while unknown. A device
+ * that runs no pipeline has no exporter to lack, and a version not read yet
+ * is never called exporter-less.
  */
-export function monitoringTarget(
-  running: Pick<
-    OverviewRunning,
-    | "configuration_id"
-    | "configuration_name"
-    | "device_count"
-    | "devices_reporting"
-  >[],
-) {
-  const tally = new Map<string, { id: string; name: string; count: number }>();
-  for (const row of running) {
-    const silent = row.device_count - row.devices_reporting;
-    if (silent <= 0 || !row.configuration_name) continue;
-    const entry = tally.get(row.configuration_id) || {
-      id: row.configuration_id,
-      name: row.configuration_name,
-      count: 0,
+export function metricsAdvice(
+  devices: readonly SilentDevice[],
+  exporterOf: (versionId: string) => string | null | undefined,
+): MetricsAdvice {
+  const advice: MetricsAdvice = {
+    settingsOff: [],
+    noPipeline: 0,
+    noExporter: 0,
+    monitoring: null,
+    exporters: [],
+  };
+  const tally = new Map<
+    string,
+    { id: string; name: string; devices: number }
+  >();
+  const seen = new Set<string>();
+  for (const device of devices) {
+    if (device.effective_policy?.telemetry_enabled === false)
+      advice.settingsOff.push({
+        id: device.id,
+        name: device.name,
+        settings:
+          device.policy_assignment?.policy_name ||
+          device.policy_assignment?.name ||
+          null,
+      });
+    const running = device.running_version;
+    if (!running) {
+      advice.noPipeline += 1;
+      continue;
+    }
+    const address = exporterOf(running.id);
+    if (address === undefined) continue;
+    const pipeline = `${running.configuration_name || "A pipeline"}${running.number ? ` v${running.number}` : ""}`;
+    if (address) {
+      if (!seen.has(`${pipeline} ${address}`)) {
+        seen.add(`${pipeline} ${address}`);
+        advice.exporters.push({
+          pipeline,
+          address,
+          loopback: loopbackAddress(address),
+        });
+      }
+      continue;
+    }
+    advice.noExporter += 1;
+    if (!running.configuration_id || !running.configuration_name) continue;
+    const entry = tally.get(running.configuration_id) || {
+      id: running.configuration_id,
+      name: running.configuration_name,
+      devices: 0,
     };
-    entry.count += silent;
+    entry.devices += 1;
     tally.set(entry.id, entry);
   }
-  return (
+  advice.monitoring =
     [...tally.values()].sort(
-      (a, b) => b.count - a.count || a.name.localeCompare(b.name),
-    )[0] || null
-  );
+      (a, b) => b.devices - a.devices || a.name.localeCompare(b.name),
+    )[0] || null;
+  return advice;
+}
+/**
+ * The versions silent devices run, most devices first, at most `limit`: the
+ * ones whose exporter is worth reading. A version never changes, so each is
+ * read once.
+ */
+export function versionsToRead(devices: readonly SilentDevice[], limit = 6) {
+  const count = new Map<string, number>();
+  for (const device of devices) {
+    const id = device.running_version?.id;
+    if (id) count.set(id, (count.get(id) ?? 0) + 1);
+  }
+  return [...count]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([id]) => id);
+}
+/**
+ * The words for "Turn on Collect operational metrics for edge-01 in its agent
+ * settings (“No metrics”)": the devices (`total` of them when more than are
+ * listed), whose settings they are, and the saved settings the devices run
+ * when those have names.
+ */
+export function settingsOffPhrase(
+  devices: MetricsAdvice["settingsOff"],
+  total = devices.length,
+) {
+  const named = [
+    ...new Set(devices.map((device) => device.settings).filter(Boolean)),
+  ] as string[];
+  const quoted = named.slice(0, 2).map((name) => `“${name}”`);
+  const rest = named.length > 2 ? ` and ${named.length - 2} more` : "";
+  return {
+    names: nameList(
+      devices.map((device) => device.name),
+      total,
+    ),
+    owner: total > 1 ? "their" : "its",
+    settings: named.length ? ` (${quoted.join(" and ")}${rest})` : "",
+  };
 }
 /**
  * What runs on devices without a pipeline: a local configuration adopted at
