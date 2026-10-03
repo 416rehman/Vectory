@@ -96,7 +96,7 @@ A host you added before you turned updates on has agreed to nothing, and so has 
 
 A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**. Its **Upgrade agent** command carries no update choice: running it upgrades the agent and leaves what the host agreed to as it is. When something about updates needs fixing on that host, such as the key it pins or the releases it takes, the command carries only that fix.
 
-The dashboard writes the **Upgrade agent** command for Linux and macOS hosts. For a Windows host, **Add device** carries the choice about updates when you add it. A Windows host added before agrees with `setup`, run in an elevated PowerShell on the host with the flags of the command above, and the same command with one flag changes one thing it agreed to. See [Agent updates in setup](cli.md#agent-updates-in-setup).
+On Linux and macOS the command is the installer, run again. A Windows host has no installer to run, so **Upgrade agent** shows a `setup` command for the agent that is already installed, to run in an elevated PowerShell on the host. It carries only the update flags (and `--state-dir` when the agent keeps its state elsewhere), replaces no file, and `setup` keeps the address the host enrolled with. A Windows host that reports no update information runs an agent that predates updates: upgrade it by hand first, then choose and run the command. **Add device** carries the choice for a Windows host you add now. The same command with one flag changes one thing the host agreed to. See [Agent updates in setup](cli.md#agent-updates-in-setup).
 
 ### What a host needs to take an update
 

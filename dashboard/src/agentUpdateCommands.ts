@@ -9,6 +9,7 @@ import {
   platformDefaults,
   quote,
   unlessUnquotable,
+  updateArguments,
   type UpdateAmend,
   type UpdateConsent,
   type UpdateTrack,
@@ -82,6 +83,32 @@ export function updateVerbCommand(
     return stateDir.length
       ? continued(`sudo vectory update ${verb}`, stateDir)
       : `sudo vectory update ${verb}`;
+  });
+}
+
+/**
+ * The `setup` command that gives an enrolled Windows host its consent to agent
+ * updates, or changes a part of it. There is no installer to run there: it runs the
+ * agent that is installed, in an elevated PowerShell, with only the update flags
+ * (and `--state-dir` when the agent keeps its state anywhere but the default).
+ * Setup finds the address the host enrolled with and keeps everything else, so the
+ * agent isn't replaced and nothing but the host's consent changes. Null for any
+ * other system, or when a value can't be quoted.
+ */
+export function windowsConsentCommand(
+  device: HostDevice,
+  consent: UpdateConsent | UpdateAmend,
+): string | null {
+  if (device.os !== "windows") return null;
+  return unlessUnquotable(() => {
+    const args = [
+      ...stateDirArguments(device),
+      ...updateArguments(consent, "windows"),
+    ];
+    return [
+      "# In an elevated PowerShell:",
+      `& ${quote(platformDefaults("windows").binary, "windows")} setup${args.length ? ` ${args.join(" ")}` : ""}`,
+    ].join("\n");
   });
 }
 

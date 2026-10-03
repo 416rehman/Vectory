@@ -2352,6 +2352,101 @@ try {
   );
 
   await check(
+    "Upgrade agent: an enrolled Windows host takes its consent from the agent installed there, in PowerShell",
+    async () => {
+      const windows = (over = {}) =>
+        one({
+          os: "windows",
+          arch: "amd64",
+          state_dir: "C:\\ProgramData\\Vectory\\agent",
+          service_manager: "windows",
+          ...over,
+        });
+      const commandName = "Command to turn on agent updates on edge-01";
+      for (const view of views) {
+        await load({
+          ...view,
+          path: `devices/${id(1)}`,
+          scenario: onState(),
+          devices: windows({
+            agent_update: report({ consent: "off", windows: [], keys: [] }),
+          }),
+        });
+        await openUpgrade();
+        const dialog = upgradeDialog();
+        await expect(
+          dialog.getByRole("heading", { name: "Agent updates" }),
+        ).toBeVisible();
+        await expect(dialog).toContainText("Updates are off on this host.");
+        // Nothing is chosen, and no command is made until a person chooses.
+        for (const name of [
+          /^Automatic \(recommended\)/,
+          /^Ask on the host/,
+          /^Off/,
+        ])
+          await expect(dialog.getByRole("radio", { name })).not.toBeChecked();
+        await expect(dialog).toContainText(
+          "Choose how this host takes agent updates to get its command.",
+        );
+        await expect(
+          dialog.getByLabel(commandName, { exact: true }),
+        ).toHaveCount(0);
+        await look("upgrade-opt-in-windows", view);
+        await dialog
+          .getByRole("radio", { name: /^Automatic \(recommended\)/ })
+          .check();
+        const command = dialog.getByLabel(commandName, { exact: true });
+        await expect(command).toContainText("# In an elevated PowerShell:");
+        await expect(command).toContainText(
+          "& 'C:\\Program Files\\Vectory\\vectory.exe' setup --updates auto",
+        );
+        await expect(command).toContainText(
+          `--update-key-sha256 ${teamFingerprint}`,
+        );
+        await expect(command).toContainText("--update-track patch");
+        // It replaces no file: no installer, no server address, no sudo.
+        const text = await command.innerText();
+        expect(text).not.toMatch(/sudo|--server|curl|Get-FileHash/);
+      }
+      // A Windows host that sent no update report runs an agent that predates updates:
+      // it is told to upgrade by hand first, and no command is made.
+      await load({
+        path: `devices/${id(1)}`,
+        scenario: onState(),
+        devices: windows({}),
+      });
+      await openUpgrade();
+      await expect(upgradeDialog()).toContainText(
+        "Its last check-in carried no update report, so its agent predates agent updates.",
+      );
+      await expect(
+        upgradeDialog().getByRole("radio", { name: /^Off/ }),
+      ).toHaveCount(0);
+      await expect(
+        upgradeDialog().getByLabel(commandName, { exact: true }),
+      ).toHaveCount(0);
+      // A Windows host that takes updates can have the key pinned again from the same agent.
+      await load({
+        path: `devices/${id(1)}`,
+        scenario: onState(),
+        devices: windows({ agent_update: report() }),
+      });
+      await openUpgrade();
+      await upgradeDialog()
+        .getByText("Pin this server's current key again")
+        .click();
+      const again = upgradeDialog().getByLabel(
+        "Command to pin the current key on edge-01",
+        { exact: true },
+      );
+      await expect(again).toContainText(
+        `setup --update-key-sha256 ${teamFingerprint}`,
+      );
+      await expect(again).not.toContainText("--updates");
+    },
+  );
+
+  await check(
     "Upgrade agent: a host that takes updates is rolled out to, and can pin the key again",
     async () => {
       for (const view of views) {

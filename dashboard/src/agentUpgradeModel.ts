@@ -86,6 +86,16 @@ export function hasUpgradeCommand(os: string | null | undefined): boolean {
 }
 
 /**
+ * Whether the dashboard can write a command that gives an enrolled device its
+ * consent to agent updates: the upgrade command above on Linux and macOS, and on
+ * Windows the `setup` command of the agent that is installed there
+ * (windowsConsentCommand), which replaces nothing.
+ */
+export function hasConsentCommand(os: string | null | undefined): boolean {
+  return hasUpgradeCommand(os) || os === "windows";
+}
+
+/**
  * The Add device installer, run again on an enrolled Linux or macOS device:
  * it replaces the agent, and setup finds the enrolled state (so no token),
  * keeps the host's mode, account and service, restarts the service on the

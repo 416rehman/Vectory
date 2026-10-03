@@ -17,6 +17,7 @@ import {
 } from "./agentUpdateModel";
 import {
   consentFor,
+  windowsConsentCommand,
   type ConsentChange,
   type ConsentChoice,
 } from "./agentUpdateCommands";
@@ -212,10 +213,19 @@ function fixChange(code: string, track?: "patch" | "minor"): ConsentChange {
   }
 }
 
+/** The codes whose fix on a Windows host is one run of `setup` with update flags. */
+const windowsFixCodes = [
+  "UPDATES_OFF",
+  "KEY_NOT_PINNED",
+  "KEY_ROLLOVER_CONFLICT",
+  "VERSION_NOT_ON_TRACK",
+];
+
 /**
  * The command that fixes one device, made from where it keeps its state, or
- * null when no command does (Windows, a state directory no command can carry,
- * a choice still to make). A host that already takes updates keeps its level,
+ * null when no command does (a Windows host that needs a new agent, a state
+ * directory no command can carry, a choice still to make). A host that already
+ * takes updates keeps its level,
  * windows and track: the command carries only what the fix changes, never a
  * value the device reported about its own consent. A host that has none gets
  * the choice a person made.
@@ -228,7 +238,14 @@ export function hostFixCommand(input: HostFixInput): string | null {
     change: fixChange(group.code, input.track),
   });
   if (!consent) return null;
-  return upgradeCommand(install, device, consent);
+  const command = upgradeCommand(install, device, consent);
+  if (command || device.os !== "windows") return command;
+  // A Windows host has no installer to run. What it needs is its consent, which
+  // setup gives from the agent that is installed there: not for an agent that
+  // predates updates, nor for a service definition, which a new agent writes.
+  return windowsFixCodes.includes(group.code)
+    ? windowsConsentCommand(device, consent)
+    : null;
 }
 
 export type HostFixBlock = { devices: string[]; command: string };
