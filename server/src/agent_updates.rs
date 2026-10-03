@@ -732,6 +732,34 @@ pub struct Outcome {
     pub enabled: bool,
     pub offer: Option<Value>,
 }
+/// Whether the report carries a rollback or a failure that the report stored
+/// before it did not: the agent's record of its latest update (`last`) names a
+/// result that is new to the server, which records it once.
+async fn new_result(
+    conn: &mut SqliteConnection,
+    device: &str,
+    report: Option<&Report>,
+) -> Result<bool> {
+    let Some(last) = report.and_then(Report::last) else {
+        return Ok(false);
+    };
+    if !matches!(last["outcome"].as_str(), Some("rolled_back" | "failed")) {
+        return Ok(false);
+    }
+    let before: Option<String> = sqlx::query_scalar(
+        "SELECT json_extract(report,'$.last') FROM agent_update_reports WHERE device_id=?",
+    )
+    .bind(device)
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten();
+    Ok(before
+        .map(|before| db::parse(&before))
+        .transpose()?
+        .as_ref()
+        != Some(last))
+}
+
 /// The agent-update part of a check-in, inside its transaction: store the report
 /// (a check-in without one removes it), let the device's target move as far as
 /// the check-in proves, and find the offer the device holds. While updates are
@@ -743,6 +771,7 @@ pub async fn heartbeat(
     build: &Build<'_>,
     report: Option<&Report>,
 ) -> Result<Outcome> {
+    let fresh = new_result(conn, build.device_id, report).await?;
     store(conn, build.device_id, report, now).await?;
     let setting = setting(conn).await?;
     if !setting.enabled {
@@ -751,7 +780,7 @@ pub async fn heartbeat(
             offer: None,
         });
     }
-    crate::agent_update_rollouts::observe(conn, s, now, build, report).await?;
+    crate::agent_update_rollouts::observe(conn, s, now, build, report, fresh).await?;
     let offer = if setting.stopped.is_some() {
         None
     } else {

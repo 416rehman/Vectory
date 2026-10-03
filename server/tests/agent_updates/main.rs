@@ -10,6 +10,7 @@ mod engine;
 mod fleet;
 mod issues;
 mod keys;
+mod late_results;
 mod liveness;
 mod notify;
 mod releases;
