@@ -245,9 +245,10 @@ jobs:
   # (boot-gap); the volume is nearly filled for the disk-full phase, because the path
   # check refuses a mount point over the step's directory; and the builds are the
   # product's source with the Windows line of the release gate (update_gate.go) opened
-  # in the copy. These phases are the proof that gates agent updates on Windows: while
-  # one fails, windowsUpdatesInRelease stays false, and Windows hosts update by hand
-  # in that release; the commit that sets it to true cites a green run of this job.
+  # in the copy. These phases are the proof that gates agent updates on Windows: when
+  # one fails and is not fixed by the cut, windowsUpdatesInRelease in
+  # agent/internal/agent/update_gate.go is set to false, and Windows hosts update by
+  # hand in that release.
   windows:
     runs-on: windows-2025
     concurrency:
