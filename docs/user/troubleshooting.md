@@ -30,6 +30,7 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 | `ENROLLMENT_FAILED` (401) | The server refused the token or name. Ask an administrator to check the token's expiry, uses, name prefix and revocation in **Add device**. A token can't take over a name that belongs to another device. |
 | Already enrolled | The device already has an identity. Look it up in **Devices**. Re-enroll only through [identity recovery](agents.md#recover-a-device-identity). |
 | Interrupted | Run the same command again with the same server, name and token. The agent reuses its pending request, so nothing is created twice. |
+| `Vector 0.58.x isn't installed here` | Setup looked on `PATH` and in the usual places and found no Vector 0.58. Install it, or pass `--vector-binary PATH`; **Add device → Advanced → Vector binary** puts the path into the command you copy. |
 | The service account can't run Vector or the agent | Setup names the folder or file that blocks it, such as a private `/root`. Install Vector system-wide (https://vector.dev/download/) or pass `--vector-binary` with a path the account can read. Keep the agent at mode `0755`. |
 
 For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log:

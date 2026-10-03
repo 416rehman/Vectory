@@ -922,6 +922,19 @@ func interruptedCheckIn(ctx context.Context, err error) bool {
 	return ok && ce.Code == "CANCELED"
 }
 
+// failureNews says whether a failed check-in is worth a line: the first one,
+// or one for another reason than the one already said. A device the server
+// keeps refusing, or can't reach, is told once rather than at every retry;
+// `vectory status` shows how long it has lasted. A failure that isn't a
+// connection problem is always said.
+func failureNews(said string, err error) (code string, news bool) {
+	ce, connection := AsConnectionError(err)
+	if !connection || ce.Code == "" {
+		return "", true
+	}
+	return ce.Code, ce.Code != said
+}
+
 // recordCheckInFailure keeps the outage for status: the first failed
 // check-in since the last success, with the latest reason. Only network
 // failures count, never a check-in interrupted by stopping the agent.
@@ -1047,6 +1060,8 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		}
 	}
 	failures, followed, complete := 0, false, false
+	// The reason of the failed check-in already said, until one succeeds.
+	said := ""
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
 	// `vectory status` reads this from the state: a run that never waits says so
@@ -1086,10 +1101,13 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 				}
 			}
 			message := describeCheckInFailure(err, e.State.LastHeartbeat, e.now())
-			report(message)
+			if code, news := failureNews(said, err); news {
+				said = code
+				report(message)
+			}
 			e.recordCheckInFailure(ctx, err, message)
 		default:
-			failures = 0
+			failures, said = 0, ""
 			if failure := e.State.CheckInFailure; failure != nil {
 				report(fmt.Sprintf("Reconnected to %s after %s.", e.Settings.Server, preciseDuration(e.now().Sub(failure.Since))))
 				e.State.CheckInFailure = nil
