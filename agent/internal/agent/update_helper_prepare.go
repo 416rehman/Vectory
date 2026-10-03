@@ -506,6 +506,12 @@ func (s *updateStep) dropJournal() error {
 // which answers the request again from the start.
 func (s *updateStep) abort(j *updateJournal, code, detail string) error {
 	s.logf("%s: %s", code, detail)
+	if j.Swap != nil && s.install == nil {
+		// The journal names a temporary file beside the executable, and without the
+		// install directory the step can't see whether it is there: the journal stays
+		// until a run that can.
+		return errors.New("the install directory can't be opened, so the files of the request can't be removed: " + s.eligibility)
+	}
 	s.cleanUp(j)
 	if err := s.dropJournal(); err != nil {
 		return err
