@@ -204,15 +204,26 @@ func placeHelper(host updateHost, install updateInstall, paths UpdatePaths, dige
 // rolling_back), with the time it ends: the step's next run is what settles an
 // interrupted update, and without it the host could be left on a build nobody
 // proved. What the step left beside the executable (the previous build) goes with
-// it. Called by `vectory update off` and by service uninstall; it does nothing on a
-// host that has no step.
-func RemoveUpdateHelper() error {
-	host := currentUpdateHost()
-	if host == nil {
-		return nil
-	}
+// it. Called by `vectory update off` and by service uninstall.
+//
+// It uses the operating system's host whatever the gate says (removalUpdateHost): a
+// build that doesn't ship updates here still has to take away a step, and the root
+// launch daemon or service that runs it, which an earlier build installed. Where no
+// step is written for the operating system, there is none to remove, and a step's
+// directory that is there anyway is said to be out of its reach, never reported removed.
+func RemoveUpdateHelper() error { return removeStepWith(removalUpdateHost()) }
+
+// removeStepWith is RemoveUpdateHelper for the host given: nil where no step is written
+// for the operating system.
+func removeStepWith(host updateHost) error {
 	paths := UpdateLocations()
 	_, statErr := os.Lstat(paths.StepDir)
+	if host == nil {
+		if notExist(statErr) {
+			return nil
+		}
+		return fmt.Errorf("this build has no update step for this operating system, so it can't take away %s: delete it yourself", paths.StepDir)
+	}
 	if notExist(statErr) {
 		return removeUnits(host, nil)
 	}

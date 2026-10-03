@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -26,6 +27,8 @@ import (
 type launchctlRecorder struct {
 	calls   []string
 	answers map[string][]launchctlResult
+	// clock is the time the host sees; it moves only when the host sleeps.
+	clock time.Time
 }
 
 func (r *launchctlRecorder) answer(call string, results ...launchctlResult) {
@@ -73,15 +76,20 @@ func newTestMacOSHost(t *testing.T) (*macosUpdateHost, *launchctlRecorder, *[]ti
 	root := filepath.Dir(filepath.Dir(filepath.Dir(paths.PolicyDir)))
 	daemons := filepath.Join(root, "Library", "LaunchDaemons")
 	mkdirMode(t, daemons, 0o755)
-	recorder := &launchctlRecorder{}
+	recorder := &launchctlRecorder{clock: time.Date(2026, 10, 5, 2, 0, 0, 0, time.UTC)}
 	host := newMacOSUpdateHost(recorder.run)
 	host.daemonDir = daemons
 	host.receipt = filepath.Join(root, "receipts", "com.vectory.agent.bom")
 	host.agent = host.job("", recorder.run)
 	host.step = host.job(updateLaunchdLabel, recorder.run)
+	host.alive = func(int) bool { return false }
 	var slept []time.Duration
 	for _, job := range []*launchdJob{&host.agent, &host.step} {
-		job.sleep = func(d time.Duration) { slept = append(slept, d) }
+		job.now = func() time.Time { return recorder.clock }
+		job.sleep = func(d time.Duration) {
+			slept = append(slept, d)
+			recorder.clock = recorder.clock.Add(d)
+		}
 	}
 	return host, recorder, &slept
 }
@@ -242,6 +250,26 @@ func TestPathsWithSpacesQuotesAndMarkupAreWrittenAsXMLReadsThemAndReadBack(t *te
 	}
 }
 
+// The agent's own definition carries what XML reads specially the same way: escaped as XML
+// wants, and read back by the property list as the values that were given.
+func TestTheAgentsDefinitionCarriesAPathWithMarkupAsXMLReadsIt(t *testing.T) {
+	for _, base := range []string{"/Library/Application Support/Vectory", `/opt/we"ird`, "/opt/it's", "/opt/a&b", "/opt/<angle>", "/opt/ünï", "/opt/50%", "/opt/]]>", `/opt/back\slash`} {
+		text := mustLaunchdPlist(t, base+"/vectory", base+"/state", "_v&c")
+		dict, err := parsePropertyList([]byte(text))
+		if err != nil {
+			t.Errorf("%q: %v", base, err)
+			continue
+		}
+		arguments, _ := dict["ProgramArguments"].([]any)
+		if len(arguments) != 4 || arguments[0] != base+"/vectory" || arguments[3] != base+"/state" || dict["UserName"] != "_v&c" {
+			t.Errorf("%q reads back as %v, user %v", base, arguments, dict["UserName"])
+		}
+		if strings.Contains(text, "&b") || strings.Contains(text, "<angle>") {
+			t.Errorf("%q isn't escaped: %s", base, text)
+		}
+	}
+}
+
 // ---------------------------------------------------------------- installing and removing
 
 func TestInstallingTheStepWritesItsDefinitionForEveryoneToReadEnablesItAndLoadsIt(t *testing.T) {
@@ -270,8 +298,8 @@ func TestInstallingTheStepWritesItsDefinitionForEveryoneToReadEnablesItAndLoadsI
 
 func TestInstallingTheStepAgainUnloadsTheJobItHasSoThatLaunchdReadsTheTextNowOnDisk(t *testing.T) {
 	host, recorder, _ := newTestMacOSHost(t)
-	// Loaded: print succeeds. It is gone once bootout has returned.
-	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"})
+	// Loaded: print succeeds, and says there is no such job once launchd has removed it.
+	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"}, launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = running\n\truns = 4\n}\n"}, notLoaded)
 	if err := host.InstallUnits(macTestUnitSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +340,7 @@ func TestAJobThatWontLoadIsTheAnswerAndAnEnableThatFailsIsNot(t *testing.T) {
 func writeAgentDefinition(t *testing.T, host *macosUpdateHost, exe, dir, account string) string {
 	t.Helper()
 	path := host.agent.definition
-	if err := os.WriteFile(path, []byte(launchdPlist(exe, dir, account)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(mustLaunchdPlist(t, exe, dir, account)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0o644); err != nil {
@@ -334,7 +362,7 @@ func TestRemovingTheStepUnloadsItFirstSaysWhereTheInstallDirectoryWasAndLeavesNo
 	}
 	writeAgentDefinition(t, host, "/opt/vectory/bin/vectory", "/var/lib/vectory-agent", "_vectory")
 	recorder.calls = nil
-	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"})
+	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"}, notLoaded)
 	dir, removed, err := host.RemoveUnits()
 	if err != nil || !removed || dir != "/opt/vectory/bin" {
 		t.Fatalf("removing: %q, %v, %v", dir, removed, err)
@@ -392,22 +420,27 @@ func TestTheServiceStateIsWhatLaunchctlPrintsAndNothingIsGuessed(t *testing.T) {
 		want    updateServiceState
 		wantErr bool
 	}{
-		"running":                          {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, updateServiceState{State: "active", Restarts: 0, PID: 4242}, false},
-		"restarted twice":                  {launchctlResult{stdout: readTestdata(t, "launchctl-print-restarted.txt")}, updateServiceState{State: "active", Restarts: 2, PID: 4399}, false},
-		"waiting to start again":           {launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")}, updateServiceState{State: "activating", Restarts: 1}, false},
-		"loaded and not running":           {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, updateServiceState{State: "activating", Restarts: 0}, false},
-		"not loaded":                       {notLoaded, updateServiceState{State: "inactive"}, false},
-		"not loaded, by its text alone":    {launchctlResult{status: 1, stderr: `Could not find service "io.vectory.agent" in domain for system`}, updateServiceState{State: "inactive"}, false},
-		"only the job's own lines count":   {launchctlResult{stdout: nested}, updateServiceState{State: "active", Restarts: 1, PID: 11}, false},
-		"running with no process":          {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = 1\n}\n"}, updateServiceState{State: "activating"}, false},
-		"no state":                         {launchctlResult{stdout: "system/io.vectory.agent = {\n\truns = 1\n}\n"}, updateServiceState{}, true},
-		"no count of runs":                 {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\tpid = 5\n}\n"}, updateServiceState{}, true},
-		"a count that isn't one":           {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = many\n}\n"}, updateServiceState{}, true},
-		"a negative count":                 {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = -1\n}\n"}, updateServiceState{}, true},
-		"a pid that isn't one":             {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = 1\n\tpid = x\n}\n"}, updateServiceState{}, true},
-		"nothing printed":                  {launchctlResult{}, updateServiceState{}, true},
-		"launchctl failing for its reason": {launchctlResult{status: 5, stderr: "Input/output error"}, updateServiceState{}, true},
-		"launchctl that was killed":        {launchctlResult{status: -1}, updateServiceState{}, true},
+		"running":                            {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, updateServiceState{State: "active", Restarts: 0, PID: 4242}, false},
+		"restarted twice":                    {launchctlResult{stdout: readTestdata(t, "launchctl-print-restarted.txt")}, updateServiceState{State: "active", Restarts: 2, PID: 4399}, false},
+		"waiting to start again":             {launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")}, updateServiceState{State: "activating", Restarts: 1}, false},
+		"loaded and not running":             {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, updateServiceState{State: "activating", Restarts: 0}, false},
+		"not loaded":                         {notLoaded, updateServiceState{State: "inactive", Unloaded: true}, false},
+		"not loaded, by its text alone":      {launchctlResult{status: 1, stderr: `Could not find service "io.vectory.agent" in domain for system`}, updateServiceState{State: "inactive", Unloaded: true}, false},
+		"only the job's own lines count":     {launchctlResult{stdout: nested}, updateServiceState{State: "active", Restarts: 1, PID: 11}, false},
+		"running with no process":            {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = 1\n}\n"}, updateServiceState{State: "activating"}, false},
+		"no state":                           {launchctlResult{stdout: "system/io.vectory.agent = {\n\truns = 1\n}\n"}, updateServiceState{}, true},
+		"no count of runs":                   {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\tpid = 5\n}\n"}, updateServiceState{}, true},
+		"a count that isn't one":             {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = many\n}\n"}, updateServiceState{}, true},
+		"a negative count":                   {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = -1\n}\n"}, updateServiceState{}, true},
+		"a count too large to be one":        {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = 99999999999999999999\n}\n"}, updateServiceState{}, true},
+		"lines that end with CR and LF":      {launchctlResult{stdout: "system/io.vectory.agent = {\r\n\tstate = running\r\n\tpid = 11\r\n\truns = 2\r\n}\r\n"}, updateServiceState{State: "active", Restarts: 1, PID: 11}, false},
+		"cut off after the lines that count": {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\tpid = 11\n\truns = 2\n"}, updateServiceState{State: "active", Restarts: 1, PID: 11}, false},
+		"cut off before the count of runs":   {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\tpid = 11\n"}, updateServiceState{}, true},
+		"no spaces around the equals sign":   {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate=running\n\truns=1\n\tpid=5\n}\n"}, updateServiceState{}, true},
+		"a pid that isn't one":               {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = 1\n\tpid = x\n}\n"}, updateServiceState{}, true},
+		"nothing printed":                    {launchctlResult{}, updateServiceState{}, true},
+		"launchctl failing for its reason":   {launchctlResult{status: 5, stderr: "Input/output error"}, updateServiceState{}, true},
+		"launchctl that was killed":          {launchctlResult{status: -1}, updateServiceState{}, true},
 	} {
 		recorder.calls = nil
 		recorder.answer(print, c.result)
@@ -475,72 +508,280 @@ func TestAJobThatLaunchdKeepsStartingCountsItsRestartsFromItsRuns(t *testing.T) 
 	}
 }
 
-func TestStoppingAndStartingTheAgentJobAreTheCallsLaunchdGetsAndABootstrapItRefusesIsTriedAgain(t *testing.T) {
+// listed is what print says of a job launchd lists as running with a process.
+func listed(t *testing.T) launchctlResult {
+	t.Helper()
+	return launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}
+}
+
+// The stop is the bootout, and it reports the job stopped only when launchd no longer
+// lists it and the process the job had is gone: launchctl bootout returns when launchd has
+// begun to remove the job, and the process is looked for with kill(pid, 0) after that.
+func TestStoppingTheAgentJobWaitsForLaunchdToRemoveItAndForItsProcessToBeGone(t *testing.T) {
 	host, recorder, slept := newTestMacOSHost(t)
-	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
-	// Stop: the job is loaded, so it is booted out (which waits for the drain).
-	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")})
+	// The job is listed for the looks that come before the bootout and for two more after
+	// it, and then it is gone; its process, pid 4242 in the listing, is there for three
+	// looks more.
+	recorder.answer("print system/io.vectory.agent", listed(t), listed(t), listed(t), listed(t), notLoaded)
+	var looked []int
+	remaining := 3
+	host.alive = func(pid int) bool {
+		looked = append(looked, pid)
+		if remaining > 0 {
+			remaining--
+			return true
+		}
+		return false
+	}
 	if err := host.StopService(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := recorder.changes(); strings.Join(got, "|") != "bootout system/io.vectory.agent" {
 		t.Errorf("stop: %v", got)
 	}
-	// Start, with nothing loaded: bootstrap.
-	recorder.calls = nil
+	// Two pauses between the looks at the listing that still found the job, then three
+	// that found the process, each a quarter of a second after the one before.
+	if len(looked) != 4 || looked[0] != 4242 {
+		t.Errorf("the process was looked for as %v", looked)
+	}
+	if want := 2 + 3; len(*slept) != want {
+		t.Errorf("slept %d times (%v), want %d", len(*slept), *slept, want)
+	}
+	for _, d := range *slept {
+		if d != launchdUnloadPoll {
+			t.Errorf("a pause of %s", d)
+		}
+	}
+
+	// A job that isn't loaded has nothing to boot out, and no process to wait for.
+	recorder.calls, *slept, looked = nil, nil, nil
 	recorder.answer("print system/io.vectory.agent", notLoaded)
+	if err := host.StopService(context.Background()); err != nil || len(recorder.changes()) != 0 || len(looked) != 0 {
+		t.Errorf("stopping an unloaded job: %v, %v, %v", err, recorder.changes(), looked)
+	}
+}
+
+func TestStoppingTheAgentJobGivesUpWhenItsProcessOutlastsTheStopLimit(t *testing.T) {
+	host, recorder, slept := newTestMacOSHost(t)
+	recorder.answer("print system/io.vectory.agent", listed(t), listed(t), notLoaded)
+	host.alive = func(int) bool { return true }
+	err := host.StopService(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "process 4242 is still there") {
+		t.Fatalf("a process that never went: %v", err)
+	}
+	total := time.Duration(0)
+	for _, d := range *slept {
+		total += d
+	}
+	if total < serviceStopLimit || total > serviceStopLimit+time.Second {
+		t.Errorf("the stop waited %s of the %s it has", total, serviceStopLimit)
+	}
+
+	// A bootout that fails is the answer, and no process is looked for.
+	host, recorder, _ = newTestMacOSHost(t)
+	recorder.answer("bootout system/io.vectory.agent", launchctlResult{status: 5, stderr: "Boot-out failed: 5: Input/output error"})
+	recorder.answer("print system/io.vectory.agent", listed(t))
+	host.alive = func(int) bool { t.Error("a process was looked for after a stop that failed"); return false }
+	if err := host.StopService(context.Background()); err == nil {
+		t.Error("a stop that failed was reported as done")
+	}
+
+	// A step that is stopped doesn't keep waiting.
+	host, recorder, _ = newTestMacOSHost(t)
+	recorder.answer("print system/io.vectory.agent", listed(t), listed(t), notLoaded)
+	ctx, cancel := context.WithCancel(context.Background())
+	host.alive = func(int) bool { cancel(); return true }
+	if err := host.StopService(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("a stop of a stopped step: %v", err)
+	}
+}
+
+// The start doesn't act on what print says at that instant and no more: it bootstraps a
+// job launchd doesn't know, and returns only when launchd lists it.
+func TestStartingTheAgentJobBootstrapsItAndConfirmsThatLaunchdListsIt(t *testing.T) {
+	host, recorder, slept := newTestMacOSHost(t)
+	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
+	const print = "print system/io.vectory.agent"
+
+	// Nothing loaded: bootstrap, a moment for launchd, and a look that shows the job.
+	recorder.answer(print, notLoaded, listed(t))
 	if err := host.StartService(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := recorder.changes(); strings.Join(got, "|") != "bootstrap system "+agent {
 		t.Errorf("start: %v", got)
 	}
-	// Start, loaded and not running: kickstart. Running: nothing.
-	recorder.calls = nil
-	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")})
+	if len(*slept) != 1 || (*slept)[0] != launchdUnloadPoll {
+		t.Errorf("the pauses were %v", *slept)
+	}
+
+	// A job launchd lists is a job started, whatever it is doing: running, or waiting out
+	// its throttle after its process ended. Nothing is bootstrapped or kicked, and the
+	// watch judges it by its runs.
+	for name, text := range map[string]string{"running": "launchctl-print-running.txt", "waiting to start again": "launchctl-print-waiting.txt", "not running": "launchctl-print-not-running.txt"} {
+		recorder.calls = nil
+		recorder.answer(print, launchctlResult{stdout: readTestdata(t, text)})
+		if err := host.StartService(context.Background()); err != nil || len(recorder.changes()) != 0 {
+			t.Errorf("start of a job that is %s: %v, %v", name, err, recorder.changes())
+		}
+	}
+}
+
+// launchd refuses a bootstrap in the moments while it tears a job down: it is tried again
+// every two seconds, for a minute in all.
+func TestAStartLaunchdRefusesIsTriedEveryTwoSecondsForAMinute(t *testing.T) {
+	refused := launchctlResult{status: 5, stderr: "Bootstrap failed: 5: Input/output error"}
+	const print = "print system/io.vectory.agent"
+
+	host, recorder, slept := newTestMacOSHost(t)
+	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
+	// Refused three times (seven seconds are more than the four tries of two seconds
+	// the step once made), then taken, then listed.
+	recorder.answer(print, notLoaded, notLoaded, notLoaded, notLoaded, listed(t))
+	recorder.answer("bootstrap system "+agent, refused, refused, refused, launchctlResult{})
+	if err := host.StartService(context.Background()); err != nil {
+		t.Fatalf("a start that worked on the fourth try: %v", err)
+	}
+	wantPauses := []time.Duration{launchdStartPause, launchdStartPause, launchdStartPause, launchdUnloadPoll}
+	if fmt.Sprint(*slept) != fmt.Sprint(wantPauses) {
+		t.Errorf("the pauses were %v, want %v", *slept, wantPauses)
+	}
+
+	// Refused for good: it is the answer after a minute, with what launchd said, and the
+	// tries stopped when the minute did.
+	host, recorder, slept = newTestMacOSHost(t)
+	recorder.answer("bootstrap system "+host.agent.definition, refused)
+	err := host.StartService(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "launchd doesn't show the agent's job after 60 s") || !strings.Contains(err.Error(), "Bootstrap failed: 5") {
+		t.Fatalf("a start that never worked: %v", err)
+	}
+	total := time.Duration(0)
+	for _, d := range *slept {
+		total += d
+	}
+	if want := launchdStartBound; total < want || total > want+launchdStartPause {
+		t.Errorf("the start tried for %s, and it has %s", total, want)
+	}
+	tries := 0
+	for _, call := range recorder.calls {
+		if strings.HasPrefix(call, "bootstrap ") {
+			tries++
+		}
+	}
+	if tries != int(launchdStartBound/launchdStartPause) {
+		t.Errorf("%d tries in a minute, two seconds apart", tries)
+	}
+
+	// A step that is stopped doesn't keep trying.
+	host, recorder, slept = newTestMacOSHost(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := host.StartService(ctx); !errors.Is(err, context.Canceled) || len(*slept) != 0 || len(recorder.changes()) != 0 {
+		t.Errorf("a start of a stopped step: %v after %d pauses, %v", err, len(*slept), recorder.changes())
+	}
+}
+
+// A bootstrap that failed because launchd already has the job (it says "Input/output
+// error" then too) is a job that is there: the next look shows it.
+func TestABootstrapThatFailedBecauseLaunchdHasTheJobIsAJobStarted(t *testing.T) {
+	host, recorder, _ := newTestMacOSHost(t)
+	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
+	recorder.answer("print system/io.vectory.agent", notLoaded, listed(t))
+	recorder.answer("bootstrap system "+agent, launchctlResult{status: 5, stderr: "Bootstrap failed: 5: Input/output error"})
+	if err := host.StartService(context.Background()); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+// A bootstrap launchd accepts and then drops is looked for again after the pause, and
+// bootstrapped again within the same minute. A job that is never listed after launchd
+// accepted the bootstrap is an error that says so.
+func TestABootstrapLaunchdAcceptsAndDropsIsNotAStart(t *testing.T) {
+	host, recorder, _ := newTestMacOSHost(t)
+	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
+	recorder.answer("print system/io.vectory.agent", notLoaded, notLoaded, notLoaded, listed(t))
 	if err := host.StartService(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := recorder.changes(); strings.Join(got, "|") != "kickstart system/io.vectory.agent" {
-		t.Errorf("start of a loaded job: %v", got)
+	bootstraps := 0
+	for _, call := range recorder.calls {
+		if call == "bootstrap system "+agent {
+			bootstraps++
+		}
 	}
-	recorder.calls = nil
-	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")})
-	if err := host.StartService(context.Background()); err != nil || len(recorder.changes()) != 0 {
-		t.Errorf("start of a running job: %v, %v", err, recorder.changes())
+	if bootstraps != 3 {
+		t.Errorf("bootstrapped %d times", bootstraps)
 	}
 
-	// launchd refuses a bootstrap in the moments after a bootout: it is tried again,
-	// with a pause, and then it is the answer.
-	recorder.calls, *slept = nil, nil
-	recorder.answer("print system/io.vectory.agent", notLoaded)
-	recorder.answer("bootstrap system "+agent,
-		launchctlResult{status: 5, stderr: "Bootstrap failed: 5: Input/output error"},
-		launchctlResult{status: 5, stderr: "Bootstrap failed: 5: Input/output error"},
-		launchctlResult{})
-	if err := host.StartService(context.Background()); err != nil {
-		t.Errorf("a start that worked on the third try: %v", err)
-	}
-	if len(*slept) != 2 || (*slept)[0] != launchdStartPause {
-		t.Errorf("the pauses were %v", *slept)
-	}
-	recorder.calls, *slept = nil, nil
-	recorder.answer("bootstrap system "+agent, launchctlResult{status: 5, stderr: "Bootstrap failed: 5: Input/output error"})
+	host, _, _ = newTestMacOSHost(t)
 	err := host.StartService(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "Bootstrap failed: 5") || len(*slept) != launchdStartAttempts-1 {
-		t.Errorf("a start that never worked: %v after %d pauses", err, len(*slept))
+	if err == nil || !strings.Contains(err.Error(), "launchd doesn't show the agent's job after 60 s: launchd accepted the bootstrap and then didn't list the job") {
+		t.Errorf("a job that was never listed: %v", err)
 	}
-	// A step that is stopped doesn't keep trying.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	recorder.calls, *slept = nil, nil
-	if err := host.StartService(ctx); !errors.Is(err, context.Canceled) || len(*slept) != 0 {
-		t.Errorf("a start of a stopped step: %v after %d pauses", err, len(*slept))
+}
+
+// What print says other than a job or "no such job" is not a start: it is looked at again,
+// and is the answer if it doesn't change.
+func TestAPrintThatSaysNothingAboutTheJobIsNeverTakenForAStart(t *testing.T) {
+	host, recorder, _ := newTestMacOSHost(t)
+	recorder.answer("print system/io.vectory.agent", launchctlResult{status: -1}, launchctlResult{status: 5, stderr: "Input/output error"}, listed(t))
+	if err := host.StartService(context.Background()); err != nil || len(recorder.changes()) != 0 {
+		t.Errorf("%v, %v", err, recorder.changes())
 	}
-	recorder.answer("bootout system/io.vectory.agent", launchctlResult{status: 5, stderr: "Boot-out failed: 5: Input/output error"})
-	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")})
-	if err := host.StopService(context.Background()); err == nil {
-		t.Error("a stop that failed was reported as done")
+	host, recorder, _ = newTestMacOSHost(t)
+	recorder.answer("print system/io.vectory.agent", launchctlResult{status: 5, stderr: "Input/output error"})
+	err := host.StartService(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "launchctl print system/io.vectory.agent failed") || len(recorder.changes()) != 0 {
+		t.Errorf("%v, %v", err, recorder.changes())
+	}
+}
+
+// A job that launchd lost while a build was tried is loaded again, and the host says it
+// did; a job it lists is left alone.
+func TestReloadingTheAgentJobLoadsItOnlyWhenLaunchdDoesNotKnowIt(t *testing.T) {
+	host, recorder, _ := newTestMacOSHost(t)
+	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
+	const print = "print system/io.vectory.agent"
+
+	recorder.answer(print, listed(t))
+	if reloaded, err := host.ReloadService(context.Background()); reloaded || err != nil || len(recorder.changes()) != 0 {
+		t.Errorf("a job launchd lists: %v, %v, %v", reloaded, err, recorder.changes())
+	}
+
+	recorder.calls = nil
+	recorder.answer(print, notLoaded, notLoaded, listed(t))
+	if reloaded, err := host.ReloadService(context.Background()); !reloaded || err != nil || strings.Join(recorder.changes(), "|") != "bootstrap system "+agent {
+		t.Errorf("a job launchd lost: %v, %v, %v", reloaded, err, recorder.changes())
+	}
+
+	// A print that said something else is no reason to load anything.
+	recorder.calls = nil
+	recorder.answer(print, launchctlResult{status: 5, stderr: "Input/output error"})
+	if reloaded, err := host.ReloadService(context.Background()); reloaded || err != nil || len(recorder.changes()) != 0 {
+		t.Errorf("a print that failed: %v, %v, %v", reloaded, err, recorder.changes())
+	}
+
+	// A job launchd won't take again is the error, and it was not reloaded.
+	host, recorder, _ = newTestMacOSHost(t)
+	recorder.answer("bootstrap system "+host.agent.definition, launchctlResult{status: 5, stderr: "Bootstrap failed: 5: Input/output error"})
+	if reloaded, err := host.ReloadService(context.Background()); reloaded || err == nil || !strings.Contains(err.Error(), "launchd doesn't show the agent's job") {
+		t.Errorf("a reload launchd refused: %v, %v", reloaded, err)
+	}
+}
+
+// A person's `launchctl bootout` of the job during a trial leaves launchd saying it doesn't
+// know the job, which the step sees as an inactive service that nothing is trying to start.
+func TestAJobLaunchdDoesNotKnowIsInactiveAndUnloadedAndOneItListsIsNeither(t *testing.T) {
+	host, recorder, _ := newTestMacOSHost(t)
+	recorder.answer("print system/io.vectory.agent", notLoaded)
+	state, err := host.ServiceState(context.Background())
+	if err != nil || state.State != "inactive" || !state.Unloaded {
+		t.Errorf("a job launchd doesn't know: %+v, %v", state, err)
+	}
+	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")})
+	state, err = host.ServiceState(context.Background())
+	if err != nil || state.State != "activating" || state.Unloaded {
+		t.Errorf("a job launchd lists: %+v, %v", state, err)
 	}
 }
 
@@ -548,7 +789,7 @@ func TestStoppingAndStartingTheAgentJobAreTheCallsLaunchdGetsAndABootstrapItRefu
 
 func TestTheAgentsDefinitionIsReadOnlyWhenItIsExactlyWhatSetupWrites(t *testing.T) {
 	const exe, dir = "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent"
-	good := launchdPlist(exe, dir, "_vectory")
+	good := mustLaunchdPlist(t, exe, dir, "_vectory")
 	got, err := parseAgentDefinition(good)
 	if err != nil || got != (agentDefinition{Account: "_vectory", Executable: exe, StateDir: dir}) {
 		t.Fatalf("the definition setup writes: %+v, %v", got, err)
@@ -593,7 +834,7 @@ func TestTheAgentsDefinitionIsReadOnlyWhenItIsExactlyWhatSetupWrites(t *testing.
 	}
 	// It agrees with the test setup uses for the same definition.
 	for _, other := range []string{
-		launchdPlist(exe, dir, "_other"), launchdPlist("/opt/bin/vectory", dir, "_vectory"), launchdPlist(exe, "/srv/agent", "_vectory"),
+		mustLaunchdPlist(t, exe, dir, "_other"), mustLaunchdPlist(t, "/opt/bin/vectory", dir, "_vectory"), mustLaunchdPlist(t, exe, "/srv/agent", "_vectory"),
 	} {
 		parsed, err := parseAgentDefinition(other)
 		if err != nil {
@@ -604,7 +845,7 @@ func TestTheAgentsDefinitionIsReadOnlyWhenItIsExactlyWhatSetupWrites(t *testing.
 		}
 	}
 	// Quoting setup does survives the reading.
-	odd, err := parseAgentDefinition(launchdPlist(`/opt/my "apps"/a&b/vectory`, `/srv/a <b>/state`, "_vectory"))
+	odd, err := parseAgentDefinition(mustLaunchdPlist(t, `/opt/my "apps"/a&b/vectory`, `/srv/a <b>/state`, "_vectory"))
 	if err != nil || odd.Executable != `/opt/my "apps"/a&b/vectory` || odd.StateDir != "/srv/a <b>/state" {
 		t.Errorf("a definition with quotes, an ampersand and angle brackets: %+v, %v", odd, err)
 	}
@@ -678,7 +919,7 @@ func TestTheRegisteredServiceOnAMacIsTheOneSetupWroteForThisStateDirectoryAndAnA
 	_, err = host.Registered(dir)
 	refusedWith("no such account", "NO_SERVICE", err)
 
-	if err := os.WriteFile(path, []byte(strings.Replace(launchdPlist(exe, dir, "nobody"), "<string>run</string>", "<string>run</string><string>-x</string>", 1)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Replace(mustLaunchdPlist(t, exe, dir, "nobody"), "<string>run</string>", "<string>run</string><string>-x</string>", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err = host.Registered(dir)
@@ -708,7 +949,7 @@ func TestTheRegisteredServiceOnAMacIsTheOneSetupWroteForThisStateDirectoryAndAnA
 		t.Fatal(err)
 	}
 	elsewhere := filepath.Join(filepath.Dir(host.daemonDir), "elsewhere.plist")
-	if err := os.WriteFile(elsewhere, []byte(launchdPlist(exe, dir, "nobody")), 0o644); err != nil {
+	if err := os.WriteFile(elsewhere, []byte(mustLaunchdPlist(t, exe, dir, "nobody")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(elsewhere, path); err != nil {
@@ -741,12 +982,17 @@ func TestAnExecutableAPackageOwnsOnAMacIsNotUpdatedBehindItsBack(t *testing.T) {
 	for _, executable := range []string{
 		"/usr/bin/vectory", "/usr/sbin/vectory", "/bin/vectory", "/sbin/vectory", "/usr/lib/vectory/vectory",
 		"/opt/homebrew/bin/vectory", "/opt/homebrew/Cellar/vectory/0.1.0/bin/vectory", "/usr/local/Cellar/vectory/0.1.0/bin/vectory",
+		// MacPorts installs into /opt/local.
+		"/opt/local/bin/vectory", "/opt/local/libexec/vectory/vectory",
 	} {
 		if reason, managed := host.PackageManaged(executable); !managed || reason == "" {
 			t.Errorf("%s isn't taken for a package's", executable)
 		}
 	}
-	for _, executable := range []string{"/usr/local/bin/vectory", "/opt/vectory/vectory", "/usr/binary/vectory", "/Library/Application Support/Vectory/bin/vectory", "/usr/local/Cellar2/vectory"} {
+	for _, executable := range []string{
+		"/usr/local/bin/vectory", "/opt/vectory/vectory", "/usr/binary/vectory", "/Library/Application Support/Vectory/bin/vectory", "/usr/local/Cellar2/vectory",
+		"/opt/local2/bin/vectory", "/opt/localbin/vectory", "/opt/locally/vectory",
+	} {
 		if reason, managed := host.PackageManaged(executable); managed {
 			t.Errorf("%s is taken for a package's: %s", executable, reason)
 		}

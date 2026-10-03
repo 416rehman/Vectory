@@ -185,6 +185,11 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 		if err := removeStep(); err != nil {
 			return done, err
 		}
+		// The step is reported removed only when it is gone: a removal that returned
+		// and left its directory is one that didn't happen.
+		if _, err := os.Lstat(paths.StepDir); err == nil {
+			return done, fmt.Errorf("the update step's directory %s is still there, so the step is not removed", paths.StepDir)
+		}
 		done.StepRemoved = true
 	}
 	return done, nil

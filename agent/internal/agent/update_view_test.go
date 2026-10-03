@@ -114,7 +114,7 @@ func TestTheHeadlineSaysWhatNeedsAttentionFirst(t *testing.T) {
 		},
 		"a rollback whose previous build didn't come back either": {
 			UpdateView{ReadAt: time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC), Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Status: &UpdateStatus{Stage: UpdateStageIdle, Last: lastResult(UpdateOutcomeRolledBack, "ROLLBACK_UNHEALTHY", "0.1.0", "0.1.1")}},
-			"rolled back from 0.1.1 at 02:19, and the previous build hasn't checked in either: check the network and the server; this host won't try 0.1.1 again",
+			"rolled back from 0.1.1 at 02:19, but the previous build isn't healthy either (it didn't report healthy within 5 minutes of its start, or it couldn't be put back): look at the agent's service and the update step's log, then at the network and the server; this host won't try 0.1.1 again",
 		},
 		"an update that failed before the swap": {
 			UpdateView{ReadAt: time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC), Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Status: &UpdateStatus{Stage: UpdateStageIdle, Last: lastResult(UpdateOutcomeFailed, "PROBE_FAILED", "0.1.0", "0.1.1")}},
@@ -135,6 +135,24 @@ func TestTheHeadlineSaysWhatNeedsAttentionFirst(t *testing.T) {
 		"a rollback in progress": {
 			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Status: &UpdateStatus{Stage: UpdateStageRollingBack, FromVersion: "0.1.0", ToVersion: "0.1.1"}},
 			"rolling back from 0.1.1",
+		},
+		"a rollback in progress with the agent's service running": {
+			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Status: &UpdateStatus{Stage: UpdateStageRollingBack, FromVersion: "0.1.0", ToVersion: "0.1.1"},
+				AgentService: &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "running", PID: 812}},
+			"rolling back from 0.1.1",
+		},
+		// The journal says rolling_back for as long as the previous build can't be started,
+		// and the step tries again every 30 seconds: what is true is said, and not that the
+		// network or the server is at fault.
+		"a rollback in progress with the agent's service not running": {
+			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Status: &UpdateStatus{Stage: UpdateStageRollingBack, FromVersion: "0.1.0", ToVersion: "0.1.1"},
+				AgentService: &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "stopped"}},
+			"rolling back from 0.1.1 · the agent's service isn't running, and the update step is trying to start the previous build again (every 30 seconds until it can)",
+		},
+		"a build on trial whose service isn't running yet": {
+			UpdateView{Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Status: &UpdateStatus{Stage: UpdateStageTrial, FromVersion: "0.1.0", ToVersion: "0.1.1", Deadline: time.Date(2026, 10, 5, 2, 19, 9, 0, time.UTC)},
+				AgentService: &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "stopped"}},
+			"trying 0.1.1 (from 0.1.0) · ends by 02:19",
 		},
 		"a fork": {
 			UpdateView{Policy: func() UpdatePolicy {
@@ -253,6 +271,52 @@ func TestTheDetailOfAHostThatCantTakeUpdates(t *testing.T) {
 	}
 	if rows[len(rows)-1].Label != "Eligibility" || rows[len(rows)-1].Value != "this host could take updates: the Upgrade agent command turns them on" {
 		t.Fatalf("%+v", rows)
+	}
+}
+
+// A rollback that keeps showing while the agent's service isn't running is one that can't
+// start the previous build yet: `vectory update status` says so in words and says what to look
+// at, and says nothing of the kind while the service runs, or at any other stage.
+func TestTheDetailOfARollbackThatCantStartThePreviousBuildSaysWhatToLookAt(t *testing.T) {
+	withLocalZone(t, time.UTC)
+	view := func(stage string, service *ServiceInfo) UpdateView {
+		return UpdateView{
+			StateDir: DefaultPaths().StateDir, ReadAt: viewNow, Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Eligibility: UpdateEligible,
+			Status:       &UpdateStatus{RunAt: viewNow.Add(-12 * time.Second), Stage: stage, FromVersion: "0.1.0", ToVersion: "0.1.1", ServiceDefinition: 1},
+			AgentService: service,
+		}
+	}
+	rows := func(v UpdateView) map[string]string {
+		got := map[string]string{}
+		for _, row := range v.Rows() {
+			got[row.Label] = row.Value
+		}
+		return got
+	}
+	stopped := &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "stopped"}
+	running := &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "running", PID: 812}
+
+	got := rows(view(UpdateStageRollingBack, stopped))
+	if want := "rolling back from 0.1.1 · the agent's service isn't running, and the update step is trying to start the previous build again (every 30 seconds until it can)"; got["In progress"] != want {
+		t.Errorf("In progress says %q, want %q", got["In progress"], want)
+	}
+	if want := "the agent's service (" + agentServiceLook() + ") and the update step's log (" + updateStepLogWords() + ")"; got["Look at"] != want {
+		t.Errorf("Look at says %q, want %q", got["Look at"], want)
+	}
+
+	for name, v := range map[string]UpdateView{
+		"a rollback with the service running":         view(UpdateStageRollingBack, running),
+		"a rollback with the service not read":        view(UpdateStageRollingBack, nil),
+		"a trial with the service not running":        view(UpdateStageTrial, stopped),
+		"a step that is idle with no service":         view(UpdateStageIdle, stopped),
+		"an update being applied and service stopped": view(UpdateStageSwapping, stopped),
+	} {
+		if value, found := rows(v)["Look at"]; found {
+			t.Errorf("%s: a Look at row says %q", name, value)
+		}
+		if strings.Contains(rows(v)["In progress"], "trying to start the previous build") {
+			t.Errorf("%s: it is said that the step is trying to start the previous build", name)
+		}
 	}
 }
 

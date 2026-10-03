@@ -113,7 +113,10 @@ type fakeConfig struct {
 	StepFree    uint64 `json:"step_free"`
 	ReadOnly    bool   `json:"read_only"`
 	StopFails   bool   `json:"stop_fails"`
-	StageENOSPC bool   `json:"stage_enospc"`
+	// StartFails is how many starts of the service fail before one works: a service
+	// manager that doesn't take the service for a while.
+	StartFails  int  `json:"start_fails"`
+	StageENOSPC bool `json:"stage_enospc"`
 	// SwapFails is why the swap fails: "read-only" for a file system that turned
 	// read-only, and any other text for an error the system gives.
 	SwapFails string `json:"swap_fails"`
@@ -363,6 +366,10 @@ func (h *fakeHost) StopService(ctx context.Context) error {
 }
 
 func (h *fakeHost) StartService(ctx context.Context) error {
+	if h.cfg.StartFails > 0 {
+		h.cfg.StartFails--
+		return errors.New("systemctl start failed")
+	}
 	s := h.loadService()
 	if s.State == "active" && s.Started != 0 {
 		return nil
