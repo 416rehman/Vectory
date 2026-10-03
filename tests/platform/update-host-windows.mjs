@@ -922,42 +922,67 @@ export function windowsHost() {
         const flag = path.join(dir, "release");
         const alive = path.join(dir, "alive");
         const held = path.join(dir, "held");
-        const script = [
-          "$ErrorActionPreference = 'Continue'",
-          `$dir = ${psq(installDir)}; $flag = ${psq(flag)}; $alive = ${psq(alive)}; $ready = ${psq(held)}`,
-          "[IO.File]::WriteAllText($alive, 'yes')",
-          "$file = $null",
-          "$deadline = (Get-Date).AddMinutes(15)",
-          "while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $flag)) {",
-          "  if ($null -eq $file) {",
-          "    foreach ($f in [IO.Directory]::GetFiles($dir, '.vectory-update-*')) {",
-          "      try {",
-          "        $file = [IO.File]::Open($f, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)",
-          "        [IO.File]::WriteAllText($ready, [IO.Path]::GetFileName($f))",
-          "        break",
-          "      } catch { }",
-          "    }",
-          "  }",
-          "  Start-Sleep -Milliseconds 10",
-          "}",
-          "if ($null -ne $file) { $file.Dispose() }",
-        ].join("\n");
-        const child = spawn(
-          "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-Command", script],
-          {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-            env: windowsPowerShellEnv(),
-          },
+        const scriptFile = path.join(dir, "hold.ps1");
+        const logFile = path.join(dir, "hold.log");
+        fs.writeFileSync(
+          scriptFile,
+          [
+            "$ErrorActionPreference = 'Continue'",
+            `$dir = ${psq(installDir)}; $flag = ${psq(flag)}; $alive = ${psq(alive)}; $ready = ${psq(held)}`,
+            "[IO.File]::WriteAllText($alive, 'yes')",
+            "$file = $null",
+            "$deadline = (Get-Date).AddMinutes(15)",
+            "while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $flag)) {",
+            "  if ($null -eq $file) {",
+            "    foreach ($f in [IO.Directory]::GetFiles($dir, '.vectory-update-*')) {",
+            "      try {",
+            "        $file = [IO.File]::Open($f, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)",
+            "        [IO.File]::WriteAllText($ready, [IO.Path]::GetFileName($f))",
+            "        break",
+            "      } catch { }",
+            "    }",
+            "  }",
+            "  Start-Sleep -Milliseconds 10",
+            "}",
+            "if ($null -ne $file) { $file.Dispose() }",
+            "",
+          ].join("\r\n"),
         );
+        // A script file and a log of its own: what the program says is what a failure
+        // shows. It has a hidden console of its own, as the other programs the checks
+        // start have, and nothing of this process's.
+        const log = fs.openSync(logFile, "a");
+        let child;
+        try {
+          child = spawn(
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              scriptFile,
+            ],
+            {
+              stdio: ["ignore", log, log],
+              windowsHide: true,
+              env: windowsPowerShellEnv(),
+            },
+          );
+        } finally {
+          fs.closeSync(log);
+        }
         child.unref();
+        let exited = null;
+        child.on("exit", (code) => {
+          exited = code ?? "a signal";
+        });
         const began = Date.now();
         while (!fs.existsSync(alive)) {
-          if (Date.now() - began > 60000)
+          if (exited !== null || Date.now() - began > 60000)
             throw new Error(
-              "The program that holds the staged file never started.",
+              `The program that holds the staged file never started (${exited === null ? "it did not write its mark in 60 s" : `it ended with ${exited}`}):\n${fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").slice(-2000) : "(it wrote no log)"}`,
             );
           await sleep(100);
         }
@@ -966,7 +991,7 @@ export function windowsHost() {
             fs.existsSync(held) ? fs.readFileSync(held, "utf8") : null,
           async release() {
             fs.writeFileSync(flag, "release");
-            for (let i = 0; i < 100 && child.exitCode === null; i += 1)
+            for (let i = 0; i < 100 && exited === null; i += 1)
               await sleep(100);
             fs.rmSync(dir, { recursive: true, force: true });
           },
