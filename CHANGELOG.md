@@ -166,6 +166,7 @@ Agents built before these fixes behave differently. Rebuild agents from this rev
 - **Typing on the sign-in page stays where you put it.** After **Back to sign in**, a failed sign-in or a refused form, focus moves to its field as the page changes, not a frame later. Earlier builds could move focus on a slow device while you typed, so the rest of a password went into **Email address**.
 - **A refused recovery token no longer blocks the next one.** After `vectory recover-enrollment` was refused (an expired, revoked or mistyped token) or never left the host, the next token was turned away with "pending recovery must retry its original token". Now a new token starts a new request. A reply lost after the request was sent still requires the original token, and the message says so.
 - **A changed Vector binary is named.** When the adopted Vector binary changed or went missing (an operating-system package upgrade does it), a deployed version failed as "Vector refused this version during validation", with no finding. It now reports the finding `VECTOR_BINARY_UNAVAILABLE`: Vector never ran, and the issue, the device page and `vectory status` name the binary and say to restore it or approve the new one with `vectory re-adopt`.
+- **`vectory allow` notes its change before Vector has ever run.** On a host whose first version was refused there is no Vector log yet, and the note in `vectory logs` was dropped. `allow` and `install --capability-policy` now create the private log, owned like the state directory, and write the note.
 
 ### Documentation
 
