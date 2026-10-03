@@ -140,6 +140,18 @@ func updateRootWord() string {
 	return "root"
 }
 
+// onTheWay is what a fix says is to be made root's alone when a directory on the way
+// to what decides an install can be changed by others: unix where every directory on
+// the way must be (the directory and each one above it), and windows where a drive
+// root and ProgramData let accounts create entries, and are left as they are, so that
+// the one to put right is the directory the message names.
+func onTheWay(unix, windows string) string {
+	if runtime.GOOS == "windows" {
+		return windows
+	}
+	return unix
+}
+
 // humanClock is a time of day as the agent's other commands print it.
 func humanClock(t time.Time) string { return t.Local().Format("15:04") }
 

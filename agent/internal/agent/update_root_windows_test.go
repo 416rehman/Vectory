@@ -197,3 +197,82 @@ func TestOnlyTheUpdateRootIsClosedAndWhatIsBelowItIsJudged(t *testing.T) {
 		t.Errorf("a directory outside the update root was changed: %+v, then %+v", before.entries, after.entries)
 	}
 }
+
+// The update root is judged as strictly as what is below it: a path that reaches the
+// policy or the step's files through a directory that the Users may add entries to is
+// refused, because that is the directory a squatter makes the step's directories in
+// first. Setup's first look lets it pass, because the walk that makes the directories
+// closes it, and once it is closed the path passes.
+func TestAPathThroughAnUpdateRootThatOthersCanAddToIsRefusedUntilItIsClosed(t *testing.T) {
+	programData := programDataOfItsOwn(t)
+	root := filepath.Join(programData, "Vectory")
+	paths := UpdateLocations()
+	made, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made.Close()
+	writeText(t, paths.Policy, "{}")
+	// What ProgramData gives a new folder: the Users may create files and folders in it.
+	setDACL(t, root, ownDACL(t, true, "(A;;0x116;;;BU)"))
+	want := root + " can be changed by " + accountName(sidUsers) + " (write)"
+	for _, path := range []string{paths.PolicyDir, paths.StepDir, paths.Private} {
+		_, err := openRootOwned(path, rootOwnedDirectory)
+		if refusal := refusedAs(t, err); refusal.Detail != want {
+			t.Errorf("%s through an update root open to the Users: %q, want %q", path, refusal.Detail, want)
+		}
+	}
+	_, err = openRootOwned(paths.Policy, rootOwnedFile)
+	if refusal := refusedAs(t, err); refusal.Detail != want {
+		t.Errorf("the policy through an update root open to the Users: %q, want %q", refusal.Detail, want)
+	}
+	if err := untrustedPrefix(paths.StepDir); err != nil {
+		t.Errorf("setup's first look at an update root that is root's and open to the Users: %v", err)
+	}
+	again, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+	if err != nil {
+		t.Fatalf("what makes the directories doesn't close the update root: %v", err)
+	}
+	again.Close()
+	requireClosedRoot(t, root)
+	mustOpen(t, paths.Policy, rootOwnedFile)
+}
+
+// Whatever makes %ProgramData%\Vectory first makes it closed. The agent's state
+// directory and its managed configuration are made in it, before the policy and the
+// step's directories, so a root that was made with what ProgramData gives a new folder
+// would be open to a squatter until the policy was written.
+func TestTheStateDirectoryMakesTheUpdateRootClosedWhenItIsTheFirstToMakeIt(t *testing.T) {
+	programData := programDataOfItsOwn(t)
+	root := filepath.Join(programData, "Vectory")
+	state := filepath.Join(root, "agent")
+	if err := PrivateDir(state); err != nil {
+		t.Fatal(err)
+	}
+	requireClosedRoot(t, root)
+	if owner := readDescriptor(t, root).owner; owner != sidAdministrators {
+		t.Errorf("the update root that the state directory made belongs to %s, want the Administrators", accountName(owner))
+	}
+	requirePrivateToItsOwner(t, state, currentUserSID(t))
+	managed := filepath.Join(root, "managed")
+	if err := PrivateDir(managed); err != nil {
+		t.Fatal(err)
+	}
+	requireClosedRoot(t, root)
+	requirePrivateToItsOwner(t, managed, currentUserSID(t))
+	// The step's directories are made below it, and everything passes the path check.
+	dir, err := ensureRootOwnedDir(UpdateLocations().Private, rootPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir.Close()
+	mustOpen(t, UpdateLocations().Private, rootOwnedDirectory)
+	// A directory that isn't the update root is made with what its parent passes on.
+	other := filepath.Join(programData, "Elsewhere")
+	if err := PrivateDir(filepath.Join(other, "agent")); err != nil {
+		t.Fatal(err)
+	}
+	if found := readDescriptor(t, other); found.protected {
+		t.Errorf("a directory above a private one that isn't the update root was closed: %+v", found)
+	}
+}

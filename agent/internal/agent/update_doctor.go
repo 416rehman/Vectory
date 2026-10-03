@@ -22,7 +22,7 @@ func updateChecks(v UpdateView) []DoctorCheck {
 	switch {
 	case v.PolicyProblem != "":
 		add("updates", "fail", "Updates", "The update policy can't be used, so this host takes no update: "+v.PolicyProblem+".",
-			"Make it, and every directory above it, writable by root alone, or write it again: "+lowerFirst(upgrade)+" with updates on.")
+			"Make "+onTheWay("it, and every directory above it,", "the directory the message names")+" writable by "+updateRootWord()+" alone, or write it again: "+lowerFirst(upgrade)+" with updates on.")
 		return checks
 	case v.Policy.Consent == UpdateConsentOff:
 		fix := ""
@@ -37,7 +37,8 @@ func updateChecks(v UpdateView) []DoctorCheck {
 	// The privileged step: it ran in the last two minutes, or nothing applies a build.
 	switch {
 	case v.StatusProblem != "":
-		add("updates-step", "fail", "Update step", "Its status can't be read: "+v.StatusProblem+".", "Make every directory on its path root's alone.")
+		add("updates-step", "fail", "Update step", "Its status can't be read: "+v.StatusProblem+".",
+			onTheWay("Make every directory on its path root's alone.", "Make the directory the message names "+updateRootWord()+"'s alone."))
 	case v.Status == nil:
 		add("updates-step", "fail", "Update step", "It hasn't run on this host: it has written no status.", "Run "+repin+": it installs the update step.")
 	case !v.StepRunning:
@@ -98,7 +99,8 @@ func updateEligibilityFix(v UpdateView) string {
 	case "NO_SERVICE":
 		return "Register the agent as a service with the Add device command, or " + AdminCommandFor(dir, "vectory service-install") + ", and make sure the service runs this executable for this state directory."
 	case "UNTRUSTED_LOCATION":
-		return "Make every directory on the path of the agent, of the update policy and of the update step writable by root alone, and keep them so."
+		return onTheWay("Make every directory on the path of the agent, of the update policy and of the update step writable by root alone, and keep them so.",
+			"Make the install directory, %ProgramData%\\Vectory and the directories in it that hold the update policy and the update step writable by "+updateRootWord()+" alone, and keep them so. The directories above them may let other accounts create entries, as a default Windows install does in C:\\ and in C:\\ProgramData, but none may delete, rename or take over what it holds.")
 	case "READ_ONLY":
 		return "Install the agent in a directory the update step can write (--install-dir), or make the install directory writable by it. " +
 			"If the agent or its directory has an immutable or append-only flag, clear it (" + clearFlagWords() + "); the update step's log (" + updateStepLogWords() + ") names the path."

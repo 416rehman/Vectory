@@ -230,6 +230,30 @@ export function summarizeAcl(acl) {
 }
 
 /**
+ * An access list as a person reads it in a failure: its owner, whether it is
+ * protected, one line per entry (allow or deny, the account, the mask in hexadecimal,
+ * and whether the entry is inherited or only passes on to what is made inside), and
+ * the descriptor text when it was read, which is what a test of the product's path
+ * check takes as a fixture.
+ */
+export function describeAcl(file, acl) {
+  const hex = (mask) => `0x${(mask >>> 0).toString(16)}`;
+  const flags = (rule) =>
+    [rule.inheritOnly && "inherit only", rule.inherited && "inherited"]
+      .filter(Boolean)
+      .join(", ");
+  return [
+    file,
+    `  owner ${acl.owner}${acl.protected ? ", protected" : ""}`,
+    ...acl.rules.map(
+      (rule) =>
+        `  ${rule.type === "Allow" ? "allow" : "deny"} ${rule.identity} ${hex(rule.mask)}${flags(rule) ? ` (${flags(rule)})` : ""}`,
+    ),
+    ...(acl.sddl ? [`  ${acl.sddl}`] : []),
+  ].join("\n");
+}
+
+/**
  * Why a file or a directory isn't SYSTEM's, the Administrators' and
  * TrustedInstaller's alone to change: an owner that is another account, or an entry
  * that gives another account a right to change it. The list is empty when it is.
@@ -349,7 +373,7 @@ export function windowsHost() {
       "$out = @()",
       `foreach ($p in @(${files.map(psq).join(",")})) {`,
       "  $a = Get-Acl -LiteralPath $p",
-      "  $out += [pscustomobject]@{ path = $p; owner = $a.Owner; protected = [bool]$a.AreAccessRulesProtected; rules = @($a.Access | ForEach-Object { [pscustomobject]@{ identity = $_.IdentityReference.Value; type = [string]$_.AccessControlType; mask = [int64]$_.FileSystemRights; inherited = [bool]$_.IsInherited; inheritOnly = [bool](([int]$_.PropagationFlags -band 2) -ne 0) } }) }",
+      "  $out += [pscustomobject]@{ path = $p; owner = $a.Owner; sddl = $a.Sddl; protected = [bool]$a.AreAccessRulesProtected; rules = @($a.Access | ForEach-Object { [pscustomobject]@{ identity = $_.IdentityReference.Value; type = [string]$_.AccessControlType; mask = [int64]$_.FileSystemRights; inherited = [bool]$_.IsInherited; inheritOnly = [bool](([int]$_.PropagationFlags -band 2) -ne 0) } }) }",
       "}",
       "ConvertTo-Json -InputObject @($out) -Depth 5 -Compress",
     ].join("\n");
@@ -553,6 +577,31 @@ export function windowsHost() {
       );
     },
     expectedLayout: expectedLayout(paths),
+    /**
+     * The owner and the access list of the directories the product's path check judges,
+     * as they are now: the drive roots, ProgramData and Program Files, the directory the
+     * agent keeps its own directories in, and the install directory (the ones that
+     * exist). A failure prints it, and a run that passes keeps it in the evidence, so
+     * that what this Windows has on them is known without another run.
+     */
+    describeLocations() {
+      try {
+        const files = [
+          path.parse(programData).root,
+          programData,
+          updateRoot,
+          path.parse(programFiles).root,
+          programFiles,
+          installDir,
+        ].filter(
+          (file, i, all) => all.indexOf(file) === i && fs.existsSync(file),
+        );
+        const acls = readAcls(files);
+        return files.map((file) => describeAcl(file, acls[file])).join("\n");
+      } catch (error) {
+        return `(the access lists couldn't be read: ${error.message})`;
+      }
+    },
 
     // ---- the registration of the step's service
     /**
@@ -980,6 +1029,7 @@ export function windowsHost() {
           allowFailure: true,
           quiet: true,
         }).text;
+      save("acl-locations.txt", host.describeLocations());
       save("acl-update-root.txt", icacls(updateRoot));
       save("acl-step.txt", icacls(stepDir, "/T"));
       save("acl-install-dir.txt", icacls(installDir, "/T"));

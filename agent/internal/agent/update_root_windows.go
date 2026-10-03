@@ -17,11 +17,19 @@ import (
 // would then refuse that directory for good (it is not root's), and agent updates
 // would never work on the host. The directory both are made in is therefore
 // closed to every account but root before either is made, whether setup is the
-// one that makes it (with a descriptor of its own, owned by the Administrators)
+// one that makes it (with a descriptor of its own, owned by the Administrators;
+// the agent's state directory and its managed configuration are made in the same
+// directory, and whichever of them is made first makes it so: makeSharedDirectory)
 // or an installation that already has it, made earlier with what ProgramData gives
 // a new folder. An existing directory is judged first: one that belongs to root is
 // closed; one that belongs to anyone else is left for the path check to refuse,
 // with the name of its owner, because it is not this code's to take.
+//
+// The directory is judged as strictly as the directories below it (windowsHolds): a
+// folder that ProgramData's default entries let an account add to is open to a
+// squatter, and a path that reaches the step's files through it is refused until it
+// is closed. Setup's first look (untrustedPrefix) judges only who owns it, because
+// setup closes it itself.
 
 // updateRootFor is the directory the policy's and the step's directories are made
 // in, when path is one of them or is below one of them and the locations in use

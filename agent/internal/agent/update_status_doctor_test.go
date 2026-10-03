@@ -109,7 +109,7 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 		{
 			name:  "a policy that can't be used",
 			view:  UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: DefaultUpdatePolicy(), PolicyFile: true, PolicyProblem: "/etc/vectory/updates is writable by its group (mode 0775)"},
-			want:  map[string]verdict{"updates": {"fail", "The update policy can't be used, so this host takes no update: /etc/vectory/updates is writable by its group (mode 0775).", "Make it, and every directory above it, writable by root alone"}},
+			want:  map[string]verdict{"updates": {"fail", "The update policy can't be used, so this host takes no update: /etc/vectory/updates is writable by its group (mode 0775).", "Make " + onTheWay("it, and every directory above it,", "the directory the message names") + " writable by " + updateRootWord() + " alone"}},
 			other: []string{"updates-step"},
 		},
 		{
@@ -134,7 +134,12 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 		{
 			name: "a step whose status can't be trusted",
 			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), StatusProblem: "/var/lib/vectory-update is writable by everyone (mode 0777)", Eligibility: "HELPER_NOT_RUNNING"},
-			want: map[string]verdict{"updates-step": {"fail", "Its status can't be read: /var/lib/vectory-update is writable by everyone (mode 0777).", "Make every directory on its path root's alone."}},
+			want: map[string]verdict{"updates-step": {"fail", "Its status can't be read: /var/lib/vectory-update is writable by everyone (mode 0777).", onTheWay("Make every directory on its path root's alone.", "Make the directory the message names "+updateRootWord()+"'s alone.")}},
+		},
+		{
+			name: "a path that other accounts can change",
+			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), Status: step(func(s *UpdateStatus) { s.Eligibility = "UNTRUSTED_LOCATION" }), StepRunning: true, Eligibility: "UNTRUSTED_LOCATION"},
+			want: map[string]verdict{"updates-host": {"fail", "a directory on the path of the agent, the policy or the update step can be changed by other accounts (UNTRUSTED_LOCATION).", onTheWay("Make every directory on the path of the agent, of the update policy and of the update step writable by root alone, and keep them so.", "Make the install directory, ")}},
 		},
 		{
 			name: "a package-managed host that consented",

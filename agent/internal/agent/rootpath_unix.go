@@ -353,6 +353,30 @@ func ensureRootOwnedDir(path string, leaf rootFilePerm) (*rootOwned, error) {
 	return walkOwned(path, rootOwnedDirectory, rootOwnedTrust, &createSpec{leaf: leaf})
 }
 
+// untrustedPrefix is setup's first look at where a directory will be: it says why
+// the nearest directory that exists on the way to path can't be trusted with what
+// decides an install, or returns nil when it can. A directory that isn't there yet
+// is made by the step that needs it, below one that passed. Every directory is
+// judged the same here (root's, and writable by nobody else), so the nearest one
+// that exists is judged as the path would judge it.
+func untrustedPrefix(path string) error {
+	for {
+		held, err := openRootOwned(path, rootOwnedDirectory)
+		if err == nil {
+			_ = held.Close()
+			return nil
+		}
+		if !notExist(err) {
+			return err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return nil
+		}
+		path = parent
+	}
+}
+
 // openPlainFile opens a regular file without following a link in any component
 // of its path, and without waiting for a writer. It judges nothing else: the
 // file may belong to anyone, which a caller reads from the handle. The privileged
