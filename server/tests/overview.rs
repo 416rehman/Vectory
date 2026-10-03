@@ -530,6 +530,8 @@ async fn an_offline_device_that_verified_its_assigned_version_is_counted_apart()
         false,
     )
     .await;
+    // The device went in beside the server, so the shared read is told.
+    s.fleet.invalidate();
     let slim = get(&app, &actor, "/api/v1/overview?slim=1").await;
     assert_eq!(slim["devices_offline_on_desired"], 2);
     assert_eq!(slim["offline_on_desired_version"], Value::Null);
