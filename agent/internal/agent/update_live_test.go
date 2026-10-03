@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -224,12 +225,37 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 	public := testPublicKey(t, private, "live-check")
 	pinnedAt := time.Now().UTC().Truncate(time.Second)
 
+	t.Run("a-server-with-updates-off-has-no-list-of-keys", func(t *testing.T) {
+		if _, err := fetchReleaseKeyBundle(context.Background(), srv.https, releaseKeyTrust{caFile: srv.caFile}); !errors.Is(err, errServerHasNoUpdates) {
+			t.Fatalf("the list of keys of a server with updates off: %v", err)
+		}
+	})
+
 	// Updates on, with that key.
 	current := srv.must("GET", "/agent-updates", nil)
 	on := srv.must("PUT", "/agent-updates/settings", map[string]any{"enabled": true, "custody": map[string]any{"kind": "offline", "public_key": public.Line()}, "current_password": liveAdminPassword, "revision": current["revision"]})
 	if key, _ := on["current_key"].(map[string]any); on["enabled"] != true || key["fingerprint"] != public.Fingerprint() {
 		t.Fatalf("turning updates on: %v", on)
 	}
+
+	t.Run("setup-finds-the-teams-key-in-the-servers-list-by-its-fingerprint", func(t *testing.T) {
+		raw, err := fetchReleaseKeyBundle(context.Background(), srv.https, releaseKeyTrust{caFile: srv.caFile})
+		if err != nil {
+			t.Fatalf("the list of keys: %v", err)
+		}
+		offered, err := ParseReleaseKeyBundle(raw)
+		if err != nil {
+			t.Fatalf("the agent can't read the list the server serves: %v (%s)", err, raw)
+		}
+		wrong := strings.Repeat("0", 64)
+		pins, missing := matchReleaseKeys(offered, []string{public.Fingerprint(), wrong})
+		if len(pins) != 1 || pins[0].Fingerprint() != public.Fingerprint() || len(missing) != 1 || missing[0] != wrong {
+			t.Fatalf("matching by fingerprint: pins %v, missing %v, offered %+v", pins, missing, offered)
+		}
+		if len(offered) != 1 || offered[0].State != "current" || offered[0].Key.Line() != public.Line() {
+			t.Fatalf("the list of a server that holds one key: %+v", offered)
+		}
+	})
 
 	// The release mirror holds a build of 0.1.1 for this platform (and for the
 	// other architecture, which no host here runs).
