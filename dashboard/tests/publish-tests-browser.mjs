@@ -129,6 +129,14 @@ function baseDocument(tests, kind) {
     config.transforms.enrich.source =
       '.seen = true\n.region = get_enrichment_table_record!("regions", { "id": .id })';
   }
+  if (kind === "program") {
+    // A remap whose program is a file on the device.
+    config.transforms.enrich = {
+      type: "remap",
+      inputs: ["demo"],
+      file: "/etc/vector/enrich.vrl",
+    };
+  }
   if (kind === "lua") {
     config.transforms.probe = {
       type: "lua",
@@ -275,9 +283,51 @@ const enrichmentValidation = {
     "Each device checks enrichment data files and local files and paths before applying this version.",
   ],
 };
+// And for a remap that loads its VRL program from a file: the worker never
+// opens an author's path either.
+const programSentence =
+  "A VRL program in a file is read on devices, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests.";
+const programReasons = [
+  "A VRL program in a file is read on devices",
+  "device-local paths or external code files",
+];
+const programTestReply = {
+  ...luaTestReply,
+  deferred_reasons: programReasons,
+  errors: [programSentence],
+  warnings: [
+    "Each device checks local files and paths before applying this version.",
+  ],
+  diagnostics: [
+    {
+      severity: "error",
+      section: "tests",
+      code: "tests_on_devices",
+      message: programSentence,
+    },
+  ],
+};
+const programValidation = {
+  ...luaValidation,
+  deferred_reasons: programReasons,
+  diagnostics: [
+    {
+      severity: "warning",
+      section: "transforms",
+      component: "enrich",
+      code: "device_check",
+      message: "This step loads its VRL program from a file on each device.",
+    },
+  ],
+  warnings: [
+    "transforms.enrich: This step loads its VRL program from a file on each device.",
+    "Each device checks local files and paths before applying this version.",
+  ],
+};
 function testReply(mode) {
   if (mode === "lua") return luaTestReply;
   if (mode === "enrichment") return enrichmentTestReply;
+  if (mode === "program") return programTestReply;
   const tests = rows[mode];
   const stopped = tests.filter((t) => !t.passed).length;
   return {
@@ -308,7 +358,9 @@ function state(options = {}) {
             ),
           )
         : undefined,
-      ["lua", "enrichment"].includes(options.mode) ? options.mode : undefined,
+      ["lua", "enrichment", "program"].includes(options.mode)
+        ? options.mode
+        : undefined,
     ),
     mode: options.mode || "passed",
     versions: [],
@@ -452,16 +504,18 @@ async function start(f, options = {}) {
           ? luaValidation
           : f.mode === "enrichment"
             ? enrichmentValidation
-            : {
-                valid: true,
-                vector_validated: true,
-                static_checked: true,
-                deferred: false,
-                diagnostics: [],
-                errors: [],
-                warnings: [],
-                vector_version: "0.58.0",
-              },
+            : f.mode === "program"
+              ? programValidation
+              : {
+                  valid: true,
+                  vector_validated: true,
+                  static_checked: true,
+                  deferred: false,
+                  diagnostics: [],
+                  errors: [],
+                  warnings: [],
+                  vector_version: "0.58.0",
+                },
       );
     if (
       method === "POST" &&
@@ -947,6 +1001,67 @@ try {
       }
     },
   );
+
+  for (const [width, theme] of [
+    [1200, "light"],
+    [390, "dark"],
+  ])
+    await run(
+      `a remap whose program is a file at ${width}px, ${theme}: the tests did not run here, the sentence says why, and the check line names local files (Axe)`,
+      async () => {
+        const s = await start(state({ mode: "program" }), {
+          width,
+          height: width < 600 ? 900 : 950,
+          theme,
+        });
+        try {
+          await openReview(s.page);
+          const region = testsRegion(s.page);
+          await expect(region).toHaveAttribute("data-tests-state", "failing");
+          await expect(region).toContainText(
+            "Tests: Vector didn't run either of the 2 tests",
+          );
+          await expect(region).toContainText(programSentence);
+          await runCheck(s.page);
+          await expect(reviewDialog(s.page)).toContainText(
+            "Vector 0.58 accepted this pipeline. Each device checks local files and paths before applying it.",
+          );
+          // The check line keeps its own words, never the raw reason.
+          expect(
+            await reviewDialog(s.page)
+              .locator(".publish-review-check")
+              .innerText(),
+          ).not.toContain("A VRL program in a file");
+          expect(
+            await s.page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth + 1,
+            ),
+          ).toBe(true);
+          await scan(s.page, "program-file-review", width, theme);
+          // The editor's Tests panel says the same, and that the tests wait
+          // for a device rather than failed.
+          await reviewDialog(s.page)
+            .getByRole("button", { name: "Open tests", exact: true })
+            .click();
+          const settings = s.page.getByRole("dialog", {
+            name: "Pipeline settings",
+          });
+          await settings
+            .getByRole("button", { name: "Run pipeline tests", exact: true })
+            .click();
+          const results = settings.locator(".pipeline-test-results");
+          await expect(results).toHaveAttribute("data-state", "deferred");
+          await expect(results).toContainText(
+            "These tests need the device environment",
+          );
+          await expect(results).toContainText(programSentence);
+          await scan(s.page, "program-file-tests-panel", width, theme);
+          clean(s.f);
+        } finally {
+          await s.close();
+        }
+      },
+    );
 
   await run("a pipeline without tests never asks for any", async () => {
     const s = await start(state({ names: [] }));

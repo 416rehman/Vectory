@@ -1804,6 +1804,251 @@ async fn enrichment_tables_that_read_files_never_reach_the_validator() {
     child.kill().await.ok();
 }
 
+/// A pipeline whose one remap names its program the ways `program` says, and a
+/// test of what that program does.
+#[cfg(target_os = "linux")]
+fn remap_program_pipeline(program: serde_json::Value) -> serde_json::Value {
+    let mut remap = json!({"type": "remap", "inputs": ["in"]});
+    for (key, value) in program.as_object().unwrap() {
+        remap[key] = value.clone();
+    }
+    json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"norm": remap},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["norm"]}},
+        "tests": [{"name": "adds a service",
+            "inputs": [{"insert_at": "norm", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "norm", "conditions": [{"type": "vrl", "source": ".service == \"edge\""}]}]}],
+    })
+}
+
+/// How a remap names its program, by what `name` says: `file`, `files`, or an
+/// inline `source` beside them.
+#[cfg(target_os = "linux")]
+fn program_shape(name: &str, path: &std::path::Path) -> serde_json::Value {
+    let inline = ".service = \"edge\"";
+    match name {
+        "file" => json!({"file": path}),
+        "files" => json!({"files": [path]}),
+        "source and file" => json!({"source": inline, "file": path}),
+        "source and files" => json!({"source": inline, "files": [path]}),
+        "file and files" => json!({"file": path, "files": [path]}),
+        "all three" => json!({"source": inline, "file": path, "files": [path]}),
+        other => unreachable!("{other}"),
+    }
+}
+
+/// A remap that loads its program from a file makes Vector open that file when
+/// it builds the remap, which `vector validate` and `vector test` both do. The
+/// server never opens a path an author names: a device reads its own files, so
+/// the check says the device does and the tests run there. A remap that names
+/// its program twice never reaches a file, because Vector refuses it first and
+/// says so itself, through the worker and the API alike.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_remap_with_its_program_in_a_file_stays_out_of_the_validator_and_naming_it_twice_is_refused()
+ {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; remap program file guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+
+    // Control: Vector reads the file when it builds the remap for a test, and
+    // the test passes only with the program the file holds. A path that stays
+    // unopened below means something kept the remap away.
+    let program = dir.path().join("normalize.vrl");
+    std::fs::write(&program, ".service = \"edge\"\n").unwrap();
+    let control = dir.path().join("control.json");
+    std::fs::write(
+        &control,
+        remap_program_pipeline(json!({"file": program})).to_string(),
+    )
+    .unwrap();
+    let (code, text) = vector_ends(&vector, &["test", "--config-json"], &control, None).await;
+    assert_eq!(code, Some(0), "the control test did not pass: {text}");
+    for name in ["file", "files"] {
+        let pipe = Tripwire::new(dir.path().join(format!("control-{name}")));
+        let path = dir.path().join(format!("control-{name}.json"));
+        std::fs::write(
+            &path,
+            remap_program_pipeline(program_shape(name, &pipe.path)).to_string(),
+        )
+        .unwrap();
+        // It waits on the pipe for a moment, then is stopped.
+        vector_briefly(&vector, &["test", "--config-json"], &path).await;
+        assert!(
+            pipe.opened().await,
+            "{name}: Vector did not open the path under a normal test, so this test proves nothing"
+        );
+    }
+
+    let (mut child, url, client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let (status, created) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Remap file","description":"","config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}},"graph":{"nodes":[],"edges":[]}}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let reason = "A VRL program in a file is read on devices";
+    let sentence = "A VRL program in a file is read on devices, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests.";
+    let mut pipes = Vec::new();
+
+    // Exactly one way to name the program, and it is a file: left to a device.
+    for name in ["file", "files"] {
+        let pipe = Tripwire::new(dir.path().join(format!("worker-{name}")));
+        let config = remap_program_pipeline(program_shape(name, &pipe.path));
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        assert_eq!(checked["stubbed"], json!(["norm"]), "{name}: {checked}");
+        let tests = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tests["tests_run"], false, "{name}: {tests}");
+        assert_eq!(
+            tests["diagnostics"][0]["code"], "tests_on_devices",
+            "{name}: {tests}"
+        );
+        let (status, run) = api(
+            &app,
+            "POST",
+            "/api/v1/configurations/test",
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {run}");
+        assert_eq!(run["tests_run"], false, "{name}: {run}");
+        assert_eq!(run["deferred"], true, "{name}: {run}");
+        assert_eq!(run["tests"], json!([]), "{name}: {run}");
+        assert!(
+            run["deferred_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(reason)),
+            "{name}: {run}"
+        );
+        assert_eq!(run["errors"], json!([sentence]), "{name}: {run}");
+        let (status, validated) = api(
+            &app,
+            "POST",
+            &format!("/api/v1/configurations/{id}/validate"),
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {validated}");
+        assert_eq!(validated["valid"], true, "{name}: {validated}");
+        assert_eq!(validated["deferred"], true, "{name}: {validated}");
+        assert_eq!(validated["vector_validated"], false, "{name}: {validated}");
+        assert!(
+            validated["deferred_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(reason)),
+            "{name}: {validated}"
+        );
+        assert!(
+            validated["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| {
+                    d["code"] == "device_check"
+                        && d["component"] == "norm"
+                        && d["message"]
+                            == "This step loads its VRL program from a file on each device."
+                }),
+            "{name}: {validated}"
+        );
+        pipes.push((name.to_owned(), pipe));
+    }
+
+    // More than one way to name it: nothing is replaced, nothing is opened, and
+    // Vector's own rule is the finding, with no test run to fail against it.
+    let rule = "must provide exactly one of `source` or `file` or `files`";
+    for name in [
+        "source and file",
+        "source and files",
+        "file and files",
+        "all three",
+    ] {
+        let pipe = Tripwire::new(dir.path().join(format!("twice-{}", name.replace(' ', "-"))));
+        let config = remap_program_pipeline(program_shape(name, &pipe.path));
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], false, "{name}: {checked}");
+        assert_eq!(checked["stubbed"], json!([]), "{name}: {checked}");
+        let finding = diagnostic(&checked, "norm");
+        assert!(
+            finding["message"].as_str().unwrap().contains(rule),
+            "{name}: {checked}"
+        );
+        let (status, validated) = api(
+            &app,
+            "POST",
+            &format!("/api/v1/configurations/{id}/validate"),
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {validated}");
+        assert_eq!(validated["valid"], false, "{name}: {validated}");
+        assert_eq!(validated["vector_validated"], false, "{name}: {validated}");
+        let finding = diagnostic(&validated, "norm");
+        assert!(
+            finding["message"].as_str().unwrap().contains(rule),
+            "{name}: {validated}"
+        );
+        assert_eq!(finding["section"], "transforms", "{name}: {validated}");
+        let (status, run) = api(
+            &app,
+            "POST",
+            "/api/v1/configurations/test",
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {run}");
+        // Tests that no device can build are not deferred to devices: Vector
+        // could not build the test, and its own reason is in the result.
+        assert_eq!(run["valid"], false, "{name}: {run}");
+        assert!(
+            !run["errors"].to_string().contains("run only on devices"),
+            "{name}: {run}"
+        );
+        assert!(
+            !run["deferred_reasons"]
+                .to_string()
+                .contains("A VRL program in a file"),
+            "{name}: {run}"
+        );
+        assert_eq!(run["tests"][0]["refused"], true, "{name}: {run}");
+        assert!(
+            run["tests"][0]["detail"].as_str().unwrap().contains(rule),
+            "{name}: {run}"
+        );
+        pipes.push((name.to_owned(), pipe));
+    }
+    for (name, pipe) in &pipes {
+        assert!(
+            !pipe.opened().await,
+            "{name}: the worker opened a path the author named"
+        );
+    }
+
+    // An inline program is checked and tested here, as before.
+    let inline = remap_program_pipeline(json!({"source": ".service = \"edge\""}));
+    let tests = post(&client, &url, "tests", json!({"config": inline})).await;
+    assert_eq!(tests["tests_run"], true, "{tests}");
+    assert_eq!(tests["tests"][0]["passed"], true, "{tests}");
+    child.kill().await.ok();
+}
+
 /// Run Vector for a moment and stop it, for a program that makes it wait on a
 /// path.
 #[cfg(target_os = "linux")]
