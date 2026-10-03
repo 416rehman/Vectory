@@ -233,10 +233,12 @@ function linuxHost() {
     unitText: (file) => fs.readFileSync(file, "utf8"),
     /** What `systemd-analyze verify` prints about the two units, which must be nothing. */
     analyze() {
+      // As root: the step's helper is in a directory only root can enter, and verify
+      // checks that the command is there and can be run.
       const result = run(
         "systemd-analyze",
         ["verify", "--man=no", paths.stepUnit, paths.timerUnit],
-        { allowFailure: true, quiet: true },
+        { allowFailure: true, quiet: true, elevated: true },
       );
       return { code: result.code, output: result.text.trim() };
     },
@@ -244,6 +246,7 @@ function linuxHost() {
       return run("systemd-analyze", ["security", "--no-pager", units.step], {
         allowFailure: true,
         quiet: true,
+        elevated: true,
       }).text;
     },
     /** The properties the manager reports for the units. */

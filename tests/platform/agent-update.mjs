@@ -105,10 +105,15 @@ const saveContext = (patch) => {
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+// A bit mask is a BigInt, which JSON can't write: it is written as hexadecimal.
+const written = (value) =>
+  JSON.stringify(value, (_, member) =>
+    typeof member === "bigint" ? `0x${member.toString(16)}` : member,
+  );
 function assertEqual(actual, expected, what) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected))
+  if (written(actual) !== written(expected))
     throw new Error(
-      `${what}: expected ${JSON.stringify(expected)}, found ${JSON.stringify(actual)}.`,
+      `${what}: expected ${written(expected)}, found ${written(actual)}.`,
     );
 }
 
@@ -449,12 +454,6 @@ async function install(evidence) {
   const setup = await evidence.step(
     `vectory setup 0.1.0 with the consent flags of Add device (${flags.join(" ")}) registers the service and enrolls ${deviceName}`,
     async () => {
-      // TEMPORARY: setup installs the update step before it registers the service, so
-      // on a fresh host the first run registers it and the second adds the consent.
-      // Removed when setup installs the step after the service is registered.
-      await setupDevice(s, builds["0.1.0"].file, deviceName, [], {
-        agentPath: host.paths.agent,
-      });
       const { parsed } = await setupDevice(
         s,
         builds["0.1.0"].file,
