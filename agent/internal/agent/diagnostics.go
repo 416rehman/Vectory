@@ -143,6 +143,9 @@ func applyNextAction(state State) string {
 	if diagnostic(state.Error, "DISK_FULL") != nil {
 		return "Free some space on the disk the problem names. The agent applies the version at its next check-in by itself; keep the private recovery files intact."
 	}
+	if diagnostic(state.Error, "VECTOR_BINARY_UNAVAILABLE") != nil {
+		return "Restore the Vector binary, or stop the agent and approve the new one with vectory re-adopt. Then choose Retry in the dashboard or run vectory retry; Vector never ran this version."
+	}
 	// Only a device that verified a configuration has one that keeps running.
 	keeps := " Vector keeps running the last working configuration."
 	if state.LastGoodSHA256 == "" {

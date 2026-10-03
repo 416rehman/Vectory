@@ -247,6 +247,13 @@ func prepareFailure(code, message, hint string) *VectorFailure {
 	return &VectorFailure{Phase: "prepare", Summary: message, Diagnostics: []Diagnostic{{Code: code, Message: message, Hint: hint}}}
 }
 
+// binaryUnavailable is what every check and every start says when the Vector
+// binary on disk is not the one the agent approved. Vector never ran, so the
+// finding names the binary and the way out, not the pipeline.
+func binaryUnavailable() *VectorFailure {
+	return prepareFailure("VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", "Run vectory doctor on the host. Restore the binary, or stop the agent and approve a new one with vectory re-adopt.")
+}
+
 func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (candidateRun, error) {
 	var run candidateRun
 	// A check on request reports its own words for what can't run; an apply keeps
@@ -261,7 +268,11 @@ func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (
 		return run, prepareFailure(code, message, hint)
 	}
 	if e := d.checkBinary(); e != nil {
-		return unready(e, "VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", "Run vectory doctor on the host. Restore the binary, or stop the agent and approve a new one with vectory re-adopt.")
+		// The cause names the binary's path, so it stays in the private local log.
+		if !mode.dryRun {
+			d.Log.note("Vector was not run", []byte(e.Error()))
+		}
+		return run, binaryUnavailable()
 	}
 	if e := SafePath(path); e != nil {
 		return unready(e, "CHECK_UNAVAILABLE", "The agent couldn't prepare this check.", "Run it again. If it keeps failing, run vectory doctor on the host.")
@@ -408,7 +419,7 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 		return errors.New("Vector instance has not been explicitly adopted")
 	}
 	if e := d.checkBinary(); e != nil {
-		return e
+		return binaryUnavailable()
 	}
 	if d.Log == nil {
 		d.Log = newVectorLog(d.Dir)

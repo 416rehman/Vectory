@@ -39,8 +39,14 @@ func TestSamePathInstallDoesNotTrustReplacedBinary(t *testing.T) {
 		t.Fatal("ordinary install silently approved new bytes", err)
 	}
 	driver := &VectorDriver{Settings: got}
-	if err = driver.Validate(context.Background(), s.ManagedConfig); err == nil || !strings.Contains(err.Error(), "adopted Vector binary changed") {
-		t.Fatal("driver must reject replacement before executing it", err)
+	for name, run := range map[string]func() error{
+		"validate": func() error { return driver.Validate(context.Background(), s.ManagedConfig) },
+		"activate": func() error { return driver.Activate(context.Background(), s.ManagedConfig) },
+	} {
+		failure := asVectorFailure(run())
+		if failure == nil || len(failure.Diagnostics) != 1 || failure.Diagnostics[0].Code != "VECTOR_BINARY_UNAVAILABLE" {
+			t.Fatalf("driver must reject replacement before executing it (%s): %+v", name, failure)
+		}
 	}
 }
 
