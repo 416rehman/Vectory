@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,20 +30,64 @@ func probeAccount() updateAccount {
 	return updateAccount{Name: "self", UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
 }
 
-// scriptDir is a directory every account can enter and write, outside the test's
-// private temporary directory (which only its owner may enter): the account the
-// probe runs as must reach the script.
+// scriptDir is a directory every account can enter and write, for the scripts that
+// stand in for builds: the account the probe runs as must reach the script. It is
+// outside the test's private temporary directory (which only its owner may enter),
+// and it is not in a temporary folder that only its owner may enter either. A Mac
+// keeps TMPDIR in such a folder (/var/folders/.../T, mode 0700): when root runs the
+// tests the probe switches to another account, and that account can't pass through
+// it to a directory root made there (EACCES, at the first step of the start).
+//
+// So the temporary folder is tried first, as it always was, then /tmp, and the first
+// directory is taken where the account can enter every directory above the script and
+// a script of its own starts as that account. Where there is none, the test ends
+// with what the host says about each place it tried.
 func scriptDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "vectory-probe-")
-	if err != nil {
-		t.Fatal(err)
+	account := probeAccount()
+	ids := probeAccountIDs(account)
+	var turnedDown []string
+	for _, base := range scriptDirBases() {
+		dir, err := os.MkdirTemp(base, "vectory-probe-")
+		if err != nil {
+			turnedDown = append(turnedDown, fmt.Sprintf("%s: %v", base, err))
+			continue
+		}
+		if err := os.Chmod(dir, 0o777); err != nil {
+			os.RemoveAll(dir)
+			t.Fatal(err)
+		}
+		if blocker, _ := accessBlocker(ids, dir, false); blocker != "" {
+			turnedDown = append(turnedDown, fmt.Sprintf("%s: the account %d:%d can't enter %s: %s", base, account.UID, account.GID, dir, blocker))
+			os.RemoveAll(dir)
+			continue
+		}
+		starts, err := probeScriptStarts(dir, account)
+		if err != nil {
+			turnedDown = append(turnedDown, fmt.Sprintf("%s: a script in %s doesn't start as %d:%d: %v%s", base, dir, account.UID, account.GID, err, probeDiagnostics(starts, account)))
+			os.RemoveAll(dir)
+			continue
+		}
+		os.Remove(starts)
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		if len(turnedDown) > 0 {
+			t.Logf("the script directory is %s; not used: %s", dir, strings.Join(turnedDown, "; "))
+		}
+		return dir
 	}
-	if err := os.Chmod(dir, 0o777); err != nil {
-		t.Fatal(err)
+	t.Fatalf("there is no directory where a script starts as %d:%d:\n%s", account.UID, account.GID, strings.Join(turnedDown, "\n"))
+	return ""
+}
+
+// scriptDirBases are the folders scriptDir tries, in order: the temporary folder,
+// then /tmp when that is another folder.
+func scriptDirBases() []string {
+	bases := []string{os.TempDir()}
+	temp, _ := filepath.EvalSymlinks(os.TempDir())
+	if tmp, err := filepath.EvalSymlinks("/tmp"); err == nil && tmp != temp {
+		bases = append(bases, "/tmp")
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return dir
+	return bases
 }
 
 func probeScript(t *testing.T, dir, body string) string {
@@ -219,7 +265,7 @@ sleep 60`)
 	started := time.Now()
 	_, err := runProbe(context.Background(), script, probeAccount(), 1500*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "didn't finish") {
-		t.Fatalf("a probe that never answered: %v", err)
+		probeFailed(t, script, "a probe that never answered: %v", err)
 	}
 	if took := time.Since(started); took > 6*time.Second {
 		t.Errorf("the step waited %s for a probe limited to 1.5s", took)
@@ -232,7 +278,7 @@ func TestAProbeThatPrintsMoreThanTheBoundIsRefusedAndNeverBlocked(t *testing.T) 
 	started := time.Now()
 	_, err := runProbe(context.Background(), script, probeAccount(), 5*time.Second)
 	if !errors.Is(err, errProbeOutputTooLong) {
-		t.Fatalf("a probe that printed a megabyte: %v", err)
+		probeFailed(t, script, "a probe that printed a megabyte: %v", err)
 	}
 	if took := time.Since(started); took > 4*time.Second {
 		t.Errorf("a probe that printed a megabyte took %s", took)
@@ -242,11 +288,17 @@ func TestAProbeThatPrintsMoreThanTheBoundIsRefusedAndNeverBlocked(t *testing.T) 
 func TestAProbeThatExitsWithAFailureIsAFailedProbeWhatEverItPrinted(t *testing.T) {
 	script := probeScript(t, scriptDir(t), `printf '{"version":"0.1.1","os":"%s","arch":"%s"}\n' `+runtime.GOOS+` `+runtime.GOARCH+`
 exit 3`)
+	// Each failure is the one that was meant: a host where nothing starts would fail
+	// all three and pass a test that only asked for an error.
 	if output, err := runProbe(context.Background(), script, probeAccount(), 5*time.Second); err == nil {
 		t.Fatalf("a probe that exited 3 passed: %s", output)
+	} else if !strings.Contains(err.Error(), "exit status 3") {
+		probeFailed(t, script, "a probe that exited 3 failed another way: %v", err)
 	}
 	if _, err := runProbe(context.Background(), filepath.Join(scriptDir(t), "missing"), probeAccount(), 5*time.Second); err == nil {
 		t.Error("a build that isn't there passed")
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a build that isn't there: %v", err)
 	}
 	notExecutable := filepath.Join(scriptDir(t), "vectory")
 	if err := os.WriteFile(notExecutable, []byte("#!/bin/sh\necho {}\n"), 0o644); err != nil {
@@ -254,6 +306,8 @@ exit 3`)
 	}
 	if _, err := runProbe(context.Background(), notExecutable, probeAccount(), 5*time.Second); err == nil {
 		t.Error("a file that isn't executable passed")
+	} else if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("a file that isn't executable: %v", err)
 	}
 }
 
@@ -271,7 +325,7 @@ sleep 60`)
 	}()
 	_, err := runProbe(ctx, script, probeAccount(), 30*time.Second)
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("a probe whose step was stopped: %v", err)
+		probeFailed(t, script, "a probe whose step was stopped: %v", err)
 	}
 	waitUntilProcessEnds(t, readPID(t, child))
 }

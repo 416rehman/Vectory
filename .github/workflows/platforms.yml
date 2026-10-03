@@ -25,9 +25,10 @@ on:
       - "dashboard/e2e/cross-browser.spec.ts"
 permissions:
   contents: read
-concurrency:
-  group: platforms-${{ github.ref }}
-  cancel-in-progress: true
+# A newer push cancels the Linux and browser runs it replaces. A Windows or macOS
+# run that is under way finishes (the newest one waits for its turn), because their
+# proofs take longer than changes come, and a run that every push cancelled would
+# never end.
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
@@ -46,6 +47,9 @@ jobs:
   # a host must refuse. A phase runs only when the phases it builds on passed.
   linux-service:
     runs-on: ubuntu-24.04
+    concurrency:
+      group: platforms-linux-${{ github.ref }}
+      cancel-in-progress: true
     timeout-minutes: 210
     env:
       VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
@@ -246,6 +250,9 @@ jobs:
   # in that release; the commit that sets it to true cites a green run of this job.
   windows:
     runs-on: windows-2025
+    concurrency:
+      group: platforms-windows-${{ github.ref }}
+      cancel-in-progress: false
     timeout-minutes: 240
     defaults:
       run:
@@ -583,6 +590,9 @@ jobs:
   # false, and macOS hosts update by hand in that release.
   macos:
     runs-on: macos-15
+    concurrency:
+      group: platforms-macos-${{ github.ref }}
+      cancel-in-progress: false
     timeout-minutes: 240
     env:
       VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
@@ -785,6 +795,9 @@ jobs:
   # fresh instance, because the first administrator can be created only once.
   browsers:
     runs-on: ubuntu-24.04
+    concurrency:
+      group: platforms-browsers-${{ github.ref }}
+      cancel-in-progress: true
     timeout-minutes: 60
     env:
       VECTORY_PREVIEW_AGENT_TARGETS: linux/amd64

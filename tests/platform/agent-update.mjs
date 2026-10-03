@@ -45,6 +45,7 @@
 // (launchd) and Windows (the Service Control Manager).
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { adapterFor, agentProcesses, describeProcesses } from "./adapters.mjs";
@@ -124,6 +125,35 @@ function assertEqual(actual, expected, what) {
     throw new Error(
       `${what}: expected ${written(expected)}, found ${written(actual)}.`,
     );
+}
+
+/**
+ * What a failed phase prints about the host: the step's status, journal and counters,
+ * its log, and the service manager's view, each cut to its last 6 KB. The evidence
+ * artifact holds the same files, but the run's page is where a failure is read.
+ */
+function hostDiagnostics(host) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vectory-diagnostics-"));
+  try {
+    host.collect(dir);
+    return fs
+      .readdirSync(dir)
+      .sort()
+      .filter((name) =>
+        /^(journal-|step-(status|journal|counters)|step\.log|launchctl-print)/.test(
+          name,
+        ),
+      )
+      .map(
+        (name) =>
+          `--- ${name}\n${fs.readFileSync(path.join(dir, name), "utf8").slice(-6000)}`,
+      )
+      .join("\n");
+  } catch (error) {
+    return `(the host's diagnostics couldn't be read: ${error.message})`;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** A file the product pins, from the agent's test data. */
@@ -993,10 +1023,10 @@ async function startRollout(evidence, s, release, deviceId) {
     `${release.version}: a rollout to the device, after its review`,
     async () => {
       const preview = await review(s, release, deviceId);
-      assertEqual(
-        preview.will_update.map((d) => d.device_id),
-        [deviceId],
-        "the devices that will update",
+      assert(
+        preview.will_update.length === 1 &&
+          preview.will_update[0].device_id === deviceId,
+        `The review says the device won't update: ${JSON.stringify(preview.wont_update)}`,
       );
       assertEqual(preview.wont_update, [], "the devices that won't");
       const rollout = await s.api("/agent-update-rollouts", {
@@ -1160,6 +1190,10 @@ async function update(evidence) {
     "the device is updated, as the server counts it: a check-in of the new build that reports the commit",
     ended,
   );
+  if (done.state !== "verified")
+    throw new Error(
+      `The target ended as ${done.state} (${done.code ?? "no code"}), not verified.\n${hostDiagnostics(host)}`,
+    );
   assertEqual(
     [done.state, done.from_version, done.to_version],
     ["verified", "0.1.0", "0.1.1"],
@@ -1534,6 +1568,10 @@ async function truncated(evidence) {
   );
   const before = snapshot(host);
   const rollout = await startRollout(evidence, s, release, device.deviceId);
+  // The server hashes a build as it streams it and refuses to serve a store file
+  // that is no longer the one that was signed, so no byte of it reaches the host
+  // and the host's own size and digest checks (ARTIFACT_MISMATCH, which the stand-in
+  // server proves) are never needed: the update ends as a failed download.
   const done = await waitForTarget(
     s,
     rollout,
@@ -1543,7 +1581,7 @@ async function truncated(evidence) {
   );
   assertEqual(
     [done.state, done.code],
-    ["failed", "ARTIFACT_MISMATCH"],
+    ["failed", "DOWNLOAD_FAILED"],
     "the target",
   );
   await evidence.step(
@@ -1567,7 +1605,7 @@ async function interruptOne(evidence, s, version, stage) {
   const host = updateHostFor();
   const release = await prepareRelease(evidence, s, version);
   const old = host.sha256(host.paths.agent);
-  await startRollout(evidence, s, release, device.deviceId);
+  const rollout = await startRollout(evidence, s, release, device.deviceId);
   let atKill;
   await evidence.step(
     `The step is killed with SIGKILL as soon as its journal says ${stage}`,
@@ -1672,6 +1710,24 @@ async function interruptOne(evidence, s, version, stage) {
         snapshot(host).floors[keys.team.fingerprint] >= release.counter,
         "The floor was lowered.",
       );
+    },
+  );
+  // A device is in at most one update rollout that hasn't ended, so the next
+  // release can't be reviewed until the server has heard how this one ended.
+  await evidence.step(
+    "The server hears how the interrupted update ended",
+    async () => {
+      const ending = await waitForTarget(
+        s,
+        rollout,
+        "the interrupted update's target ends",
+        ended,
+        minutes(6),
+      );
+      evidence.observe(`server_view_after_${stage}`, {
+        state: ending.state,
+        code: ending.code,
+      });
     },
   );
   return release;

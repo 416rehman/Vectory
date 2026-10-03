@@ -26,6 +26,7 @@ import {
   type ConsentForm,
 } from "./agentUpdateConsent";
 import { UpdateConsentFields } from "./UpdateConsentFields";
+import { updatesShip } from "./agentUpdatePlatforms";
 import { CommandBlock } from "./CommandBlock";
 import DeviceRollout from "./DeviceRollout";
 import { useAgentUpdates } from "./useAgentUpdates";
@@ -149,7 +150,7 @@ export default function AgentUpgrade({
     settings.on &&
     !optedIn &&
     device.status !== "revoked" &&
-    (device.os === "linux" || device.os === "darwin");
+    updatesShip(device.os);
   const noService = device.service_manager === "none";
   const [consent, setConsent] = useState<ConsentForm>(emptyConsent);
   const consentRead = readConsent(consent, key?.fingerprint ?? null);

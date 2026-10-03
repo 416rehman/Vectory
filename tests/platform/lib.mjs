@@ -257,7 +257,10 @@ export async function main(name, body) {
     failure = new Error(
       `${evidence.failures.length} checks failed: ${evidence.failures.join("; ")}`,
     );
-  if (failure) process.exitCode = 1;
+  if (failure) {
+    process.exitCode = 1;
+    console.error(`\n${failure.stack ?? failure}`);
+  }
   const file = evidence.write(
     failure ? "failed" : "passed",
     failure ? String(failure.stack ?? failure) : undefined,

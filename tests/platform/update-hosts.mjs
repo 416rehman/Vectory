@@ -155,6 +155,22 @@ function rootOnlyInstallDir() {
   );
 }
 
+/**
+ * systemd shows a timer's monotonic intervals in one property, `TimersMonotonic={
+ * OnBootUSec=15s ; next_elapse=... } { OnUnitInactiveUSec=30s ; ... }`; the
+ * intervals are returned as members of their own.
+ */
+function monotonicIntervals(properties) {
+  const text = properties.TimersMonotonic ?? "";
+  const interval = (name) =>
+    new RegExp(`${name}=([^\\s;}]+)`).exec(text)?.[1] ?? null;
+  return {
+    ...properties,
+    OnBootUSec: interval("OnBootUSec"),
+    OnUnitInactiveUSec: interval("OnUnitInactiveUSec"),
+  };
+}
+
 export function linuxHost() {
   const INSTALL_DIR = rootOnlyInstallDir();
   const stepDir = "/var/lib/vectory-update";
@@ -304,14 +320,15 @@ export function linuxHost() {
           "TimeoutStartUSec",
           "FragmentPath",
         ]),
-        timer: show(units.timer, [
-          "OnBootUSec",
-          "OnUnitInactiveUSec",
-          "AccuracyUSec",
-          "ActiveState",
-          "UnitFileState",
-          "FragmentPath",
-        ]),
+        timer: monotonicIntervals(
+          show(units.timer, [
+            "TimersMonotonic",
+            "AccuracyUSec",
+            "ActiveState",
+            "UnitFileState",
+            "FragmentPath",
+          ]),
+        ),
       };
     },
     /**
@@ -718,6 +735,36 @@ export function macosHost() {
               `the mode and owner of ${plist}`,
             );
           }
+        },
+      );
+      // The step runs the new build as the service account from the probe directory
+      // before it stops anything. A temporary folder on a Mac is private to its owner,
+      // and a script there can't be started as another account (EACCES); the probe
+      // directory is root's and open to everyone, and its parents are made so, which
+      // this shows for the real account on the real directories.
+      await evidence.softStep(
+        `The service account (${host.account}) can enter every directory down to the probe directory, where the step runs a new build as it`,
+        () => {
+          const entered = run(
+            "sudo",
+            [
+              "-n",
+              "-u",
+              host.account,
+              "/bin/sh",
+              "-c",
+              `cd ${quoted(paths.probe)} && /bin/pwd -P && /bin/ls -ld .`,
+            ],
+            { allowFailure: true, quiet: true },
+          );
+          evidence.observe(
+            "probe_directory_as_the_service_account",
+            entered.text,
+          );
+          assert(
+            entered.code === 0,
+            `${host.account} can't enter ${paths.probe}:\n${entered.text}`,
+          );
         },
       );
       await evidence.softStep(

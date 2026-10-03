@@ -2826,6 +2826,34 @@ try {
   );
 
   await check(
+    "Add device: for a system whose updates aren't in the release the step says so, and the command has no update flags",
+    async () => {
+      await load({ path: "enrollment", scenario: onState() });
+      await page.getByRole("radio", { name: "Windows", exact: true }).check();
+      await expect(
+        page.getByRole("heading", { name: "2. Agent updates" }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "Agent updates aren't in this release for Windows hosts. They are upgraded on the host with the Upgrade agent command.",
+        ),
+      ).toBeVisible();
+      await expect(levelCards()).toHaveCount(0);
+      // Nothing about updates needs choosing before a command can be made.
+      await page.getByRole("radio", { name: /^Restricted/ }).check();
+      await expect(
+        page.getByText("Choose how this host takes agent updates first."),
+      ).toHaveCount(0);
+      // The same page for a system that ships them still asks first.
+      await page.getByRole("radio", { name: "Linux", exact: true }).check();
+      await expect(levelCards()).toBeVisible();
+      await expect(
+        page.getByText("Choose how this host takes agent updates first."),
+      ).toBeVisible();
+    },
+  );
+
+  await check(
     "Add device: with updates off the step isn't there and the command is today's",
     async () => {
       for (const view of views) {
