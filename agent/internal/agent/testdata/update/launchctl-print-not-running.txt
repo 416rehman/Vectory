@@ -1,0 +1,26 @@
+system/io.vectory.agent = {
+	active count = 0
+	path = /Library/LaunchDaemons/io.vectory.agent.plist
+	type = LaunchDaemon
+	state = not running
+
+	program = /usr/local/bin/vectory
+	arguments = {
+		/usr/local/bin/vectory
+		run
+		--state-dir
+		/Library/Application Support/Vectory/agent
+	}
+
+	domain = system
+	username = _vectory
+	minimum runtime = 10
+	exit timeout = 330
+	runs = 0
+	last exit code = (never exited)
+	immediate reason = inefficient
+	forks = 0
+	execs = 0
+
+	properties = keepalive | runatload | inferred program
+}

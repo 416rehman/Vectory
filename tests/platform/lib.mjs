@@ -55,7 +55,9 @@ const indent = (text) =>
  */
 export function windowsPowerShellEnv(env = process.env) {
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => name.toLowerCase() !== "psmodulepath"),
+    Object.entries(env).filter(
+      ([name]) => name.toLowerCase() !== "psmodulepath",
+    ),
   );
 }
 
@@ -288,6 +290,65 @@ export function parseKeyValues(text) {
     if (at > 0) values[line.slice(0, at)] = line.slice(at + 1);
   }
   return values;
+}
+
+/**
+ * The lines directly inside the job's braces of `launchctl print system/<label>`,
+ * as { state, pid, runs, "last exit code", ... }. A block inside the job
+ * (arguments, environment, endpoints) has lines of its own that look alike, so
+ * only depth one counts: the same rule the agent's parser (parseLaunchdPrint in
+ * update_launchd.go) follows, and the two read the same sample files in
+ * agent/internal/agent/testdata/update.
+ */
+export function parseLaunchdPrint(text) {
+  const values = {};
+  let depth = 0;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (line.endsWith("{")) {
+      depth += 1;
+      continue;
+    }
+    if (depth !== 1) continue;
+    const at = line.indexOf(" = ");
+    if (at > 0) values[line.slice(0, at)] = line.slice(at + 3);
+  }
+  return values;
+}
+
+/** The bytes `df -k` says are available, from the first row it prints. */
+export function parseDfAvailable(text) {
+  const row = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)[1];
+  const columns = row?.split(/\s+/) ?? [];
+  const kilobytes = Number(columns[3]);
+  if (!Number.isFinite(kilobytes))
+    throw new Error(`df -k printed no available space:\n${text}`);
+  return kilobytes * 1024;
+}
+
+/** Count, minimum, median, 95th percentile and maximum of numbers (null for none). */
+export function summarize(numbers) {
+  if (!numbers.length) return null;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const at = (fraction) =>
+    sorted[
+      Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)
+    ];
+  return {
+    count: sorted.length,
+    min: sorted[0],
+    median: at(0.5),
+    p95: at(0.95),
+    max: sorted[sorted.length - 1],
+  };
 }
 
 const SPAN_UNITS = {

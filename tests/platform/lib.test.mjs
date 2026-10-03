@@ -3,17 +3,22 @@
 // the text each tool really prints, so a wrong guess shows up here and not on
 // a runner that takes ten minutes to reach it.
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { classifyProcesses, expectProperties } from "./adapters.mjs";
 import {
   Evidence,
   isReadOnly,
   mountFor,
+  parseDfAvailable,
   parseDuration,
   parseExposure,
   parseKeyValues,
+  parseLaunchdPrint,
   parseMountInfo,
   run,
+  summarize,
   until,
 } from "./lib.mjs";
 
@@ -223,4 +228,86 @@ test("only the agent's own supervisors and Vector processes are counted", () => 
     supervisors.map((r) => r.pid),
     [6, 7],
   );
+});
+
+// The samples the agent's own parser reads (agent/internal/agent/testdata/update),
+// so that what the native checks make of `launchctl print` and what the step makes
+// of it are one reading.
+const sample = (name) =>
+  fs.readFileSync(
+    path.resolve(
+      import.meta.dirname,
+      "../../agent/internal/agent/testdata/update",
+      name,
+    ),
+    "utf8",
+  );
+
+test("launchctl print: the job's own lines, not those of the blocks inside it", () => {
+  const running = parseLaunchdPrint(sample("launchctl-print-running.txt"));
+  assert.equal(running.state, "running");
+  assert.equal(running.pid, "4242");
+  assert.equal(running.runs, "1");
+  assert.equal(running.username, "_vectory");
+  assert.equal(running["exit timeout"], "330");
+  // The environment and the arguments are blocks of their own.
+  assert.equal(running.PATH, undefined);
+  assert.equal(running.XPC_SERVICE_NAME, undefined);
+
+  const restarted = parseLaunchdPrint(sample("launchctl-print-restarted.txt"));
+  assert.deepEqual(
+    [
+      restarted.state,
+      restarted.pid,
+      restarted.runs,
+      restarted["last exit code"],
+    ],
+    ["running", "4399", "3", "1"],
+  );
+  const waiting = parseLaunchdPrint(sample("launchctl-print-waiting.txt"));
+  assert.deepEqual(
+    [waiting.state, waiting.pid, waiting.runs],
+    ["waiting", undefined, "2"],
+  );
+  const idle = parseLaunchdPrint(sample("launchctl-print-not-running.txt"));
+  assert.deepEqual(
+    [idle.state, idle.pid, idle.runs, idle["last exit code"]],
+    ["not running", undefined, "0", "(never exited)"],
+  );
+
+  // A line inside a nested block never counts, however much it looks like one.
+  const nested = parseLaunchdPrint(
+    'system/io.vectory.agent = {\n\tstate = running\n\tpid = 11\n\truns = 2\n\tendpoints = {\n\t\t"x" = {\n\t\t\tstate = 3\n\t\t\tpid = 999\n\t\t\truns = 77\n\t\t}\n\t}\n}\n',
+  );
+  assert.deepEqual(
+    [nested.state, nested.pid, nested.runs],
+    ["running", "11", "2"],
+  );
+  assert.deepEqual(parseLaunchdPrint(""), {});
+});
+
+test("df -k: the space a file system has left, for a mount point with spaces in its name", () => {
+  const text =
+    "Filesystem     1024-blocks   Used Available Capacity iused ifree %iused  Mounted on\n" +
+    "/dev/disk4s1         19456  11600      7856    60%       3     0  100%   /Library/Application Support/Vectory/update-state\n";
+  assert.equal(parseDfAvailable(text), 7856 * 1024);
+  assert.throws(() => parseDfAvailable("nothing useful"), /available space/);
+});
+
+test("measurements are summarized as count, minimum, median, 95th percentile and maximum", () => {
+  assert.equal(summarize([]), null);
+  assert.deepEqual(summarize([30]), {
+    count: 1,
+    min: 30,
+    median: 30,
+    p95: 30,
+    max: 30,
+  });
+  assert.deepEqual(summarize([31, 30, 29, 30, 62, 30, 30, 30, 31, 30]), {
+    count: 10,
+    min: 29,
+    median: 30,
+    p95: 62,
+    max: 62,
+  });
 });

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -399,8 +398,8 @@ func TestTheStepWritesWhatItsStatusSaysEveryRun(t *testing.T) {
 func TestNoPlatformMeansNoStep(t *testing.T) {
 	updateHostOverride = nil
 	t.Cleanup(func() { updateHostOverride = nil })
-	if runtime.GOOS == "linux" {
-		return // Linux has a host: the others say there is no step.
+	if currentUpdateHost() != nil {
+		return // Linux and macOS have a host: the others say there is no step.
 	}
 	if err := RunUpdateHelper(bg(), "/var/lib/vectory-agent"); err != errUpdateStepUnavailable {
 		t.Errorf("a platform with no step: %v", err)
