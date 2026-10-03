@@ -253,7 +253,7 @@ func prepareFailure(code, message, hint string) *VectorFailure {
 // command, which names the state directory of the agent at dir when it isn't
 // the default.
 func binaryUnavailable(dir string) *VectorFailure {
-	return prepareFailure("VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", "Restore the binary, or stop the agent and approve a new one with "+CommandFor(dir, "vectory re-adopt --expected-sha256 SHA256")+".")
+	return prepareFailure("VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", hintWithCommand("Restore the binary, or stop the agent and approve a new one with ", dir, "vectory re-adopt --expected-sha256 SHA256", "."))
 }
 
 func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (candidateRun, error) {

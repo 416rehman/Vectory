@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // NotInstalledError explains that no agent is installed at a state directory.
@@ -72,6 +73,18 @@ func CommandFor(dir, words string) string {
 		return words
 	}
 	return words + " --state-dir " + ShellQuote(dir)
+}
+
+// hintWithCommand is a fix for a diagnostic, which leaves the host and is
+// bounded: lead, the command for the agent at dir, then tail. A state
+// directory too long for the bound would be cut in the middle and send the
+// operator to the wrong place, so then the hint names the flag instead of the
+// path; status prints the whole command.
+func hintWithCommand(lead, dir, words, tail string) string {
+	if hint := lead + CommandFor(dir, words) + tail; utf8.RuneCountInString(hint) <= maxDiagnosticHint {
+		return hint
+	}
+	return lead + words + ", naming this agent's --state-dir" + tail
 }
 
 // ShellQuote keeps a value bare only when every character in it is one no
