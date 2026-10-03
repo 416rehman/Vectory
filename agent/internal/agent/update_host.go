@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"time"
 )
 
@@ -27,10 +28,11 @@ var (
 // the next step, and everything that differs between systemd, launchd and the
 // Windows Service Control Manager, or between a rename over a file and two
 // journaled renames, is behind updateHost and updateInstall. Linux implements them
-// in update_service_linux.go and update_eligibility_linux.go over the Unix
-// primitives of update_helper_unix.go and update_swap_unix.go, which macOS shares.
-// A platform whose update step isn't built has no host (platformUpdateHost returns
-// nil), and every function of the step's API says so.
+// in update_service_linux.go and macOS in update_launchd.go, both over the Unix
+// primitives of update_helper_unix.go and update_swap_unix.go. A platform whose
+// update step isn't built, or isn't shipped in this build (update_gate.go), has no
+// host (currentUpdateHost returns nil), and every function of the step's API says
+// so.
 
 // updateAccount is who the agent's service runs as: an account the step never
 // trusts with anything but what it wrote itself, and the one the probe runs as.
@@ -225,6 +227,8 @@ func (systemUpdateClock) Sleep(ctx context.Context, d time.Duration) error {
 // replaces the service manager, the probe and the facts of the operating system,
 // the clock replaces time, and the fault hook stops the step at a named boundary
 // so that a test can kill it there. The binary that ships has none of them set.
+// A fourth, updateGateOverride (update_gate.go), replaces the table of the operating
+// systems whose updates this build ships.
 var (
 	updateHostOverride  updateHost
 	updateClockOverride updateClock
@@ -232,10 +236,14 @@ var (
 )
 
 // currentUpdateHost is the operating system's host, or nil when this platform has
-// no update step.
+// no update step: its native proof isn't part of this build (updatesInRelease), or
+// no step is written for it yet.
 func currentUpdateHost() updateHost {
 	if updateHostOverride != nil {
 		return updateHostOverride
+	}
+	if !updatesInRelease(runtime.GOOS) {
+		return nil
 	}
 	return platformUpdateHost()
 }

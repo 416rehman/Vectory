@@ -161,6 +161,11 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 
 func ServiceControl(action string) error {
 	if action == "uninstall" {
+		// The update step goes first, and is refused while it is trying a build: the
+		// agent's service must not be removed under it.
+		if err := RemoveUpdateHelper(); err != nil {
+			return err
+		}
 		if _, loaded := agentJob.loaded(context.Background()); loaded {
 			_ = agentJob.bootout()
 		}
