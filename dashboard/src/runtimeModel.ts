@@ -8,13 +8,17 @@ import { z } from "zod";
 
 const componentKind = z.enum(["source", "transform", "sink"]);
 
+// A component ID or output name a device reports is at most 128 UTF-8 bytes, the
+// pipeline validator's bound, so at most 128 characters here.
+const MAX_REPORTED_ID = 128;
+
 /** One redacted finding from Vector's own output. */
 export const DiagnosticSchema = z.object({
   severity: z.enum(["error", "warning"]),
   code: z.string().min(1).max(48),
   component_kind: componentKind.optional(),
-  component_id: z.string().min(1).max(100).optional(),
-  route_output: z.string().min(1).max(100).optional(),
+  component_id: z.string().min(1).max(MAX_REPORTED_ID).optional(),
+  route_output: z.string().min(1).max(MAX_REPORTED_ID).optional(),
   field: z.string().min(1).max(128).optional(),
   line: z.number().int().min(1).max(1_000_000).optional(),
   column: z.number().int().min(1).max(1_000_000).optional(),
@@ -84,7 +88,7 @@ export type HostRuntime = z.infer<typeof HostRuntimeSchema>;
 export const VectorLogGroupSchema = z.object({
   fingerprint: z.string().regex(/^[0-9a-f]{16}$/),
   level: z.enum(["error", "warn"]),
-  component_id: z.string().min(1).max(100).optional(),
+  component_id: z.string().min(1).max(MAX_REPORTED_ID).optional(),
   component_kind: componentKind.optional(),
   component_type: z.string().min(1).max(64).optional(),
   error_type: z.string().min(1).max(64).optional(),
