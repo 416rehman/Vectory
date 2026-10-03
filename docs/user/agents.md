@@ -121,7 +121,6 @@ sudo vectory resume
 
 A local pause belongs to the host: the dashboard can't clear it. Resuming clears only the local pause; a pause set in agent settings from the dashboard still applies. Once sync resumes, the agent replaces manual edits with the assigned version.
 
-<!-- verify-after-merge: that `vectory pause` also stops agent updates on the host, from the agent's update step -->
 While the host is paused, it also takes no agent update: it keeps its [update choices](agent-updates.md#what-a-host-agrees-to) and reports that it is paused. `sudo vectory update pause` pauses only updates.
 
 ## Retry a rejected version

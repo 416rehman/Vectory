@@ -13,4 +13,4 @@ ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX
 SystemCallFilter=@system-service
 ReadWritePaths="/usr/local/bin" "/var/lib/vectory-update" "/etc/vectory/updates"
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_KILL
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_KILL

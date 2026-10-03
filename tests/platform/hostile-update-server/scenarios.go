@@ -102,6 +102,13 @@ func freshKey(name string) releaseKey {
 	return releaseKey{private: private, name: name}
 }
 
+// derivedKey is a key made from another key's seed and a label, so that two scenarios,
+// and two processes, that ask for the same label get the same key.
+func derivedKey(from releaseKey, label string) releaseKey {
+	seed := sha256.Sum256(append(append([]byte(nil), from.private.Seed()...), label...))
+	return releaseKey{private: ed25519.NewKeyFromSeed(seed[:]), name: label}
+}
+
 func signWith(seed []byte, message []byte) []byte {
 	return ed25519.Sign(ed25519.NewKeyFromSeed(seed), message)
 }
@@ -196,6 +203,12 @@ type triedRelease struct {
 }
 
 func (c *craft) platform() (string, string) { return c.cfg.goos, c.cfg.goarch }
+
+// successors are the two keys the pinned key is handed to by the fork, which the offer
+// after the fork names again: the same two for as long as the pinned key is the same.
+func (c *craft) successors() (releaseKey, releaseKey) {
+	return derivedKey(c.pinned, "successor-a"), derivedKey(c.pinned, "successor-b")
+}
 
 func (c *craft) fileName(version, goos, goarch string) string {
 	name := fmt.Sprintf("vectory-%s-%s-%s", version, goos, goarch)
@@ -367,11 +380,18 @@ var scenarios = []scenario{
 		}},
 	{"consent_off", "UPDATES_OFF", "A release in every way a host takes, offered to a host whose consent is off.",
 		func(c *craft) (offer, error) { return c.signed(c.genuine(), nil, c.pinned), nil }},
-	// A fork freezes the host until it is pinned again, so it goes last.
+	// A fork freezes the host until it is pinned again, so it and what is offered after
+	// it go last.
 	{"fork", "KEY_ROLLOVER_CONFLICT", "Two statements from the pinned key naming different successors, and a release one successor signed.",
 		func(c *craft) (offer, error) {
-			first, second := freshKey("successor-a"), freshKey("successor-b")
+			first, second := c.successors()
 			statements := []rolloverEnvelope{rollover(c.pinned, first, c.now.Add(-time.Hour)), rollover(c.pinned, second, c.now.Add(-time.Hour))}
+			return c.signed(c.genuine(), statements, first), nil
+		}},
+	{"after_fork", "KEY_ROLLOVER_CONFLICT", "After a fork: a release in every way a host takes, signed by one of the fork's two successors and carrying the one statement that hands the pinned key to it. A host that never saw the fork takes it; one that did refuses it.",
+		func(c *craft) (offer, error) {
+			first, _ := c.successors()
+			statements := []rolloverEnvelope{rollover(c.pinned, first, c.now.Add(-time.Hour))}
 			return c.signed(c.genuine(), statements, first), nil
 		}},
 }

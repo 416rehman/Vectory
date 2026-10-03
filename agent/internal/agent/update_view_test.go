@@ -213,6 +213,25 @@ func TestTheDetailListsTheRowsThatApply(t *testing.T) {
 	}
 }
 
+// A request with no build beside it is how the agent hands the update step the evidence
+// of a fork, so the row says no build is staged and never that one is still arriving.
+func TestTheDetailSaysWhenARequestHasNoBuildBesideIt(t *testing.T) {
+	withLocalZone(t, time.UTC)
+	view := UpdateView{
+		StateDir: DefaultPaths().StateDir, ReadAt: viewNow, Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Eligibility: UpdateEligible,
+		Staged: &StagedUpdate{ManifestSHA256: strings.Repeat("b", 64), OfferedAt: time.Date(2026, 10, 5, 19, 30, 0, 0, time.UTC), Version: "0.1.1"},
+	}
+	var staged string
+	for _, row := range view.Rows() {
+		if row.Label == "Staged" {
+			staged = row.Value
+		}
+	}
+	if want := "0.1.1 · offered 19:30 · no build is staged for it"; staged != want {
+		t.Fatalf("the Staged row says %q, want %q", staged, want)
+	}
+}
+
 func TestTheDetailOfAHostThatCantTakeUpdates(t *testing.T) {
 	view := UpdateView{ReadAt: viewNow, Policy: viewPolicy(t, UpdateConsentAuto), Eligibility: "UNTRUSTED_LOCATION"}
 	var got []string
@@ -399,5 +418,28 @@ func TestTheJSONViewHasEveryMemberNullWhereNothingApplies(t *testing.T) {
 	}
 	if staged, _ := busy["staged"].(map[string]any); staged["version"] != "0.1.1" || staged["complete"] != true {
 		t.Fatalf("%v", busy["staged"])
+	}
+}
+
+// A person at the keyboard can settle an update that is only being prepared, which has
+// swapped nothing, and can't settle one that has begun to swap: that is the update
+// step's, and every command that would otherwise offer to apply says so first.
+func TestTheViewSaysTheStepIsSettlingAnUpdateOnlyOnceItHasBegunToSwap(t *testing.T) {
+	for stage, want := range map[string]bool{
+		UpdateStageIdle: false, UpdateStagePreparing: false,
+		UpdateStageSwapping: true, UpdateStageTrial: true, UpdateStageRollingBack: true,
+	} {
+		if got := (UpdateView{Status: &UpdateStatus{Stage: stage}}).StepIsSettlingAnUpdate(); got != want {
+			t.Errorf("with the step in %s: %v, want %v", stage, got, want)
+		}
+	}
+	if (UpdateView{}).StepIsSettlingAnUpdate() {
+		t.Error("a host whose step never wrote a status has no update to settle")
+	}
+	words := UpdateBeingSettledError("/var/lib/vectory-agent-other").Error()
+	for _, want := range []string{"an update that already began is being settled by the background update step", "usually within a minute or two", "sudo vectory update status --state-dir /var/lib/vectory-agent-other"} {
+		if !strings.Contains(words, want) {
+			t.Errorf("%q doesn't say %q", words, want)
+		}
 	}
 }
