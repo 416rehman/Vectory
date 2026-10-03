@@ -21,7 +21,7 @@ scripts/preview.sh           # start; also: status, restart, stop
 ```
 
 ```text
-Preview running at http://127.0.0.1:8080 (agent TLS https://localhost:8443).
+Preview running at http://127.0.0.1:8080 (agent TLS https://127.0.0.1:8443).
 Bootstrap secret: /home/you/Vectory/.local/preview/bootstrap.secret
 ```
 
@@ -44,9 +44,9 @@ node scripts/demo.mjs --agents 4    # 1 to 12 agents
 node scripts/demo.mjs --stop        # stops the agents and the preview
 ```
 
-The demo builds the agent, downloads Vector 0.58.0 and checks it against the official SHA-256 list, starts the preview and creates an administrator, `operator@vectory.local`, with a random password in `.local/preview/credentials.json`. It then enrolls the agents, puts them in two groups, sets 15-second check-ins, and publishes and deploys two pipelines that generate synthetic `demo_logs` events. Nothing leaves the machine.
+The demo builds the agent, downloads Vector 0.58.0 and checks it against the official SHA-256 list, starts the preview and creates an administrator, `operator@vectory.local`, with a random password in `.local/preview/credentials.json`. It then enrolls the agents with the address **Add device** shows (`https://127.0.0.1:8443` here), puts them in two groups, sets 15-second check-ins, and publishes and deploys two pipelines that generate synthetic `demo_logs` events. Nothing leaves the machine.
 
-Each agent keeps its state in `.local/demo/agents/<name>/`. Running the demo again reuses agents that are still running. Set `VECTORY_DEMO_DIR` and `VECTORY_DEMO_METRICS_PORT` (default `19600`) to keep a second demo apart.
+Each agent keeps its state in `.local/demo/agents/<name>/`. Running the demo again reuses agents that are still running and restarts the ones that stopped. Set `VECTORY_DEMO_DIR` and `VECTORY_DEMO_METRICS_PORT` (default `19600`) to keep a second demo apart.
 
 ### Test
 

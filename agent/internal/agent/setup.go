@@ -491,7 +491,8 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if enrolled {
 		if options.Server != "" {
 			if normalized, err := NormalizeServer(options.Server); err != nil || normalized != settings.Server {
-				return r.fail("server", "Server", "This host is enrolled with "+settings.Server+".", "To move it to another server, run `vectory unenroll`, revoke the old device in the dashboard, then run setup again.")
+				detail, fix := differentServerAddress(settings.Server, normalized, err)
+				return r.fail("server", "Server", detail, fix)
 			}
 		}
 		origin = settings.Server
@@ -1190,6 +1191,24 @@ func humanLatency(d time.Duration) string {
 	default:
 		return humanDuration(d)
 	}
+}
+
+// differentServerAddress is what setup says when an enrolled host is given a
+// --server other than the address it enrolled with. That address stays: the
+// host's identity and pinned authority belong to it, and another spelling of
+// the same server is still another address. Setup says what it sees, then what
+// to run when it is the same server, and only then how to move the host; a
+// host is never told to unenroll as the first or only step. requested is the
+// normalized --server, empty when err says it can't be used.
+func differentServerAddress(enrolled, requested string, err error) (detail, fix string) {
+	if err != nil {
+		detail = "This host is enrolled with " + enrolled + "; this command's --server isn't an HTTPS address with no path or credentials."
+	} else {
+		detail = "This host is enrolled with " + enrolled + "; this command names " + requested + "."
+	}
+	fix = "If it is the same server, run the command again with `--server " + quoteArg(enrolled) + "`.\n" +
+		"To move this host to another server, run `vectory unenroll`, revoke the old device in the dashboard, then run setup again."
+	return detail, fix
 }
 
 func quoteArg(s string) string {

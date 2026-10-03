@@ -36,7 +36,7 @@ Landed since `a469266` (the details are in [CHANGELOG.md](../../CHANGELOG.md) an
 2. **Look at CI on the head of the branch** (workflow `checks`, [CI.md](CI.md) says what each job proves). Open a failing job's log before reading code. The last change to code (`b0349c3`, run 72) passed all nine jobs; every commit after it only edits documents. Two checks are flaky and failed in other runs of the same code (the first two items under "Known unstable or unproven"), so a red run on this code is not necessarily a regression.
 3. **Set up the toolchain** from the table in [CONTRIBUTING.md](../../CONTRIBUTING.md) (Rust 1.94, Go 1.26.8, Node 22.12 or newer, Python 3.11 or newer) and put a checksum-verified Vector 0.58.0 under `.local/tools/` (the archive names and SHA-256 values are in `.github/workflows/ci.yml`; [docs/dev/DEVELOPMENT.md](../dev/DEVELOPMENT.md) explains the preview and the demo fleet).
 4. **Run the fast checks** below on the checkout before changing anything, so you know what green looks like on your machine.
-5. **Start the demo fleet** (`node scripts/demo.mjs --agents 4`; dashboard on `http://127.0.0.1:8080`, agent listener on `https://localhost:8443`, `--stop` stops it) and click through Overview, a device, a pipeline, a rollout. Every item in the queue is easier to judge after you have seen the product run.
+5. **Start the demo fleet** (`node scripts/demo.mjs --agents 4`; dashboard on `http://127.0.0.1:8080`, agent listener on `https://127.0.0.1:8443`, `--stop` stops it) and click through Overview, a device, a pipeline, a rollout. Every item in the queue is easier to judge after you have seen the product run.
 
 ## How to verify
 
