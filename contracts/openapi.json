@@ -18199,6 +18199,16 @@
                 "minimum": 0,
                 "maximum": 9007199254740991
               },
+              "agent_update_rollouts_to_cancel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "agent_update_stop": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
               "previous_device_id": {
                 "type": "string",
                 "format": "uuid"

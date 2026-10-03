@@ -1081,3 +1081,29 @@ async fn a_rollout_that_stalled_says_it_made_no_progress_for_a_day() {
         "It made no progress for 24 hours, so it stopped."
     );
 }
+
+#[tokio::test]
+async fn a_stop_the_restore_made_is_announced_with_who_and_why() {
+    let r = Rig::build(2).await;
+    let hook = Hook::new().await;
+    channel(
+        &r.f,
+        &hook,
+        "/all",
+        json!({"events":["agent_update.stopped"]}),
+    )
+    .await;
+    let refs: Vec<&String> = r.ids.iter().collect();
+    r.start(&refs, json!({"canary_size":1})).await;
+    vectory_server::restored_access::invalidate(&r.f.state, true)
+        .await
+        .unwrap();
+    drain(&r.f, later()).await;
+    let events = hook.events("/all");
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["type"], "agent_update.stopped");
+    assert_eq!(
+        events[0]["message"],
+        "A local administrator stopped all agent updates. Reason: “The server was restored from a backup. Review the release keys, the releases and the rollouts, then clear the stop in Settings → Agent updates.” No host is offered a build until an administrator ends the stop. 1 update rollout was cancelled."
+    );
+}
