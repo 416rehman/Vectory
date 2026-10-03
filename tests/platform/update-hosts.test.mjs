@@ -8,7 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { root, run } from "./lib.mjs";
-import { linuxHost, macosHost, quoted, rootReaders } from "./update-hosts.mjs";
+import {
+  linuxHost,
+  macosHost,
+  monotonicIntervals,
+  quoted,
+  rootReaders,
+} from "./update-hosts.mjs";
 
 const source = fs.readFileSync(
   path.join(import.meta.dirname, "agent-update.mjs"),
@@ -141,6 +147,36 @@ test("the paths of a Mac's host are the ones the product pins in its definition"
     assert.ok(paths[key].startsWith(`${paths.stepDir}/`), key);
   assert.ok(paths.policyDir.startsWith(`${paths.support}/`));
   assert.ok(paths.stateDir.startsWith(`${paths.support}/`));
+});
+
+test("a timer's intervals are read from every line systemd prints for them", () => {
+  // As systemd 255 prints the timer of the update step: one TimersMonotonic line per
+  // interval, the one written last in the file first, so the last line alone has
+  // the boot interval and none of the other.
+  const shown = [
+    "TimersMonotonic={ OnUnitInactiveUSec=30s ; next_elapse=0 }",
+    "TimersMonotonic={ OnBootUSec=15s ; next_elapse=15s }",
+    "AccuracyUSec=5s",
+    "ActiveState=active",
+    "UnitFileState=enabled",
+    "FragmentPath=/etc/systemd/system/vectory-update.timer",
+    "",
+  ].join("\n");
+  const timer = monotonicIntervals(shown);
+  assert.equal(timer.OnBootUSec, "15s");
+  assert.equal(timer.OnUnitInactiveUSec, "30s");
+  assert.equal(timer.AccuracyUSec, "5s");
+  assert.equal(timer.ActiveState, "active");
+  // On one line, as an older systemd prints them, and with no interval at all.
+  const joined = monotonicIntervals(
+    "TimersMonotonic={ OnBootUSec=15s ; next_elapse=15s }{ OnUnitInactiveUSec=30s ; next_elapse=0 }\n",
+  );
+  assert.deepEqual(
+    [joined.OnBootUSec, joined.OnUnitInactiveUSec],
+    ["15s", "30s"],
+  );
+  const none = monotonicIntervals("AccuracyUSec=5s\n");
+  assert.deepEqual([none.OnBootUSec, none.OnUnitInactiveUSec], [null, null]);
 });
 
 test("a path with a space or a quote is one word for sh", () => {
