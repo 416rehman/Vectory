@@ -293,7 +293,7 @@ sudo vectory update off
 - `status` shows the policy, the keys the host pins, what it is doing and the result of its last update.
 - `apply` installs a build a host set to **Ask on the host** has staged. Before it does, it reads what the agent last reported and stops if the offer was withdrawn or the agent hasn't checked in for five minutes. That check is advice: the file it reads is written by the agent, so it can warn you but can't prove an offer is still good. `--force` applies anyway, after you confirm on a terminal.
 - `pause` keeps the host's choices and stops every download and install until `resume`.
-- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried.
+- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried. Where the directory above the agent's state directory could be changed by another account, it deletes nothing and tells you the staged files are yours to delete; see [Agent CLI](cli.md#update-off).
 
 Every verb but `status` needs root. See [Agent CLI](cli.md#update) for what each prints.
 

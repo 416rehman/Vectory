@@ -466,6 +466,49 @@ func TestUpdateOffJSON(t *testing.T) {
 	if json.Unmarshal([]byte(stdout), &out) != nil || out["command"] != "update off" || out["changed"] != true || out["policy_off"] != true || out["discarded"] != false || out["step_removed"] != true || out["keys_kept"] != float64(2) {
 		t.Fatalf("%q", stdout)
 	}
+	// Nothing was left, and the document says so.
+	if left, there := out["staged_left"]; !there || left != nil {
+		t.Fatalf("staged_left is %v (there: %v) when nothing was left", left, there)
+	}
+}
+
+// Where root may not delete through the directory above the state directory, the
+// agent's staged files are left. update off still withdraws consent and removes
+// the step, and says in words and in JSON that the files are for a person to
+// delete.
+func TestUpdateOffSaysWhenTheStagedFilesWereLeft(t *testing.T) {
+	h := newUpdateHost(t)
+	left := &agent.UpdateLeft{Path: filepath.Join(h.dir, "updates"), Code: "UNTRUSTED_LOCATION", Detail: filepath.Dir(h.dir) + " is writable by its group (mode 0775)"}
+	root := "root"
+	if runtime.GOOS == "windows" {
+		root = "an administrator"
+	}
+	message := "The staged files in " + left.Path + " were not deleted: the directory above the agent's state isn't owned by " + root + ", so " + root + " won't delete through it. Delete them yourself."
+	h.withdraw = agent.UpdateWithdrawal{PolicyOff: true, StepRemoved: true, KeysKept: 1, StagedLeft: left}
+	code, stdout, stderr := h.run(noTerminalAt, "off")
+	want := "Agent updates are off on this host: the policy says off, the update step is removed.\nThe pinned key is kept. To turn updates on again, run the Upgrade agent command with --updates.\n" + message + "\n"
+	if code != 0 || stdout != want || stderr != "" {
+		t.Fatalf("%d %q %q", code, stdout, stderr)
+	}
+	// Run again with the files still there: nothing else changed, and the files are
+	// still said to be left.
+	h.withdraw = agent.UpdateWithdrawal{StagedLeft: left}
+	if code, stdout, _ = h.run(noTerminalAt, "off"); code != 0 || stdout != "Agent updates are already off on this host. Nothing changed.\n"+message+"\n" {
+		t.Fatalf("%d %q", code, stdout)
+	}
+	h.withdraw = agent.UpdateWithdrawal{PolicyOff: true, StepRemoved: true, KeysKept: 1, StagedLeft: left}
+	code, stdout, stderr = h.run(noTerminalAt, "off", "--json")
+	var out struct {
+		Changed    bool              `json:"changed"`
+		Discarded  bool              `json:"discarded"`
+		StagedLeft map[string]string `json:"staged_left"`
+	}
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &out) != nil || !out.Changed || out.Discarded {
+		t.Fatalf("%d %q %q", code, stdout, stderr)
+	}
+	if got := out.StagedLeft; len(got) != 4 || got["path"] != left.Path || got["code"] != "UNTRUSTED_LOCATION" || got["detail"] != left.Detail || got["message"] != message {
+		t.Fatalf("%q", stdout)
+	}
 }
 
 // Taking the step away while it applies or tries a build could leave a build

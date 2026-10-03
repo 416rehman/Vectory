@@ -103,7 +103,10 @@ holds back every change on this host, is separate.`,
 				about: `Withdraws this host's consent: the policy says off, the build the agent staged
 is deleted and the privileged update step is removed. The pinned keys are kept.
 It refuses while an update is being applied or tried, and says when that ends.
-The Upgrade agent command with --updates turns updates on again.`,
+Root deletes the staged build only through a path that only root can change;
+where the directory above the agent's state directory can be changed by another
+account, it deletes nothing and says the files are yours to delete. The Upgrade
+agent command with --updates turns updates on again.`,
 				examples: []string{"sudo vectory update off"},
 				define:   env.defineOff},
 		},
@@ -328,16 +331,21 @@ func (e updateEnv) defineOff(c *cli) func() int {
 			return c.fail(err)
 		}
 		if *c.json {
-			c.output(map[string]any{"status": "ok", "command": "update off", "changed": !done.Nothing(), "policy_off": done.PolicyOff, "discarded": done.Discarded, "step_removed": done.StepRemoved, "keys_kept": done.KeysKept})
+			// staged_left says the agent's staged files were not deleted, and why: root
+			// won't delete through a directory that an account other than root can change.
+			c.output(map[string]any{"status": "ok", "command": "update off", "changed": !done.Nothing(), "policy_off": done.PolicyOff, "discarded": done.Discarded, "step_removed": done.StepRemoved, "keys_kept": done.KeysKept, "staged_left": done.StagedLeft})
 			return exitOK
 		}
 		if done.Nothing() {
 			fmt.Fprintln(c.stdout, "Agent updates are already off on this host. Nothing changed.")
-			return exitOK
+		} else {
+			fmt.Fprintf(c.stdout, "Agent updates are off on this host: %s.\n", strings.Join(done.Parts(), ", "))
+			if done.KeysKept > 0 {
+				fmt.Fprintf(c.stdout, "The pinned %s kept. To turn updates on again, run the Upgrade agent command with --updates.\n", map[bool]string{true: "key is", false: "keys are"}[done.KeysKept == 1])
+			}
 		}
-		fmt.Fprintf(c.stdout, "Agent updates are off on this host: %s.\n", strings.Join(done.Parts(), ", "))
-		if done.KeysKept > 0 {
-			fmt.Fprintf(c.stdout, "The pinned %s kept. To turn updates on again, run the Upgrade agent command with --updates.\n", map[bool]string{true: "key is", false: "keys are"}[done.KeysKept == 1])
+		if done.StagedLeft != nil {
+			fmt.Fprintln(c.stdout, done.StagedLeft.Message())
 		}
 		return exitOK
 	}
