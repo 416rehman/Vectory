@@ -51,6 +51,11 @@ func checkNoPendingPurge(dir string) error {
 }
 
 func createFreshStateDirectory(dir string) error {
+	// On Windows, the directory that holds the state directory under ProgramData is
+	// judged before anything is made in it (see state_root.go).
+	if err := ensureStateRoot(dir); err != nil {
+		return err
+	}
 	// A previously absent parent has no installed state to purge yet. It stays
 	// traversable: the service account owns the state directory below it.
 	if err := makeTraversable(filepath.Dir(dir)); err != nil {

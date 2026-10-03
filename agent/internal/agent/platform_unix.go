@@ -182,6 +182,15 @@ func makeSharedDirectory(dir string) error {
 	return os.Chmod(dir, 0755)
 }
 
+// ensureStateRoot is what the code that makes or reuses the agent's state directory
+// does first about the directory that holds it under ProgramData on Windows (see
+// state_root.go). Nothing here keeps the agent's own directories in a directory that
+// other accounts may create, so it has nothing to do.
+func ensureStateRoot(path string) error { return nil }
+
+// stateRootProblem is setup's first look at that directory, which changes nothing.
+func stateRootProblem(dir string, elevated bool) error { return nil }
+
 // makePrivateDirectory makes a private directory, and what is missing above it.
 func makePrivateDirectory(path string) error { return os.MkdirAll(path, 0700) }
 
