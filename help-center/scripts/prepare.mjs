@@ -8,7 +8,10 @@ import { groups, topics } from "../pages.mjs";
 export const helpRoot = fileURLToPath(new URL("../", import.meta.url));
 export const repoRoot = path.resolve(helpRoot, "..");
 export { topics };
-export const version = { vectory: "0.1.0-dev", vector: "0.58.0" };
+// The Help center says the version its own package declares; scripts/check-versions.mjs
+// keeps that equal to the agent's, the server's and the changelog's.
+const own = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
+export const version = { vectory: own.version, vector: "0.58.0" };
 
 // Page titles come from each source's H1; the sidebar and llms.txt reuse them.
 export async function pageTitles() {

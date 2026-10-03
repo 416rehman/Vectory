@@ -123,6 +123,13 @@ jobs:
           node --test scripts/check-workflow-scripts.test.mjs
           node scripts/check-workflow-scripts.mjs
         working-directory: .
+      - name: Check every part of the product says the same version
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-versions.test.mjs
+          node scripts/check-versions.mjs
+        working-directory: .
       - id: build
         if: ${{ !cancelled() }}
         run: npm run build
