@@ -8,7 +8,7 @@ import {
   signedOutRecently,
 } from "./authRequests";
 import { formatCountdown, formatExpiry, formatRemaining } from "./authControls";
-import { setupCommand } from "./AuthScreen";
+import { initials, setupCommand } from "./AuthScreen";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -130,6 +130,16 @@ describe("time formatting", () => {
     expect(formatRemaining("2026-09-29T00:45:00Z", base)).toBe("in 45 min");
     expect(formatRemaining("2026-09-28T23:00:00Z", base)).toBe("expired");
     expect(formatRemaining(null, base)).toBe("");
+  });
+});
+
+describe("who the two-factor step says is signing in", () => {
+  it("shows the first letter of the email address, as the app does for an account with no name", () => {
+    expect(initials("ada@example.com")).toBe("A");
+    expect(initials("  grace.hopper@example.com ")).toBe("G");
+    expect(initials("élodie@example.com")).toBe("É");
+    expect(initials("@example.com")).toBe("?");
+    expect(initials("")).toBe("?");
   });
 });
 

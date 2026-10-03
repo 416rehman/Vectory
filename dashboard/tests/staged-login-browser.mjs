@@ -864,6 +864,57 @@ try {
       }
     }
   });
+  await check(
+    "a new refusal replaces the old one, and the two-factor step shows the address's first letter",
+    async () => {
+      const f = await fixture();
+      try {
+        const refused = "That email and password don't match. Try again.";
+        await f.credentials("incorrect-password");
+        await expect(f.page.getByRole("alert")).toHaveText(refused);
+        // The form refuses an address without @ by itself: it says so, and the
+        // refusal of the earlier try is gone, not left beside it.
+        await f.page
+          .getByLabel("Email address", { exact: true })
+          .fill("not-an-email");
+        await f.page.getByLabel("Password", { exact: true }).fill("anything");
+        await f.page
+          .getByRole("button", { name: "Sign in", exact: true })
+          .click();
+        await expect(
+          f.page.getByText("Enter the email address for your account."),
+        ).toBeVisible();
+        await expect(f.page.getByText(refused)).toHaveCount(0);
+        await expect(f.page.getByRole("alert")).toHaveCount(0);
+        expect(
+          f.state.requests.filter((request) => request.path === "/login"),
+        ).toHaveLength(1);
+        // Past the password, the step names who is signing in.
+        await f.credentials();
+        await pending(f);
+        await expect(f.page.locator(".signin-identity")).toContainText(
+          credentials.email,
+        );
+        await expect(f.page.locator(".signin-identity > span")).toHaveText("S");
+        for (const [width, theme] of [
+          [1280, "light"],
+          [390, "light"],
+          [390, "dark"],
+        ]) {
+          await f.page.setViewportSize({ width, height: 844 });
+          await f.page.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          await f.page.screenshot({
+            path: resolve(output, `auth-two-factor-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      } finally {
+        await f.close();
+      }
+    },
+  );
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   await writeFile(

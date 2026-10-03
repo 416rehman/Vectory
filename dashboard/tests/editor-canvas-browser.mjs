@@ -602,6 +602,10 @@ try {
       async () => {
         await load();
         const original = structuredClone(fixture.document);
+        // The tab names the pipeline, as a device's page names the device.
+        await expect(page).toHaveTitle(
+          `${original.name} · Pipelines · Vectory`,
+        );
         await nameButton().focus();
         await page.keyboard.press("Enter");
         await expect(details()).toBeVisible();

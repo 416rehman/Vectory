@@ -49,6 +49,8 @@ export const auditActions: Record<string, string> = {
   "user.update": "Workspace access changed",
   "user.password_reset.issue": "Password reset authorized",
   "user.password_reset.redeem": "Password reset completed",
+  // The stored code says mfa; the product says two-factor.
+  "user.mfa_reset": "Two-factor reset",
   "mfa.setup": "Authenticator setup started",
   "mfa.confirm": "Authenticator enabled",
   "mfa.disable": "Authenticator disabled",

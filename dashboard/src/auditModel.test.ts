@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   auditActionLabel,
+  auditActions,
   auditChanges,
   auditDateError,
   auditFilterParams,
@@ -91,6 +92,10 @@ describe("audit view queries and identities", () => {
     expect(auditActionLabel("deployment.stage_released_early")).toBe(
       "Next stage released early",
     );
+    // The stored code says mfa; what the list shows says two-factor.
+    expect(auditActionLabel("user.mfa_reset")).toBe("Two-factor reset");
+    for (const label of Object.values(auditActions))
+      expect(label).not.toMatch(/\bmfa\b/i);
   });
   it("retains server-wide browsing order in permalinks but excludes it from prepared export filters", () => {
     const q = {
