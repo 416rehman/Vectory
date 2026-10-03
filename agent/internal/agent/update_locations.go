@@ -3,7 +3,6 @@ package agent
 import (
 	"os"
 	"runtime"
-	"strings"
 )
 
 // UpdatePaths are the places the update feature keeps what only root may change
@@ -66,10 +65,7 @@ func UpdateLocations() UpdatePaths {
 func updateLocationsFor(goos, programData string) UpdatePaths {
 	switch goos {
 	case "windows":
-		if programData == "" {
-			programData = `C:\ProgramData`
-		}
-		base := strings.TrimRight(programData, `\/`) + `\Vectory`
+		base := windowsUpdateRoot(programData)
 		return newUpdatePaths(base+`\updates`, base+`\update-state`, true)
 	case "darwin":
 		return newUpdatePaths("/Library/Application Support/Vectory/updates", "/Library/Application Support/Vectory/update-state", false)

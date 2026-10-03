@@ -93,6 +93,12 @@ const (
 	sidCreatorOwner = "S-1-3-0"
 )
 
+// rootAccount reports whether a SID is SYSTEM, the Administrators or
+// TrustedInstaller, or the one more account a test trusts.
+func rootAccount(sid, extra string) bool {
+	return sid == sidSystem || sid == sidAdministrators || sid == sidTrustedInstaller || (extra != "" && sid == extra)
+}
+
 // Access entry types and flags (winnt.h).
 const (
 	aclAccessAllowed = 0
