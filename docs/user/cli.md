@@ -411,12 +411,13 @@ Wrote the private key to team.key, closed to other accounts.
 Keep it off the server. Whoever holds it can sign builds that every host pinning this key installs as root.
 
 Public key (give it to the server, and save it in a file such as team.pub):
-  vectory-release-key ed25519 3n1kX5uZnEN2wf+ZrjTlfd3sqUPQff1ANP0I/elZz7o= team
+vectory-release-key ed25519 3n1kX5uZnEN2wf+ZrjTlfd3sqUPQff1ANP0I/elZz7o= team
+
 Fingerprint (hosts pin it; compare it with the one the dashboard shows):
-  05cc6c02 351af0cb 1be9877e 7cdcd326 c6831001 8746cb7b bbbf6beb 29392618
+05cc6c02 351af0cb 1be9877e 7cdcd326 c6831001 8746cb7b bbbf6beb 29392618
 ```
 
-The fingerprint is the SHA-256 of the key's 32 bytes, written in groups of eight characters. Its first 16 characters are the short ID that the dashboard and `vectory update status` print. An existing file, even one that is a symbolic link, is refused: `team.key already exists, and keygen never replaces a file.`
+The public key line starts at the left edge, so what you copy is the line and nothing in front of it. A file that holds it with spaces before it is refused. The fingerprint is the SHA-256 of the key's 32 bytes, written in groups of eight characters. Its first 16 characters are the short ID that the dashboard and `vectory update status` print. An existing file, even one that is a symbolic link, is refused: `team.key already exists, and keygen never replaces a file.`
 
 ### release sign
 
@@ -433,6 +434,7 @@ Sign the exact bytes of a `release.json`, the file the server prepared for your 
 
 ```text
 Agent 0.1.1 · counter 7 · expires 2027-04-01 12:00 UTC (in 180 days)
+  Issued 2026-10-03 12:00 UTC · service definition 1
   For agents running 0.1.0 or newer
   linux/amd64    vectory-0.1.1-linux-amd64        15204352 bytes  sha256 4206fd2a4cefdeff…
   windows/amd64  vectory-0.1.1-windows-amd64.exe  15892480 bytes  sha256 25043433d22cf8f6…
@@ -441,6 +443,8 @@ Sign this release with key 05cc6c02351af0cb? [y/N] y
 Signed with key 05cc6c02351af0cb. Wrote release.json.sig (1 signature).
 Next: upload release.json.sig to the release on Devices → Agent updates.
 ```
+
+The service definition is the generation of the service unit or plist (on Windows, the service registration) that the build needs. A host whose service definition is older refuses the release with `SERVICE_DEFINITION_OUTDATED`, so check that it is what your hosts have (0.1 builds say `1`). The `For agents running` line appears when the release names the oldest agent that may take it.
 
 When a build doesn't match, nothing is written and each difference is named:
 
@@ -482,6 +486,7 @@ Check a release the way a host does, with the one function every host uses: the 
 ```text
 Valid: release.json is signed by key 05cc6c02351af0cb (team).
 Agent 0.1.1 · counter 7 · expires 2027-04-01 12:00 UTC (in 180 days)
+  Issued 2026-10-03 12:00 UTC · service definition 1
   For agents running 0.1.0 or newer
   linux/amd64    vectory-0.1.1-linux-amd64        15204352 bytes  sha256 4206fd2a4cefdeff…
   windows/amd64  vectory-0.1.1-windows-amd64.exe  15892480 bytes  sha256 25043433d22cf8f6…
