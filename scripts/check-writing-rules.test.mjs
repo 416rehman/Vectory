@@ -331,3 +331,21 @@ test("the repository's allowlist is well formed and names real rules", () => {
     for (const rule of entry.rules ?? [])
       assert.ok(RULE_IDS.includes(rule), rule);
 });
+
+test("accounts named in the allowlist excuse only their own home directory", () => {
+  const files = [
+    {
+      path: "docs/a.md",
+      text: "Open /home/you/Vectory and /home/jane/Vectory.\n",
+    },
+  ];
+  const allow = {
+    accounts: [{ name: "You", reason: "The placeholder in the sample paths." }],
+    entries: [],
+  };
+  const { violations } = check(files, allow);
+  assert.deepEqual(
+    violations.map((v) => v.match),
+    ["/home/jane"],
+  );
+});
