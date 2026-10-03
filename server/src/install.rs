@@ -870,7 +870,8 @@ const INSTALL_SH: &str = r#"#!/bin/sh
 # certificate verification.
 #
 # Agent updates are the host's own choice, made here and nowhere else. These
-# four setup options pass through too:
+# four setup options pass through too. Without --updates, the other three amend
+# what a host that already agreed chose and leave the rest as it was:
 #
 #   --updates auto|ask|off        auto applies an update the server offers, inside
 #                                 the window if there is one; ask waits for
