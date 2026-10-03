@@ -21,7 +21,7 @@ type ConfigurationDiagnostic struct {
 }
 
 func localDiagnostics(dir string, settings Settings, state State) LocalDiagnostics {
-	d := LocalDiagnostics{NextAction: applyNextAction(state), RetryStatus: "not_suppressed", DesiredConfiguration: ConfigurationDiagnostic{Check: "unmanaged"}}
+	d := LocalDiagnostics{NextAction: applyNextAction(dir, state), RetryStatus: "not_suppressed", DesiredConfiguration: ConfigurationDiagnostic{Check: "unmanaged"}}
 	if LocalPaused(dir) {
 		d.NextAction = "Local pause is active. Review any manual changes before running resume; remote pause still applies."
 	} else if state.Policy.SyncPaused {
@@ -136,12 +136,18 @@ func capabilityDiagnostic(reason string) ConfigurationDiagnostic {
 // to start: nothing ran before it, so nothing needs recovering.
 const firstVersionFailed = "Vector isn't running: this was the device's first version, so there is nothing earlier to go back to. Fix the problem above, then deploy a corrected version or choose Retry."
 
-func applyNextAction(state State) string {
+// applyNextAction is the next step after the last apply, for the agent
+// installed at dir (empty when not known). Commands in it name the state
+// directory when it isn't the default.
+func applyNextAction(dir string, state State) string {
 	if state.Error == nil {
 		return "Compare the cached apply state and last heartbeat with the dashboard. This local report does not prove current process liveness or server connectivity."
 	}
 	if diagnostic(state.Error, "DISK_FULL") != nil {
 		return "Free some space on the disk the problem names. The agent applies the version at its next check-in by itself; keep the private recovery files intact."
+	}
+	if diagnostic(state.Error, "VECTOR_BINARY_UNAVAILABLE") != nil {
+		return "Restore the Vector binary, or stop the agent and approve the new one with " + CommandFor(dir, "vectory re-adopt --expected-sha256 SHA256") + ". Then choose Retry in the dashboard or run " + CommandFor(dir, "vectory retry") + "; Vector never ran this version."
 	}
 	// Only a device that verified a configuration has one that keeps running.
 	keeps := " Vector keeps running the last working configuration."
@@ -166,7 +172,7 @@ func applyNextAction(state State) string {
 		}
 		return "Allow what the problem names on this host, or change the pipeline and deploy again." + keeps
 	case "VALIDATION_FAILED":
-		return "Fix what the problem names, then deploy again or choose Retry in the dashboard. `vectory logs` shows Vector's full output." + keeps
+		return "Fix what the problem names, then deploy again or choose Retry in the dashboard. `" + CommandFor(dir, "vectory logs") + "` shows Vector's full output." + keeps
 	case "SECRET_RESOLUTION_FAILED":
 		return "Check the host's secret bindings and the files' permissions for the service account. Never share the rendered managed configuration."
 	case "APPLY_ROLLED_BACK":

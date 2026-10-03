@@ -629,6 +629,14 @@ for(const [path,methods] of Object.entries(paths)){
 if(untagged.length)console.warn(`Tagged as "Other"; add them to tagGroups in contracts/generate.mjs: ${untagged.join(', ')}`);
 spec.tags=[...tagGroups,otherTag].filter(([name])=>usedTags.has(name)).map(([name,,description])=>({name,description}));
 spec.security=[{sessionCookie:[]}];
+// An optional filter with a fixed set of values must not arrive filled in by the
+// API reference's client: it sends the first value of an enum that has no
+// default, so Send on a list would filter it (status=applied, scope=changes).
+// The example stays, switched off.
+for(const methods of Object.values(paths))for(const operation of Object.values(methods))for(const parameter of operation.parameters??[]){
+  const choices=parameter.schema?.enum;
+  if(parameter.in==='query'&&!parameter.required&&Array.isArray(choices)&&parameter.schema.default===undefined&&parameter.example===undefined&&parameter.examples===undefined)parameter.examples={default:{value:choices[0],'x-disabled':true}};
+}
 spec.info.description=[
   'The HTTP API behind the Vectory dashboard. Everything the dashboard does goes through it.',
   '**Authentication.** Sign in with `POST /api/v1/login`. The reply sets the `vectory_session` cookie (HttpOnly, SameSite=Strict, 12 hours) and returns a `csrf_token`. Send the cookie with every request, and the token as the `X-CSRF-Token` header with every `POST`, `PUT` and `DELETE`. Requests run with your role. There are no separate API keys.',

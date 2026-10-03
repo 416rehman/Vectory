@@ -86,7 +86,7 @@ func TestStatusAndDoctorPrintTheProblems(t *testing.T) {
 		t.Fatalf("status points at text it doesn't print:\n%s", out)
 	}
 	report := &DoctorReport{}
-	report.add("apply", "fail", "Last apply", "CAPABILITY_DENIED during validation", applyNextAction(v.State))
+	report.add("apply", "fail", "Last apply", "CAPABILITY_DENIED during validation", applyNextAction("", v.State))
 	for _, problem := range problemRows(issue.Diagnostics) {
 		report.add("apply", "info", "Problem", problem.Message, problem.Hint)
 	}

@@ -144,6 +144,26 @@ func keepOwner(tmp, path string) {
 	}
 	_ = os.Lchown(tmp, int(oldStat.Uid), int(oldStat.Gid))
 }
+
+// ownedLikeParent makes a file this process just created belong to the user
+// and group of the directory that holds it, when this process is root: the
+// agent's files belong to the account that has its state directory, and a file
+// left to root would be one that account can't write. Without root the file is
+// already this account's.
+func ownedLikeParent(path string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	stat, ok := parent.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	return os.Lchown(path, int(stat.Uid), int(stat.Gid))
+}
 func rejectPlatformLink(path string) error { return nil }
 func replaceFile(from, to string) error    { return os.Rename(from, to) }
 func syncDir(path string) error {

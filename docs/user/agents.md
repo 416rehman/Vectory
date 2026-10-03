@@ -184,6 +184,8 @@ The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed
 
 `re-adopt` checks the SHA-256 before running the binary, then validates the current configuration with it. It changes only the approved binary. If validation fails, fix the reported problem or put the previous binary back.
 
+A version deployed while the binary was changed failed without Vector running it (the finding `VECTOR_BINARY_UNAVAILABLE`) and waits for a retry. After the agent runs again, choose **Retry application** on the device page or run `sudo vectory retry`.
+
 If you didn't replace Vector yourself, don't approve the change. Find out why the file changed first.
 
 ## Adopt a Vector that already runs
@@ -261,6 +263,8 @@ Use recovery when a device's credentials are lost or can no longer renew. It cre
    ```
 
 4. **In the dashboard:** find the new device identity, add it back to its groups and deploy its pipeline. Recovery keeps the files on the host but not groups or assignments.
+
+If the server refuses the token because it expired, was revoked or was mistyped, run the command again with a new one. If the connection dropped after the command sent its request, run it again with the same token: it finishes the request it started, and a different token is refused until it does.
 
 Delete any downloaded token file afterwards. If creating the token was interrupted, see [If a request is interrupted](interrupted-requests.md).
 

@@ -312,6 +312,12 @@ async fn own_account_routes_authenticate_before_they_read_the_body() {
             )
             .await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{path} {raw:?}: {body}");
+            // Same status and code as a role refusal, but a script can tell why.
+            assert_eq!(body["error"]["code"], "FORBIDDEN", "{path} {raw:?}");
+            assert_eq!(
+                body["error"]["message"], "The X-CSRF-Token header is missing or wrong",
+                "{path} {raw:?}"
+            );
         }
         // Signed in with the token, a body the route cannot read is the
         // caller's mistake: 400, whatever the role.

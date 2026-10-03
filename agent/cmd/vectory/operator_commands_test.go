@@ -116,9 +116,10 @@ func TestAllowCannotPermitAPipelineToOpenVectorsLocalAPI(t *testing.T) {
 
 func TestAllowAddsWhatTheHostApprovesAndSaysWhatItAllowsNow(t *testing.T) {
 	dir := installedDir(t, agent.CapabilityPolicy{AllowedNetworkHosts: []string{"logs.example.test:443"}})
-	// The agent's log exists once it ran; the change is noted there.
-	if err := os.WriteFile(filepath.Join(dir, "vector.log"), nil, 0600); err != nil {
-		t.Fatal(err)
+	// Vector has not run on this host, so there is no log yet; the change is
+	// noted all the same.
+	if _, err := os.Stat(filepath.Join(dir, "vector.log")); !os.IsNotExist(err) {
+		t.Fatal("the fixture already has a Vector log")
 	}
 	code, stdout, stderr := invoke("allow", "--state-dir", dir, "--network", "127.0.0.1:8239", "--listener", "0.0.0.0:514")
 	if code != 0 || stderr != "" {
@@ -147,7 +148,13 @@ func TestAllowAddsWhatTheHostApprovesAndSaysWhatItAllowsNow(t *testing.T) {
 	if code, _, stderr = invoke("allow", "--state-dir", dir); code != 2 || !strings.Contains(stderr, "name at least one") {
 		t.Fatal(code, stderr)
 	}
-	if code, _, stderr = invoke("allow", "--state-dir", dir, "--network", "no-port"); code != 1 || !strings.Contains(stderr, "host:port") {
+	// A value that can't be an address is a usage error that echoes the value.
+	for _, args := range [][]string{{"--network", "no-port"}, {"--network", "logs.example.net"}, {"--listener", "0.0.0.0:99999"}} {
+		if code, _, stderr = invoke(append([]string{"allow", "--state-dir", dir}, args...)...); code != 2 || !strings.Contains(stderr, args[1]+" isn't an exact host:port") {
+			t.Fatal(args, code, stderr)
+		}
+	}
+	if code, _, stderr = invoke("allow", "--state-dir", dir, "--file-root", "relative/dir"); code != 2 || !strings.Contains(stderr, "file root relative/dir isn't an absolute path") {
 		t.Fatal(code, stderr)
 	}
 	// A complete policy file says what it leaves allowed.
@@ -159,6 +166,9 @@ func TestAllowAddsWhatTheHostApprovesAndSaysWhatItAllowsNow(t *testing.T) {
 	}
 	if code, stdout, _ = invoke("install", "--state-dir", dir, "--capability-policy", policy); code != 0 || !strings.Contains(stdout, "This host allows files under "+root+".") {
 		t.Fatal(code, stdout)
+	}
+	if logged, _ = os.ReadFile(filepath.Join(dir, "vector.log")); !strings.Contains(string(logged), "Host operator replaced the allowances: files under "+root+" (vectory install --capability-policy)") {
+		t.Fatalf("no local note of the replaced allowances: %q", logged)
 	}
 }
 

@@ -108,8 +108,11 @@ func validateInstallPolicy(policy CapabilityPolicy) error {
 		}
 	}
 	for _, root := range policy.AllowedFileRoots {
-		if !filepath.IsAbs(root) || strings.ContainsAny(root, "*?[") {
-			return errors.New("capability file roots must be absolute paths without wildcard patterns")
+		if !filepath.IsAbs(root) {
+			return inputError(fmt.Sprintf("file root %s isn't an absolute path: name the whole directory, such as %s", safeText(root, 120), exampleFileRoot()))
+		}
+		if strings.ContainsAny(root, "*?[") {
+			return inputError(fmt.Sprintf("file root %s has a wildcard: name the directory itself, such as %s, which covers everything under it", safeText(root, 120), exampleFileRoot()))
 		}
 		// A filesystem or volume root covers every file. What a root may not
 		// overlap (the agent's own directories, a bound secret file) needs the
@@ -120,7 +123,7 @@ func validateInstallPolicy(policy CapabilityPolicy) error {
 	}
 	for _, value := range append(slices.Clone(policy.AllowedNetworkHosts), policy.AllowedListenAddresses...) {
 		if !validInstallAddress(value) {
-			return errors.New("capability destinations and listeners require an exact host:port with port 1..65535")
+			return inputError(fmt.Sprintf("%s isn't an exact host:port: a destination or listener names a host and a port from 1 to 65535, such as logs.example.net:443", safeText(value, 120)))
 		}
 	}
 	return nil
@@ -165,7 +168,7 @@ func (options InstallOptions) validate() error {
 		}
 	}
 	if n := options.GracefulShutdownSeconds; n != nil && (*n < minGracefulShutdownSeconds || *n > maxGracefulShutdownSeconds) {
-		return errors.New("--graceful-shutdown-seconds must be between 5 and 300")
+		return inputError(fmt.Sprintf("--graceful-shutdown-seconds %d is out of range: Vector may drain for a whole number of seconds from %d to %d", *n, minGracefulShutdownSeconds, maxGracefulShutdownSeconds))
 	}
 	return nil
 }
@@ -281,7 +284,11 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 		}
 		if s.VectorVersion, err = probe(ctx, s); err != nil {
 			if found := InspectVector(ctx, binary); found.Version != "" && !SupportedVectorVersion(found.Version) {
-				return fmt.Errorf("found Vector %s at %s; this agent requires %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, VectorSeries)
+				reason := "this agent requires " + VectorSeries
+				if vectorPrerelease(found.Version) {
+					reason = "pre-releases aren't supported, so install a " + VectorSeries + " release"
+				}
+				return fmt.Errorf("found Vector %s at %s; %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, reason)
 			}
 			return err
 		}

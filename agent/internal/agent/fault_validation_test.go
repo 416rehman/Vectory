@@ -141,6 +141,106 @@ func TestSlowValidationWithinItsLimitStillPasses(t *testing.T) {
 	d.requireConverged(t)
 }
 
+// adoptPrivateStandIn gives the device its own copy of the stand-in as the
+// adopted Vector, so a test can change the binary without touching the one
+// every other test shares.
+func adoptPrivateStandIn(t *testing.T, d *applyDevice, driver *validationDriver, config fakeVectorConfig) string {
+	t.Helper()
+	shared := standInVector(t, config)
+	data, err := os.ReadFile(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), filepath.Base(shared))
+	if err = os.WriteFile(binary, data, 0755); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := FileDigest(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.e.Settings.VectorBinary, d.e.Settings.VectorBinarySHA256 = binary, digest
+	driver.VectorDriver.Settings = d.e.Settings
+	return binary
+}
+
+// A package upgrade replaces the adopted Vector. The agent runs nothing it did
+// not approve, so the apply fails before Vector starts, and the finding names
+// the binary and how to approve the new one, not the pipeline.
+func TestChangedVectorBinaryFailsAnApplyWithoutRunningIt(t *testing.T) {
+	calls := filepath.Join(t.TempDir(), "validations.log")
+	d, driver := validationDevice(t, fakeVectorConfig{Validate: "ok", Calls: calls})
+	binary := adoptPrivateStandIn(t, d, driver, fakeVectorConfig{Validate: "ok", Calls: calls})
+	f, err := os.OpenFile(binary, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.WriteString("\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = d.e.Reconcile(context.Background(), d.m); err == nil {
+		t.Fatal("a version was applied although the adopted Vector binary changed")
+	}
+	issue := d.e.State.Error
+	if d.e.State.ApplyState != "failed" || issue == nil || issue.Code != "VALIDATION_FAILED" || issue.Stage != "validation" {
+		t.Fatalf("state %s, issue %+v", d.e.State.ApplyState, issue)
+	}
+	found := diagnostic(issue, "VECTOR_BINARY_UNAVAILABLE")
+	if found == nil || !strings.Contains(found.Message, "binary this agent approved") || !strings.Contains(found.Hint, "vectory re-adopt") {
+		t.Fatalf("the finding doesn't name the binary and the fix: %+v", issue.Diagnostics)
+	}
+	if strings.Contains(issue.Message, "rejected") || strings.Contains(found.Message+found.Hint, binary) {
+		t.Fatalf("Vector didn't reject anything, and the finding must not carry the binary's path: %q %+v", issue.Message, found)
+	}
+	if _, statErr := os.Stat(calls); !os.IsNotExist(statErr) {
+		t.Fatal("Vector was started although its binary changed")
+	}
+	if driver.activations != 0 {
+		t.Fatal("a version was activated")
+	}
+	if next := applyNextAction("", d.e.State); !strings.Contains(next, "vectory re-adopt") || strings.Contains(next, "vectory logs") {
+		t.Fatalf("the next step is for a pipeline problem: %q", next)
+	}
+	if line := problemText(issue); !strings.Contains(line, "VECTOR_BINARY_UNAVAILABLE") || !strings.Contains(line, "re-adopt") {
+		t.Fatalf("the agent log doesn't name the cause: %q", line)
+	}
+	d.requireIntact(t)
+
+	// Approving the new binary and retrying applies the version.
+	if err = os.WriteFile(binary, mustRead(t, standInVector(t, fakeVectorConfig{Validate: "ok", Calls: calls})), 0755); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := FileDigest(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.e.Settings.VectorBinarySHA256 = digest
+	driver.VectorDriver.Settings = d.e.Settings
+	if err = QueueRetry(d.e.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if !d.e.takeQueuedRetry() {
+		t.Fatal("the retry request found nothing held back")
+	}
+	if err = d.e.Reconcile(context.Background(), d.m); err != nil {
+		t.Fatalf("the version didn't apply once the binary was approved: %v", err)
+	}
+	d.requireConverged(t)
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 // When Vector rejects a version, the diagnostic doesn't call it a timeout.
 func TestValidationRejectionIsNotATimeout(t *testing.T) {
 	d, _ := validationDevice(t, fakeVectorConfig{Validate: "reject"})

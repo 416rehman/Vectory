@@ -86,7 +86,7 @@ The report looks like this:
 }
 ```
 
-Use `null` for the version and artifact fields of a device with no pipeline. The whole operation stops if any device is unknown or revoked, appears twice, has a missing counter, or doesn't match the reviewed version and policy. `--apply` moves each counter one past the value you supplied, resets rollout evidence for those devices and records the change.
+Use `null` for the version and artifact fields of a device with no pipeline. The whole operation stops if any device is unknown or revoked, appears twice, has a missing counter, or doesn't match the reviewed version and policy. Each refusal names the device, and one for a counter that is still `null` also names the counter and says to read it with `sudo vectory status --json` on the device. `--apply` moves each counter one past the value you supplied, resets rollout evidence for those devices and records the change.
 
 > [!CAUTION]
 > Never lower or delete a device's counters to make it accept a configuration. If you can't read a device's counters, recover its identity instead: see [Recover a device identity](agents.md#recover-a-device-identity).
@@ -151,7 +151,7 @@ vectory-admin --data-dir /var/lib/vectory reset-password \
   --email admin@example.com --url https://vectory.example.com
 ```
 
-It prints a link and the bare code, valid for 1 hour. Start the server again, then send the link through a trusted channel. The person opens it, or chooses **Forgot password?** on the sign-in page and pastes the code. Two-factor sign-in stays on; if the authenticator is lost too, also run `disable-mfa`.
+It prints a link and the bare code, valid for 1 hour. Start the server again, then send the link through a trusted channel. The person opens it, or chooses **Forgot password?** on the sign-in page and pastes the code. On an account with two-factor sign-in it stays on, and the command says so; if the authenticator is lost too, also run `disable-mfa`.
 
 ## disable-mfa
 

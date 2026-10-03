@@ -34,6 +34,24 @@ func cleanupPendingRecovery(pending string) error {
 	return nil
 }
 
+// unissuedRecoveryRequest reports whether the pending recovery request cannot
+// have created a replacement identity: nothing under pending-recovery holds
+// one, and the request's record (the one vectory enroll keeps) says the server
+// refused it or that it never left this host. Such a request may be replaced
+// by one with another token. Any other record, a missing one or an identity
+// keeps the original token required, so a reply lost after sending still
+// returns the identity it issued.
+func unissuedRecoveryRequest(pending string) bool {
+	for _, name := range []string{"identity.json", "credentials.json"} {
+		if _, err := os.Lstat(filepath.Join(pending, name)); !os.IsNotExist(err) {
+			return false
+		}
+	}
+	var request enrollmentPending
+	exists, err := readOptionalEnrollmentJSON(filepath.Join(pending, "enrollment.json"), &request)
+	return err == nil && exists && request.rebindable()
+}
+
 func resetForReplacement(s State, newID string) State {
 	return State{DeviceID: newID, ApplyState: "unmanaged", ActualSHA256: s.ActualSHA256, LastGoodSHA256: s.LastGoodSHA256, Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}}
 }
@@ -199,7 +217,7 @@ func recoveryEnrollmentPreflight(dir string, s Settings, token string) error {
 			// path only after all prospective input/trust checks have succeeded.
 			return nil
 		}
-		if origin.TokenSHA256 != Digest([]byte(token)) {
+		if origin.TokenSHA256 != Digest([]byte(token)) && !unissuedRecoveryRequest(pending) {
 			return errors.New("pending recovery must retry its original token before starting another request")
 		}
 	} else {
@@ -258,7 +276,14 @@ func recoverEnrollmentPrepared(ctx context.Context, dir string, s Settings, toke
 		return err
 	}
 	if origin.OldDeviceID != "" && origin.TokenSHA256 != Digest([]byte(token)) {
-		return errors.New("pending recovery must retry its original token before starting another request")
+		if !unissuedRecoveryRequest(pending) {
+			return errors.New("pending recovery must retry its original token before starting another request")
+		}
+		// The earlier request issued nothing: the new token starts a new one.
+		if err = cleanupPendingRecovery(pending); err != nil {
+			return err
+		}
+		origin = pendingRecovery{}
 	}
 	if err = PrivateDir(pending); err != nil {
 		return err

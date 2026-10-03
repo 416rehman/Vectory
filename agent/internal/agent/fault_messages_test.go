@@ -32,7 +32,7 @@ func TestFullDiskIsSaidWithItsFixWhereverTheAgentSpeaks(t *testing.T) {
 	if _, line := outcomeLine(e.State); !strings.Contains(line, "couldn't be applied yet") || !strings.Contains(line, "The disk that holds the managed configuration is full") || !strings.Contains(line, "Vector runs the last working configuration.") {
 		t.Fatalf("the outcome line: %q", line)
 	}
-	if next := applyNextAction(e.State); !strings.Contains(next, "Free some space") || !strings.Contains(next, "by itself") {
+	if next := applyNextAction("", e.State); !strings.Contains(next, "Free some space") || !strings.Contains(next, "by itself") {
 		t.Fatalf("the next step: %q", next)
 	}
 }

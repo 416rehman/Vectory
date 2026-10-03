@@ -162,6 +162,10 @@ func checkPrivateFile(path string) error {
 // access list (protect), which names SYSTEM, the administrators and the writing
 // account.
 func keepOwner(tmp, path string) {}
+
+// ownedLikeParent does nothing on Windows: a file created in the state
+// directory inherits its access list, which names the service account.
+func ownedLikeParent(path string) error { return nil }
 func rejectPlatformLink(path string) error {
 	p, e := windows.UTF16PtrFromString(path)
 	if e != nil {

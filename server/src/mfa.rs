@@ -418,6 +418,18 @@ pub async fn admin_reset(
     Ok(Json(json!({"user":out})))
 }
 
+/// Whether the account behind `email` signs in with two-factor authentication,
+/// for the words `vectory-admin reset-password` closes with.
+pub async fn local_is_on(s: &State, email: &str) -> anyhow::Result<bool> {
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "SELECT m.enabled FROM user_mfa m JOIN users u ON u.id=m.user_id WHERE u.email=?",
+    )
+    .bind(email.trim().to_ascii_lowercase())
+    .fetch_optional(&s.pool)
+    .await?;
+    Ok(enabled == Some(true))
+}
+
 /// Offline break-glass from `vectory-admin disable-mfa` on a stopped server.
 pub async fn local_disable(s: &State, email: &str) -> anyhow::Result<String> {
     let email = email.trim().to_ascii_lowercase();
@@ -449,6 +461,40 @@ mod tests {
     use super::*;
     use crate::{Settings, initialize};
     use axum::http::{HeaderValue, StatusCode};
+
+    #[tokio::test]
+    async fn the_admin_tool_asks_whether_an_account_signs_in_with_two_factor() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = initialize(Settings {
+            data_dir: temp.path().join("state"),
+            bootstrap_secret: "isolated-test-bootstrap-secret-123456789".into(),
+            cookie_secure: false,
+            dashboard_dir: temp.path().join("dist"),
+            releases_dir: temp.path().join("releases"),
+            instance_name: "Test".into(),
+            validation_url: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES('u1','one@example.test','One','admin','unused','2020-01-01T00:00:00Z')")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        assert!(!local_is_on(&s, "one@example.test").await.unwrap());
+        // A setup that was started and never confirmed is not two-factor.
+        sqlx::query("INSERT INTO user_mfa(user_id,secret_ciphertext,pending_expires_at,enabled) VALUES('u1','sealed','2099-01-01T00:00:00Z',0)")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        assert!(!local_is_on(&s, "one@example.test").await.unwrap());
+        sqlx::query("UPDATE user_mfa SET enabled=1 WHERE user_id='u1'")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        assert!(local_is_on(&s, " One@Example.test ").await.unwrap());
+        assert!(!local_is_on(&s, "nobody@example.test").await.unwrap());
+    }
 
     #[tokio::test]
     async fn epoch_migration_preserves_existing_account_session_and_mfa() {

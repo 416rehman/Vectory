@@ -255,7 +255,7 @@ func TestFirstVersionThatFailsToStartLeavesNothingRunning(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.Dir, "journal.json")); !os.IsNotExist(err) {
 		t.Fatal("a resolved first-version failure left a recovery journal")
 	}
-	if next := applyNextAction(e.State); next != firstVersionFailed || strings.Contains(next, "host-operator") {
+	if next := applyNextAction("", e.State); next != firstVersionFailed || strings.Contains(next, "host-operator") {
 		t.Fatalf("next step: %q", next)
 	}
 	// vectory status says the same, never the emergency procedure.
@@ -293,15 +293,15 @@ func TestFirstVersionFailureRestoresWhatTheAttemptReplaced(t *testing.T) {
 func TestNextActionOnlyClaimsARunningConfigurationThatExists(t *testing.T) {
 	for _, code := range []string{"VALIDATION_FAILED", "CAPABILITY_DENIED"} {
 		state := State{Error: &Issue{Code: code}, LastGoodSHA256: "a"}
-		if !strings.HasSuffix(applyNextAction(state), "Vector keeps running the last working configuration.") {
-			t.Fatalf("%s with a last-good configuration: %q", code, applyNextAction(state))
+		if !strings.HasSuffix(applyNextAction("", state), "Vector keeps running the last working configuration.") {
+			t.Fatalf("%s with a last-good configuration: %q", code, applyNextAction("", state))
 		}
 		state.LastGoodSHA256 = ""
-		if next := applyNextAction(state); strings.Contains(next, "keeps running") || !strings.Contains(next, "Vector isn't running yet") {
+		if next := applyNextAction("", state); strings.Contains(next, "keeps running") || !strings.Contains(next, "Vector isn't running yet") {
 			t.Fatalf("%s on a new device: %q", code, next)
 		}
 	}
-	if next := applyNextAction(State{Error: &Issue{Code: "ROLLBACK_FAILED"}, LastGoodSHA256: "a"}); !strings.Contains(next, "host-operator intervention") {
+	if next := applyNextAction("", State{Error: &Issue{Code: "ROLLBACK_FAILED"}, LastGoodSHA256: "a"}); !strings.Contains(next, "host-operator intervention") {
 		t.Fatalf("a failed restore of verified content still needs the host operator: %q", next)
 	}
 }
