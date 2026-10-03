@@ -543,9 +543,9 @@ The pinned key is kept. To turn updates on again, run the Upgrade agent command 
 
 It refuses while the update step applies or tries a build, and says when that ends: `vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that`.
 
-It also refuses while a rollback is putting the previous build back or watching it, and while an update is replacing the agent, with words that name no time, because none is known: `vectory: an update is being rolled back on this host; the update step puts the previous build back and starts it, tries every 30 seconds until it can, and then watches it for up to 5 minutes. Run the command again after that`, and `vectory: an update is being applied on this host; the update step stops the agent's service, replaces the executable and starts the service again, and tries every 30 seconds if it can't. Run the command again after that`.
+It also refuses while a rollback is putting the previous build back or watching it, and while an update is replacing the agent, with words that name no time, because none is known: `vectory: an update is being rolled back on this host; the update step puts the previous build back and starts it, tries every 30 seconds until it can, and then watches it for up to 5 minutes. Run the command again after that`, and `vectory: an update is being applied on this host; the update step stops the agent's service, replaces the executable and starts the service again, and tries every 30 seconds if it can't. Run the command again after that`. An update that waits for a start that can never be made (the agent's job disabled, its unit masked) holds `off` the same way until the agent is started by hand, as [When a host rolls back](agent-updates.md#when-a-host-rolls-back) lists for each system, and then the update step finishes the update by itself.
 
-When the previous build is already back in place and only its start is missing, `off` doesn't refuse: a service that can never start (its job disabled, its definition removed, its unit masked) would keep the step trying, and keep you from turning updates off, for ever. It ends the rollback as the step ends an update interrupted after the swap (`rolled back`, `INTERRUPTED`; the release stays tried), removes the step, and says that nothing tries to start the agent's service now, and what to run if it isn't running. On a Mac the update step is busy for most of a minute with each of its tries to start the agent's job, so `off` waits for the run to end, up to a minute and a half, before it refuses with `the update step is working now; try again in a minute`.
+When the previous build is already back in place and only its start is missing, `off` doesn't refuse: a service that can never start (its job disabled, its unit masked) would keep the step trying, and keep you from turning updates off, for ever. It ends the rollback as the step ends an update interrupted after the swap (`rolled back`, `INTERRUPTED`), removes the step, and says that nothing tries to start the agent's service now, and what to run if it isn't running. It says that only when its own removal ended the rollback, and not when a run of the update step ended it in between.
 
 ```text
 Agent updates are off on this host: the policy says off, the update step is removed, the rollback that was waiting for the agent's service to start is over.
@@ -553,6 +553,20 @@ The rollback was waiting for the agent's service to start, and nothing will try 
 ```
 
 With `--json`, `rollback_ended` is `true` then and `false` otherwise. [When a host rolls back](agent-updates.md#when-a-host-rolls-back) says what to do by hand when the service manager still refuses to start the agent.
+
+The record of that end is in the update step's files, which the same command removes, so nothing reports a result. The dashboard doesn't show **Rolled back**, and the server fails the device's update with `NO_REPORT` 30 minutes after it started applying.
+
+On a Mac the update step is busy for most of a minute with each of its tries to start the agent's job. So `off` waits for the run to end, up to a minute and a half, before it refuses with `the update step is working now; try again in a minute`. A run whose `launchctl` calls hang can last longer, and then a later try is the way. A previous build that starts and ends again is waited for first the same way.
+
+Where the agent's service isn't registered (its definition, unit or service was removed by hand), the update step can't find the executable the service runs, so `off` can't say that the previous build is in place and refuses in other words. It says what is missing, that the update step can't start the previous build, and what registers the service again:
+
+```text
+vectory: an update is being rolled back on this host, and the agent's service isn't registered (/Library/LaunchDaemons/io.vectory.agent.plist doesn't exist), so the update step can't start the previous build. Register the service again with `sudo vectory service-install`; the update step then finishes the rollback by itself, usually within a minute or two. Run the command again after that
+```
+
+On Windows it says `vectory service-install` in an elevated PowerShell. [`service-install`](#service-commands) isn't held up by an open rollback. Give it the `--state-dir` the service was registered with, if that isn't the default, and on Linux and macOS its `--service-user`.
+
+If the update step begins a run between the moment `off` checks and the moment it removes the step, so that the removal is refused after the policy was turned off and the staged build deleted, `off` says what it did and that running it again finishes the removal: `vectory: the update step is working now; try again in a minute. Done so far: the policy says off, the staged build is deleted. Run the command again to finish turning updates off`. A refusal before anything changed says nothing of the kind, because the command did nothing.
 
 It removes the update step, and the root launch daemon, timer or service that runs it, even where this build doesn't ship updates for the operating system and an earlier build installed it. It says the update step is removed only when the step's directory is gone. Where the build has no update step for the system at all and the directory is there, `off` stops with an error that names it and says to delete it yourself, and `service-uninstall` does the same.
 

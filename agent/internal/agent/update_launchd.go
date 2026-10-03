@@ -5,6 +5,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -75,11 +76,11 @@ type macosUpdateHost struct {
 	// show it. alive says whether a process is still there; a test replaces it.
 	startBound time.Duration
 	alive      func(pid int) bool
-	// leaving is the process of the agent's job that launchd was told to remove and that it
-	// hasn't been seen to finish removing (leavingKnown says there is one). The file the step
-	// keeps it in (updateLeavingFile) is what the next run reads.
-	leaving      int
-	leavingKnown bool
+	// bootSession names this boot of the Mac ("" when the system doesn't say) and uptime says
+	// for how long it has been awake (false when it doesn't say): the record of a job launchd
+	// was told to remove carries both (leavingJob). A test replaces them.
+	bootSession func() string
+	uptime      func() (time.Duration, bool)
 }
 
 var _ updateHost = (*macosUpdateHost)(nil)
@@ -88,7 +89,7 @@ var _ serviceReloader = (*macosUpdateHost)(nil)
 // newMacOSUpdateHost builds the host over a launchctl runner: the real one, or a
 // recorder in a test.
 func newMacOSUpdateHost(run func(ctx context.Context, args ...string) launchctlResult) *macosUpdateHost {
-	h := &macosUpdateHost{daemonDir: launchDaemonsDir, receipt: macosPackageReceipt, startBound: launchdStartBound, alive: processExists}
+	h := &macosUpdateHost{daemonDir: launchDaemonsDir, receipt: macosPackageReceipt, startBound: launchdStartBound, alive: processExists, bootSession: currentBootSession, uptime: currentUptime}
 	h.agent = h.job("", run)
 	h.step = h.job(updateLaunchdLabel, run)
 	return h
@@ -114,7 +115,7 @@ func (h *macosUpdateHost) job(label string, run func(ctx context.Context, args .
 		return err == nil
 	}
 	if label == "" {
-		job.accepted = h.rememberLeaving
+		job.leaving = h.rememberLeaving
 	}
 	return job
 }
@@ -303,12 +304,15 @@ func (h *macosUpdateHost) ServiceState(ctx context.Context) (updateServiceState,
 // before the bootout, and `kill(pid, 0)` says ESRCH once it is gone. Both are bounded by
 // the stop limit.
 //
-// A stop that gives up leaves a job that launchd goes on listing as running, with the
-// process it had, until the removal is done, and nothing in what `print` says tells it
-// from a job that was started. So from the moment launchd takes the bootout in hand the
-// step keeps the process of the job it told to leave (rememberLeaving), until `print` says
-// there is no such job or launchd has refused the bootout, and StartService never takes a
-// listing of that process for a start.
+// A stop that gives up, is cut short or dies while launchctl waits leaves a job that
+// launchd goes on listing as running, with the process it had, until the removal is done,
+// and nothing in what `print` says tells it from a job that was started. So the step writes
+// a record of the job it is about to tell launchd to remove before launchctl is asked
+// (rememberLeaving), and a bootout whose record can't be written isn't asked for: the stop
+// fails with that error. The record stays whatever launchd answers and wherever the stop
+// ends. Only `print` saying that launchd has no such job ends it, here or in the start that
+// follows, and so does a listing of another process or the record's age (leavingJob).
+// StartService never takes a listing of the job the record names for a start.
 func (h *macosUpdateHost) StopService(ctx context.Context) error {
 	deadline := h.agent.now().Add(serviceStopLimit)
 	pid := 0
@@ -318,13 +322,9 @@ func (h *macosUpdateHost) StopService(ctx context.Context) error {
 		}
 	}
 	if err := h.agent.controlContext(ctx, "stop"); err != nil {
-		var refused bootoutRefused
-		if errors.As(err, &refused) {
-			// launchd didn't take the removal in hand: the job is what it was.
-			h.forgetLeaving()
-		}
 		return err
 	}
+	// launchd says it has no such job, so there is none left to wait for.
 	h.forgetLeaving()
 	for pid > 0 && h.alive(pid) {
 		if err := ctx.Err(); err != nil {
@@ -349,16 +349,17 @@ func (h *macosUpdateHost) StopService(ctx context.Context) error {
 // a job that is shown ends it with nil.
 //
 // A job that is listed is the new instance only if it isn't the one the step told launchd
-// to remove: the stop waits until launchd has removed the old job, but a stop that gave up
-// leaves it listed, as running, with the process it had (StopService). A listing of that
-// process, or of no process, while the step still holds it is not a start: the start waits
-// for launchd to finish within its minute, bootstraps once `print` says there is no such
-// job, and otherwise ends with an error that says what it found. The step never ends a
-// request on it.
+// to remove: the stop waits until launchd has removed the old job, but a stop that gave up,
+// was cut short or died leaves it listed, as running, with the process it had
+// (StopService). While the step holds a record of that job, a listing of its process, of no
+// process or (when the record names none) of any process is not a start: the start waits for
+// launchd to finish within its minute, bootstraps once `print` says there is no such job,
+// and otherwise ends with an error that says what it found. The step never ends a request on
+// it.
 func (h *macosUpdateHost) StartService(ctx context.Context) error {
 	job := h.agent
 	deadline := job.now().Add(h.startBound)
-	leaving, leavingKnown := h.leavingProcess()
+	leaving, leavingKnown := h.leavingRecord()
 	var last error
 	// gaveUp is the error of a start that has run out of its minute, with what launchd
 	// said last.
@@ -371,9 +372,11 @@ func (h *macosUpdateHost) StartService(ctx context.Context) error {
 	for {
 		printed := job.launchctl(ctx, launchdStatusLimit, "print", job.target())
 		pause := launchdStartPause
-		departing := leavingKnown && printed.status == 0 && listsOnlyTheLeavingJob(printed.stdout, leaving)
+		departing := leavingKnown && printed.status == 0 && leaving.listedIn(printed.stdout)
 		switch {
 		case printed.status == 0 && !departing:
+			// A job that is listed and isn't the one the step told to leave: nothing was
+			// recorded, or the listing is of another process, which is a job started since.
 			h.forgetLeaving()
 			return nil
 		case ctx.Err() != nil:
@@ -383,7 +386,7 @@ func (h *macosUpdateHost) StartService(ctx context.Context) error {
 			// once more, above.
 			return gaveUp()
 		case departing:
-			last, pause = fmt.Errorf("it lists only the job it was told to remove, of the process %d", leaving), launchdUnloadPoll
+			last, pause = fmt.Errorf("it lists only the job it was told to remove%s", leaving.of()), launchdUnloadPoll
 		case launchdNotLoaded(printed):
 			// launchd has finished removing the job it was told to remove; what is listed from
 			// here on is what this start makes.
@@ -405,59 +408,165 @@ func (h *macosUpdateHost) StartService(ctx context.Context) error {
 	}
 }
 
-// updateLeavingFile is where the step keeps the process of the agent's job it told launchd
-// to remove, in its private directory, for as long as launchd lists that job. The step is
-// a new process every 30 seconds, and the removal can last longer than a run.
+// updateLeavingFile is where the step keeps the record of the agent's job it is telling
+// launchd to remove (leavingJob), in its private directory, for as long as launchd may
+// still list that job. The step is a new process every 30 seconds, and the removal can last
+// longer than a run.
 const updateLeavingFile = "agent-job-leaving"
+
+// leavingLife is how long a record of a job the step told launchd to remove can hold, counted
+// in the time the Mac has been awake. launchd sends SIGKILL to the job's process when the
+// job's exit timeout has passed (330 s in the agent's definition) and drops the job at once, so
+// the removal is over by then. The stop limit is that and 30 seconds more, and the record is
+// written before launchctl is asked, so it ages from just before launchd began. The two minutes
+// added are for launchd to reap the process and drop the job, for a start that began just
+// before the stop limit and waits a minute of its own, and for a clock that runs a little slow.
+// A listing of the job after that is not one that was told to leave.
+const leavingLife = serviceStopLimit + 2*time.Minute
+
+// leavingJob is the record of the agent's job the step is telling launchd to remove. It is
+// written before launchctl is asked, so that it is there whatever becomes of the step while
+// launchctl waits for the agent to drain, and it says enough for a later run, which is a new
+// process, to tell whether a listing of the job is that job.
+type leavingJob struct {
+	// PID is the process `print` listed for the job just before the bootout, and null when it
+	// listed none ("unknown"): any listing of the job is then the job that was told to leave,
+	// until `print` says that launchd has no such job.
+	PID *int `json:"pid"`
+	// Boot is the boot session of the Mac, empty when the system doesn't say; Awake is how long
+	// the Mac had been awake, in nanoseconds, and 0 when the system doesn't say; At is the time
+	// the record was written, by the wall clock.
+	Boot  string    `json:"boot"`
+	Awake int64     `json:"awake_ns"`
+	At    time.Time `json:"at"`
+}
 
 func (h *macosUpdateHost) leavingPath() string {
 	return filepath.Join(UpdateLocations().Private, updateLeavingFile)
 }
 
-// rememberLeaving records that launchd took a bootout of the agent's job in hand: pid is
-// the process the job had, 0 when it had none. It is kept in memory for this run and in a
-// file for the next, which finds a new host with nothing in its memory.
-func (h *macosUpdateHost) rememberLeaving(pid int) {
-	h.leaving, h.leavingKnown = pid, true
-	_ = AtomicWrite(h.leavingPath(), []byte(strconv.Itoa(pid)+"\n"))
+// of says which process the record names, for an error: ", of the process 4242", or nothing
+// when it names none.
+func (r leavingJob) of() string {
+	if r.PID == nil {
+		return ""
+	}
+	return fmt.Sprintf(", of the process %d", *r.PID)
 }
 
-// forgetLeaving records that there is no job left to wait for: launchd says it doesn't
-// know the job, has refused to remove it or lists a job that was started since.
-func (h *macosUpdateHost) forgetLeaving() {
-	h.leaving, h.leavingKnown = 0, false
-	_ = os.Remove(h.leavingPath())
-}
-
-// leavingProcess is the process of the job the step told launchd to remove and hasn't
-// seen go, and whether there is one. A file that isn't a process ID is no record: only the
-// step writes it, in a directory only root can enter.
-func (h *macosUpdateHost) leavingProcess() (pid int, known bool) {
-	if h.leavingKnown {
-		return h.leaving, true
-	}
-	data, err := os.ReadFile(h.leavingPath())
-	if err != nil || len(data) > 32 {
-		return 0, false
-	}
-	pid, err = strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid < 0 {
-		return 0, false
-	}
-	return pid, true
-}
-
-// listsOnlyTheLeavingJob says whether a listing of the agent's job is the job the step told
-// launchd to remove: one that lists the process it had, or none, because launchd goes on
-// listing a job as running while it removes it, and a job it removed leaves its process.
-// A listing of another process is a job that was started since. A listing that can't be
-// read can't show that it is.
-func listsOnlyTheLeavingJob(listing string, leaving int) bool {
+// listedIn says whether a listing of the agent's job is the job the record names: one that lists
+// the process it had, or none, because launchd goes on listing a job as running while it
+// removes it, and a job it removed leaves its process; or any listing at all when the record
+// names no process. A listing of another process is a job that was started since. A listing that
+// can't be read can't show that it is.
+func (r leavingJob) listedIn(listing string) bool {
 	printed, err := parseLaunchdPrint(listing)
 	if err != nil {
 		return true
 	}
-	return printed.PID == 0 || printed.PID == leaving
+	return r.PID == nil || printed.PID == 0 || printed.PID == *r.PID
+}
+
+// rememberLeaving writes the record of the job launchd is about to be told to remove: pid is
+// the process `print` listed for it, 0 when it listed none. It is on disk, synced, before this
+// returns, and an error is the reason launchctl must not be asked: a bootout that nothing
+// records can leave a job that the next run takes for a start.
+func (h *macosUpdateHost) rememberLeaving(pid int) error {
+	record := leavingJob{Boot: h.bootSession(), At: h.agent.now().UTC()}
+	if pid > 0 {
+		record.PID = &pid
+	}
+	if awake, known := h.uptime(); known && awake > 0 {
+		record.Awake = int64(awake)
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	if err := AtomicWrite(h.leavingPath(), append(data, '\n')); err != nil {
+		return fmt.Errorf("couldn't write the record of the agent's job before launchd is told to remove it, so launchctl wasn't asked to: %w", err)
+	}
+	return nil
+}
+
+// forgetLeaving removes the record: launchd says it doesn't know the job, or lists a job that
+// was started since. A record that can't be removed is judged again by what it says (the boot,
+// the age, the process it names) wherever it is read, so there is nothing to do about it
+// here; a record that is left holds no longer than it would have.
+func (h *macosUpdateHost) forgetLeaving() {
+	_ = os.Remove(h.leavingPath())
+}
+
+// leavingRecord is the record of the job the step told launchd to remove, when there is one
+// that still holds. A file that isn't a record is none: only the step writes it, in a directory
+// only root can enter.
+func (h *macosUpdateHost) leavingRecord() (leavingJob, bool) {
+	record, ok := readLeavingJob(h.leavingPath())
+	if !ok || !h.leavingHolds(record) {
+		return leavingJob{}, false
+	}
+	return record, true
+}
+
+// leavingHolds says whether a record still names a job that launchd may be removing. A record
+// from another boot session names a process of a Mac that was restarted since, and a restart
+// sets the uptime back, so an uptime below the record's says the same where the boot session
+// can't be read; neither is the job. Older than leavingLife is not either. Age is counted in
+// the time the Mac has been awake, which a Mac that sleeps doesn't spend: a night with the lid
+// shut in the middle of a stop doesn't age a record while the job is still being removed, and
+// that age never runs ahead of the removal's, whether launchd's own timers stand still while the
+// Mac sleeps or not. The wall clock stands in where the system doesn't say.
+func (h *macosUpdateHost) leavingHolds(r leavingJob) bool {
+	if !sameBoot(r.Boot, h.bootSession()) {
+		return false
+	}
+	if awake, known := h.uptime(); known && r.Awake > 0 {
+		if awake < time.Duration(r.Awake) {
+			return false
+		}
+		return awake-time.Duration(r.Awake) <= leavingLife
+	}
+	return h.agent.now().Sub(r.At) <= leavingLife
+}
+
+// sameBoot says whether two boot sessions are one boot. A session the system didn't say, or two
+// of different kinds (a UUID and a boot time, which the system gave at different moments), can't
+// be told apart: they are taken for one boot, and the record holds as long as its age allows.
+// Holding a record too long costs a wait that ends; dropping one early is what a record is for.
+func sameBoot(recorded, now string) bool {
+	if recorded == "" || now == "" {
+		return true
+	}
+	kind, _, _ := strings.Cut(recorded, ":")
+	nowKind, _, _ := strings.Cut(now, ":")
+	return kind != nowKind || recorded == now
+}
+
+// readLeavingJob reads the record file, bounded and strictly: what isn't exactly what
+// rememberLeaving writes is no record.
+func readLeavingJob(path string) (leavingJob, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return leavingJob{}, false
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 1025))
+	if err != nil || len(data) > 1024 {
+		return leavingJob{}, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var record leavingJob
+	if err := decoder.Decode(&record); err != nil {
+		return leavingJob{}, false
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return leavingJob{}, false
+	}
+	if record.At.IsZero() || (record.PID != nil && *record.PID <= 0) || record.Awake < 0 {
+		return leavingJob{}, false
+	}
+	return record, true
 }
 
 // ReloadService loads the agent's job again when launchd doesn't know it, and says
@@ -536,9 +645,13 @@ func (h *macosUpdateHost) readAgentDefinition() (agentDefinition, error) {
 	return parseAgentDefinition(text)
 }
 
-// AgentExecutable is the executable the agent's definition runs.
+// AgentExecutable is the executable the agent's definition runs. A definition that isn't
+// there is errAgentNotRegistered.
 func (h *macosUpdateHost) AgentExecutable() (string, error) {
 	definition, err := h.readAgentDefinition()
+	if notExist(err) {
+		return "", fmt.Errorf("%w (%s doesn't exist)", errAgentNotRegistered, h.agent.definition)
+	}
 	if err != nil {
 		return "", err
 	}

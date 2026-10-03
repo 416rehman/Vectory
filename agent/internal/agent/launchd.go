@@ -20,13 +20,8 @@ import (
 const launchdLabel = "io.vectory.agent"
 
 // launchctlInProgress is launchctl's "Operation now in progress": bootout
-// stopped waiting while the job is still stopping. launchctlNoSuchProcess is "No such
-// process": a bootout of a job that launchd no longer has, or that is already being
-// removed.
-const (
-	launchctlInProgress    = 36
-	launchctlNoSuchProcess = 3
-)
+// stopped waiting while the job is still stopping.
+const launchctlInProgress = 36
 
 const (
 	launchctlLimit     = 30 * time.Second
@@ -201,11 +196,14 @@ type launchdJob struct {
 	// service-uninstall do. The update step's host looks for the process itself, so its
 	// jobs leave this unset.
 	alive func(pid int) bool
-	// accepted, when it is set, is told that launchd took a bootout of the job in hand
-	// (it answered, or answered that it keeps removing the job), with the process the job
-	// had, before the job is gone. The update step's host remembers it, because launchd
-	// goes on listing the job as running until the removal is done.
-	accepted func(pid int)
+	// leaving, when it is set, is called just before launchctl is asked to boot the job out,
+	// with the process `print` listed for the job (0 when it listed none), and a bootout
+	// whose call returns an error is not asked for at all. The update step's host keeps a
+	// record of the job it is about to tell launchd to remove there, because launchd goes on
+	// listing a job as running until the removal is done, and a record made after launchctl
+	// returned is never made when the step is stopped, or dies, while launchctl waits for the
+	// agent to drain.
+	leaving func(pid int) error
 }
 
 func (j launchdJob) name() string {
@@ -312,9 +310,9 @@ func (j launchdJob) controlContext(ctx context.Context, action string) error {
 
 // listedPID is the process of the job in an answer to `launchctl print`, or 0 when the
 // answer lists none. It is only looked for where someone uses it: a job that waits for its
-// process (alive) or tells what it took in hand (accepted).
+// process (alive) or keeps a record of the job it tells launchd to remove (leaving).
 func (j launchdJob) listedPID(result launchctlResult) int {
-	if (j.alive == nil && j.accepted == nil) || result.status != 0 {
+	if (j.alive == nil && j.leaving == nil) || result.status != 0 {
 		return 0
 	}
 	printed, err := parseLaunchdPrint(result.stdout)
@@ -350,18 +348,22 @@ func (j launchdJob) bootoutContext(ctx context.Context) error {
 	return j.bootoutFrom(ctx, 0)
 }
 
-// bootoutRefused is a bootout that launchd answered with an error: it didn't take the
-// removal of the job in hand, and the job it was asked to remove is what it was. A
-// bootout that launchd answered, or that it kept removing the job for, is not one.
-type bootoutRefused struct{ error }
-
-func (e bootoutRefused) Unwrap() error { return e.error }
-
 // bootoutFrom boots the job out, waits until launchd no longer lists it and, when it has
 // a way to look for a process and pid says which one the job had, until that process is
 // gone: both within the stop limit.
+//
+// What launchd answers to the bootout says nothing about whether it is removing the job: a
+// refusal and a removal that is under way both leave the job listed as it was, so the
+// answer is never what decides whether the job is leaving. The caller's record is made
+// before launchctl is asked (leaving), and only `print` saying that launchd has no such job
+// ends it.
 func (j launchdJob) bootoutFrom(ctx context.Context, pid int) error {
 	deadline := j.now().Add(serviceStopLimit)
+	if j.leaving != nil {
+		if err := j.leaving(pid); err != nil {
+			return err
+		}
+	}
 	args := []string{"bootout", j.target()}
 	result := j.launchctl(ctx, serviceStopLimit, args...)
 	if result.status != 0 {
@@ -373,20 +375,8 @@ func (j launchdJob) bootoutFrom(ctx context.Context, pid int) error {
 			if launchdNotLoaded(j.launchctl(ctx, launchdStatusLimit, "print", j.target())) {
 				return nil
 			}
-			failure := launchctlFailure(args, result)
-			if result.status > 0 && result.status != launchctlNoSuchProcess {
-				return bootoutRefused{failure}
-			}
-			if j.accepted != nil {
-				// No answer, or "no such process" for a job that is still listed: it may be
-				// leaving, so what the caller keeps for a job that is must be kept.
-				j.accepted(pid)
-			}
-			return failure
+			return launchctlFailure(args, result)
 		}
-	}
-	if j.accepted != nil {
-		j.accepted(pid)
 	}
 	if err := j.waitUnloaded(ctx, deadline); err != nil {
 		return err
