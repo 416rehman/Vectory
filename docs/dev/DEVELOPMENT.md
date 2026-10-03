@@ -23,6 +23,7 @@ scripts/preview.sh           # start; also: status, restart, stop
 ```text
 Preview running at http://127.0.0.1:8080 (agent TLS https://localhost:8443).
 Bootstrap secret: /home/you/Vectory/.local/preview/bootstrap.secret
+Add a device from Devices > Add device. The server log (/home/you/Vectory/.local/preview/server.log) shows only the ends of the CA fingerprint; Add device shows all of it.
 ```
 
 On first start the script creates a short-lived test CA in `.local/pki/` (with `go run packaging/dev-pki/main.go`) and a random bootstrap secret. It starts the validator when it finds a Vector binary under `.local/tools/`; without one, pipeline checks are structural only. Logs are in `.local/preview/server.log` and `validator.log`. Run `scripts/preview.sh restart` after rebuilding.
