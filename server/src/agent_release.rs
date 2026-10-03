@@ -23,7 +23,8 @@
 //!   is always computed from the 32 bytes. [`bundle_entry_matches`] is what
 //!   setup does with one entry of the public key bundle.
 //! - Reading signed files: [`parse_manifest`], [`parse_signature_file`],
-//!   [`parse_statement`] and [`Rollover::from_base64`].
+//!   [`parse_statement`], and for a rollover as it travels
+//!   [`RolloverEnvelope::from_file`] and [`Rollover::from_base64`].
 //! - Writing them: [`build_manifest`], [`build_signature_file`],
 //!   [`build_statement`], and [`sign`] and [`sign_rollover`] for a key the
 //!   server holds. What the server accepts for an uploaded signature is
@@ -56,6 +57,9 @@ pub const KEY_LINE_PREFIX: &str = "vectory-release-key ed25519 ";
 pub const MAX_MANIFEST_BYTES: usize = 16 * 1024;
 pub const MAX_SIGNATURE_FILE_BYTES: usize = 4 * 1024;
 pub const MAX_STATEMENT_BYTES: usize = 1024;
+/// A rollover wrapper written as a file: a statement of 1 KiB as base64, a
+/// signature and the two member names fit in 2 KiB.
+pub const MAX_ENVELOPE_BYTES: usize = 2 * 1024;
 /// Rollover statements in one offer.
 pub const MAX_ROLLOVERS: usize = 8;
 pub const MAX_ARTIFACTS: usize = 8;
@@ -1192,6 +1196,14 @@ impl RolloverEnvelope {
         }
     }
 
+    /// Reads a wrapper that arrives as a file (what `vectory release rollover`
+    /// writes): at most 2 KiB under the profile of the signed files, with
+    /// exactly the two members. Nothing is decoded or verified yet; see
+    /// [`RolloverEnvelope::decode`].
+    pub fn from_file(bytes: &[u8]) -> Result<RolloverEnvelope, ParseError> {
+        decode(bytes, MAX_ENVELOPE_BYTES)
+    }
+
     /// Decodes and reads the envelope; see [`Rollover::from_base64`].
     pub fn decode(&self) -> Result<Rollover, RolloverError> {
         Rollover::from_base64(&self.statement, &self.signature)
@@ -2007,6 +2019,15 @@ mod tests {
             statement_bytes
         );
         let envelope: RolloverEnvelope = serde_json::from_str(EXAMPLE_ENVELOPE).unwrap();
+        assert_eq!(
+            RolloverEnvelope::from_file(EXAMPLE_ENVELOPE.as_bytes()).unwrap(),
+            envelope,
+            "the wrapper file, with its final line feed"
+        );
+        assert_eq!(
+            RolloverEnvelope::from_file(without_line_feed(EXAMPLE_ENVELOPE).as_bytes()).unwrap(),
+            envelope
+        );
         let rollover = envelope.decode().unwrap();
         assert_eq!(rollover.statement_bytes(), statement_bytes);
         assert!(rollover.verify(&team.key));
@@ -2427,7 +2448,7 @@ mod tests {
             assert!(parse_manifest(&bytes).is_err(), "{byte:#x}");
         }
 
-        // Nesting that no member of the format has never reaches deep recursion.
+        // Nesting that no member of the format uses is refused without deep recursion.
         let deep = format!("{{\"schema\":{}{}}}", "[".repeat(5000), "]".repeat(5000));
         assert!(parse_manifest(deep.as_bytes()).is_err());
         let deep = format!("{{\"artifacts\":{}{}}}", "[".repeat(5000), "]".repeat(5000));
@@ -3190,6 +3211,40 @@ mod tests {
         let wrong_prefix =
             Rollover::from_base64(&envelope.statement, &BASE64.encode(release_signature)).unwrap();
         assert!(!wrong_prefix.verify(&team.key));
+
+        // A wrapper file is read under the profile of the signed files.
+        let (statement_text, signature_text) = (&envelope.statement, &envelope.signature);
+        let body = format!(r#"{{"statement":"{statement_text}","signature":"{signature_text}"}}"#);
+        let file = |text: &str| RolloverEnvelope::from_file(text.as_bytes());
+        assert_eq!(file(&body).unwrap(), envelope);
+        assert_eq!(file(&format!("{body}\n")).unwrap(), envelope);
+        let swapped =
+            format!(r#"{{"signature":"{signature_text}","statement":"{statement_text}"}}"#);
+        assert_eq!(file(&swapped).unwrap(), envelope);
+        for refused in [
+            format!(" {body}"),
+            format!("{body} "),
+            format!("{body}\n\n"),
+            format!("[{body}]"),
+            format!(r#"["{statement_text}","{signature_text}"]"#),
+            format!(r#"{{"statement":"{statement_text}"}}"#),
+            format!(r#"{{"statement":"{statement_text}","signature":"{signature_text}","x":1}}"#),
+            format!(
+                r#"{{"statement":"{statement_text}","statement":"{statement_text}","signature":"{signature_text}"}}"#
+            ),
+            format!(r#"{{"statement":null,"signature":"{signature_text}"}}"#),
+            format!(r#"{{"statement":"{statement_text}\n","signature":"{signature_text}"}}"#),
+            format!(
+                r#"{{"statement":"{}","signature":"{signature_text}"}}"#,
+                "A".repeat(MAX_ENVELOPE_BYTES)
+            ),
+        ] {
+            assert!(
+                file(&refused).is_err(),
+                "{}",
+                &refused[..refused.len().min(90)]
+            );
+        }
 
         // The envelope is the wire shape, with no other member.
         assert!(
