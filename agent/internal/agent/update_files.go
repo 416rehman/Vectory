@@ -664,13 +664,20 @@ type updateStatusWire struct {
 	Last              *UpdateLast       `json:"last"`
 }
 
-// checkCounterFloors checks a map of fingerprint to attempted counter.
+// checkCounterFloors checks a map of fingerprint to attempted counter that status.json
+// reports: at most the four keys a host pins.
 func checkCounterFloors(what string, floors map[string]uint64) error {
+	return checkCounterFloorsUpTo(what, floors, maxUpdateFingerprints)
+}
+
+// checkCounterFloorsUpTo checks a map of fingerprint to attempted counter of at most
+// limit keys.
+func checkCounterFloorsUpTo(what string, floors map[string]uint64, limit int) error {
 	if floors == nil {
 		return fmt.Errorf("%s isn't an object", what)
 	}
-	if len(floors) > maxUpdateFingerprints {
-		return fmt.Errorf("%s has %d keys, and a host pins at most %d", what, len(floors), maxUpdateFingerprints)
+	if len(floors) > limit {
+		return fmt.Errorf("%s has %d keys, and at most %d are allowed", what, len(floors), limit)
 	}
 	for fingerprint, counter := range floors {
 		if !isLowerHex64(fingerprint) {

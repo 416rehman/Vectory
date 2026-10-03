@@ -3,8 +3,10 @@
 package agent
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,8 +25,11 @@ func (f *stepFixture) requireTakenBack(oldDigest string, release *fakeRelease, c
 	if !found || journal.Stage != updateJournalRolledBack || journal.Code != code || journal.FinishedAt.IsZero() {
 		f.t.Fatalf("the journal after a rollback: %+v (found %v)", journal, found)
 	}
-	if floors := f.counters().HighestCounters; floors[f.public.Fingerprint()] < release.counter {
-		f.t.Errorf("the floor %v was lowered by the rollback below %d", floors, release.counter)
+	// The attempt is on disk under the key that signed the release, whichever key that
+	// is: the pinned one, or the successor a statement of the offer names.
+	floors := f.counters().HighestCounters
+	if highest := slices.Max(append(slices.Collect(maps.Values(floors)), 0)); highest < release.counter {
+		f.t.Errorf("the floors %v were lowered by the rollback below %d", floors, release.counter)
 	}
 	if !f.stagingEmpty() {
 		f.t.Error("the staging directory still holds the request's files")

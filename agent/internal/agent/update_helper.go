@@ -351,14 +351,14 @@ func inspectHost(host updateHost, stateDir, running string) hostFacts {
 
 // ---------------------------------------------------------------- status.json
 
-// floorsForStatus are the floors the status file reports: at most the four the
-// file holds, those of the pinned keys first.
+// floorsForStatus are the floors the status file reports: at most four, those of
+// the pinned keys first. counters.json keeps more.
 func (s *updateStep) floorsForStatus() map[string]uint64 {
 	floors := make(map[string]uint64, len(s.counters.HighestCounters))
 	for fingerprint, floor := range s.counters.HighestCounters {
 		floors[fingerprint] = floor
 	}
-	return trimFloors(floors, s.policy.Fingerprints())
+	return trimFloors(floors, s.policy.Fingerprints(), maxUpdateFingerprints)
 }
 
 // writeStatus writes status.json for the journal j, or for an idle step when j is

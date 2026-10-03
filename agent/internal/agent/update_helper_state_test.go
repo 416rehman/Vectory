@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,11 +236,19 @@ func TestAJournalIsRefusedWhenItIsNotWhatTheStepCanActOn(t *testing.T) {
 	}
 }
 
+// floorsJSON is a highest_counters object of n keys with distinct fingerprints.
+func floorsJSON(n int) string {
+	var members []string
+	for i := 1; i <= n; i++ {
+		members = append(members, fmt.Sprintf(`"%064x":%d`, i, i))
+	}
+	return "{" + strings.Join(members, ",") + "}"
+}
+
 func TestCounterFloorsAreBoundedLikeTheContractSaysAndNeverNegative(t *testing.T) {
 	counters := parseObject(t, golden(t, "counters.json"))
-	five := `{"` + strings.Repeat("a", 64) + `":1,"` + strings.Repeat("b", 64) + `":1,"` + strings.Repeat("c", 64) + `":1,"` + strings.Repeat("d", 64) + `":1,"` + strings.Repeat("e", 64) + `":1}`
 	for what, data := range map[string][]byte{
-		"five keys":                 counters.with("highest_counters", five).bytes(),
+		"seventeen keys":            counters.with("highest_counters", floorsJSON(maxStoredFloors+1)).bytes(),
 		"a key that isn't a hash":   counters.with("highest_counters", `{"team":7}`).bytes(),
 		"a negative floor":          counters.with("highest_counters", `{"`+goldenKey+`":-1}`).bytes(),
 		"a floor above 2^53-1":      counters.with("highest_counters", `{"`+goldenKey+`":9007199254740992}`).bytes(),
@@ -254,8 +263,27 @@ func TestCounterFloorsAreBoundedLikeTheContractSaysAndNeverNegative(t *testing.T
 			t.Errorf("%s was accepted:\n%s", what, data)
 		}
 	}
+	// The file keeps the floors of keys the host pinned before: five, and up to sixteen.
+	for _, n := range []int{5, maxStoredFloors} {
+		data := counters.with("highest_counters", floorsJSON(n)).bytes()
+		parsed, err := parseUpdateCounters(data)
+		if err != nil || len(parsed.HighestCounters) != n {
+			t.Errorf("%d floors: %v", n, err)
+		}
+		if written, err := marshalUpdateCounters(parsed); err != nil || len(written) > maxUpdateStepFile {
+			t.Errorf("%d floors are written as %d bytes: %v", n, len(written), err)
+		}
+	}
 	if _, err := parseUpdateCounters(counters.with("highest_counters", `{"`+goldenKey+`":9007199254740991}`).bytes()); err != nil {
 		t.Errorf("the largest counter: %v", err)
+	}
+	// What status.json reports is bounded at the four keys a host pins.
+	status := parseObject(t, golden(t, "status.json"))
+	if _, err := ParseUpdateStatus(status.with("highest_counters", floorsJSON(maxUpdateFingerprints)).bytes()); err != nil {
+		t.Errorf("four floors in status.json: %v", err)
+	}
+	if _, err := ParseUpdateStatus(status.with("highest_counters", floorsJSON(maxUpdateFingerprints+1)).bytes()); err == nil {
+		t.Error("five floors in status.json were accepted")
 	}
 }
 
