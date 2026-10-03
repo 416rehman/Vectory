@@ -161,7 +161,7 @@ func (s *updateStep) prepareUntilSwap(ctx context.Context, j *updateJournal, req
 
 	// Stage beside the executable. The journal names the temporary file before it
 	// exists, so that a run that finds the journal here can remove it.
-	j.Swap = &updateSwap{Style: s.install.Style(), Staged: fmt.Sprintf("%s%d", updateStagedPrefix, j.Counter), Previous: updatePreviousName}
+	j.Swap = &updateSwap{Style: s.install.Style(), Staged: fmt.Sprintf("%s%d", updateStagedPrefix, j.Counter), Previous: updatePreviousFor(runtime.GOOS)}
 	if err := writeUpdateJournal(s.private, *j); err != nil {
 		return err
 	}

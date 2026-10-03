@@ -219,6 +219,17 @@ func RemoveUpdateHelper() error {
 	if !canWriteRootOwned() {
 		return errors.New("removing the update step needs root (an Administrator on Windows): run the command with sudo")
 	}
+	if err := removeStepUnits(host, paths); err != nil {
+		return err
+	}
+	return removeTree(paths.StepDir)
+}
+
+// removeStepUnits takes the step's units away while it holds the step's lock, so
+// that no run is under way, and lets go of the lock and of the directories it
+// opened before it returns: the directory is removed next, and a file that is open
+// can't be deleted on Windows.
+func removeStepUnits(host updateHost, paths UpdatePaths) error {
 	private, err := openRootOwned(paths.Private, rootOwnedDirectory)
 	if err != nil && !notExist(err) {
 		return err
@@ -245,10 +256,20 @@ func RemoveUpdateHelper() error {
 			journal = &found
 		}
 	}
-	if err := removeUnits(host, journal); err != nil {
-		return err
+	return removeUnits(host, journal)
+}
+
+// removeTree removes a directory and everything in it. On Windows a file that was
+// written a moment ago may still be open in a virus scanner, and the process of a
+// service that has just stopped may not have let go of its executable yet, so the
+// removal is repeated for a few seconds before it is reported.
+func removeTree(path string) error {
+	err := os.RemoveAll(path)
+	for attempt := 1; err != nil && runtime.GOOS == "windows" && attempt < 10; attempt++ {
+		time.Sleep(500 * time.Millisecond)
+		err = os.RemoveAll(path)
 	}
-	return os.RemoveAll(paths.StepDir)
+	return err
 }
 
 // removeUnits removes the step's units and what it left beside the executable.
@@ -265,7 +286,8 @@ func removeUnits(host updateHost, journal *updateJournal) error {
 		return nil
 	}
 	defer held.Close()
-	names := []string{updatePreviousName, updatePreviousName + ".new"}
+	previous := updatePreviousFor(runtime.GOOS)
+	names := []string{previous, previous + ".new"}
 	if journal != nil && journal.Swap != nil {
 		names = append(names, journal.Swap.Staged, journal.Swap.Previous+".new")
 	}

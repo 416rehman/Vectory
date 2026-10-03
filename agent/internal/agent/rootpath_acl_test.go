@@ -209,21 +209,89 @@ func TestTheServiceSIDIsDerivedTheWayWindowsDerivesIt(t *testing.T) {
 
 func TestWindowsSecurityDescriptorsForWhatRootMakes(t *testing.T) {
 	service := serviceSID("Vectory")
+	readAndRun := "0x1200a9"
 	for _, tc := range []struct {
 		perm      rootFilePerm
 		directory bool
 		want      string
 	}{
-		{rootPrivate, true, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"},
-		{rootPrivate, false, "D:P(A;;FA;;;SY)(A;;FA;;;BA)"},
-		{rootReadable, true, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;" + service + ")"},
-		{rootReadable, false, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;" + service + ")"},
-		{rootExecutable, false, ""},
-		{rootExecutable, true, ""},
+		{rootPrivate, true, "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"},
+		{rootPrivate, false, "O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)"},
+		{rootReadable, true, "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;" + service + ")"},
+		{rootReadable, false, "O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;" + service + ")"},
+		// A file made beside the executable has a list of its own: SYSTEM, the
+		// Administrators and TrustedInstaller write it, and the Users and the agent's
+		// service read and run it, whatever the directory would have given it.
+		{rootExecutable, false, "O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + sidTrustedInstaller + ")(A;;" + readAndRun + ";;;BU)(A;;" + readAndRun + ";;;" + service + ")"},
+		{rootExecutable, true, "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + sidTrustedInstaller + ")(A;OICI;" + readAndRun + ";;;BU)(A;OICI;" + readAndRun + ";;;" + service + ")"},
 	} {
 		if got := windowsSDDL(tc.perm, tc.directory, "Vectory"); got != tc.want {
 			t.Errorf("perm %d, directory %v: %q, want %q", tc.perm, tc.directory, got, tc.want)
 		}
+	}
+	if got := windowsSDDL(rootFilePerm(0), false, "Vectory"); got != "" {
+		t.Errorf("an access nobody asked for has the descriptor %q", got)
+	}
+}
+
+// The directory the policy's and the step's directories are made in lets nobody
+// but root add an entry: that is what makes a squatter's directory impossible, and
+// the agent's service may list it because its own directories are below it.
+func TestTheUpdateRootAddsNoEntriesForAnyoneButRoot(t *testing.T) {
+	service := serviceSID("Vectory")
+	want := "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;" + service + ")"
+	if got := updateRootSDDL("Vectory"); got != want {
+		t.Fatalf("%q, want %q", got, want)
+	}
+	// As the check reads it: root's alone to change, in every role.
+	entries := []aclEntry{allow(sidSystem, maskFull, inheritObject|inheritContainer), allow(sidAdministrators, maskFull, inheritObject|inheritContainer), allow(service, maskReadRun, 0)}
+	for _, role := range []windowsRole{windowsAbove, windowsHolds, windowsObject} {
+		if got := aclProblem(sidAdministrators, true, entries, role, "", nil); got != "" {
+			t.Errorf("role %d: %q", role, got)
+		}
+	}
+}
+
+func cloneEntries(entries []aclEntry) []aclEntry { return append([]aclEntry(nil), entries...) }
+
+func TestADirectoryOnlyRootMayEnterIsOneNobodyElseCanSee(t *testing.T) {
+	private := []aclEntry{allow(sidSystem, maskFull, inheritObject|inheritContainer), allow(sidAdministrators, maskFull, inheritObject|inheritContainer)}
+	if got := privateDirectoryProblem(sidAdministrators, true, private, "", nil); got != "" {
+		t.Errorf("what setup makes: %q", got)
+	}
+	service := serviceSID("Vectory")
+	for _, tc := range []struct {
+		name    string
+		owner   string
+		hasACL  bool
+		entries []aclEntry
+		want    string
+	}{
+		{"read by the agent's service", sidAdministrators, true, append(cloneEntries(private), allow(service, maskRead, 0)), "can be entered by " + service},
+		{"read by Users", sidAdministrators, true, append(cloneEntries(private), allow(sidUsers, maskReadRun, 0)), "can be entered by " + sidUsers},
+		{"a right that only passes to what is made later", sidAdministrators, true, append(cloneEntries(private), allow(sidUsers, maskRead, inheritObject|inheritContainer|inheritOnly)), "can be entered by " + sidUsers},
+		{"an owner that isn't root", sidSomeUser, true, private, "belongs to " + sidSomeUser + ", not to SYSTEM or the Administrators"},
+		{"no access list", sidAdministrators, false, nil, "has no access list, so everyone can enter it"},
+		{"an entry of another kind", sidAdministrators, true, append(cloneEntries(private), aclEntry{Type: 9, Mask: maskFull}), "has an access entry of a kind this check doesn't read (type 9)"},
+	} {
+		if got := privateDirectoryProblem(tc.owner, tc.hasACL, tc.entries, "", nil); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// Entries that give nobody anything: a refusal, an empty right, the owner's own
+	// entry, and TrustedInstaller.
+	quiet := append(cloneEntries(private),
+		aclEntry{SID: sidUsers, Type: aclAccessDenied, Mask: maskFull},
+		allow(sidUsers, 0, 0),
+		allow(sidCreatorOwner, maskFull, inheritObject|inheritContainer|inheritOnly),
+		allow(sidTrustedInstaller, maskFull, 0))
+	if got := privateDirectoryProblem(sidSystem, true, quiet, "", nil); got != "" {
+		t.Errorf("entries that grant nothing to anyone else: %q", got)
+	}
+	// One more trusted account, as a test builds trees under its own.
+	own := append(cloneEntries(private), allow(sidSomeUser, maskFull, 0))
+	if got := privateDirectoryProblem(sidSomeUser, true, own, sidSomeUser, nil); got != "" {
+		t.Errorf("the extra account: %q", got)
 	}
 }
 
