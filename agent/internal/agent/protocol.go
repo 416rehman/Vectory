@@ -319,8 +319,13 @@ func enrollPreparedAs(ctx context.Context, dir string, s Settings, token string,
 			case ce.Delivery == NotSent:
 				outcome.Delivery = previous
 			case ce.Code == "ENROLLMENT_REFUSED":
-				// The server looks up this request before checking the token, so
-				// a refusal means no device exists for it.
+				// A refusal means no device exists for this request, with two
+				// exceptions: a token the server doesn't know, and a request
+				// presented with a different token than the one that enrolled
+				// it, are refused before the server can answer it. A reply lost
+				// before one of those leaves a device this record forgets; the
+				// next attempt is refused as NAME_TAKEN until that device is
+				// recovered or the host uses another name.
 				outcome.Delivery = "refused"
 			}
 			outcome.LastFailure = ce.Code
