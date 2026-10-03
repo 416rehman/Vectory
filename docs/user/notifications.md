@@ -91,6 +91,7 @@ Every message is one JSON object. Slack reads `text` and `blocks`; other receive
 | `event.severity` | `error` or `warning`; `info` for a test. |
 | `event.recovery` | `true` for `issue.resolved` and `device.recovered`. |
 | `event.device`, `event.pipeline`, `event.deployment`, `event.issue` | What the event is about, or `null`. |
+| `event.restored` | Only on `rollout.rolled_back`: the pipeline version the rollback restored, as `id`, `name` and `version_number`. It can belong to another pipeline than `event.pipeline`. |
 | `event.test` | `true` only for a message sent with **Send test**. |
 | `event.url` | The page in Vectory, or `null` without `VECTORY_PUBLIC_URL`. |
 | `event.count`, `event.items` | Only on a `digest`: how many messages it stands for, and the first of them. |

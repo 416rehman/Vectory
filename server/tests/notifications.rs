@@ -1535,6 +1535,95 @@ async fn a_device_reported_offline_before_a_restart_is_not_reported_again() {
 }
 
 #[tokio::test]
+async fn a_rollback_names_the_pipeline_it_restored_when_that_differs() {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let f = fixture().await;
+    channel(&f, webhook(&hook.url("/r"), true, &["rollout.rolled_back"])).await;
+    // "Web access logs v4" was rolled back, once to a version of another
+    // pipeline and once to an earlier version of itself.
+    let (web, rolled) = version(&f, "Web access logs").await;
+    let edge = db::id();
+    let edge_v1 = db::id();
+    let web_v3 = db::id();
+    let admin: String = sqlx::query_scalar("SELECT id FROM users WHERE role='admin'")
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap();
+    let mut conn = f.s.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "configuration",
+        &json!({"id":edge,"name":"Edge syslog processing (synthetic demo)","created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    for (id, configuration, number) in [(&edge_v1, &edge, 1), (&web_v3, &web, 3)] {
+        db::insert(&mut conn, "version", &json!({"id":id,"configuration_id":configuration,"number":number,"artifact":"{}\n","sha256":db::hash("{}\n"),"size":3,"created_at":db::now()})).await.unwrap();
+    }
+    let selector = json!({"device_ids":[],"group_ids":[],"exclude_ids":[]});
+    let mut sources = Vec::new();
+    for restored in [&edge_v1, &web_v3] {
+        let replacement = db::id();
+        db::insert(&mut conn, "deployment", &json!({"id":replacement,"version_id":restored,"status":"active","selector":selector,"created_at":db::now()})).await.unwrap();
+        let source = db::id();
+        db::insert(&mut conn, "deployment", &json!({"id":source,"version_id":rolled,"status":"cancelled","rolled_back_by":replacement,"selector":selector,"created_at":db::now()})).await.unwrap();
+        db::audit(&mut conn, &admin, "deployment.rollback", &source, "success")
+            .await
+            .unwrap();
+        sources.push(source);
+    }
+    drop(conn);
+    drain(&f, Utc::now() + Duration::seconds(5)).await;
+    let sent: Vec<Value> = hook.requests().iter().map(Captured::json).collect();
+    assert_eq!(sent.len(), 2);
+    let event = |deployment: &str| {
+        sent.iter()
+            .map(|body| &body["event"])
+            .find(|event| event["deployment"]["id"] == deployment)
+            .unwrap()
+    };
+    let other = event(&sources[0]);
+    assert_eq!(
+        other["message"],
+        "Synthetic admin rolled it back to Edge syslog processing (synthetic demo) v1."
+    );
+    assert_eq!(
+        other["restored"],
+        json!({"id":edge,"name":"Edge syslog processing (synthetic demo)","version_number":1})
+    );
+    let same = event(&sources[1]);
+    assert_eq!(same["message"], "Synthetic admin rolled it back to v3.");
+    assert_eq!(
+        same["restored"],
+        json!({"id":web,"name":"Web access logs","version_number":3})
+    );
+    assert_eq!(same["pipeline"]["version_number"], 4);
+}
+
+#[tokio::test]
+async fn recoveries_say_resolved_or_back_online_instead_of_a_severity() {
+    let f = fixture().await;
+    let now = Utc::now();
+    for (kind, last) in [
+        ("issue.resolved", "Resolved"),
+        ("device.recovered", "Back online"),
+        ("issue.opened", "Error"),
+        ("device.offline", "Warning"),
+    ] {
+        let preview = notifier::preview(&f.s, "On-call", &notifier::example_notice(kind, now));
+        let line = preview["context"].as_str().unwrap();
+        assert!(
+            line.ends_with(&format!(" · {last} · Notification tests")),
+            "{kind}: {line}"
+        );
+        assert_eq!(
+            preview["webhook"]["blocks"][1]["elements"][0]["text"], line,
+            "{kind}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn rollout_failures_come_from_the_audit_trail() {
     let hook = receiver(Reply::Status(200, "ok".into())).await;
     let f = fixture().await;
