@@ -63,6 +63,14 @@ type setupServer struct {
 	// carries, and artifacts what the agent downloads by path (see carry).
 	validation json.RawMessage
 	artifacts  map[string][]byte
+	// releaseKeys is what GET /agent/v1/release-keys answers (nil: 404, as a
+	// server with agent updates off does), and releaseKeysStatus replaces the
+	// answer with a status. keyRequests counts those requests and
+	// keyRequestCerts the ones that carried a client certificate.
+	releaseKeys       []byte
+	releaseKeysStatus int
+	keyRequests       atomic.Int32
+	keyRequestCerts   atomic.Int32
 }
 
 // carry makes every manifest carry a request to check artifact, and serves it.
@@ -154,6 +162,22 @@ func newSetupServerFor(t *testing.T, names []string) *setupServer {
 			csr, _ := x509.ParseCertificateRequest(block.Bytes)
 			expiry := time.Now().Add(time.Hour).Truncate(time.Second)
 			_ = json.NewEncoder(w).Encode(Credentials{DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", CertificatePEM: ca.issue(t, csr.PublicKey, "5e7a9c2d-0000-4000-8000-000000000001", false, expiry), CAPEM: ca.pem, SigningPublicKey: base64.StdEncoding.EncodeToString(pub), CertificateExpiresAt: expiry})
+		case "/agent/v1/release-keys":
+			s.keyRequests.Add(1)
+			if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+				s.keyRequestCerts.Add(1)
+			}
+			s.mu.Lock()
+			bundle, status := s.releaseKeys, s.releaseKeysStatus
+			s.mu.Unlock()
+			switch {
+			case status != 0:
+				http.Error(w, "refused", status)
+			case bundle == nil:
+				http.NotFound(w, r)
+			default:
+				_, _ = w.Write(bundle)
+			}
 		case "/agent/v1/wait":
 			s.waits.Add(1)
 			s.mu.Lock()
