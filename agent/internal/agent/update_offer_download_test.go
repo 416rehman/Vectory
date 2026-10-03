@@ -158,7 +158,7 @@ func TestATransferWithTooManyOrTooFewBytesOrOtherBytesIsNotTheSignedBuild(t *tes
 }
 
 // A build the server stopped offering is dropped, not counted against it, and not
-// asked for again for ten minutes: the server allows six requests an hour.
+// asked for again until a minute has passed.
 func TestAServerThatStoppedOfferingTheBuildIsLeftAloneForAWhile(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusNotFound} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
