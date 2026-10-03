@@ -206,3 +206,87 @@ async fn a_changed_applied_migration_is_refused() {
         "{error}"
     );
 }
+
+/// Targets written before a rollout recorded what it replaced once: one that
+/// had taken its device keeps what it recorded (even when that was nothing),
+/// and one released behind a higher-priority assignment records when it takes
+/// the device.
+#[tokio::test]
+async fn targets_that_already_took_their_device_keep_what_they_recorded() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings = settings(temp.path());
+    let shipped = sqlx::migrate!("./migrations");
+    let behind = Migrator {
+        migrations: Cow::Owned(
+            shipped
+                .migrations
+                .iter()
+                .filter(|migration| migration.version < 135)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    let pool = open(&settings).await;
+    behind.run(&pool).await.unwrap();
+    for (id, assignment) in [
+        ("d1", Some("dep-took")),
+        ("d2", Some("dep-other")),
+        ("d3", None),
+    ] {
+        sqlx::query("INSERT INTO devices(id,name,data,assignment_id) VALUES(?,?,'{}',?)")
+            .bind(id)
+            .bind(format!("edge-{id}"))
+            .bind(assignment)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    for (deployment, device, state, generation, previous) in [
+        // Took its device; the device ran nothing managed before it.
+        ("dep-took", "d1", "verified_applied", 2, None),
+        // Recorded a version, and another assignment holds the device now.
+        (
+            "dep-with-previous",
+            "d2",
+            "verified_applied",
+            4,
+            Some("version-1"),
+        ),
+        // Released, but a higher-priority assignment still holds the device.
+        ("dep-held", "d3", "desired", 1, None),
+        ("dep-pending", "d1", "pending", 0, None),
+        // Its device left: a fresh release records again.
+        ("dep-left", "d2", "removed", 3, Some("version-1")),
+    ] {
+        sqlx::query("INSERT INTO deployment_targets(deployment_id,device_id,state,generation,previous_version_id) VALUES(?,?,?,?,?)")
+            .bind(deployment)
+            .bind(device)
+            .bind(state)
+            .bind(generation)
+            .bind(previous)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+    let s = initialize(settings).await.unwrap();
+    let recorded: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT deployment_id,previous_recorded FROM deployment_targets ORDER BY deployment_id",
+    )
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        recorded,
+        [
+            ("dep-held".to_owned(), 0),
+            ("dep-left".to_owned(), 0),
+            ("dep-pending".to_owned(), 0),
+            ("dep-took".to_owned(), 1),
+            ("dep-with-previous".to_owned(), 1),
+        ]
+    );
+}

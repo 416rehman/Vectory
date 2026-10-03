@@ -320,7 +320,8 @@ fn base(details: bool) -> String {
                      ELSE 'unknown' END AS target_kind
             FROM raw
         ), named AS (
-            SELECT a.*,COALESCE(substr(au.name,1,120),substr(ad.name,1,256),a.actor_id) AS actor,
+            SELECT a.*,COALESCE(substr(au.name,1,120),substr(ad.name,1,256),
+                    CASE WHEN json_type(atk.data,'$.name')='text' THEN substr(json_extract(atk.data,'$.name'),1,120) END,a.actor_id) AS actor,
                 CASE WHEN au.id IS NOT NULL THEN 'user' WHEN ad.id IS NOT NULL THEN 'device'
                      WHEN a.actor_id IN ('anonymous','scheduler','local-admin') THEN 'system' ELSE 'unknown' END AS actor_kind,
                 CASE WHEN a.target_kind='unknown' OR a.linked_target='' THEN NULL
@@ -335,6 +336,7 @@ fn base(details: bool) -> String {
                 COALESCE(substr(tu.name,1,120),substr(td.name,1,256),
                     CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END,
                     CASE WHEN json_type(other.data,'$.name')='text' THEN substr(json_extract(other.data,'$.name'),1,120) END,
+                    CASE WHEN a.target_kind='issue' AND json_type(other.data,'$.title')='text' THEN substr(json_extract(other.data,'$.title'),1,120)||CASE WHEN idv.id IS NOT NULL THEN ' on '||substr(idv.name,1,100) ELSE '' END END,
                     CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END,
                     CASE WHEN json_type(dc.data,'$.name')='text' THEN substr(json_extract(dc.data,'$.name'),1,120)||CASE WHEN json_type(dv.data,'$.number')='integer' THEN ' v'||json_extract(dv.data,'$.number') ELSE '' END END,
                     CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
@@ -347,12 +349,14 @@ fn base(details: bool) -> String {
                      WHEN ad.id IS NOT NULL THEN ad.id ELSE NULL END AS device_id
             FROM classified a
             LEFT JOIN users au ON au.id=a.actor_id LEFT JOIN devices ad ON ad.id=a.actor_id
+            LEFT JOIN enrollment_tokens atk ON atk.id=a.actor_id
             LEFT JOIN users tu ON tu.id=a.linked_target LEFT JOIN devices td ON td.id=a.linked_target
             LEFT JOIN records v ON v.kind='version' AND v.id=a.target
             LEFT JOIN records rv ON rv.kind='revision' AND rv.id=a.target
             LEFT JOIN records c ON c.kind='configuration' AND c.id={configuration_target}
             LEFT JOIN records other ON other.kind=a.target_kind AND other.id=a.linked_target
             LEFT JOIN enrollment_tokens et ON a.target_kind='token' AND et.id=a.linked_target
+            LEFT JOIN devices idv ON a.target_kind='issue' AND idv.id=json_extract(other.data,'$.device_id')
             LEFT JOIN records dv ON a.target_kind='deployment' AND dv.kind='version' AND dv.id=json_extract(other.data,'$.version_id')
             LEFT JOIN records dc ON a.target_kind='deployment' AND dc.kind='configuration' AND dc.id=json_extract(dv.data,'$.configuration_id')
             LEFT JOIN records dp ON a.target_kind='deployment' AND dp.kind='policy' AND dp.id=json_extract(other.data,'$.policy_id')
@@ -446,7 +450,7 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
         q.push(" AND instr(lower(actor||' '||actor_id||' '||action||' '||replace(replace(action,'.',' '),'_',' ')||' '||target||' '||COALESCE(target_name,'')||' '||outcome),lower(").push_bind(search.clone()).push("))>0");
     }
 }
-const SUMMARY: &str = "json_object('id',id,'actor_id',actor_id,'actor',actor,'actor_kind',actor_kind,'action',action,'target',target,'target_id',target_id,'target_kind',target_kind,'target_exists',json(CASE WHEN target_exists THEN 'true' ELSE 'false' END),'target_name',target_name,'device_id',device_id,'outcome',outcome,'created_at',created_at,'request_id',request_id)";
+const SUMMARY: &str = "json_object('id',id,'actor_id',actor_id,'actor',actor,'actor_kind',actor_kind,'action',action,'target',target,'target_id',target_id,'target_kind',target_kind,'target_exists',json(CASE WHEN target_exists THEN 'true' ELSE 'false' END),'target_name',target_name,'device_id',device_id,'device_name',(SELECT substr(dn.name,1,256) FROM devices dn WHERE dn.id=named.device_id),'outcome',outcome,'created_at',created_at,'request_id',request_id)";
 pub(crate) async fn count(
     conn: &mut SqliteConnection,
     f: &Filters,

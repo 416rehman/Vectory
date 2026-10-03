@@ -91,6 +91,7 @@ Every message is one JSON object. Slack reads `text` and `blocks`; other receive
 | `event.severity` | `error` or `warning`; `info` for a test. |
 | `event.recovery` | `true` for `issue.resolved` and `device.recovered`. |
 | `event.device`, `event.pipeline`, `event.deployment`, `event.issue` | What the event is about, or `null`. |
+| `event.restored` | Only on `rollout.rolled_back`: the pipeline version the rollback restored, as `id`, `name` and `version_number`. It can belong to another pipeline than `event.pipeline`. |
 | `event.test` | `true` only for a message sent with **Send test**. |
 | `event.url` | The page in Vectory, or `null` without `VECTORY_PUBLIC_URL`. |
 | `event.count`, `event.items` | Only on a `digest`: how many messages it stands for, and the first of them. |
@@ -148,7 +149,7 @@ Each channel has its own events and filters, so one channel can page on-call for
 - **Severity:** **Errors only** sends issues with error severity and failed rollouts. Everything else is a warning.
 - **Pipelines** and **Groups:** send only events about these. A rollout matches the groups it targets and the groups of its devices.
 
-Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline.
+Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline. After the server starts, devices have five minutes to reconnect before an offline alert.
 
 ## Quiet hours
 
