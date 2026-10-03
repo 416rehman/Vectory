@@ -60,10 +60,12 @@ type SetupOptions struct {
 	// NoWake turns wake-ups off (true) or back on (false); nil keeps them.
 	NoWake *bool
 	// Updates is the level this host takes agent updates at (auto, ask or off);
-	// empty leaves updates as they are. UpdateKeys are the fingerprints of the
+	// empty leaves the level as it is. UpdateKeys are the fingerprints of the
 	// release keys to pin (required with auto or ask), UpdateTrack is patch or
 	// minor (default patch) and UpdateWindows are the windows an update may start
-	// in (none means any time).
+	// in (none means any time). Given with no level, they change only the parts
+	// they name of what a host that agreed to updates already has, and a host that
+	// agreed to nothing is refused.
 	Updates       string
 	UpdateKeys    []string
 	UpdateTrack   string
@@ -477,6 +479,14 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if err != nil {
 		return r.fail("updates", "Updates", sentence(err.Error()), "")
 	}
+	if updates != nil && updates.amend {
+		// Update flags without --updates change what the host agreed to, so there has
+		// to be something it agreed to: a host that agreed to nothing is refused before
+		// anything else is looked at.
+		if err := updates.readBase(); err != nil {
+			return r.fail("updates", "Updates", sentence(err.Error()), "")
+		}
+	}
 	defaults := DefaultPaths()
 
 	platform := DetectPlatform(ctx)
@@ -595,7 +605,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if enrolled {
 		trust.caFile = settings.CAFile
 	}
-	if updates != nil && updates.consent != UpdateConsentOff && !options.DryRun {
+	if updates != nil && updates.consent != UpdateConsentOff && len(updates.wanted) > 0 && !options.DryRun {
 		if err := r.resolveUpdateKeys(ctx, updates, origin, trust); err != nil {
 			return r.result, err
 		}
