@@ -329,6 +329,8 @@ sudo vectory recover-enrollment
 | `--ca-file PATH` | The CA certificate (PEM) to trust. Omit it to keep the saved trust. |
 | `--json` | Print the result as JSON. |
 
+A token the server refuses, or one that never left this host, doesn't block the next: run the command again with a new token. If the connection dropped after the request was sent, run it again with the same token, because that request may have issued the new identity.
+
 ## Service commands
 
 | Command | Meaning |

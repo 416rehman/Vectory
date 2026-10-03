@@ -102,21 +102,29 @@ func pendingBindingError(pending enrollmentPending) error {
 }
 
 // enrollmentFailure adds what happens next to a classified request failure.
-func enrollmentFailure(err error) error {
+// A recovery keeps its server and name, and a request that may have been
+// delivered is finished only with the token it was sent with.
+func enrollmentFailure(err error, recovering bool) error {
 	ce, ok := AsConnectionError(err)
 	if !ok {
 		return err
 	}
 	next := *ce
+	unsent := " Nothing was sent to the server, so you can change the address, name or token and run the command again."
+	maybeSent := " The server may have received the request: run the same command again to finish (keep the server and name; a new token is fine)."
+	if recovering {
+		unsent = " Nothing was sent to the server, so you can run the command again, with a new token if you like."
+		maybeSent = " The server may have received the request: run the same command again with the same token to finish."
+	}
 	switch {
 	case ce.Delivery == NotSent:
-		next.Fix = strings.TrimSpace(ce.Fix + " Nothing was sent to the server, so you can change the address, name or token and run the command again.")
+		next.Fix = strings.TrimSpace(ce.Fix + unsent)
 	case ce.Code == "ENROLLMENT_REFUSED":
 		return err
 	default:
-		next.Fix = strings.TrimSpace(ce.Fix + " The server may have received the request: run the same command again to finish (keep the server and name; a new token is fine).")
+		next.Fix = strings.TrimSpace(ce.Fix + maybeSent)
 		if ce.Fix == "Run the same command again; it picks up where it stopped." {
-			next.Fix = "The server may have received the request: run the same command again to finish (keep the server and name; a new token is fine)."
+			next.Fix = strings.TrimSpace(maybeSent)
 		}
 	}
 	return &next
@@ -317,5 +325,5 @@ func EnrollWithOptions(ctx context.Context, dir string, options EnrollmentOption
 	} else {
 		err = enrollPreparedAs(ctx, dir, s, token, client, options.ServiceManager)
 	}
-	return enrollmentFailure(err)
+	return enrollmentFailure(err, options.Recover)
 }
