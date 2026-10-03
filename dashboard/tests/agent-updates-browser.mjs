@@ -2839,16 +2839,17 @@ try {
         ),
       ).toBeVisible();
       await expect(levelCards()).toHaveCount(0);
-      // Nothing needs choosing, so the command can be made at once.
+      // Nothing about updates needs choosing before a command can be made.
       await page.getByRole("radio", { name: /^Restricted/ }).check();
-      await page
-        .getByRole("button", { name: "Create install command" })
-        .click();
-      await expect(page.locator(".enroll-command pre").first()).toBeVisible();
-      expect(await installCommandText()).not.toMatch(/--update/);
+      await expect(
+        page.getByText("Choose how this host takes agent updates first."),
+      ).toHaveCount(0);
       // The same page for a system that ships them still asks first.
       await page.getByRole("radio", { name: "Linux", exact: true }).check();
       await expect(levelCards()).toBeVisible();
+      await expect(
+        page.getByText("Choose how this host takes agent updates first."),
+      ).toBeVisible();
     },
   );
 
