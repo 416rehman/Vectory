@@ -1066,7 +1066,7 @@ async fn unique_name(db: &mut SqliteConnection, name: &str, except: Option<&str>
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "NAME_TAKEN",
-            "Another channel has this name. Choose another",
+            "Another channel has this name. Choose another.",
         ));
     }
     Ok(())

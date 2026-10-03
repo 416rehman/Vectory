@@ -529,6 +529,23 @@ async fn channels_are_for_administrators_with_csrf() {
     );
 }
 
+#[tokio::test]
+async fn a_name_another_channel_has_is_refused_in_any_case_with_a_sentence() {
+    let f = fixture().await;
+    let mut first = webhook("https://hooks.example.test/a", false, &["issue.opened"]);
+    first["name"] = json!("On-call Slack");
+    channel(&f, first).await;
+    let mut second = webhook("https://hooks.example.test/b", false, &["issue.opened"]);
+    second["name"] = json!("on-call SLACK");
+    let (status, error) = call(&f, "POST", "/api/v1/notifications/channels", second).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "NAME_TAKEN");
+    assert_eq!(
+        error["error"]["message"],
+        "Another channel has this name. Choose another."
+    );
+}
+
 /// A writer that keeps everything logged while it is the default subscriber.
 #[derive(Clone, Default)]
 struct Logs(Arc<Mutex<Vec<u8>>>);
