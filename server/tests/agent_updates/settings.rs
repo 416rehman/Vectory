@@ -51,7 +51,7 @@ async fn while_updates_are_off_only_the_setting_answers() {
             value,
             json!({
                 "enabled":false,"custody":null,"revision":0,"current_key":null,"stopped":null,
-                "active_rollouts":0,"fleet":null,"catalog":null
+                "active_rollouts":0,"fleet":null,"frozen_devices":null,"catalog":null
             })
         );
     }
@@ -106,6 +106,7 @@ async fn the_setting_keeps_its_key_and_custody_while_off_and_shows_neither_fleet
     assert_eq!(on["current_key"]["fingerprint"], team);
     assert_eq!(on["current_key"]["state"], "current");
     assert!(on["fleet"].is_object() && on["catalog"].is_array());
+    assert_eq!(on["frozen_devices"], json!({"total":0,"items":[]}));
     switch(&f, false).await;
     let off = ok(&f, "GET", "/api/v1/agent-updates", Value::Null, &f.viewer).await;
     assert_eq!(off["enabled"], false);
@@ -118,6 +119,7 @@ async fn the_setting_keeps_its_key_and_custody_while_off_and_shows_neither_fleet
         "and so does the key"
     );
     assert_eq!(off["fleet"], Value::Null);
+    assert_eq!(off["frozen_devices"], Value::Null);
     assert_eq!(off["catalog"], Value::Null);
     // The revision moved with the switches, and only with them.
     assert!(off["revision"].as_i64().unwrap() > on["revision"].as_i64().unwrap());
@@ -191,6 +193,72 @@ async fn the_fleet_puts_every_device_in_exactly_one_level_and_lists_versions_new
             {"version":"0.1.0","devices":3},
             {"version":"unknown","devices":2},
         ])
+    );
+}
+
+#[tokio::test]
+async fn the_setting_lists_the_hosts_frozen_on_a_fork_by_name_at_most_twenty() {
+    let f = fixture_on().await;
+    let team = fingerprint("team");
+    let (one, two) = (fingerprint("successor one"), fingerprint("successor two"));
+    let (low, high) = if one < two {
+        (&one, &two)
+    } else {
+        (&two, &one)
+    };
+    let frozen = with(
+        member(&[&team]),
+        json!({
+            "state":"refused","code":"KEY_ROLLOVER_CONFLICT",
+            "rollover_conflict":{"from":team,"to":[low,high]},
+        }),
+    );
+    // Twenty-two frozen hosts, made in the reverse of the order of their names.
+    let mut names = Vec::new();
+    let mut ids = std::collections::BTreeMap::new();
+    for n in (0..22).rev() {
+        let name = format!("edge-{n:02}");
+        let id = device(&f, &name, "0.1.0").await;
+        store(&f, &id, &frozen).await;
+        ids.insert(name.clone(), id);
+        names.push(name);
+    }
+    // Not frozen: a host with a report that names no fork, one that is revoked
+    // (whatever it last reported) and one that reported nothing.
+    let fine = device(&f, "a-fine", "0.1.0").await;
+    store(&f, &fine, &member(&[&team])).await;
+    let gone = device(&f, "a-gone", "0.1.0").await;
+    store(&f, &gone, &frozen).await;
+    revoke(&f, &gone).await;
+    device(&f, "a-silent", "0.1.0").await;
+    let view = ok(&f, "GET", "/api/v1/agent-updates", Value::Null, &f.viewer).await;
+    let listed = &view["frozen_devices"];
+    assert_eq!(listed["total"], 22, "the revoked host is not counted");
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 20, "at most twenty are named");
+    names.sort();
+    let named: Vec<&str> = items
+        .iter()
+        .map(|item| item["device_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, names[..20], "by name");
+    for item in items {
+        assert_eq!(
+            item["device_id"],
+            json!(ids[item["device_name"].as_str().unwrap()])
+        );
+        assert_eq!(
+            item["rollover_conflict"],
+            json!({"from":team,"to":[low,high]})
+        );
+    }
+    // The host leaves the list when it is pinned again: a report without the fork.
+    store(&f, &ids["edge-00"], &member(&[&team])).await;
+    let again = ok(&f, "GET", "/api/v1/agent-updates", Value::Null, &f.viewer).await;
+    assert_eq!(again["frozen_devices"]["total"], 21);
+    assert_eq!(
+        again["frozen_devices"]["items"][0]["device_name"],
+        "edge-01"
     );
 }
 
