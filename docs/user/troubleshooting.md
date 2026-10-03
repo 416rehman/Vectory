@@ -212,7 +212,7 @@ ReadWritePaths=/srv/logs
 ## Validation says deferred or unavailable
 
 - **Deferred:** part of the check needs the device, such as a local file, a device secret, an environment variable or a provider. The device runs that check before applying. Deferred is not a pass.
-- **Unavailable:** the server got no usable answer from its validator, so publishing is blocked until it's back. It never skips the check. An administrator can read the cause in the server log: `docker compose logs server | grep "isolated validator"` prints a warning with a `reason`, such as `the server could not connect to it`, `it did not answer within 8 seconds`, `it answered HTTP 503` or `it speaks another protocol, or runs another Vector, than this server expects`. Then check the `validator` container.
+- **Unavailable:** the server got no usable answer from its validator, so publishing is blocked until it's back. It never skips the check. An administrator can read the cause in the server log: `docker compose logs server | grep "isolated validator"` prints one warning for each unusable answer, with the `path` it was for (`validate`, `tests` or `transform-test`) and a `reason`, such as `the server could not connect to it`, `it did not answer within 8 seconds`, `it answered HTTP 503`, `it speaks another protocol, or runs another Vector, than this server expects` or `its diagnostics are not in the expected form`. The warning never quotes what the validator sent. Then check the `validator` container.
 - **Structural only:** you're on a development preview without a validator. Production servers can't run that way.
 
 ## A credential is refused when you save or publish
