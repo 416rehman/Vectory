@@ -202,15 +202,20 @@ pub(crate) async fn record_failure(db: &mut SqliteConnection, f: Failure<'_>) ->
 /// removed, `revoked` when its identity was revoked. Acknowledgement context
 /// stays as history. Verifying a configuration says nothing about delivery,
 /// so data-plane issues resolve only through their own evaluation (or when
-/// the assignment or the device goes away).
+/// the assignment or the device goes away); it says nothing about the agent
+/// either, so agent update issues resolve only when the device verifies a
+/// later update, or with the device.
 pub(crate) async fn resolve_device(
     db: &mut SqliteConnection,
     device_id: &str,
     reason: &str,
 ) -> Result<()> {
-    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND (?=0 OR COALESCE(json_extract(data,'$.code'),'') NOT GLOB 'DATA_PLANE_*')")
+    // Agent update issues end only with a later update the device verified
+    // (`resolve_agent_update`) or with the device itself.
+    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND (?=0 OR COALESCE(json_extract(data,'$.code'),'') NOT GLOB 'DATA_PLANE_*') AND (?=1 OR COALESCE(json_extract(data,'$.code'),'') NOT GLOB 'AGENT_UPDATE_*')")
         .bind(device_id)
         .bind(reason == "verified")
+        .bind(reason == "revoked")
         .fetch_all(&mut *db)
         .await?;
     for row in rows {
@@ -300,6 +305,84 @@ pub(crate) async fn record_data_plane(
     }
     Ok(id)
 }
+/// An update of a device's agent that was rolled back or failed.
+pub(crate) struct AgentUpdateFailure<'a> {
+    pub device_id: &'a str,
+    pub release_version: &'a str,
+    /// `rolled_back` or `failed`.
+    pub outcome: &'a str,
+    /// The agent's code, or `NO_REPORT`.
+    pub code: &'a str,
+    pub rollout_id: &'a str,
+}
+/// Open or refresh the issue of an agent update that was rolled back
+/// (`AGENT_UPDATE_ROLLED_BACK`) or failed (`AGENT_UPDATE_FAILED`), keyed by
+/// device, release version and code. A new rollout's failure, or one after the
+/// issue resolved, is a new occurrence and clears an acknowledgement. The agent
+/// update events of the notifier announce it, so no `issue.opened` follows.
+pub(crate) async fn record_agent_update(
+    db: &mut SqliteConnection,
+    f: AgentUpdateFailure<'_>,
+) -> Result<()> {
+    let code = if f.outcome == "rolled_back" {
+        "AGENT_UPDATE_ROLLED_BACK"
+    } else {
+        "AGENT_UPDATE_FAILED"
+    };
+    let id = db::hash(format!(
+        "{}:{}:{code}:agent_update",
+        f.device_id, f.release_version
+    ));
+    let now = db::now();
+    let attempt = json!({"rollout_id":f.rollout_id});
+    let (mut issue, new) = match db::record(db, "issue", &id).await {
+        Ok(v) => (v, false),
+        Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => (
+            json!({"id":id,"device_id":f.device_id,"code":code,"stage":"agent_update","count":0,"reports":0,"first_seen":now,"resolved":false,"revision":1}),
+            true,
+        ),
+        Err(e) => return Err(e),
+    };
+    if new || issue["resolved"] == true || issue["last_attempt"] != attempt {
+        if !new {
+            advance_revision(&mut issue)?;
+        }
+        clear_acknowledgement(&mut issue);
+        issue["count"] = increment(counter(&issue, "count"))?;
+        issue["resolved"] = json!(false);
+        if let Some(o) = issue.as_object_mut() {
+            o.remove("resolved_reason");
+            o.remove("resolved_at");
+        }
+    }
+    let reports = counter(&issue, "reports").max(counter(&issue, "count").saturating_sub(1));
+    issue["reports"] = increment(reports)?;
+    issue["last_seen"] = json!(now);
+    issue["last_attempt"] = attempt;
+    issue["update_version"] = json!(f.release_version);
+    issue["update_code"] = json!(f.code);
+    issue["desired_version_id"] = Value::Null;
+    issue["deployment_id"] = Value::Null;
+    if new {
+        db::insert(db, "issue", &issue).await
+    } else {
+        db::update(db, "issue", &issue).await
+    }
+}
+/// Resolve a device's open agent update issues as `verified`: it verified a
+/// later update.
+pub(crate) async fn resolve_agent_update(db: &mut SqliteConnection, device_id: &str) -> Result<()> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND COALESCE(json_extract(data,'$.code'),'') GLOB 'AGENT_UPDATE_*'")
+        .bind(device_id)
+        .fetch_all(&mut *db)
+        .await?;
+    for row in rows {
+        let mut issue = db::parse(&row)?;
+        resolve(&mut issue, "verified")?;
+        db::update(db, "issue", &issue).await?;
+    }
+    Ok(())
+}
 /// Resolve one data-plane issue, e.g. `healthy` after clean evaluations.
 pub(crate) async fn resolve_data_plane_issue(
     db: &mut SqliteConnection,
@@ -382,6 +465,8 @@ fn issue_object(q: &mut QueryBuilder<'_, Sqlite>) {
         'configuration_id',CASE WHEN json_type(v.data,'$.configuration_id')='text' THEN substr(json_extract(v.data,'$.configuration_id'),1,128) ELSE NULL END,\
         'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) ELSE NULL END,\
         'deployment_id',CASE WHEN json_type(i.data,'$.deployment_id')='text' THEN substr(json_extract(i.data,'$.deployment_id'),1,128) ELSE NULL END,\
+        'update_version',CASE WHEN json_type(i.data,'$.update_version')='text' THEN substr(json_extract(i.data,'$.update_version'),1,64) ELSE NULL END,\
+        'update_code',CASE WHEN json_type(i.data,'$.update_code')='text' THEN substr(json_extract(i.data,'$.update_code'),1,64) ELSE NULL END,\
         'resolved',json(CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'true' ELSE 'false' END),\
         'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned','healthy','superseded','unmonitored','revoked') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
         'resolved_at',").push(timestamp("json_extract(i.data,'$.resolved_at')")).push(",\
@@ -398,6 +483,23 @@ fn issue_object(q: &mut QueryBuilder<'_, Sqlite>) {
 /// unbounded or unexpected content.
 pub(crate) fn render(mut issue: Value) -> Value {
     let code = issue["code"].as_str().unwrap_or("APPLY_FAILED").to_owned();
+    if let Some(fields) = issue.as_object_mut() {
+        let version = fields.remove("update_version");
+        let agent_code = fields.remove("update_code");
+        if code.starts_with("AGENT_UPDATE_") {
+            let version = version.as_ref().and_then(Value::as_str).unwrap_or("");
+            let device = issue["device_name"].as_str().unwrap_or("A device");
+            issue["title"] = json!(agent_update_title(&code, device, version));
+            issue["message"] = json!(
+                crate::agent_update_rollouts::detail::message(
+                    agent_code.as_ref().and_then(Value::as_str)
+                )
+                .unwrap_or("The update of the agent didn't finish.")
+            );
+            issue["diagnostics"] = json!([]);
+            return issue;
+        }
+    }
     let diagnostics = crate::configuration_attempt::diagnostics(&issue["diagnostics"])
         .unwrap_or_else(|_| json!([]));
     if crate::data_plane::is_data_plane(&code) {
@@ -421,6 +523,20 @@ pub(crate) fn render(mut issue: Value) -> Value {
     issue["message"] = json!(crate::configuration_attempt::summary(&code, &diagnostics));
     issue["diagnostics"] = diagnostics;
     issue
+}
+/// "edge-02 rolled back agent 0.1.1", or "edge-02 couldn't update to agent
+/// 0.1.1", cut to 120 characters.
+fn agent_update_title(code: &str, device: &str, version: &str) -> String {
+    let title = if code == "AGENT_UPDATE_ROLLED_BACK" {
+        format!("{device} rolled back agent {version}")
+    } else {
+        format!("{device} couldn't update to agent {version}")
+    };
+    if title.chars().count() <= 120 {
+        title
+    } else {
+        title.chars().take(119).chain(['…']).collect()
+    }
 }
 /// A device's first version that stopped Vector says who couldn't start
 /// what: "edge-01 couldn't start Syslog intake v1", or "3 devices couldn't
