@@ -269,6 +269,19 @@ export function failedRunningText(
   };
 }
 /**
+ * What a device without an assigned pipeline says about itself. A revoked
+ * device no longer checks in, so it never waits for a first version.
+ */
+export function noPipelineExplanation(
+  device: Pick<Device, "status" | "actual_sha256">,
+) {
+  if (device.status === "revoked")
+    return "No pipeline is assigned. This device's access is revoked, so it no longer checks in and nothing can be deployed to it.";
+  return device.actual_sha256
+    ? "No published pipeline is assigned. The configuration adopted at setup stays in place until you deploy one."
+    : "No published pipeline is assigned. The agent checks in and waits; Vector starts with the first version you deploy.";
+}
+/**
  * While a released version waits for the agent (no attempt for this
  * generation yet) and the agent holds a wait open, it arrives within
  * seconds: say so. Null otherwise, and the application explanation stands.
@@ -1203,9 +1216,7 @@ export default function DeviceDetail({
               {device.desired_version_id
                 ? (pickupExplanation(device, version.data) ??
                   deviceApplicationExplanation(device, version.data))
-                : device.actual_sha256
-                  ? "No published pipeline is assigned. The configuration adopted at setup stays in place until you deploy one."
-                  : "No published pipeline is assigned. The agent checks in and waits; Vector starts with the first version you deploy."}
+                : noPipelineExplanation(device)}
             </p>
             <FailureDetails device={device} version={version.data} />
             <DeviceRetryAction

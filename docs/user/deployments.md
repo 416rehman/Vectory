@@ -92,6 +92,7 @@ Groups can carry pipeline and agent-settings deployments that include future mem
 - The group editor previews the effect: which devices would get or lose a pipeline. For a large change it describes the devices the edit changes something on first, and counts the rest ("Adding 480 devices changes nothing on them"). A change to more than 500 devices waits for **Preview what changes**, because the server answers with a line for each device; saving checks every device either way.
 - If someone else changed the group while you were editing, **This group changed** shows their version next to yours. Choose **Use latest name**, **Use latest description** or **Use latest members**, or keep your edits, then **Save changes**.
 - A group change that would add devices to a canary that's still running is refused, with a link to that canary.
+- A group change that would give a device two different pipelines, or two different agent settings, at the same priority is refused. The preview names the device, both assignments and the priority: "edge-01 already follows “Fast check-in” (agent settings, priority 100), and “Group defaults” follows Berlin edge at the same priority." **Save changes** stays off while the preview shows it. Give one of them another priority, or remove the device from the targets of the other, then add it to the group.
 
 ## Understand priority
 

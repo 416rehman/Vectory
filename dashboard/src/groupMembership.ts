@@ -1,11 +1,15 @@
+import { z } from "zod";
 import {
   APIError,
   api,
   withRequestDeadline,
+  type AssignmentDescription,
   type GroupMemberPage,
   type GroupMembershipPreview,
   type GroupMembershipState,
 } from "./api";
+import { nameList } from "./activityModel";
+import { countLabel } from "./countLabel";
 import { assignmentName, policySummary } from "./deploymentReviewModel";
 
 /**
@@ -201,4 +205,146 @@ export function membershipEffects(entries: Entry[], limit: number) {
       .filter(Boolean)
       .join(" "),
   };
+}
+
+/* ---------- Collisions the server names ---------- */
+
+/** One side of a collision: the assignment as the deploy review names it. */
+export type ConflictAssignment = AssignmentDescription & {
+  targets: "group" | "devices";
+  /** The groups it targets that hold the device (at most three). */
+  groups: { id: string; name: string }[];
+};
+/** A device that would follow two different assignments at one priority. */
+export type MembershipConflict = {
+  device_id: string;
+  device_name: string | null;
+  resource: "configuration" | "policy";
+  priority: number;
+  assignments: [ConflictAssignment, ConflictAssignment];
+};
+export type MembershipConflicts = {
+  conflicts: MembershipConflict[];
+  /** Collisions in all; `conflicts` holds the first ten. */
+  total: number;
+};
+
+const conflictAssignment = z
+  .object({
+    id: z.string(),
+    resource: z.enum(["configuration", "policy"]),
+    priority: z.number(),
+    targets: z.enum(["group", "devices"]),
+    groups: z.array(z.object({ id: z.string(), name: z.string() })).max(3),
+  })
+  .passthrough();
+const conflictList = z
+  .array(
+    z.object({
+      device_id: z.string(),
+      device_name: z.string().nullable(),
+      resource: z.enum(["configuration", "policy"]),
+      priority: z.number(),
+      assignments: z.array(conflictAssignment).length(2),
+    }),
+  )
+  .min(1)
+  .max(10);
+
+/**
+ * The collisions a refused or blocked group edit names, or null when the
+ * server named none (an older server, or another kind of refusal): the
+ * caller then shows the server's sentence as it is.
+ */
+export function parseMembershipConflicts(
+  details: unknown,
+  total?: unknown,
+): MembershipConflicts | null {
+  const parsed = conflictList.safeParse(details);
+  if (!parsed.success) return null;
+  const listed = parsed.data.length;
+  return {
+    conflicts: parsed.data as unknown as MembershipConflict[],
+    total:
+      typeof total === "number" && Number.isSafeInteger(total) && total > listed
+        ? total
+        : listed,
+  };
+}
+
+/** "“Fast check-in”" for saved agent settings, "Edge metrics v3" for a pipeline. */
+function conflictName(assignment: ConflictAssignment) {
+  const settings = assignment.policy_name || assignment.name;
+  return assignment.resource === "policy" && settings
+    ? `“${settings}”`
+    : assignmentName(assignment);
+}
+const joined = (names: string[]) =>
+  names.length < 2
+    ? names.join("")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+/**
+ * What to tell a person whose group edit would give a device two different
+ * assignments at the same priority. The assignment that follows the edited
+ * group is the new one; the device already follows the other. One sentence
+ * pair for every pair of assignments, naming the devices they collide on:
+ *
+ * "edge-01 already follows “Fast check-in” (agent settings, priority 100),
+ * and “Group defaults” follows Berlin edge at the same priority. Give one of
+ * them another priority, or remove edge-01 from the targets of “Fast
+ * check-in”, then add it to the group."
+ */
+export function conflictSentences(
+  { conflicts, total }: MembershipConflicts,
+  editedGroupId: string,
+): string[] {
+  const pairs = new Map<string, MembershipConflict[]>();
+  for (const conflict of conflicts) {
+    const key = `${conflict.assignments
+      .map((assignment) => assignment.id)
+      .sort()
+      .join("|")}|${conflict.priority}`;
+    pairs.set(key, [...(pairs.get(key) ?? []), conflict]);
+  }
+  const lines = [...pairs.values()].map((group) => {
+    const [first] = group;
+    const devices = nameList(
+      group.map(
+        (one) => one.device_name || `Device ${one.device_id.slice(0, 8)}…`,
+      ),
+    );
+    const many = group.length > 1;
+    const them = many ? "those devices" : devices;
+    const [x, y] = first.assignments;
+    const kind = first.resource === "policy" ? "agent settings" : "pipeline";
+    const follows = (assignment: ConflictAssignment) =>
+      assignment.groups.find((held) => held.id === editedGroupId);
+    if (!follows(x) !== !follows(y)) {
+      const [added, current] = follows(x) ? [x, y] : [y, x];
+      const remedy = current.groups.length
+        ? `take ${them} out of ${joined(current.groups.map((held) => held.name))}`
+        : `remove ${them} from the targets of ${conflictName(current)}`;
+      return `${devices} already ${many ? "follow" : "follows"} ${conflictName(current)} (${kind}, priority ${first.priority}), and ${conflictName(added)} follows ${follows(added)!.name} at the same priority. Give one of them another priority, or ${remedy}, then add ${many ? "them" : "it"} to the group.`;
+    }
+    return `${devices} would follow both ${conflictName(x)} and ${conflictName(y)} (${kind}, priority ${first.priority}). Give one of them another priority, or take ${them} out of one of them, then save again.`;
+  });
+  const unlisted = total - conflicts.length;
+  if (unlisted > 0)
+    lines.push(
+      `${countLabel(unlisted, "more conflict")} ${unlisted === 1 ? "isn't" : "aren't"} listed here.`,
+    );
+  return lines;
+}
+
+/**
+ * Why saving waits for a previewed edit, or "" when nothing blocks it. A
+ * collision is named in the preview itself, so this only says it blocks.
+ */
+export function savingBlocked(preview: GroupMembershipPreview | null) {
+  const blocker = preview?.blockers[0];
+  if (!blocker) return "";
+  return parseMembershipConflicts(blocker.details, blocker.details_total)
+    ? "Saving is blocked until the conflict above is resolved."
+    : blocker.reason;
 }

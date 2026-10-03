@@ -174,6 +174,8 @@ Vector stopped after 3.2 s.
 
 When Vector doesn't finish in time, the last line is `Drain limit reached after 60 s; Vector was terminated before it finished its in-flight events.`
 
+A check-in that keeps failing for the same reason, such as a revoked device or a server that is down, is logged when it starts and again if the reason changes, not at every retry. `vectory status` says since when.
+
 ## status
 
 Show the device's identity, server, last check-in, pipeline and the next step, and say what it runs, when it checks in next and whether it waits for wake-ups.

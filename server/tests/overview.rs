@@ -439,6 +439,110 @@ async fn rollback_lineage_and_failing_groups_name_their_rollout() {
 }
 
 #[tokio::test]
+async fn an_offline_device_that_verified_its_assigned_version_is_counted_apart() {
+    let (_temp, s, app, actor) = fixture().await;
+    let (pipeline, version, older) = (db::id(), db::id(), db::id());
+    let sha = "b".repeat(64);
+    {
+        let mut conn = s.pool.acquire().await.unwrap();
+        db::insert(
+            &mut conn,
+            "configuration",
+            &json!({"id":pipeline,"name":"First pipeline","description":"","config":{},"graph":{"nodes":[],"edges":[]}}),
+        )
+        .await
+        .unwrap();
+        for (id, number) in [(&older, 1), (&version, 2)] {
+            db::insert(
+                &mut conn,
+                "version",
+                &json!({"id":id,"configuration_id":pipeline,"number":number,"sha256":sha}),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    let verified =
+        |id: &str| json!({"generation":1,"version_id":id,"sha256":sha,"state":"verified_applied"});
+    let gone = "2026-01-01T00:00:00Z";
+    // Verified its assigned version, then went offline.
+    device(
+        &s,
+        "edge-01",
+        json!({"last_seen":gone,"apply_state":"verified_applied","reported_generation":1,"verified_configuration_attempt":verified(&version)}),
+        Some(&version),
+        false,
+    )
+    .await;
+    // Offline having verified an older version than the one it is assigned.
+    device(
+        &s,
+        "edge-02",
+        json!({"last_seen":gone,"apply_state":"verified_applied","reported_generation":1,"verified_configuration_attempt":verified(&older)}),
+        Some(&version),
+        false,
+    )
+    .await;
+    // Offline and never verified anything.
+    device(
+        &s,
+        "edge-03",
+        json!({"last_seen":gone,"apply_state":"unmanaged","reported_generation":0}),
+        Some(&version),
+        false,
+    )
+    .await;
+    // Offline with nothing assigned, and a revoked one that verified.
+    device(
+        &s,
+        "edge-04",
+        json!({"last_seen":gone,"apply_state":"unmanaged","reported_generation":0}),
+        None,
+        false,
+    )
+    .await;
+    device(
+        &s,
+        "retired-01",
+        json!({"last_seen":gone,"apply_state":"verified_applied","reported_generation":1,"verified_configuration_attempt":verified(&version)}),
+        Some(&version),
+        true,
+    )
+    .await;
+    let value = overview(&app, &actor).await;
+    assert_eq!(value["devices_managed"], 3);
+    assert_eq!(value["devices_on_desired"], 0);
+    assert_eq!(value["devices_offline_on_desired"], 1, "{value}");
+    // They all last verified the one version, so its number is named.
+    assert_eq!(value["offline_on_desired_version"], 2);
+    // The slim read the Overview uses says the same.
+    let slim = get(&app, &actor, "/api/v1/overview?slim=1").await;
+    assert_eq!(slim["devices_offline_on_desired"], 1);
+    assert_eq!(slim["offline_on_desired_version"], 2);
+    assert_eq!(slim["devices_on_desired"], 0);
+    // Another device out of reach on a different version: two are counted and
+    // no single version is named.
+    device(
+        &s,
+        "edge-05",
+        json!({"last_seen":gone,"apply_state":"verified_applied","reported_generation":1,"verified_configuration_attempt":verified(&older)}),
+        Some(&older),
+        false,
+    )
+    .await;
+    // The device went in beside the server, so the shared read is told.
+    s.fleet.invalidate();
+    let slim = get(&app, &actor, "/api/v1/overview?slim=1").await;
+    assert_eq!(slim["devices_offline_on_desired"], 2);
+    assert_eq!(slim["offline_on_desired_version"], Value::Null);
+    // Nothing offline counts nothing and names nothing.
+    let (_temp, _s, app, actor) = fixture().await;
+    let empty = overview(&app, &actor).await;
+    assert_eq!(empty["devices_offline_on_desired"], 0);
+    assert_eq!(empty["offline_on_desired_version"], Value::Null);
+}
+
+#[tokio::test]
 async fn overview_is_empty_but_well_formed_for_a_new_workspace() {
     let (_temp, _s, app, actor) = fixture().await;
     let value = overview(&app, &actor).await;

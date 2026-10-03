@@ -53,7 +53,8 @@ A deployment's reminder confirms that the server saved it. Devices still have to
 | Signing in | Vectory checks your session automatically. If it still can't tell, it says **We couldn't confirm your sign-in**: enter your password again. |
 | Setting up the first administrator | Vectory checks automatically. If setup didn't finish, paste the setup secret and choose your password again. |
 | Signing out | Open the account menu and choose **Check sign-out status**, or **Check again** in the dialog. |
-| Adding a person, creating a reset link, editing access, or turning two-factor on or off | The dialog shows **We couldn't confirm that**. Choose **Check again**; it only reads. Act again only if it says nothing changed. |
+| Adding a person | The dialog checks by itself. If the account exists but the reply never arrived, it reads **Ada's account is ready**: "We couldn't show the invite link. Create a new one to send to Ada." Choose **Create invite link**. For a person you gave a password, it reads **Ada can sign in now**; choose **Create reset link** if you no longer have the password. If it can't tell, it says **We couldn't confirm that**: choose **Check again**, or **Cancel it and try again** when the request might still go through. Your entries stay filled in. |
+| Creating a reset link, editing access, or turning two-factor on or off | The dialog shows **We couldn't confirm that**. Choose **Check again**; it only reads. Act again only if it says nothing changed. |
 | Changing your password | Sign in with the new password. If it doesn't work, try the old one. |
 | Setting a new password from a reset or invite link | Try signing in with the new password. If that fails, ask for a new link. |
 

@@ -49,6 +49,10 @@ export class APIError extends Error {
     public retryAfter?: number,
     /** GET /session 401 only: why this browser's session ended. */
     public reason?: string,
+    /** What a refusal names (the colliding assignments of a group edit): unchecked. */
+    public details?: unknown,
+    /** How many there are in all when `details` lists only the first few. */
+    public detailsTotal?: unknown,
   ) {
     super(message);
   }
@@ -311,6 +315,8 @@ export async function api<T = unknown>(
           typeof data?.error?.message === "string",
         Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
         typeof data?.error?.reason === "string" ? data.error.reason : undefined,
+        data?.error?.details,
+        data?.error?.details_total,
       );
     }
     const expected = schema || responseSchema(path, method);
@@ -1325,7 +1331,13 @@ export type GroupMembershipPreview = {
   revision: number;
   stale: boolean;
   ready: boolean;
-  blockers: { code: string; reason: string }[];
+  blockers: {
+    code: string;
+    reason: string;
+    /** A conflict blocker: the devices and assignments it names (unchecked). */
+    details?: unknown;
+    details_total?: number;
+  }[];
   devices: {
     device_id: string;
     device_name: string | null;
@@ -1362,7 +1374,14 @@ const GroupMembershipPreviewSchema = z
     revision: z.number().int().nonnegative(),
     stale: z.boolean(),
     ready: z.boolean(),
-    blockers: z.array(z.object({ code: z.string(), reason: z.string() })),
+    blockers: z.array(
+      z.object({
+        code: z.string(),
+        reason: z.string(),
+        details: z.unknown().optional(),
+        details_total: z.number().int().nonnegative().optional(),
+      }),
+    ),
     devices: z
       .array(
         z

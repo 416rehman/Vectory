@@ -311,6 +311,255 @@ async fn membership_preview_explains_effects_without_changing_anything() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+fn rollout_settings() -> Value {
+    json!({"kind":"all","canary_size":1,"batch_size":1,"observation_seconds":0,"failure_threshold":0})
+}
+
+/// A persistent deployment of agent settings that follows `group`.
+fn settings_following(group: &str, heartbeat: i64, priority: i64) -> Value {
+    json!({"policy":settings(heartbeat, false),"selector":{"device_ids":[],"group_ids":[group],"exclude_ids":[]},"priority":priority,"target_mode":"persistent","rollout":rollout_settings()})
+}
+
+/// A snapshot deployment of agent settings on exactly these devices.
+fn settings_on(devices: &[String], heartbeat: i64, priority: i64) -> Value {
+    json!({"policy":settings(heartbeat, false),"selector":{"device_ids":devices,"group_ids":[],"exclude_ids":[]},"priority":priority,"target_mode":"snapshot","rollout":rollout_settings()})
+}
+
+/// A pipeline version whose restricted-mode artifact differs per number.
+async fn pipeline_version(
+    tx: &mut sqlx::SqliteConnection,
+    name: &str,
+    number: i64,
+) -> (String, String) {
+    let pipeline = db::id();
+    let version = db::id();
+    let artifact = format!("{{\"data_dir\":\"/var/lib/vectory-groups/{number}\"}}\n");
+    db::insert(
+        tx,
+        "configuration",
+        &json!({"id":pipeline,"name":name,"created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    db::insert(tx,"version",&json!({"id":version,"configuration_id":pipeline,"number":number,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+    (pipeline, version)
+}
+
+fn pipeline_following(group: &str, version: &str, priority: i64) -> Value {
+    json!({"version_id":version,"selector":{"device_ids":[],"group_ids":[group],"exclude_ids":[]},"priority":priority,"target_mode":"persistent","rollout":rollout_settings()})
+}
+
+fn pipeline_on(devices: &[String], version: &str, priority: i64) -> Value {
+    json!({"version_id":version,"selector":{"device_ids":devices,"group_ids":[],"exclude_ids":[]},"priority":priority,"target_mode":"snapshot","rollout":rollout_settings()})
+}
+
+async fn new_group(f: &Fixture, name: &str, members: &[String]) -> String {
+    let id = db::id();
+    let mut conn = f.state.pool.acquire().await.unwrap();
+    db::insert(&mut conn,"group",&json!({"id":id,"name":name,"description":"","device_ids":members,"created_at":db::now(),"revision":1})).await.unwrap();
+    id
+}
+
+async fn edit_group(
+    f: &Fixture,
+    group: &str,
+    name: &str,
+    members: &[String],
+) -> (StatusCode, Value) {
+    call(
+        f,
+        "PUT",
+        &format!("/api/v1/groups/{group}"),
+        Some(json!({"name":name,"description":"","device_ids":members,"revision":1})),
+    )
+    .await
+}
+
+async fn preview_edit(f: &Fixture, group: &str, members: &[String]) -> Value {
+    let (status, preview) = call(
+        f,
+        "POST",
+        "/api/v1/groups/membership-preview",
+        Some(json!({"group_id":group,"device_ids":members,"revision":1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    preview
+}
+
+/// The one entry that names `device`, with its two assignments told apart by
+/// what they target.
+fn named<'a>(details: &'a [Value], device: &str) -> (&'a Value, &'a Value, &'a Value) {
+    let entry = details
+        .iter()
+        .find(|entry| entry["device_id"] == device)
+        .unwrap_or_else(|| panic!("no conflict names {device}: {details:?}"));
+    let assignments = entry["assignments"].as_array().unwrap();
+    assert_eq!(assignments.len(), 2, "{entry}");
+    let by = |targets: &str| {
+        assignments
+            .iter()
+            .find(|assignment| assignment["targets"] == targets)
+            .unwrap_or_else(|| panic!("no assignment targets {targets}: {entry}"))
+    };
+    (entry, by("devices"), by("group"))
+}
+
+#[tokio::test]
+async fn a_group_edit_that_collides_names_the_device_and_both_assignments() {
+    let f = fixture(20).await;
+    let message = "Group membership creates conflicting equal-priority assignments";
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let (_, metrics) = pipeline_version(&mut tx, "Edge metrics", 1).await;
+    let (_, logs) = pipeline_version(&mut tx, "Access logs", 4).await;
+    tx.commit().await.unwrap();
+
+    // Agent settings: edge-01 has its own, and "Berlin edge" follows others.
+    let berlin = new_group(&f, "Berlin edge", &f.devices[..1]).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let hand = rollout::create(&mut tx, &settings_on(&f.devices[1..2], 15, 100), "operator")
+        .await
+        .unwrap();
+    let following = rollout::create(&mut tx, &settings_following(&berlin, 60, 100), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let members: Vec<String> = f.devices[..2].to_vec();
+    let (status, refused) = edit_group(&f, &berlin, "Berlin edge", &members).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"]["code"], "CONFLICT");
+    assert_eq!(refused["error"]["message"], message);
+    assert_eq!(refused["error"]["details_total"], 1);
+    let details = refused["error"]["details"].as_array().unwrap();
+    assert_eq!(details.len(), 1, "{refused}");
+    let (entry, own, group) = named(details, &f.devices[1]);
+    assert_eq!(entry["device_name"], "edge-01");
+    assert_eq!(entry["resource"], "policy");
+    assert_eq!(entry["priority"], 100);
+    assert_eq!(own["id"], hand["id"]);
+    assert_eq!(own["resource"], "policy");
+    assert_eq!(own["priority"], 100);
+    assert_eq!(own["groups"], json!([]));
+    assert_eq!(own["policy"]["heartbeat_seconds"], 15);
+    assert_eq!(group["id"], following["id"]);
+    assert_eq!(group["target_mode"], "persistent");
+    assert_eq!(group["groups"], json!([{"id":berlin,"name":"Berlin edge"}]));
+    // The refusal changed nothing.
+    let (_, saved) = call(&f, "GET", &format!("/api/v1/groups/{berlin}"), None).await;
+    assert_eq!(saved["device_ids"], json!(f.devices[..1]));
+    assert_eq!(saved["revision"], 1);
+    // The preview before saving answers the same list, and says it is not ready.
+    let preview = preview_edit(&f, &berlin, &members).await;
+    assert_eq!(preview["ready"], false);
+    assert_eq!(preview["blockers"].as_array().unwrap().len(), 1);
+    let blocker = &preview["blockers"][0];
+    assert_eq!(blocker["code"], "CONFLICT");
+    assert_eq!(blocker["reason"], message);
+    assert_eq!(blocker["details"], refused["error"]["details"]);
+    assert_eq!(blocker["details_total"], 1);
+
+    // Pipelines collide the same way.
+    let paris = new_group(&f, "Paris edge", &f.devices[2..3]).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let by_hand = rollout::create(
+        &mut tx,
+        &pipeline_on(&f.devices[3..4], &metrics, 100),
+        "operator",
+    )
+    .await
+    .unwrap();
+    let by_group = rollout::create(&mut tx, &pipeline_following(&paris, &logs, 100), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let members: Vec<String> = f.devices[2..4].to_vec();
+    let (status, refused) = edit_group(&f, &paris, "Paris edge", &members).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let details = refused["error"]["details"].as_array().unwrap();
+    let (entry, own, group) = named(details, &f.devices[3]);
+    assert_eq!(entry["device_name"], "edge-03");
+    assert_eq!(entry["resource"], "configuration");
+    assert_eq!(own["id"], by_hand["id"]);
+    assert_eq!(own["resource"], "configuration");
+    assert_eq!(own["configuration_name"], "Edge metrics");
+    assert_eq!(own["version_number"], 1);
+    assert_eq!(group["id"], by_group["id"]);
+    assert_eq!(group["configuration_name"], "Access logs");
+    assert_eq!(group["version_number"], 4);
+    assert_eq!(group["groups"], json!([{"id":paris,"name":"Paris edge"}]));
+    let preview = preview_edit(&f, &paris, &members).await;
+    assert_eq!(
+        preview["blockers"][0]["details"],
+        refused["error"]["details"]
+    );
+
+    // Other priorities are no conflict: the higher one wins, so both are saved.
+    let rome = new_group(&f, "Rome edge", &f.devices[4..5]).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    rollout::create(&mut tx, &settings_on(&f.devices[5..6], 15, 110), "operator")
+        .await
+        .unwrap();
+    rollout::create(&mut tx, &settings_following(&rome, 60, 100), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let members: Vec<String> = f.devices[4..6].to_vec();
+    let preview = preview_edit(&f, &rome, &members).await;
+    assert_eq!(preview["ready"], true, "{preview}");
+    assert_eq!(preview["blockers"], json!([]));
+    let (status, saved) = edit_group(&f, &rome, "Rome edge", &members).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let oslo = new_group(&f, "Oslo edge", &f.devices[6..7]).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    rollout::create(
+        &mut tx,
+        &pipeline_on(&f.devices[7..8], &metrics, 120),
+        "operator",
+    )
+    .await
+    .unwrap();
+    rollout::create(&mut tx, &pipeline_following(&oslo, &logs, 100), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let members: Vec<String> = f.devices[6..8].to_vec();
+    let (status, saved) = edit_group(&f, &oslo, "Oslo edge", &members).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["device_ids"].as_array().unwrap().len(), 2);
+
+    // A large collision lists the first ten devices by name and counts them all.
+    let wide = new_group(&f, "Wide edge", &f.devices[8..9]).await;
+    let crowd: Vec<String> = f.devices[9..].to_vec();
+    let mut tx = f.state.pool.begin().await.unwrap();
+    rollout::create(&mut tx, &settings_on(&crowd, 15, 100), "operator")
+        .await
+        .unwrap();
+    rollout::create(&mut tx, &settings_following(&wide, 60, 100), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let members: Vec<String> = f.devices[8..].to_vec();
+    let (status, refused) = edit_group(&f, &wide, "Wide edge", &members).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"]["details_total"], crowd.len());
+    let details = refused["error"]["details"].as_array().unwrap();
+    assert_eq!(details.len(), 10, "{refused}");
+    let names: Vec<&str> = details
+        .iter()
+        .map(|entry| entry["device_name"].as_str().unwrap())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "listed by device name");
+    assert_eq!(names[0], "edge-09");
+    // Nothing but names and numbers: no selector, no member list.
+    let text = refused.to_string();
+    assert!(
+        !text.contains("selector") && !text.contains("device_ids"),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn membership_preview_answers_busy_instead_of_queueing_behind_writers() {
     let f = fixture(2).await;

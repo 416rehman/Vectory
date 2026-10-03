@@ -833,6 +833,21 @@ export type ShellInfo = {
 };
 /** Provided by the app shell so every PageHeader places crumbs and tabs alike. */
 export const ShellContext = createContext<ShellInfo | null>(null);
+/**
+ * The browser tab's title: this page, then its section, then Vectory
+ * ("edge-nyc-01 · Devices · Vectory"). Nothing while the page's name isn't
+ * known; the shell's own title holds until then.
+ */
+export function useTabTitle(tabTitle: string | null) {
+  const shell = useContext(ShellContext);
+  useEffect(() => {
+    if (!shell || !tabTitle) return;
+    const parts = [tabTitle];
+    if (shell.sectionLabel && shell.sectionLabel !== tabTitle)
+      parts.push(shell.sectionLabel);
+    document.title = [...parts, "Vectory"].join(" · ");
+  }, [tabTitle, shell?.sectionLabel]);
+}
 export type Crumb = {
   label: string;
   href?: string;
@@ -887,14 +902,7 @@ export function PageHeader({
   const crumbs: Crumb[] = ancestors.length
     ? [...ancestors, { label: title }]
     : [];
-  const tabTitle = documentTitle ?? title;
-  useEffect(() => {
-    if (!shell) return;
-    const parts = [tabTitle];
-    if (shell.sectionLabel && shell.sectionLabel !== tabTitle)
-      parts.push(shell.sectionLabel);
-    document.title = [...parts, "Vectory"].join(" · ");
-  }, [tabTitle, shell?.sectionLabel]);
+  useTabTitle(documentTitle ?? title);
   return (
     <>
       <div className="page-context">

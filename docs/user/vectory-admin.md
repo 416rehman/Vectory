@@ -10,7 +10,7 @@ vectory-admin --data-dir PATH <command> [flags]
 
 - **Stop the server first.** `vectory-admin` takes the same exclusive lock on the data directory and refuses to run next to a live server.
 - Run it as the server's operating-system account, against the server's data directory. The Compose image includes it at `/usr/local/bin/vectory-admin`; run it in a one-off container that mounts the same `data` volume as UID 10001.
-- Commands that change data preview first. Add `--apply` to make the change. Every applied change is recorded in the audit log.
+- `invalidate-restored-access`, `recover-generations` and `retire-device-ca` preview first. Add `--apply` to make the change. Every applied change is recorded in the audit log. The other commands that change data, such as `reset-password` and `disable-mfa`, act at once, as their sections say.
 
 `vectory-admin --help` lists the commands.
 

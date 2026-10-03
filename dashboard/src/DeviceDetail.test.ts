@@ -4,6 +4,7 @@ import {
   deliveryMeasurement,
   failedRunningText,
   failurePhrase,
+  noPipelineExplanation,
   pickupExplanation,
   unmanagedRunningText,
 } from "./DeviceDetail";
@@ -283,5 +284,27 @@ describe("what a failed apply says it failed because of", () => {
     expect(failurePhrase(snapshot, snapshot.configuration_attempt!)).toBe(
       "while restarting Vector",
     );
+  });
+});
+
+describe("a device with no pipeline assigned", () => {
+  it("waits for its first version, or keeps what it adopted", () => {
+    expect(noPipelineExplanation(device())).toBe(
+      "No published pipeline is assigned. The agent checks in and waits; Vector starts with the first version you deploy.",
+    );
+    expect(noPipelineExplanation(device({ actual_sha256: adopted }))).toBe(
+      "No published pipeline is assigned. The configuration adopted at setup stays in place until you deploy one.",
+    );
+  });
+  it("never says a revoked device waits for one", () => {
+    for (const actual_sha256 of [undefined, adopted]) {
+      const text = noPipelineExplanation(
+        device({ status: "revoked", actual_sha256 }),
+      );
+      expect(text).toBe(
+        "No pipeline is assigned. This device's access is revoked, so it no longer checks in and nothing can be deployed to it.",
+      );
+      expect(text).not.toMatch(/checks in and waits|until you deploy/);
+    }
   });
 });
