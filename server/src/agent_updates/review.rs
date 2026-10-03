@@ -437,6 +437,29 @@ pub fn refusal(f: &Facts, release: &Release, statements: &Statements) -> Option<
     None
 }
 
+/// What fixes a host that pins no key leading to the release's signer, when the
+/// current key signed the release, or when no key it pins leads to the current
+/// one: it pins the current key, once.
+const PIN_THE_CURRENT_KEY: &str =
+    "Run the Upgrade agent command so the host pins the current release key.";
+/// What fixes a host that pins the current key (or one that leads to it) when an
+/// older key signed the release: hosts follow keys forward only, so no command
+/// on the host reaches that key, and a release the current key signs does.
+const SIGN_AGAIN: &str = "Withdraw this release and prepare it again so the current key signs it.";
+/// Both, for a group that holds hosts of each kind.
+const SIGN_AGAIN_AND_PIN: &str = "Withdraw this release and prepare it again so the current key signs it. Hosts that pin no key leading to the current key also need the Upgrade agent command, once.";
+
+/// What to do about `KEY_NOT_PINNED` hosts: `renewable` of the group's `total`
+/// are reached by a release the current key signs (an older key signed this
+/// one), and the rest only by pinning the current key.
+fn key_fix(renewable: usize, total: usize) -> &'static str {
+    match renewable {
+        0 => PIN_THE_CURRENT_KEY,
+        n if n >= total => SIGN_AGAIN,
+        _ => SIGN_AGAIN_AND_PIN,
+    }
+}
+
 /// The sentence for a group of devices that will not update, and the sentence
 /// that says what to do on the host (null when nothing on the host would
 /// change it).
@@ -489,7 +512,7 @@ fn describe(code: &str, release: &Release, track_hint: bool) -> (String, Option<
         ),
         "KEY_NOT_PINNED" => (
             format!("These hosts pin no key that reaches the key that signed {version}."),
-            Some("Run the Upgrade agent command so the host pins the current release key."),
+            Some(PIN_THE_CURRENT_KEY),
         ),
         "RELEASE_ALREADY_TRIED" => (
             format!("These hosts tried {version} and rolled back. They take the next release."),
@@ -526,6 +549,11 @@ pub struct Review {
     pub will_update: Vec<Facts>,
     pub wont_update: BTreeMap<&'static str, Vec<(Facts, Option<[String; 2]>)>>,
     pub token: String,
+    /// The devices of `KEY_NOT_PINNED` that a release the current key signs would
+    /// reach: an older key signed this release, and the current key, or a key
+    /// that leads to it, is among their pins. What a person is told to do about
+    /// them differs; the token does not bind it.
+    pub renewable: BTreeSet<String>,
 }
 
 fn plural(count: usize, one: &str, many: &str) -> String {
@@ -587,11 +615,44 @@ async fn build(
         }
     }
     let token = token(release, settings, &will_update, &wont_update);
+    let renewable = renewable(conn, release, &statements, &wont_update).await?;
     Ok(Review {
         will_update,
         wont_update,
         token,
+        renewable,
     })
+}
+
+/// The devices that pin no key reaching the release's signer but that a release
+/// the current key signs would reach: an older key signed this release, and the
+/// current key, or a key that leads to it through the stored statements, is among
+/// their pins. None when the current key signed it, or when there is no current
+/// key to sign another.
+async fn renewable(
+    conn: &mut SqliteConnection,
+    release: &Release,
+    statements: &Statements,
+    wont_update: &BTreeMap<&'static str, Vec<(Facts, Option<[String; 2]>)>>,
+) -> Result<BTreeSet<String>> {
+    let Some(group) = wont_update.get("KEY_NOT_PINNED") else {
+        return Ok(BTreeSet::new());
+    };
+    let Some(current) = crate::agent_release_keys::current(conn).await? else {
+        return Ok(BTreeSet::new());
+    };
+    if release.signer.as_deref() == Some(current.fingerprint.as_str()) {
+        return Ok(BTreeSet::new());
+    }
+    Ok(group
+        .iter()
+        .filter(|(device, _)| {
+            statements
+                .chain(&device.pins(), &current.fingerprint)
+                .is_some()
+        })
+        .map(|(device, _)| device.id.clone())
+        .collect())
 }
 
 /// The lowercase SHA-256 that binds a review: the release, the settings (which
@@ -676,7 +737,14 @@ pub fn view(release: &Release, review: &Review, canary: Value) -> Value {
                                 })
                     })
                 });
-            let (reason, fix) = describe(code, release, track_hint);
+            let (reason, mut fix) = describe(code, release, track_hint);
+            if *code == "KEY_NOT_PINNED" {
+                let renewable = devices
+                    .iter()
+                    .filter(|(device, _)| review.renewable.contains(&device.id))
+                    .count();
+                fix = Some(key_fix(renewable, devices.len()));
+            }
             Some(json!({
                 "code": code,
                 "reason": reason,
