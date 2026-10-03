@@ -164,6 +164,25 @@ const (
 		"(A;;0x1200a9;;;AC)(A;OICIIO;GXGR;;;AC)(A;;0x1200a9;;;S-1-15-2-2)(A;OICIIO;GXGR;;;S-1-15-2-2)"
 )
 
+// The descriptors of the same three directories as the Windows Server 2025 runner
+// (build 26100) printed them, read through the handle the way the path check reads
+// them. The drive root is owned by TrustedInstaller and its list isn't protected; what
+// the Authenticated Users have there that applies to the root itself is the right to add
+// folders (LC is FILE_ADD_SUBDIRECTORY for a directory), and the rights that pass on to
+// what is made in it are inherit-only (IO). ProgramData's Users have read and run, and
+// one more entry: write data, append, extended attributes and attributes
+// (DCLCRPCR, 0x116) on the folder and its subfolders.
+const (
+	capturedDriveRootSDDL = "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:SYD:AI" +
+		"(A;OICIIO;SDGXGWGR;;;AU)(A;;LC;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)" +
+		"(A;;0x1000a1;;;S-1-15-3-65536-1888954469-739942743-1668119174-2468466756-4239452838-1296943325-355587736-700089176)"
+	capturedProgramDataSDDL  = "O:SYG:SYD:PAI(A;OICIIO;GA;;;CO)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)(A;CI;DCLCRPCR;;;BU)"
+	capturedProgramFilesSDDL = "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:PAI" +
+		"(A;OICIIO;GA;;;CO)(A;OICIIO;GA;;;SY)(A;;0x1301bf;;;SY)(A;OICIIO;GA;;;BA)(A;;0x1301bf;;;BA)(A;OICIIO;GXGR;;;BU)(A;;0x1200a9;;;BU)" +
+		"(A;CIIO;GA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;;FA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)" +
+		"(A;;0x1200a9;;;AC)(A;OICIIO;GXGR;;;AC)(A;;0x1200a9;;;S-1-15-2-2)(A;OICIIO;GXGR;;;S-1-15-2-2)"
+)
+
 // stockLists are the lists above, by the directory that has them.
 var stockLists = map[string]string{
 	`C:\`:                                   stockDriveRootSDDL,
@@ -171,6 +190,9 @@ var stockLists = map[string]string{
 	`C:\ProgramData`:                        stockProgramDataSDDL,
 	`C:\ProgramData (one entry for the Users)`: stockProgramDataOneEntrySDDL,
 	`C:\Program Files`:                         stockProgramFilesSDDL,
+	`C:\ (as captured)`:                        capturedDriveRootSDDL,
+	`C:\ProgramData (as captured)`:             capturedProgramDataSDDL,
+	`C:\Program Files (as captured)`:           capturedProgramFilesSDDL,
 }
 
 func TestTheReaderOfDescriptorTextReadsWhatThePathCheckReads(t *testing.T) {
@@ -213,16 +235,13 @@ func TestTheDirectoriesOfAStockWindowsInstallPassAboveTheStepsAndAreRefusedAsThe
 			t.Errorf("%s as a directory above the step's: %q", name, got)
 		}
 		holder := sddlProblem(t, sddl, windowsHolds)
-		switch name {
-		case `C:\Program Files`:
+		if strings.HasPrefix(name, `C:\Program Files`) {
 			// Only root can change it, which is why the agent can live in it.
 			if holder != "" {
 				t.Errorf("%s as the holder: %q", name, holder)
 			}
-		default:
-			if !strings.HasPrefix(holder, "can be changed by ") {
-				t.Errorf("%s as the holder: %q, want a refusal for the account that may create in it", name, holder)
-			}
+		} else if !strings.HasPrefix(holder, "can be changed by ") {
+			t.Errorf("%s as the holder: %q, want a refusal for the account that may create in it", name, holder)
 		}
 	}
 	// What a person reads when a drive root or ProgramData is the holder.
