@@ -111,6 +111,11 @@ type Manifest struct {
 	// it (validation.go). It stays raw so that a block this agent can't read
 	// never keeps the manifest itself from being verified and applied.
 	Validation json.RawMessage `json:"validation,omitempty"`
+	// AgentUpdate offers this device a build of the agent (update_offer.go). It
+	// stays raw for the same reason: nothing in it is acted on before the release
+	// it carries is verified against the keys this host pins, and a member this
+	// agent can't read never keeps the manifest itself from being verified.
+	AgentUpdate json.RawMessage `json:"agent_update,omitempty"`
 }
 type Envelope struct {
 	Payload   string `json:"payload"`
@@ -183,6 +188,11 @@ type Heartbeat struct {
 	AgentFeatures    []string          `json:"agent_features,omitempty"`
 	ValidationResult *ValidationResult `json:"validation_result,omitempty"`
 	Readiness        *Readiness        `json:"readiness,omitempty"`
+	// AgentUpdate says what this host consented to for agent updates, and where
+	// an offer of one stands (update_report.go). It goes only to servers whose
+	// manifest lists "agent_update", and is the first report left out when a
+	// server refuses a heartbeat.
+	AgentUpdate *AgentUpdateReport `json:"agent_update,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated

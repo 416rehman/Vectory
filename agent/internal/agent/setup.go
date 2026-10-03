@@ -59,6 +59,15 @@ type SetupOptions struct {
 	CheckIn time.Duration
 	// NoWake turns wake-ups off (true) or back on (false); nil keeps them.
 	NoWake *bool
+	// Updates is the level this host takes agent updates at (auto, ask or off);
+	// empty leaves updates as they are. UpdateKeys are the fingerprints of the
+	// release keys to pin (required with auto or ask), UpdateTrack is patch or
+	// minor (default patch) and UpdateWindows are the windows an update may start
+	// in (none means any time).
+	Updates       string
+	UpdateKeys    []string
+	UpdateTrack   string
+	UpdateWindows []string
 }
 
 // SetupDevice identifies the enrolled device.
@@ -88,6 +97,9 @@ type SetupResult struct {
 	// started, the configuration files it loads with their checksums, and where
 	// they are backed up.
 	Adoption *AdoptionInventory `json:"adoption,omitempty"`
+	// Updates is what this run did about agent updates; absent when it was given no
+	// update flag.
+	Updates *SetupUpdates `json:"updates,omitempty"`
 }
 
 // SetupError is returned when a step fails; the step carries the explanation.
@@ -178,6 +190,41 @@ type serviceHost struct {
 	// collect reads how the running Vector processes were started (nil: this
 	// host's way).
 	collect func(context.Context, []RunningVector) []VectorStartup
+	// elevated says whether this process may install system files (nil: this
+	// host's answer). The next three reach the privileged update step (nil: the
+	// step this build has).
+	elevated       func() bool
+	eligibility    func(dir string) string
+	installUpdates func(dir, executable string) error
+	removeUpdates  func() error
+}
+
+func (h serviceHost) isElevated() bool {
+	if h.elevated != nil {
+		return h.elevated()
+	}
+	return Elevated()
+}
+
+func (h serviceHost) updateEligibility(dir string) string {
+	if h.eligibility != nil {
+		return h.eligibility(dir)
+	}
+	return UpdateEligibility(dir)
+}
+
+func (h serviceHost) installUpdateStep(dir, executable string) error {
+	if h.installUpdates != nil {
+		return h.installUpdates(dir, executable)
+	}
+	return InstallUpdateHelper(dir, executable)
+}
+
+func (h serviceHost) removeUpdateStep() error {
+	if h.removeUpdates != nil {
+		return h.removeUpdates()
+	}
+	return RemoveUpdateHelper()
 }
 
 // transientVector is how long setup waits before it takes a running Vector
@@ -426,6 +473,10 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if options.AdoptExisting && options.KeepExistingVector {
 		return r.fail("existing", "Existing", "--adopt-existing hands the workload of a running Vector to Vectory, and --keep-existing-vector leaves it running beside Vectory: the two contradict each other.", "Pass only one of them.")
 	}
+	updates, err := planUpdates(options)
+	if err != nil {
+		return r.fail("updates", "Updates", sentence(err.Error()), "")
+	}
 	defaults := DefaultPaths()
 
 	platform := DetectPlatform(ctx)
@@ -439,7 +490,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	service := choice.kind
 	r.result.Service = service
 	r.add("platform", "ok", "Platform", platform.Summary(), "")
-	if service != "none" && !Elevated() && !options.DryRun {
+	if service != "none" && !r.host.isElevated() && !options.DryRun {
 		return r.fail("platform", "Privileges", "Setup needs administrator rights.", elevationHint)
 	}
 
@@ -490,8 +541,15 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 	// The exact command that keeps this agent running without a service.
 	runCommand := ShellQuote(agentPath) + " run --state-dir " + ShellQuote(dir)
+	if updates != nil {
+		if err := r.preflightUpdates(updates, choice, platform, agentPath, dir); err != nil {
+			return r.result, err
+		}
+	}
 
 	var origin string
+	// How the server was trusted, for what is read from it before anything changes.
+	var trust releaseKeyTrust
 	if enrolled {
 		if options.Server != "" {
 			if normalized, err := NormalizeServer(options.Server); err != nil || normalized != settings.Server {
@@ -518,11 +576,13 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 			if err != nil {
 				return r.failErr("server", "Server", err, "")
 			}
+			trust.pinned = certificate
 			r.add("server", "ok", "Server", fmt.Sprintf("%s · CA pinned %s (%s)", origin, ShortFingerprint(pin), certificateName(certificate)), "")
 		case options.CAFile != nil && *options.CAFile != "":
 			if err := ProbeServer(ctx, origin, *options.CAFile); err != nil {
 				return r.failErr("server", "Server", err, "")
 			}
+			trust.caFile = *options.CAFile
 			r.add("server", "ok", "Server", origin+" · trusted through "+*options.CAFile, "")
 		default:
 			if err := ProbeServer(ctx, origin, ""); err != nil {
@@ -532,6 +592,14 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		}
 	}
 	r.result.Server = origin
+	if enrolled {
+		trust.caFile = settings.CAFile
+	}
+	if updates != nil && updates.consent != UpdateConsentOff && !options.DryRun {
+		if err := r.resolveUpdateKeys(ctx, updates, origin, trust); err != nil {
+			return r.result, err
+		}
+	}
 
 	var vector VectorBinary
 	switch {
@@ -778,6 +846,9 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		} else {
 			r.withoutService(choice, runCommand, adopted, true)
 		}
+		if updates != nil {
+			r.planUpdateStep(updates, dir)
+		}
 		r.result.OK = true
 		r.result.Next = "Run the same command without --dry-run to apply."
 		return r.result, nil
@@ -870,6 +941,12 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 	if options.DashboardURL != "" {
 		r.result.DeviceURL = strings.TrimRight(options.DashboardURL, "/") + "/#/devices/" + credentials.DeviceID
+	}
+	if updates != nil {
+		// After the agent is installed and enrolled, before the service starts it.
+		if err := r.applyUpdates(updates, agentPath, dir); err != nil {
+			return r.result, err
+		}
 	}
 
 	if service == "none" {

@@ -84,8 +84,6 @@ sudo sh "$dir/vectory-install.sh" \
   --update-window 'Mon-Fri 02:00-04:00'
 ```
 
-<!-- verify-after-merge: the `--updates`, `--update-key-sha256`, `--update-track` and `--update-window` flags of `vectory setup`, from the agent's update step -->
-
 The host's choices live in a file only root can write, `/etc/vectory/updates/policy.json` on Linux. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again.
 
 ### A host that was installed without consent
@@ -289,13 +287,15 @@ sudo vectory update status
 sudo vectory update apply
 sudo vectory update pause
 sudo vectory update resume
+sudo vectory update off
 ```
-
-<!-- verify-after-merge: the `vectory update` verbs and their output, from the agent's update command -->
 
 - `status` shows the policy, the keys the host pins, what it is doing and the result of its last update.
 - `apply` installs a build a host set to **Ask on the host** has staged. Before it does, it reads what the agent last reported and stops if the offer was withdrawn or the agent hasn't checked in for five minutes. That check is advice: the file it reads is written by the agent, so it can warn you but can't prove an offer is still good. `--force` applies anyway, after you confirm on a terminal.
 - `pause` keeps the host's choices and stops every download and install until `resume`.
+- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried.
+
+Every verb but `status` needs root. See [Agent CLI](cli.md#update) for what each prints.
 
 ## Turn off agent updates
 
