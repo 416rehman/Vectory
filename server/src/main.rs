@@ -255,6 +255,9 @@ async fn main() -> anyhow::Result<()> {
         wake: wake_options(env::var("VECTORY_AGENT_WAKE_LIMIT").ok())?,
     };
     let state = initialize(settings).await?;
+    if let Some(warning) = vectory_server::db::telemetry_retention_warning() {
+        tracing::warn!("{warning}");
+    }
     tracing::info!(
         "{}",
         install::startup_banner(&state, &web_addr, &secret_source).await

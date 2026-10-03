@@ -16998,6 +16998,44 @@
             }
           ]
         },
+        "restored": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "version_number"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only on rollout.rolled_back: the pipeline version the rollback restored, or null when that is not known. It can belong to another pipeline than the rolled-back deployment."
+        },
         "count": {
           "type": "integer",
           "minimum": 0,

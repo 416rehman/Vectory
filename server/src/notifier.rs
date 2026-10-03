@@ -602,6 +602,7 @@ async fn context(
                 .as_ref()
                 .and_then(|r| r["failure_reason"].as_str())
                 .unwrap_or("");
+            let mut restored: Option<Value> = None;
             let (headline, message) = match (kind, data["outcome"].as_str().unwrap_or("")) {
                 ("canary.paused", _) => (
                     format!("Canary paused: {name}"),
@@ -612,15 +613,22 @@ async fn context(
                         .bind(data["actor"].as_str().unwrap_or(""))
                         .fetch_optional(&mut *db)
                         .await?;
-                    let to = match record.as_ref().and_then(|r| r["rolled_back_by"].as_str()) {
+                    // What the rollback restored: the version its replacement deploys.
+                    restored = match record.as_ref().and_then(|r| r["rolled_back_by"].as_str()) {
                         Some(replacement) => match db::record(db, "deployment", replacement).await {
-                            Ok(r) => pipeline(db, r["version_id"].as_str()).await?
-                                .and_then(|p| p["version_number"].as_i64())
-                                .map(|n| format!(" to v{n}"))
-                                .unwrap_or_default(),
-                            Err(_) => String::new(),
+                            Ok(r) => pipeline(db, r["version_id"].as_str()).await?,
+                            Err(_) => None,
                         },
-                        None => String::new(),
+                        None => None,
+                    };
+                    // A version of another pipeline needs that pipeline's name.
+                    let to = match (&restored, &p) {
+                        (Some(restored), Some(p)) if restored["id"] == p["id"] => restored["version_number"]
+                            .as_i64()
+                            .map(|n| format!(" to v{n}"))
+                            .unwrap_or_default(),
+                        (Some(restored), _) => format!(" to {}", pipeline_label(restored)),
+                        (None, _) => String::new(),
                     };
                     (
                         format!("Rolled back: {name}"),
@@ -651,6 +659,9 @@ async fn context(
             notice["headline"] = json!(headline);
             notice["message"] = json!(message);
             notice["context"] = json!([format!("Deployment: {name}")]);
+            if kind == "rollout.rolled_back" {
+                notice["restored"] = restored.unwrap_or(Value::Null);
+            }
         }
         _ => {
             let device = data["device_id"].as_str().unwrap_or("");
@@ -1223,6 +1234,7 @@ pub fn example_notice(kind: &str, now: DateTime<Utc>) -> Value {
         "pipeline": pipeline,
         "deployment": if rollout { deployment } else { Value::Null },
         "issue": Value::Null,
+        "restored": if kind == "rollout.rolled_back" { json!({"id": "00000000-0000-4000-8000-000000000000", "name": "Example pipeline", "version_number": 2}) } else { Value::Null },
     })
 }
 fn digest_notice(id: &str, data: &Value, now: DateTime<Utc>) -> Value {
@@ -1303,6 +1315,9 @@ fn event_json(s: &crate::App, notice: &Value) -> Value {
         event.insert("count".into(), notice["count"].clone());
         event.insert("items".into(), notice["items"].clone());
     }
+    if notice["type"] == "rollout.rolled_back" {
+        event.insert("restored".into(), notice["restored"].clone());
+    }
     Value::Object(event)
 }
 fn slack_escape(text: &str) -> String {
@@ -1317,9 +1332,12 @@ fn context_line(s: &crate::App, notice: &Value) -> String {
         .flatten()
         .filter_map(|c| c.as_str().map(str::to_owned))
         .collect();
-    let severity = match notice["severity"].as_str() {
-        Some("error") => "Error",
-        Some("warning") => "Warning",
+    // A recovery says that it is one, not how serious the problem was.
+    let severity = match (notice["type"].as_str(), notice["severity"].as_str()) {
+        (Some("issue.resolved"), _) => "Resolved",
+        (Some("device.recovered"), _) => "Back online",
+        (_, Some("error")) => "Error",
+        (_, Some("warning")) => "Warning",
         _ => "",
     };
     if !severity.is_empty() && notice["type"] != "digest" {
