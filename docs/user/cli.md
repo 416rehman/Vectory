@@ -44,10 +44,10 @@ The `release` verbs keep no agent state, so they take neither flag.
 | [`configure-secrets`](#configure-secrets) | Map `vectory-secret:NAME` references to local files. | Yes |
 | [`re-adopt`](#re-adopt) | Approve a Vector binary you replaced on purpose. | Yes |
 | [`recover-enrollment`](#recover-enrollment) | Replace a lost identity with an administrator's recovery token. | Yes |
+| [`update`](#update) | Show where agent updates stand, apply a staged one, pause, resume or turn them off. | No |
 | [`service-install`, `service-start`, `service-stop`, `service-uninstall`](#service-commands) | Manage the agent's operating-system service. | Varies |
 | [`unenroll`](#unenroll) | Delete this host's credentials. | Yes |
 | [`uninstall`](#uninstall) | Delete the agent's state with `--purge`. | Yes |
-| [`update`](#update) | Show where agent updates stand, apply a staged one, pause, resume or turn them off. | No |
 | [`release`](#release) | Make release keys, sign agent builds and check signatures. | No |
 | [`version`, `help`](#version-and-help) | Print the version or usage. | No |
 
@@ -402,49 +402,6 @@ sudo vectory recover-enrollment
 
 A request the server refused, or that never left this host, doesn't hold back the next token: run the command again with a new one. A request that may have reached the server does, because it may have issued the new identity: run the command again with the same token.
 
-## Service commands
-
-| Command | Meaning |
-| --- | --- |
-| `vectory service-install` | Register the agent as a service: systemd on Linux, launchd on macOS, the Service Control Manager on Windows. Needs administrator rights. |
-| `vectory service-start` | Enable and start the service. |
-| `vectory service-stop` | Stop the service and its Vector. |
-| `vectory service-uninstall` | Remove the service registration. |
-
-| Flag | Meaning |
-| --- | --- |
-| `--service-user NAME` | For `service-install` on Linux and macOS: an existing unprivileged account to run as. Windows always uses `NT SERVICE\Vectory`. |
-
-The service is registered for the state directory you pass to `service-install`. The other service commands always act on that one service and reject `--state-dir`.
-
-On a host without systemd, `service-stop` says there is no Vectory service to stop and how to stop an agent started with `vectory run` (Ctrl-C where it runs; `vectory status` shows its pid).
-
-`vectory service` is the entry point the Windows service runs. You don't run it yourself.
-
-## unenroll
-
-Delete this host's credentials, keeping the installation. Also revoke the device in the dashboard: the host can't revoke its identity offline.
-
-```sh
-sudo vectory unenroll
-```
-
-On a host with no credentials it says so, and there is nothing to revoke.
-
-## uninstall
-
-Delete the agent's state directory. Stop and unregister the service first.
-
-```sh
-sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
-```
-
-| Flag | Meaning |
-| --- | --- |
-| `--purge` | Delete the state directory named by `--state-dir`, which is required. Vector and the managed configuration stay. |
-
-Without `--purge`, `uninstall` changes nothing and reminds you to remove the service and binary. When the state directory doesn't exist, it says `Nothing to remove` and exits `0`, so you can run an interrupted purge again.
-
 ## update
 
 Show where agent updates stand on this host, and do the few things a person here can do about them. A host takes agent updates only when it consented to them, once, in [`setup`](#agent-updates-in-setup); the dashboard can't change that. Every verb but `status` needs root (an Administrator on Windows) and prints the exact command to run when it doesn't have it.
@@ -529,6 +486,49 @@ The pinned key is kept. To turn updates on again, run the Upgrade agent command 
 ```
 
 It refuses while the update step applies or tries a build, and says when that ends: `vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that`.
+
+## Service commands
+
+| Command | Meaning |
+| --- | --- |
+| `vectory service-install` | Register the agent as a service: systemd on Linux, launchd on macOS, the Service Control Manager on Windows. Needs administrator rights. |
+| `vectory service-start` | Enable and start the service. |
+| `vectory service-stop` | Stop the service and its Vector. |
+| `vectory service-uninstall` | Remove the service registration. |
+
+| Flag | Meaning |
+| --- | --- |
+| `--service-user NAME` | For `service-install` on Linux and macOS: an existing unprivileged account to run as. Windows always uses `NT SERVICE\Vectory`. |
+
+The service is registered for the state directory you pass to `service-install`. The other service commands always act on that one service and reject `--state-dir`.
+
+On a host without systemd, `service-stop` says there is no Vectory service to stop and how to stop an agent started with `vectory run` (Ctrl-C where it runs; `vectory status` shows its pid).
+
+`vectory service` is the entry point the Windows service runs. You don't run it yourself.
+
+## unenroll
+
+Delete this host's credentials, keeping the installation. Also revoke the device in the dashboard: the host can't revoke its identity offline.
+
+```sh
+sudo vectory unenroll
+```
+
+On a host with no credentials it says so, and there is nothing to revoke.
+
+## uninstall
+
+Delete the agent's state directory. Stop and unregister the service first.
+
+```sh
+sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--purge` | Delete the state directory named by `--state-dir`, which is required. Vector and the managed configuration stay. |
+
+Without `--purge`, `uninstall` changes nothing and reminds you to remove the service and binary. When the state directory doesn't exist, it says `Nothing to remove` and exits `0`, so you can run an interrupted purge again.
 
 ## release
 
