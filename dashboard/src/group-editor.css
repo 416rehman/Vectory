@@ -218,6 +218,15 @@
   color: var(--rollout-danger-ink, var(--ink));
   font-weight: 550;
 }
+/* Why Save is off, beside the buttons it explains; its own line on a phone. */
+.group-save-blocked {
+  flex: 1 1 14rem;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+  text-align: left;
+}
 .group-overview li > .status-badge {
   justify-self: end;
 }

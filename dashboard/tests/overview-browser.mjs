@@ -7,7 +7,11 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { configuredChannels } from "./notification-fixtures.mjs";
-import { slimOverview } from "./fleet-replies.mjs";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  slimOverview,
+} from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -372,7 +376,7 @@ const server = await createServer({
       },
       load(id) {
         if (id === virtual)
-          return `import React from 'react';import{createRoot}from'react-dom/client';import{Overview}from'/src/Overview.tsx';import'/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement('main',{className:'page-content'},React.createElement(Overview,{user:${JSON.stringify(user)},navigate:path=>{window.location.hash='/'+path}})));`;
+          return `import React from 'react';import{createRoot}from'react-dom/client';import{Overview}from'/src/Overview.tsx';import'/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement('main',{className:'page-content'},React.createElement(Overview,{user:{...${JSON.stringify(user)},role:window.testRole||'admin'},navigate:path=>{window.location.hash='/'+path}})));`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
@@ -398,19 +402,30 @@ const results = [],
   requests = [],
   accessibility = [];
 let state;
-async function open(options = {}) {
+async function open({ role = "admin", ...options } = {}) {
   state = {
     overview: overview(),
     summary: null,
     releases: [],
     // Deployment history by status, for rollouts that stopped by themselves.
     history: {},
+    // The devices the inventory lists, and the published versions by ID.
+    fleet: devices,
+    versions: {},
     ...options,
   };
+  const fleetReads = fleetReplies({
+    devices: () => state.fleet,
+    groups: [],
+    groupById: false,
+  });
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     reducedMotion: "reduce",
   });
+  await context.addInitScript((value) => {
+    window.testRole = value;
+  }, role);
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   page.on("pageerror", (error) => errors.push(error.message));
@@ -421,6 +436,17 @@ async function open(options = {}) {
     requests.push({ method: req.method(), path: path + url.search });
     if (req.method() === "GET" && path === "/overview")
       return route.fulfill({ json: state.overview });
+    // Pages of devices, as the Devices page reads them.
+    if (await fulfillFleetRead(fleetReads, route)) return;
+    // A published version, whose configuration says where it exports metrics.
+    const published = path.match(/^\/versions\/([^/]+)$/);
+    if (req.method() === "GET" && published)
+      return state.versions[published[1]]
+        ? route.fulfill({ json: state.versions[published[1]] })
+        : route.fulfill({
+            status: 404,
+            json: { error: { code: "NOT_FOUND", message: "Not found" } },
+          });
     // An administrator's Overview asks whether a notification channel exists.
     if (req.method() === "GET" && path === "/notifications/channels")
       return route.fulfill({ json: configuredChannels });
@@ -1032,18 +1058,271 @@ try {
       };
       ({ context, page } = await open({
         overview: overview({}, silent),
+        fleet: silent,
       }));
       const howTo = page.locator(".overview-throughput-howto");
       await expect(howTo).toContainText("No device is reporting metrics");
       await expect(howTo).toContainText(
         "1 device has metrics turned off in Agent settings.",
       );
-      await expect(howTo).toContainText("internal_metrics");
+      // Nothing here runs a pipeline the page knows of, so it is not told to
+      // add monitoring to one.
+      await expect(
+        howTo.getByRole("listitem").filter({ hasText: "Turn on" }),
+      ).toContainText(
+        "Turn on Collect operational metrics for edge-nyc-01 in its agent settings.",
+      );
+      await expect(howTo).not.toContainText("Add monitoring");
       await expect(
         howTo.getByRole("link", { name: /Enable metrics step by step/ }),
       ).toHaveAttribute("href", "/help/telemetry/#enable-real-metrics");
       await expect(page.locator(".overview-throughput-stats")).toHaveCount(0);
       await context.close();
+    },
+  );
+  // Devices that report nothing, for each reason there is: metrics off in
+  // their agent settings, a pipeline without an exporter, no pipeline at all.
+  const exporting = {
+    sources: { metrics: { type: "internal_metrics" } },
+    sinks: {
+      exporter: {
+        type: "prometheus_exporter",
+        inputs: ["metrics"],
+        address: "127.0.0.1:8655",
+      },
+    },
+  };
+  const without = {
+    sources: { logs: { type: "demo_logs" } },
+    sinks: { out: { type: "console", inputs: ["logs"] } },
+  };
+  const runningVersion = (id, number, configurationId, name) => ({
+    id,
+    number,
+    configuration_id: configurationId,
+    configuration_name: name,
+  });
+  const publishedVersion = (id, configurationId, number, config) => ({
+    id,
+    configuration_id: configurationId,
+    number,
+    config,
+  });
+  const idle = (n, name) =>
+    device(n, name, {
+      status: "unmanaged",
+      apply_state: "unmanaged",
+      desired_version_id: null,
+      desired_generation: 0,
+      reported_generation: 0,
+    });
+  const metricsOff = {
+    fleet: [
+      device(10, "edge-linux-1", {
+        effective_policy: {
+          heartbeat_seconds: 15,
+          sync_paused: false,
+          telemetry_enabled: false,
+        },
+        policy_assignment: {
+          id: uuid(70),
+          priority: 100,
+          reason: "Applied",
+          policy_name: "No metrics",
+        },
+        desired_version_id: uuid(71),
+        running_version: runningVersion(
+          uuid(71),
+          2,
+          uuid(72),
+          "First pipeline",
+        ),
+      }),
+      idle(11, "edge-linux-2"),
+      idle(12, "edge-linux-3"),
+      idle(13, "edge-linux-4"),
+    ],
+    versions: {
+      [uuid(71)]: publishedVersion(uuid(71), uuid(72), 2, exporting),
+    },
+  };
+  const orders = {
+    fleet: [
+      device(20, "web-ams-02", {
+        running_version: runningVersion(uuid(81), 3, uuid(82), "Orders"),
+      }),
+      device(21, "web-ams-03", {
+        running_version: runningVersion(uuid(81), 3, uuid(82), "Orders"),
+      }),
+    ],
+    versions: { [uuid(81)]: publishedVersion(uuid(81), uuid(82), 3, without) },
+  };
+  const silentOverview = (fleet) => ({
+    overview: overview({}, fleet),
+    fleet,
+  });
+  await check(
+    "Metrics that are off in a device's agent settings lead the guidance, with the settings it runs and the exporter its pipeline has",
+    async () => {
+      const { context, page } = await open({
+        ...silentOverview(metricsOff.fleet),
+        versions: metricsOff.versions,
+      });
+      const howTo = page.locator(".overview-throughput-howto");
+      await expect(howTo).toContainText(
+        "1 device has metrics turned off in Agent settings.",
+      );
+      await expect(howTo).toContainText("3 devices run no pipeline yet.");
+      // Devices that run nothing have no exporter to lack.
+      await expect(howTo).not.toContainText("no metrics exporter");
+      await expect(howTo).not.toContainText("without a metrics exporter");
+      const steps = howTo.getByRole("listitem");
+      await expect(steps).toHaveCount(1);
+      await expect(steps.first()).toHaveText(
+        "Turn on Collect operational metrics for edge-linux-1 in its agent settings (“No metrics”).",
+      );
+      await expect(
+        steps.first().getByRole("link", { name: "its agent settings" }),
+      ).toHaveAttribute("href", "#/policies");
+      // The pipeline it runs already exports, and where is the address it has.
+      await expect(howTo).toContainText(
+        "First pipeline v2 exports metrics on 127.0.0.1:8655.",
+      );
+      await expect(howTo).not.toContainText("Add monitoring");
+      await expect(howTo).not.toContainText("9598");
+      await context.close();
+    },
+  );
+  await check(
+    "Add monitoring is offered only for a running version without an exporter, and only to people who can edit",
+    async () => {
+      for (const role of ["admin", "editor"]) {
+        const { context, page } = await open({
+          ...silentOverview(orders.fleet),
+          versions: orders.versions,
+          role,
+        });
+        const howTo = page.locator(".overview-throughput-howto");
+        await expect(howTo).toContainText(
+          "2 devices run a pipeline without a metrics exporter.",
+        );
+        await expect(howTo.getByRole("listitem").first()).toHaveText(
+          "Add monitoring to Orders: an internal_metrics source feeding a prometheus_exporter on 127.0.0.1:9598.",
+        );
+        await expect(
+          howTo.getByRole("link", { name: "Add monitoring to Orders" }),
+        ).toHaveAttribute(
+          "href",
+          new RegExp(`#/configurations/${uuid(82)}.*panel=tools`),
+        );
+        await context.close();
+      }
+      // An operator deploys but can't change a pipeline's steps; a viewer
+      // changes nothing. Neither is sent to an editor that can't help them.
+      for (const role of ["operator", "viewer"]) {
+        const { context, page } = await open({
+          ...silentOverview(orders.fleet),
+          versions: orders.versions,
+          role,
+        });
+        const howTo = page.locator(".overview-throughput-howto");
+        await expect(howTo.getByRole("listitem")).toHaveText(
+          "Orders has no metrics exporter. An editor or administrator can add one.",
+        );
+        await expect(
+          howTo.getByRole("link", { name: /Add monitoring/ }),
+        ).toHaveCount(0);
+        await expect(howTo).not.toContainText("Add monitoring");
+        await context.close();
+      }
+      // A version that couldn't be read is never called exporter-less.
+      const { context, page } = await open({
+        ...silentOverview(orders.fleet),
+        versions: {},
+      });
+      const howTo = page.locator(".overview-throughput-howto");
+      await expect(howTo).toContainText("No device is reporting metrics");
+      await expect
+        .poll(
+          () =>
+            requests.filter((request) => request.path.startsWith("/versions/"))
+              .length,
+        )
+        .toBeGreaterThan(0);
+      // Let the refused read finish before judging what it left unknown.
+      await page.waitForLoadState("networkidle");
+      await expect(howTo.getByRole("listitem")).toHaveCount(0);
+      await expect(howTo).not.toContainText("Add monitoring");
+      await expect(howTo).not.toContainText("without a metrics exporter");
+      await context.close();
+      // An exporter on an address an agent doesn't read is said to be that,
+      // and Add monitoring has nothing to add to a pipeline that has one.
+      const wide = {
+        sources: { metrics: { type: "internal_metrics" } },
+        sinks: {
+          exporter: {
+            type: "prometheus_exporter",
+            inputs: ["metrics"],
+            address: "0.0.0.0:9598",
+          },
+        },
+      };
+      const other = await open({
+        ...silentOverview(orders.fleet),
+        versions: { [uuid(81)]: publishedVersion(uuid(81), uuid(82), 3, wide) },
+      });
+      await expect(
+        other.page.locator(".overview-throughput-howto"),
+      ).toContainText(
+        "Orders v3 exports metrics on 0.0.0.0:9598, which the agent doesn't read. Use a loopback address such as 127.0.0.1:9598.",
+      );
+      await expect(
+        other.page.locator(".overview-throughput-howto"),
+      ).not.toContainText("Add monitoring");
+      await other.context.close();
+    },
+  );
+  await check(
+    "The metrics guidance reads well in light, dark and phone layouts",
+    async () => {
+      for (const [label, scenario] of [
+        ["metrics-off", metricsOff],
+        ["no-exporter", orders],
+      ]) {
+        const { context, page } = await open({
+          ...silentOverview(scenario.fleet),
+          versions: scenario.versions,
+        });
+        const howTo = page.locator(".overview-throughput-howto");
+        await expect(howTo.getByRole("listitem").first()).toBeVisible();
+        for (const width of [1280, 390])
+          for (const theme of ["light", "dark"]) {
+            await page.setViewportSize({
+              width,
+              height: width === 390 ? 844 : 900,
+            });
+            await page.evaluate((value) => {
+              document.documentElement.dataset.theme = value;
+            }, theme);
+            expect(
+              await page.evaluate(
+                () => document.documentElement.scrollWidth <= innerWidth,
+              ),
+            ).toBe(true);
+            const axe = await new AxeBuilder({ page })
+              .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+              .analyze();
+            expect(axe.violations.map((item) => item.id)).toEqual([]);
+            await page.locator(".throughput").screenshot({
+              path: resolve(
+                output,
+                `metrics-guidance-${label}-${width === 390 ? "mobile" : "desktop"}-${theme}.png`,
+              ),
+              animations: "disabled",
+            });
+          }
+        await context.close();
+      }
     },
   );
   await check(
@@ -1125,6 +1404,138 @@ try {
       ({ context, page } = await open());
       await expect(page.locator(".overview-kpis")).toBeVisible();
       await expect(page.locator(".overview-checklist")).toHaveCount(0);
+      await context.close();
+    },
+  );
+  await check(
+    "When the only verified device goes offline the checklist stays done and the tile says it is offline, not unverified",
+    async () => {
+      const offline = [
+        device(30, "edge-linux-1", {
+          status: "offline",
+          last_seen: ago(7200),
+          running_version: runningVersion(
+            version,
+            2,
+            pipeline,
+            "First pipeline",
+          ),
+        }),
+      ];
+      const verifiedOnce = (extra = {}) =>
+        overview(
+          {
+            configurations_total: 1,
+            versions_total: 2,
+            devices_managed: 1,
+            devices_on_desired: 0,
+            attention: [],
+            rollouts: [],
+            running: [
+              {
+                configuration_id: pipeline,
+                configuration_name: "First pipeline",
+                version_id: version,
+                version: 2,
+                device_count: 1,
+                devices_reporting: 0,
+                groups: [],
+                more_groups: 0,
+                events_in_per_second: null,
+                events_out_per_second: null,
+                state: "running",
+                not_delivering: 0,
+                canary: null,
+              },
+            ],
+            running_total: 1,
+            devices_offline_on_desired: 1,
+            offline_on_desired_version: 2,
+            ...extra,
+          },
+          offline,
+        );
+      let { context, page } = await open({
+        overview: verifiedOnce(),
+        fleet: offline,
+      });
+      const tile = page.locator(".overview-kpi-tile").nth(1);
+      await expect(tile.locator(".overview-kpi-value")).toHaveText("0 / 1");
+      await expect(tile).toContainText("1 offline, last verified v2");
+      await expect(tile).not.toContainText("not yet verified");
+      await expect(page.locator(".overview-checklist")).toHaveCount(0);
+      for (const width of [1280, 390])
+        for (const theme of ["light", "dark"]) {
+          await page.setViewportSize({
+            width,
+            height: width === 390 ? 844 : 900,
+          });
+          await page.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          await page.locator(".overview-kpis").screenshot({
+            path: resolve(
+              output,
+              `offline-verified-${width === 390 ? "mobile" : "desktop"}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+        }
+      await page.setViewportSize({ width: 1280, height: 900 });
+      // The device verified, then Vectory stopped knowing what it runs (an
+      // update under way): this account saw the steps done, so they stay done.
+      state.overview = verifiedOnce({
+        running: [],
+        running_total: 0,
+        devices_offline_on_desired: 0,
+        offline_on_desired_version: null,
+      });
+      await page.reload();
+      await expect(page.locator(".overview-kpis")).toBeVisible();
+      await expect(page.locator(".overview-checklist")).toHaveCount(0);
+      // And only what is true is said of the device now.
+      await expect(page.locator(".overview-kpi-tile").nth(1)).toContainText(
+        "1 not yet verified",
+      );
+      await context.close();
+      // Offline devices that never verified are not yet verified, in a
+      // checklist that has not been completed.
+      ({ context, page } = await open({
+        overview: verifiedOnce({
+          running: [],
+          running_total: 0,
+          devices_offline_on_desired: 0,
+          offline_on_desired_version: null,
+        }),
+        fleet: offline,
+      }));
+      await expect(page.locator(".overview-checklist")).toContainText(
+        "4 of 5 done",
+      );
+      await expect(
+        page.locator('.overview-checklist li[data-state="current"]'),
+      ).toContainText("Deploy and verify");
+      await expect(page.locator(".overview-kpi-tile").nth(1)).toContainText(
+        "1 not yet verified",
+      );
+      // Several devices that last verified different versions name none.
+      await context.close();
+      ({ context, page } = await open({
+        overview: verifiedOnce({
+          devices_managed: 3,
+          devices_offline_on_desired: 2,
+          offline_on_desired_version: null,
+        }),
+        fleet: offline,
+      }));
+      await expect(page.locator(".overview-kpi-tile").nth(1)).toContainText(
+        "2 offline, last verified their assigned version · 1 not yet verified",
+      );
       await context.close();
     },
   );

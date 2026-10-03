@@ -496,6 +496,12 @@ function ChannelDialog({
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A name another channel has, as the server refused it: said at the field
+  // until the name changes.
+  const [taken, setTaken] = useState<{ name: string; message: string } | null>(
+    null,
+  );
+  const nameInput = useRef<HTMLInputElement>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const mounted = useRef(true);
   // Typed settings are worth a question before Escape, a click outside or
@@ -523,7 +529,12 @@ function ChannelDialog({
     };
   }, []);
   const errors = validateDraft(draft);
-  const shown: DraftErrors = submitted ? errors : {};
+  const shown: DraftErrors = {
+    ...(submitted ? errors : {}),
+    ...(taken && taken.name === draft.name.trim().toLowerCase()
+      ? { name: taken.message }
+      : {}),
+  };
   const set = <K extends keyof ChannelDraft>(key: K, value: ChannelDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
   const zones = useMemo(() => timeZones(), []);
@@ -586,6 +597,15 @@ function ChannelDialog({
       if (mounted.current) onSaved(saved, !channel);
     } catch (e) {
       if (!mounted.current) return;
+      if (e instanceof APIError && e.code === "NAME_TAKEN") {
+        // The name is what to change: say so there, and go to it.
+        setTaken({
+          name: draft.name.trim().toLowerCase(),
+          message: e.message,
+        });
+        requestAnimationFrame(() => nameInput.current?.focus());
+        return;
+      }
       setError(
         e instanceof APIError && e.code === "STALE_REVISION"
           ? "Someone changed this channel while you edited it. Close the dialog and open it again to see their changes."
@@ -646,6 +666,7 @@ function ChannelDialog({
               <h3 id="notification-destination">Destination</h3>
               <Field label="Name" hint={shown.name}>
                 <input
+                  ref={nameInput}
                   value={draft.name}
                   maxLength={80}
                   placeholder="On-call Slack"

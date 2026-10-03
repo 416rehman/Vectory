@@ -134,6 +134,8 @@ export default forwardRef<
   const secretOpener = useRef<HTMLElement | null>(null);
   const revokeOpener = useRef<HTMLElement | null>(null);
   const damagedOpener = useRef<HTMLElement | null>(null);
+  // Where the person was heading when the token stopped them.
+  const leaving = useRef<string | null>(null);
   const focusedElement = () =>
     document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -176,6 +178,7 @@ export default forwardRef<
     const ended = () => {
       active.current?.controller.abort();
       active.current = null;
+      leaving.current = null;
       setBusy(false);
       setReady(null);
       setShowSecret(false);
@@ -306,6 +309,8 @@ export default forwardRef<
     const navigate = (event: Event) => {
       if (!can(user, "operate")) return;
       event.preventDefault();
+      leaving.current =
+        (event as CustomEvent<{ route?: string }>).detail?.route ?? null;
       openSecret();
       setError("Save this token or discard its in-page copy before leaving.");
     };
@@ -321,6 +326,14 @@ export default forwardRef<
       window.removeEventListener("beforeunload", unload);
     };
   }, [ready, user]);
+  // Saving or discarding the token is the answer to the question that stopped
+  // the person, so they go where they were heading.
+  useEffect(() => {
+    if (ready || !leaving.current) return;
+    const route = leaving.current;
+    leaving.current = null;
+    location.hash = `/${route}`;
+  }, [ready]);
   useEffect(() => {
     callbacks.current.onState(busy, blocked);
   }, [busy, blocked]);
@@ -949,7 +962,11 @@ export default forwardRef<
       <Modal
         open={!!ready && showSecret && visible}
         returnFocusRef={secretOpener}
-        onClose={() => setShowSecret(false)}
+        onClose={() => {
+          // Closing without choosing means the person stays.
+          leaving.current = null;
+          setShowSecret(false);
+        }}
         title="Save your enrollment token"
         description="Keep a private copy. The server cannot show this token again."
       >

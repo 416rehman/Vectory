@@ -442,6 +442,8 @@ async function load({
     deliveryQueries: [],
     tests: {},
     stale: false,
+    // A name the server says another channel has, in any case.
+    nameTaken: "",
     ...overrides,
   };
   await context.route("**/*", async (route) => {
@@ -471,6 +473,15 @@ async function load({
       return reply({ items: state.channels, max_channels: 20 });
     if (method === "POST" && path === "/notifications/channels") {
       state.writes.push({ method, path, body });
+      if (
+        state.nameTaken &&
+        body.name.toLowerCase() === state.nameTaken.toLowerCase()
+      )
+        return refuse(
+          409,
+          "NAME_TAKEN",
+          "Another channel has this name. Choose another.",
+        );
       const created = syntheticChannel({
         id: id(99),
         name: body.name,
@@ -1426,6 +1437,49 @@ try {
     },
   );
 
+  await check(
+    "a name another channel has is said at the Name field, which is marked invalid and focused, until the name changes",
+    async () => {
+      await load({ channels: [], nameTaken: "On-call Slack" });
+      await page.getByRole("button", { name: "Add channel" }).click();
+      const dialog = page.getByRole("dialog", {
+        name: "Add a notification channel",
+      });
+      const name = dialog.getByRole("textbox", { name: "Name", exact: true });
+      await name.fill("on-call slack");
+      await dialog
+        .getByRole("textbox", { name: "Webhook URL" })
+        .fill("https://hooks.example.test/services/T000/B000/synthetic");
+      const add = dialog.getByRole("button", {
+        name: "Add channel",
+        exact: true,
+      });
+      await add.click();
+      const refusal = "Another channel has this name. Choose another.";
+      await expect(dialog.getByText(refusal)).toBeVisible();
+      // At the field only: no second copy in a banner above the form.
+      await expect(dialog.getByRole("alert")).toHaveCount(0);
+      await expect(name).toHaveAttribute("aria-invalid", "true");
+      await expect(name).toBeFocused();
+      expect(state.writes).toHaveLength(1);
+      await axe("name taken", "light");
+      await shot("name-taken-light.png");
+      await theme("dark");
+      await shot("name-taken-dark.png");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await shot("name-taken-phone.png");
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await theme("light");
+      // A different name clears it, and saves.
+      await name.fill("On-call Slack 2");
+      await expect(dialog.getByText(refusal)).toHaveCount(0);
+      await expect(name).not.toHaveAttribute("aria-invalid", "true");
+      await add.click();
+      await expect(dialog).toHaveCount(0);
+      expect(state.writes).toHaveLength(2);
+      expect(state.writes.at(-1).body.name).toBe("On-call Slack 2");
+    },
+  );
   await check(
     "the tip is one quiet line for administrators without a channel, and stays dismissed",
     async () => {

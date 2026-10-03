@@ -7781,7 +7781,7 @@
         ]
       },
       "put": {
-        "summary": "Update reviewed metadata and membership under revision CAS; stale revisions return 409 STALE_REVISION; new persistent members overlapping another active canary return 409 ACTIVE_CANARY_OVERLAP; rejected edits leave assignments unchanged",
+        "summary": "Update reviewed metadata and membership under revision CAS; stale revisions return 409 STALE_REVISION; new persistent members overlapping another active canary return 409 ACTIVE_CANARY_OVERLAP; members that would receive two different assignments of the same kind at the same priority return 409 CONFLICT, with error.details naming each device and both assignments; rejected edits leave assignments unchanged",
         "operationId": "put__api_v1_groups__id_",
         "security": [
           {
@@ -15590,6 +15590,19 @@
                   }
                 ],
                 "description": "GET /session 401 only: why this browser's session ended (expired, signed_out, signed_out_elsewhere, password_changed, access_changed, mfa_changed, mfa_reset, replaced, revoked) or null."
+              },
+              "details": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "$ref": "#/components/schemas/MembershipConflict"
+                },
+                "description": "Additive. Present on a 409 CONFLICT that refuses a group edit for conflicting equal-priority assignments (PUT /groups/{id}, POST /groups) and on the matching blocker of a membership preview: at most the first ten collisions, ordered by device name, then device ID. Absent on every other error; older clients ignore it."
+              },
+              "details_total": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many collisions the edit creates in all; details lists at most ten of them."
               }
             },
             "required": [
@@ -17595,6 +17608,23 @@
             "type": "integer",
             "minimum": 0,
             "description": "Security events skipped within the scanned window (at most 300 recent events)."
+          },
+          "devices_offline_on_desired": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Additive; absent from older servers. Managed devices that are offline and whose last verified version is the one they are assigned: out of reach right now, not unverified. Never part of devices_on_desired, which counts only devices verified now."
+          },
+          "offline_on_desired_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Additive; absent from older servers. The number of the one version the devices counted in devices_offline_on_desired last verified, when they share one; null when there are none or they differ."
           },
           "devices_unmeasured": {
             "type": "integer",
@@ -28815,6 +28845,264 @@
         ],
         "additionalProperties": false
       },
+      "MembershipConflictAssignment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resource": {
+            "enum": [
+              "configuration",
+              "policy"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "target_mode": {
+            "enum": [
+              "snapshot",
+              "persistent"
+            ]
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "active",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed",
+              "missed",
+              "unassigned"
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollback_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a rollback: the deployment it rolled back."
+          },
+          "targets": {
+            "enum": [
+              "group",
+              "devices"
+            ],
+            "description": "group when the assignment's selector names at least one group, otherwise devices. With target_mode persistent a group-targeting assignment follows the group's members; a snapshot was applied to the members it had."
+          },
+          "groups": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 120
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "description": "At most three of the groups this assignment targets that hold the device. Empty when it targets devices."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "resource",
+          "priority",
+          "target_mode",
+          "status",
+          "created_at",
+          "version_id",
+          "version_number",
+          "configuration_id",
+          "configuration_name",
+          "policy",
+          "policy_id",
+          "policy_name",
+          "targets",
+          "groups"
+        ],
+        "additionalProperties": false
+      },
+      "MembershipConflict": {
+        "type": "object",
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resource": {
+            "enum": [
+              "configuration",
+              "policy"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "assignments": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/MembershipConflictAssignment"
+            },
+            "description": "The two assignments of the same kind that would both deliver to the device at this priority with different payloads. Told apart by id, never by position."
+          }
+        },
+        "required": [
+          "device_id",
+          "device_name",
+          "resource",
+          "priority",
+          "assignments"
+        ],
+        "additionalProperties": false,
+        "description": "One collision a group edit would create. Names and numbers only: never selectors, member lists, payloads or secrets."
+      },
       "GroupMembershipPreview": {
         "type": "object",
         "properties": {
@@ -28845,6 +29133,19 @@
                 },
                 "reason": {
                   "type": "string"
+                },
+                "details": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "$ref": "#/components/schemas/MembershipConflict"
+                  },
+                  "description": "Additive. Present on a 409 CONFLICT that refuses a group edit for conflicting equal-priority assignments (PUT /groups/{id}, POST /groups) and on the matching blocker of a membership preview: at most the first ten collisions, ordered by device name, then device ID. Absent on every other error; older clients ignore it."
+                },
+                "details_total": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "How many collisions the edit creates in all; details lists at most ten of them."
                 }
               },
               "required": [

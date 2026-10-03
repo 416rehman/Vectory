@@ -91,6 +91,38 @@ func TestCheckInInterruptedByStoppingIsNotAnOutage(t *testing.T) {
 	}
 }
 
+// A device the server keeps refusing, or can't reach, gets a line when that
+// starts and another when the reason changes, not one per retry.
+func TestARepeatedFailedCheckInIsSaidOnce(t *testing.T) {
+	revoked := &ConnectionError{Code: "CREDENTIAL_REJECTED", Message: "The server doesn't accept this device's credential (HTTP 401)."}
+	down := &ConnectionError{Code: "CONNECTION_REFUSED", Message: "Nothing is accepting connections on 127.0.0.1:8443."}
+	unsigned := errors.New("manifest signature rejected")
+	said := ""
+	for i, step := range []struct {
+		err  error
+		line bool
+	}{
+		{revoked, true}, {revoked, false}, {revoked, false},
+		{down, true}, {down, false},
+		{revoked, true},
+		// Anything that isn't a connection problem is said every time.
+		{unsigned, true}, {unsigned, true},
+		{revoked, true}, {revoked, false},
+	} {
+		code, news := failureNews(said, step.err)
+		if news != step.line {
+			t.Fatalf("step %d (%v): said %v, want %v", i, step.err, news, step.line)
+		}
+		if news {
+			said = code
+		}
+	}
+	// A connection error that names no reason is never swallowed.
+	if _, news := failureNews("", &ConnectionError{Message: "unnamed"}); !news {
+		t.Fatal("an unnamed failure wasn't said")
+	}
+}
+
 // The build a process records is the one it runs, read before anything slow.
 func TestRunningAgentBuildIsThisProcess(t *testing.T) {
 	exe, err := os.Executable()

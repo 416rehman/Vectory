@@ -87,7 +87,10 @@ scripts/preview.sh
 ```text
 Preview running at http://127.0.0.1:8080 (agent TLS https://127.0.0.1:8443).
 Bootstrap secret: /home/you/Vectory/.local/preview/bootstrap.secret
+Add a device from Devices > Add device. The server log (/home/you/Vectory/.local/preview/server.log) shows only the ends of the CA fingerprint; Add device shows all of it.
 ```
+
+The server log prints the certificate authority's fingerprint as `3F:DD:...:10:E5`, only its first and last bytes, so it can't be pasted as a pin. **Add device** shows the whole fingerprint, and the install command it creates already carries it.
 
 The first start also creates a test certificate authority in `.local/pki/` and builds the agent for every platform. That takes a few minutes; set `VECTORY_PREVIEW_AGENT_TARGETS="linux/amd64"` (or `darwin/arm64`) to build only yours. The preview uses the Vector you downloaded to check pipelines, just like a real server's validator.
 

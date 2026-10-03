@@ -150,7 +150,7 @@ for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:$web_port/api/v1/status" >/dev/null 2>&1; then
     echo "Preview running at http://127.0.0.1:$web_port (agent TLS https://127.0.0.1:$agent_port)."
     echo "Bootstrap secret: $preview/bootstrap.secret"
-    echo "Add a device from Devices > Add device; the server log ($preview/server.log) shows the CA fingerprint."
+    echo "Add a device from Devices > Add device. The server log ($preview/server.log) shows only the ends of the CA fingerprint; Add device shows all of it."
     exit 0
   fi
   sleep 0.5

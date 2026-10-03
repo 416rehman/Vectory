@@ -17,6 +17,7 @@ import {
   localProblems,
   mergeProblems,
   pipelineOrder,
+  readOnlyCheck,
   settleStaleProblems,
   type PipelineCheck,
 } from "./pipelineProblems";
@@ -256,6 +257,75 @@ describe("pipeline problems", () => {
       ),
     ).toMatch(/Only the pipeline structure/);
     expect(checkVerdict(check, 2)).toBe("2 problems to fix before publishing.");
+  });
+
+  it("tells a person who can't run a check what is true, never an instruction", () => {
+    const stored = {
+      valid: true,
+      vector_validated: true,
+      static_checked: true,
+      deferred: false,
+      vector_version: "0.58.0",
+      errors: [],
+      warnings: [],
+    };
+    // A draft equal to the latest published version carries its check.
+    expect(readOnlyCheck({ number: 2, validation: stored })).toEqual({
+      status: "passed",
+      verdict: "Version 2 was checked by Vector 0.58 when it was published.",
+    });
+    expect(
+      readOnlyCheck({
+        number: 3,
+        validation: {
+          ...stored,
+          vector_validated: false,
+          deferred: true,
+          deferred_reasons: ["Lua runs on devices"],
+        },
+      }),
+    ).toEqual({
+      status: "device",
+      verdict:
+        "Version 3 was checked by Vector 0.58 when it was published. Each device checks Lua code before applying it.",
+    });
+    // The release is the one the version was checked with, and absent when
+    // the stored result does not name it.
+    expect(
+      readOnlyCheck({
+        number: 1,
+        validation: { ...stored, vector_version: "0.59.1" },
+      }).verdict,
+    ).toBe("Version 1 was checked by Vector 0.59 when it was published.");
+    expect(
+      readOnlyCheck({
+        number: 1,
+        validation: { valid: true, vector_validated: true },
+      }).verdict,
+    ).toBe("Version 1 was checked by Vector when it was published.");
+    // Anything else is neutral, and says nothing they can't do.
+    for (const published of [
+      null,
+      { number: 2 },
+      { number: 2, validation: null },
+      { number: 2, validation: { valid: false, vector_validated: false } },
+      { number: 2, validation: { valid: true } },
+    ])
+      expect(readOnlyCheck(published)).toEqual({
+        status: "unchecked",
+        verdict: "Not checked since the last edit.",
+      });
+    for (const instruction of [
+      readOnlyCheck(null).verdict,
+      readOnlyCheck({ number: 2, validation: stored }).verdict,
+    ])
+      expect(instruction).not.toMatch(/run a check/i);
+    // The people who can check keep the instruction.
+    expect(checkVerdict(null, 0)).toBe(
+      "Run a check to validate this pipeline with Vector.",
+    );
+    expect(cleanSummary("passed")).toBe("No problems");
+    expect(cleanSummary("unchecked")).toBe("Not checked");
   });
 
   it("says enrichment tables are read on devices once, in a sentence", () => {

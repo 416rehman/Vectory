@@ -104,6 +104,7 @@ import {
   Field,
   Modal,
   Spinner,
+  useTabTitle,
 } from "./ui";
 import TargetDialog from "./LazyTargetDialog";
 
@@ -193,6 +194,7 @@ import {
   countProblems,
   localProblems,
   mergeProblems,
+  readOnlyCheck,
   settleStaleProblems,
   type PipelineCheck,
   type Problem,
@@ -618,6 +620,8 @@ export default function Editor({
     importGeneration = useRef(0),
     dragDepth = useRef(0),
     importContext = useRef({ config, code, pending: false, allowed: false });
+  // The tab names the pipeline, as a device's page names the device.
+  useTabTitle(doc?.name || null);
   // The draft's own tests, run each time the publish review opens.
   const publishTests = usePublishTests(config, publishOpen && !publishedResult);
   const publishTestsRef = useRef(publishTests);
@@ -1019,25 +1023,40 @@ export default function Editor({
         !problem.stale,
     );
   const nodeProblems = useMemo(() => componentProblems(problems), [problems]);
-  const status = checkStatus({
-    checking,
-    check: check?.result || null,
-    stale: checkStale,
-    errors: problemCounts.errors,
-    failed: !!checkError,
-  });
+  // A person who can't run a check reads what is true instead of an
+  // instruction: the latest published version was checked when it was
+  // published, and a draft equal to it carries that check.
+  const unseenCheck =
+    checkable || problemCounts.errors
+      ? null
+      : readOnlyCheck(
+          publishedVersionStatus === "ready" && publishedDraft
+            ? publishedVersion
+            : null,
+        );
+  const status =
+    unseenCheck?.status ??
+    checkStatus({
+      checking,
+      check: check?.result || null,
+      stale: checkStale,
+      errors: problemCounts.errors,
+      failed: !!checkError,
+    });
   const statusLabel = checkLabel(status, problemCounts.errors);
-  const verdict = checkError
-    ? checkError
-    : checkStale
-      ? pendingFieldCount
-        ? "Apply or discard the field you're editing, then check again."
-        : autoCheck && missingForCheck.length
-          ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
-          : autoCheck
-            ? "Changed since the last check. Checking again when you pause."
-            : "Changed since the last check."
-      : checkVerdict(check?.result || null, problemCounts.errors);
+  const verdict = unseenCheck
+    ? unseenCheck.verdict
+    : checkError
+      ? checkError
+      : checkStale
+        ? pendingFieldCount
+          ? "Apply or discard the field you're editing, then check again."
+          : autoCheck && missingForCheck.length
+            ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
+            : autoCheck
+              ? "Changed since the last check. Checking again when you pause."
+              : "Changed since the last check."
+        : checkVerdict(check?.result || null, problemCounts.errors);
   const autoCheckAttempt = useRef<{
     config: Config;
     variables: VariableDeclaration[];

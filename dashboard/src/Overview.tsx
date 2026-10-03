@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChartNoAxesCombined,
   Check,
@@ -18,7 +18,17 @@ import {
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
-import type { Audit, OverviewCounts, OverviewFleet, User } from "./api";
+import {
+  api,
+  type Audit,
+  type Device,
+  type DeviceInventoryPage,
+  type OverviewCounts,
+  type OverviewFleet,
+  type User,
+  type Version,
+} from "./api";
+import { metricsExporter } from "./metricsExporter";
 import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
@@ -36,16 +46,22 @@ import {
 import {
   checklist,
   countLabel,
+  desiredNote,
   formatRate,
   healthLabels,
   completeSeries,
   healthOrder,
-  monitoringTarget,
+  metricsAdvice,
   needsYouRows,
   present,
   quietSummary,
+  readDoneSteps,
+  rememberDoneSteps,
+  settingsOffPhrase,
   telemetryFromCounts,
   unmanagedDetail,
+  versionsToRead,
+  type ChecklistState,
   type ChecklistStep,
   type FleetDeviceRate,
   type HealthBucket,
@@ -147,6 +163,10 @@ export type OverviewData = OverviewFleet & {
   recent_activity: Audit[];
   devices_managed?: number;
   devices_on_desired?: number;
+  /** Offline devices whose last verified version is their assigned one. */
+  devices_offline_on_desired?: number;
+  /** The one version those last verified, when they share one. */
+  offline_on_desired_version?: number | null;
   /** Applied devices with an open data-plane issue. */
   devices_degraded?: number;
   /** Applied devices with no metrics in the last three minutes. */
@@ -171,7 +191,6 @@ type TelemetrySummary = {
   devicesTotal: number;
   devicesReporting: number;
   metricsDisabled: number | null;
-  withoutEndpoint: number | null;
   newest: string | null;
   eventsIn: number | null;
   eventsOut: number | null;
@@ -215,7 +234,6 @@ function parseSummary(value: unknown): TelemetrySummary | null {
     devicesTotal,
     devicesReporting,
     metricsDisabled: count(raw.devices_metrics_disabled),
-    withoutEndpoint: count(raw.devices_without_metrics_endpoint),
     newest:
       typeof raw.newest_sample_at === "string" ? raw.newest_sample_at : null,
     eventsIn: metric(raw.events_in_per_second),
@@ -287,8 +305,11 @@ export function Overview({
   const stopped = useStoppedRollouts(!!data && total > 0);
   const operate = roleAllows(user, "operate");
   const now = Date.now();
-  const steps = data
-    ? checklist({
+  // A step this account has seen done stays done: a device going offline, or
+  // applying its next version, never reopens the checklist.
+  const [remembered, setRemembered] = useState(() => readDoneSteps(user.id));
+  const state: ChecklistState | null = data
+    ? {
         releases: noDevices
           ? releases.data
             ? releases.data.length
@@ -299,8 +320,24 @@ export function Overview({
         pipelines: data.configurations_total,
         versions: data.versions_total ?? (data.configurations_total ? 1 : 0),
         applied: data.devices_on_desired ?? data.counts.health.applied,
-      })
-    : [];
+        // A version some device verified, whether or not it is online now.
+        verified: data.running_total,
+      }
+    : null;
+  const steps = state ? checklist(state, remembered) : [];
+  const doneNow = (state ? checklist(state) : [])
+    .filter((step) => step.done)
+    .map((step) => step.id)
+    .join(",");
+  useEffect(() => {
+    const fresh = (doneNow ? doneNow.split(",") : []).filter(
+      (id) => !remembered.has(id as ChecklistStep["id"]),
+    ) as ChecklistStep["id"][];
+    if (fresh.length)
+      setRemembered(rememberDoneSteps(user.id, fresh, remembered));
+    // What is done now decides; the memory only grows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doneNow]);
   const showChecklist = steps.some((step) => !step.done);
   return (
     <div className="overview">
@@ -353,7 +390,12 @@ export function Overview({
             <div className="overview-column">
               <FleetHealth counts={data.counts} />
               <NeedsYou data={data} user={user} now={now} stopped={stopped} />
-              <FleetThroughput data={data} summary={summary} now={now} />
+              <FleetThroughput
+                data={data}
+                summary={summary}
+                now={now}
+                user={user}
+              />
             </div>
             <div className="overview-column">
               {total > 0 && (
@@ -663,14 +705,13 @@ function KpiTiles({
             ? "No device has a pipeline yet"
             : onDesired === managed
               ? "Verified running their assigned version"
-              : [
-                  held > 0 &&
-                    `${held.toLocaleString()} held on previous version`,
-                  managed - onDesired - held > 0 &&
-                    `${(managed - onDesired - held).toLocaleString()} not yet verified`,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+              : desiredNote({
+                  managed,
+                  onDesired,
+                  held,
+                  offlineVerified: data.devices_offline_on_desired ?? 0,
+                  lastVerified: data.offline_on_desired_version ?? null,
+                }).join(" · ")}
           {managed > 0 && unmanaged > 0
             ? ` · ${unmanaged.toLocaleString()} without a pipeline`
             : ""}
@@ -1260,10 +1301,12 @@ function FleetThroughput({
   data,
   summary,
   now,
+  user,
 }: {
   data: OverviewData;
   summary: TelemetrySummary | null;
   now: number;
+  user: User;
 }) {
   if (!data.counts.total) return null;
   // What the server counted from each device's fresh sample; the fleet summary
@@ -1322,8 +1365,7 @@ function FleetThroughput({
         <MetricsHowTo
           stale={local.stale}
           disabled={summary?.metricsDisabled ?? local.disabled}
-          withoutEndpoint={summary?.withoutEndpoint ?? null}
-          target={monitoringTarget(data.running)}
+          canEdit={roleAllows(user, "edit")}
         />
       ) : (
         <>
@@ -1412,26 +1454,88 @@ function FleetThroughput({
     </Card>
   );
 }
+/** What a version exports never changes, so each is read once per page load. */
+const exporterCache = new Map<string, string | null>();
+/**
+ * Where the versions with these IDs export their internal metrics, read from
+ * their configurations as they arrive: an address, null for none, undefined
+ * until read (or when it can't be, which is never taken for none).
+ */
+function useVersionExporters(ids: readonly string[]) {
+  const [, setRead] = useState(0);
+  const key = ids.join(",");
+  useEffect(() => {
+    const wanted = ids.filter((id) => !exporterCache.has(id));
+    if (!wanted.length) return;
+    const controller = new AbortController();
+    void Promise.all(
+      wanted.map(async (id) => {
+        try {
+          const version = await api<Version>(
+            `/versions/${encodeURIComponent(id)}`,
+            { signal: controller.signal },
+          );
+          if (version.id === id)
+            exporterCache.set(id, metricsExporter(version.config));
+        } catch {
+          // Unread stays unknown: nothing is offered for it.
+        }
+      }),
+    ).then(() => {
+      if (!controller.signal.aborted) setRead((count) => count + 1);
+    });
+    return () => controller.abort();
+    // The IDs are in the key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return (id: string) => exporterCache.get(id);
+}
+/** Devices listed for the guidance; a longer list is said to be partial. */
+const SILENT_PAGE = 100;
 function MetricsHowTo({
   stale,
   disabled,
-  withoutEndpoint,
-  target,
+  canEdit,
 }: {
   stale: number;
   disabled: number;
-  withoutEndpoint: number | null;
-  /** The pipeline most devices without metrics run. */
-  target: { id: string; name: string } | null;
+  /** Only people who can edit drafts are offered "Add monitoring". */
+  canEdit: boolean;
 }) {
+  // Why each device has no metrics: the guidance follows the reason per
+  // device, from the devices themselves and the versions they run.
+  const silent = useResource<DeviceInventoryPage | null>(
+    `/devices/inventory?view=no_telemetry&page=1&page_size=${SILENT_PAGE}`,
+    null,
+    0,
+    { interval: 15000 },
+  );
+  const rows = (silent.data?.items as Device[] | undefined) ?? null;
+  const exporterOf = useVersionExporters(rows ? versionsToRead(rows) : []);
+  const advice = rows ? metricsAdvice(rows, exporterOf) : null;
+  const partial = !!silent.data && silent.data.total > (rows?.length ?? 0);
+  // Counts read off the listed devices say so when the list is cut short.
+  const scope = partial
+    ? `Of the first ${rows!.length.toLocaleString()} devices listed, `
+    : "";
+  const runs = (n: number, what: string) =>
+    `${scope}${partial ? n.toLocaleString() : countLabel(n, "device")} ${n === 1 ? "runs" : "run"} ${what}.`;
   const reasons = [
     stale &&
       `${countLabel(stale, "device")} last reported more than 3 minutes ago.`,
     disabled &&
       `${countLabel(disabled, "device")} ${disabled === 1 ? "has" : "have"} metrics turned off in Agent settings.`,
-    withoutEndpoint &&
-      `${countLabel(withoutEndpoint, "device")} ${withoutEndpoint === 1 ? "has" : "have"} no metrics exporter to read.`,
+    advice?.noPipeline && runs(advice.noPipeline, "no pipeline yet"),
+    advice?.noExporter &&
+      runs(advice.noExporter, "a pipeline without a metrics exporter"),
   ].filter(Boolean) as string[];
+  const turnOn = advice?.settingsOff.length
+    ? settingsOffPhrase(
+        advice.settingsOff,
+        Math.max(disabled, advice.settingsOff.length),
+      )
+    : null;
+  const target = advice?.monitoring ?? null;
   return (
     <div className="overview-throughput-howto">
       <span className="overview-throughput-howto-icon" aria-hidden="true">
@@ -1444,24 +1548,58 @@ function MetricsHowTo({
             ? reasons.join(" ")
             : "Throughput comes from each device's Vector internal metrics. Nothing has been reported yet."}
         </p>
-        <ol>
-          <li>
-            Add monitoring to the pipeline: an <code>internal_metrics</code>{" "}
-            source feeding a <code>prometheus_exporter</code> on{" "}
-            <code>127.0.0.1:9598</code>.
-          </li>
-          <li>
-            Deploy the new version. The agent finds the exporter by itself;
-            nothing changes on the host.
-          </li>
-          {disabled > 0 && (
-            <li>
-              Turn on <strong>Collect operational metrics</strong> in{" "}
-              <a href="#/policies">Agent settings</a>.
-            </li>
-          )}
-        </ol>
-        {target && (
+        {(turnOn || target) && (
+          <ol>
+            {turnOn && (
+              <li>
+                Turn on <strong>Collect operational metrics</strong> for{" "}
+                {turnOn.names} in{" "}
+                <a href="#/policies">{turnOn.owner} agent settings</a>
+                {turnOn.settings}.
+              </li>
+            )}
+            {target && canEdit && (
+              <>
+                <li>
+                  Add monitoring to {target.name}: an{" "}
+                  <code>internal_metrics</code> source feeding a{" "}
+                  <code>prometheus_exporter</code> on{" "}
+                  <code>127.0.0.1:9598</code>.
+                </li>
+                <li>
+                  Deploy the new version. The agent finds the exporter by
+                  itself; nothing changes on the host.
+                </li>
+              </>
+            )}
+            {target && !canEdit && (
+              <li>
+                {target.name} has no metrics exporter. An editor or
+                administrator can add one.
+              </li>
+            )}
+          </ol>
+        )}
+        {advice && advice.exporters.length > 0 && (
+          <p>
+            {advice.exporters.slice(0, 2).map((exporter, index) => (
+              <span key={exporter.pipeline}>
+                {index > 0 && " "}
+                {exporter.pipeline} exports metrics on{" "}
+                <code>{exporter.address}</code>
+                {exporter.loopback ? (
+                  "."
+                ) : (
+                  <>
+                    , which the agent doesn&apos;t read. Use a loopback address
+                    such as <code>127.0.0.1:9598</code>.
+                  </>
+                )}
+              </span>
+            ))}
+          </p>
+        )}
+        {target && canEdit && (
           <a
             className="button secondary compact"
             href={`#/${pipelineRoute(target.id, undefined, { panel: "tools" })}`}

@@ -114,6 +114,10 @@ type setupRun struct {
 	replaced bool
 }
 
+// vectorBinaryInDashboard ends the advice to pass --vector-binary. Someone who
+// ran a copied command can set the path where that command came from.
+const vectorBinaryInDashboard = " (Add device → Advanced → Vector binary adds it to the command)."
+
 func (r *setupRun) add(id, status, label, detail, fix string) {
 	step := SetupStep{ID: id, Status: status, Label: label, Detail: detail, Fix: fix}
 	r.result.Steps = append(r.result.Steps, step)
@@ -549,7 +553,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 			if vector.Version != "" {
 				detail = "Found Vector " + vector.Version + " at " + vector.Path + "; this agent requires " + VectorSeries + "."
 			}
-			return r.fail("vector", "Vector", detail, "Install Vector "+VectorSeries+" (https://vector.dev/download/), or pass the right --vector-binary.")
+			return r.fail("vector", "Vector", detail, "Install Vector "+VectorSeries+" (https://vector.dev/download/), or pass the right --vector-binary"+vectorBinaryInDashboard)
 		}
 	default:
 		found, inspected := FindVector(ctx)
@@ -561,7 +565,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 					break
 				}
 			}
-			return r.fail("vector", "Vector", detail, "Install Vector "+VectorSeries+" (https://vector.dev/download/), or pass --vector-binary PATH.")
+			return r.fail("vector", "Vector", detail, "Install Vector "+VectorSeries+" (https://vector.dev/download/), or pass --vector-binary PATH"+vectorBinaryInDashboard)
 		}
 		vector = *found
 	}
@@ -784,7 +788,12 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 			return r.fail("enroll", "Token", "An enrollment token is required.", "Use the hidden prompt, --token-file PATH or --token-stdin.")
 		}
 		if token, err = options.Token(); err != nil {
-			return r.failErr("enroll", "Token", err, "Copy the token from Add device, then run the command again.")
+			fix := "Copy the token from Add device, then run the command again."
+			if errors.As(err, new(pastedTokenError)) {
+				// The refusal already says to copy it again.
+				fix = "Then run the command again."
+			}
+			return r.failErr("enroll", "Token", err, fix)
 		}
 	}
 

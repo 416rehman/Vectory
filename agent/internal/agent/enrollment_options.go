@@ -146,6 +146,13 @@ func enrollmentInput(s Settings, token string) (Settings, string, error) {
 	return s, token, nil
 }
 
+// pastedTokenError is a paste that can't be a token. Its text already says
+// where to copy a token from, so a caller that adds its own advice can tell it
+// from a token that couldn't be read at all.
+type pastedTokenError string
+
+func (e pastedTokenError) Error() string { return string(e) }
+
 // CheckEnrollmentToken refuses, before anything is sent, a paste that can't
 // be a token: the server issues 64 hexadecimal characters (enrollment and
 // recovery tokens alike), so a short or mangled paste would only be refused.
@@ -153,9 +160,9 @@ func CheckEnrollmentToken(token string) error {
 	token = strings.TrimSpace(token)
 	switch {
 	case len(token) != 64:
-		return fmt.Errorf("that isn't a whole enrollment token: tokens are 64 characters, and this one has %d. Copy it again with Copy token on Add device", len(token))
+		return pastedTokenError(fmt.Sprintf("that isn't a whole enrollment token: tokens are 64 characters, and this one has %d. Copy it again with Copy token on Add device", len(token)))
 	case strings.Trim(token, "0123456789abcdef") != "":
-		return errors.New("that isn't an enrollment token: tokens use only the characters 0-9 and a-f. Copy it again with Copy token on Add device")
+		return pastedTokenError("that isn't an enrollment token: tokens use only the characters 0-9 and a-f. Copy it again with Copy token on Add device")
 	}
 	return nil
 }

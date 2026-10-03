@@ -7,7 +7,7 @@ See which devices are healthy, what they run and how much data flows through the
 [**Devices**](/#/devices) lists your fleet a page at a time, so it opens as quickly with thousands of devices as with ten. The server searches, filters, sorts and counts; the page only holds the rows you're looking at.
 
 - **Search** matches a device's name, platform, pipeline, Vector and agent versions, and the names of its groups. Type a few letters; the list follows a moment after you stop. Labels aren't searched.
-- **Quick filters** (**Failing**, **Not on desired version**, **Offline**, **Paused**, **No telemetry**) and the **Status** column filter show how many devices each holds. The counts follow your search, and a device counts in every filter that fits it.
+- **Quick filters** (**Needs attention**, **Not on desired version**, **Offline**, **Paused**, **No telemetry**) and the **Status** column filter show how many devices each holds. The counts follow your search, and a device counts in every filter that fits it.
 - **Group** shows one group's devices. A group name in a row does the same.
 - **Sort** by name, status, pipeline, Vector version, events per second or last seen. Names sort the way people read them, so `edge-2` comes before `edge-10`, and a device with no value sorts last in both directions.
 - Devices you have revoked are hidden. Choose **Status → Revoked** to list them.
@@ -28,7 +28,8 @@ The [**Overview**](/#/overview) reads counts from the server, never a row per de
 - **Needs you** lists what needs a person, most urgent first.
 - **Running now** answers what runs where. Each row is a pipeline version that devices report running: its name and version, how many devices run it (a link to those devices), the groups they're in (each a link to that group's devices that run it), and events in and out per second, summed over the devices that report. A note says what it is doing now: **1 not delivering** when a device applied it but isn't delivering, or **canary on edge-nyc-02 · measuring delivery** while a canary of it runs. A version no device reports metrics for reads **No metrics yet**, never a zero. Until a device verifies a version, the card reads **Nothing is running yet. Deploy a pipeline to a device.**
 - **Rollouts** shows each rollout's progress with the same words as its own page: **2 of 3 devices applied · 1 not delivering**.
-- **Fleet throughput** and **Recent changes** follow.
+- **On desired version** counts devices verified on their assigned version right now. A device that is offline but last verified that version reads **1 offline, last verified v2**, never **not yet verified**. The first-run checklist keeps a step done once this browser has seen it done, so a device going offline never reopens it.
+- **Fleet throughput** and **Recent changes** follow. While no device reports metrics, **Fleet throughput** says why, one reason per device, and leads with the fix that applies. For a device whose agent settings turn metrics off it reads **Turn on Collect operational metrics for edge-01 in its agent settings (“No metrics”)**, naming the saved settings the device runs. **Add monitoring to Orders** appears only when the version running on devices has no exporter, and only for editors and administrators; where a pipeline already exports, the card prints its address. A device that runs no pipeline is counted as running none, never as lacking an exporter.
 
 ## Read a device
 

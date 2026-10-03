@@ -105,17 +105,12 @@ function initialView(initialized: boolean | null): View {
   if (route?.kind === "invite") return { kind: "invite", code: route.code };
   return { kind: "signin" };
 }
-function initials(value: string) {
-  return (
-    value
-      .trim()
-      .split(/[\s@.]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => Array.from(part)[0])
-      .join("")
-      .toLocaleUpperCase() || "?"
-  );
+/**
+ * The first letter of the email address before the @: all this step knows of
+ * the person, and what the app shows for an account with no name.
+ */
+export function initials(email: string) {
+  return Array.from(email.trim().split("@")[0])[0]?.toLocaleUpperCase() || "?";
 }
 /** "sudo cat /srv/vectory/bootstrap" for the setup screen. Never the value. */
 export function setupCommand(hint: SetupHint | undefined) {
@@ -427,6 +422,8 @@ export default function AuthScreen({
     if (initialized === null || connectionError || throttled) return;
     const intended = email.trim();
     if (!intended.includes("@")) {
+      // An earlier refusal is about an earlier try.
+      clearMessages();
       setFields({ email: "Enter the email address for your account." });
       emailInput.current?.focus();
       return;
