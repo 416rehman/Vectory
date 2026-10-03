@@ -140,7 +140,7 @@ function hostDiagnostics(host) {
       .readdirSync(dir)
       .sort()
       .filter((name) =>
-        /^(journal-|step-(status|journal|counters)|step\.log|launchctl-print)/.test(
+        /^(journal-|step-(status|journal|counters)|step\.log|launchctl-print|sc-(queryex|qfailure)-)/.test(
           name,
         ),
       )
