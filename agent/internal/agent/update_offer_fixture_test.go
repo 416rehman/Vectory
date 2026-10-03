@@ -169,10 +169,7 @@ func (r *offerRig) readStatus() UpdateStatus {
 // offer it.
 func (r *offerRig) release(change func(*ReleaseManifest)) {
 	r.t.Helper()
-	manifest := ReleaseManifest{
-		Version: "0.1.1", Counter: 7, IssuedAt: time.Now().UTC().Add(-time.Hour).Truncate(time.Second), ExpiresAt: time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second),
-		ServiceDefinition: 1, Artifacts: []ReleaseArtifact{platformArtifact(r.build, "0.1.1")},
-	}
+	manifest := r.defaultRelease()
 	if change != nil {
 		change(&manifest)
 	}
@@ -191,6 +188,36 @@ func (r *offerRig) offerSigned(manifest []byte, private ReleasePrivateKey, publi
 		r.t.Fatal(err)
 	}
 	r.offer(manifest, signatures, nil)
+}
+
+// sign is the signature file of manifest bytes by the signer the host pins.
+func (r *offerRig) sign(manifest []byte) []byte {
+	r.t.Helper()
+	signatures, err := BuildReleaseSignatures([]ReleaseSignature{releaseSignatureBy(r.public, r.private.SignRelease(manifest))})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return signatures
+}
+
+// craft offers the default release with its bytes changed, signed as they are:
+// a release that breaks a rule of its format and is signed anyway.
+func (r *offerRig) craft(change func(manifest string) string) {
+	r.t.Helper()
+	manifest, err := BuildReleaseManifest(r.defaultRelease())
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	crafted := []byte(change(string(manifest)))
+	r.offer(crafted, r.sign(crafted), nil)
+}
+
+// defaultRelease is the manifest release offers when a test changes nothing.
+func (r *offerRig) defaultRelease() ReleaseManifest {
+	return ReleaseManifest{
+		Version: "0.1.1", Counter: 7, IssuedAt: time.Now().UTC().Add(-time.Hour).Truncate(time.Second), ExpiresAt: time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second),
+		ServiceDefinition: 1, Artifacts: []ReleaseArtifact{platformArtifact(r.build, "0.1.1")},
+	}
 }
 
 // offer has the manifest carry the offer of exactly these bytes, with the artifact

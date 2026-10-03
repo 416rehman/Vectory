@@ -93,7 +93,7 @@ func (c *Client) downloadAgentBuild(ctx context.Context, path, dir string, size 
 		case owner.Err() != nil:
 			return owner.Err()
 		case stalled.Load():
-			return &updateDownloadError{Code: "DOWNLOAD_FAILED", Words: fmt.Sprintf("The server stopped sending the build for %d seconds. %s", int(updateDownloadStall/time.Second), updateDownloadWords.again), cause: err}
+			return &updateDownloadError{Code: "DOWNLOAD_FAILED", Words: fmt.Sprintf("The server stopped sending the build for %s. %s", humanDuration(updateDownloadStall), updateDownloadWords.again), cause: err}
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			return &updateDownloadError{Code: "DOWNLOAD_FAILED", Words: fmt.Sprintf("The build didn't arrive in %s. %s", humanDuration(updateDownloadDeadline), updateDownloadWords.again), cause: err}
 		}

@@ -39,7 +39,12 @@ func TestProductionAgentContainsNoTestHooks(t *testing.T) {
 	}
 
 	// And in the source: nothing outside a test file assigns a hook.
-	seams := map[string]bool{"Fault": true, "createAtomicTemp": true}
+	seams := map[string]bool{
+		"Fault": true, "createAtomicTemp": true,
+		// The update seams: the path check's trust and the update paths, and the bounds of
+		// a transfer of an agent build.
+		"rootOwnedTrust": true, "updateLocationsOverride": true, "updateDownloadDeadline": true, "updateDownloadStall": true,
+	}
 	files, err := filepath.Glob(filepath.Join("..", "..", "internal", "agent", "*.go"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no source to check: %v", err)
