@@ -1195,7 +1195,8 @@ async fn refusals_from_many_addresses_write_a_bounded_number_of_rows_and_one_sum
         REFUSAL_ROWS_PER_MINUTE, SUMMARY_ACTION, record_at, settle,
     };
     let f = fixture(|_, _| {}).await;
-    let minute = chrono::DateTime::parse_from_rfc3339("2026-10-03T04:06:20Z")
+    // A minute long past, so no timer for the current minute is involved.
+    let minute = chrono::DateTime::parse_from_rfc3339("2020-02-02T04:06:20Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
     let refusal = |n: u32| json!({"reason_code":"TOKEN_UNKNOWN","client_address":format!("10.9.{}.{}", n / 250, n % 250)});
