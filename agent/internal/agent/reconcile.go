@@ -360,8 +360,9 @@ func (e *Engine) poll(ctx context.Context) error {
 // this order, each step only when the heartbeat still carries something of it:
 //
 //   - the report on agent updates, which a server that refuses it doesn't get for
-//     the rest of this process: it is the newest member a heartbeat has and the
-//     one whose bounds this agent has the least history with, so it goes first;
+//     the rest of this process. It goes first: its rules are written twice, in the
+//     agent and in the server, and no mistake in either may keep a device from
+//     checking in;
 //   - the result of a check on request, which is then never sent again;
 //   - the reports of what Vector logged and found (the log summary and the
 //     diagnostics), the likeliest to hold something a server refuses: they echo

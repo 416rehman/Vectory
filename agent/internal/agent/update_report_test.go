@@ -423,6 +423,37 @@ func TestWhatAHostReportsInEachCase(t *testing.T) {
 			state:    UpdateStateIdle, eligibility: UpdateEligible, windowOpen: true, definition: 1,
 		},
 		{
+			name: "a release the host refuses to try again is refused, though the result names it",
+			facts: func(t *testing.T) updateFacts {
+				f := reportFacts(t, now, UpdateConsentAuto)
+				f.status = freshStatus(now, func(s *UpdateStatus) {
+					s.Last = &UpdateLast{Release: release, Outcome: UpdateOutcomeRolledBack, Code: "NO_CHECK_IN", At: now, FromVersion: "0.1.0", ToVersion: "0.1.1"}
+				})
+				return f
+			},
+			decision: updateDecision{state: UpdateStateRefused, release: release, code: "RELEASE_ALREADY_TRIED"},
+			state:    UpdateStateRefused, code: "RELEASE_ALREADY_TRIED", release: release, eligibility: UpdateEligible, windowOpen: true, definition: 1,
+		},
+		{
+			name: "a step at work that names no release is taken to work on the one decided on",
+			facts: func(t *testing.T) updateFacts {
+				f := reportFacts(t, now, UpdateConsentAuto)
+				f.status = freshStatus(now, func(s *UpdateStatus) { s.Stage = UpdateStageTrial })
+				return f
+			},
+			decision: updateDecision{state: UpdateStateStaged, release: release},
+			state:    UpdateStateTrial, release: release, eligibility: UpdateEligible, windowOpen: true, definition: 1,
+		},
+		{
+			name: "a step at work with no release anywhere has nothing to report",
+			facts: func(t *testing.T) updateFacts {
+				f := reportFacts(t, now, UpdateConsentAuto)
+				f.status = freshStatus(now, func(s *UpdateStatus) { s.Stage = UpdateStageSwapping })
+				return f
+			},
+			state: UpdateStateIdle, eligibility: UpdateEligible, windowOpen: true, definition: 1,
+		},
+		{
 			name: "a result for an earlier release doesn't end this one",
 			facts: func(t *testing.T) updateFacts {
 				f := reportFacts(t, now, UpdateConsentAuto)
@@ -532,6 +563,7 @@ func TestTheReportCarriesThePolicyAndTheLatestResultAsTheyAre(t *testing.T) {
 // A member the agent can't build the way the server accepts it is left out of
 // the check-in, never sent: no report takes a device off the control plane.
 func TestAReportTheAgentCannotBuildRightIsLeftOutAndSaidOnce(t *testing.T) {
+	requireRootOwnedWriter(t)
 	useUpdateRoots(t)
 	e := reportEngine(viewNow)
 	e.Dir = realTempDir(t)

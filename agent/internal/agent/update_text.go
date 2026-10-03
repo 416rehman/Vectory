@@ -116,15 +116,6 @@ func untilWords(until time.Duration) string {
 	return "in " + humanDuration(until)
 }
 
-// shortDigest is the first twelve characters of a digest, for a line a person
-// reads.
-func shortDigest(digest string) string {
-	if len(digest) > 12 {
-		return digest[:12]
-	}
-	return digest
-}
-
 // updateCodeWords says what an agent code means, in a clause that follows "it":
 // "couldn't be verified", "didn't check in within 5 minutes". The unknown code
 // is named as it is.
