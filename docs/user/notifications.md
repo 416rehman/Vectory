@@ -10,7 +10,7 @@ Get a message in Slack, any webhook receiver or email when an issue opens, a rol
 | A receiver | A Slack incoming webhook, an HTTPS endpoint of your own, or an SMTP server that speaks TLS. |
 | `VECTORY_PUBLIC_URL` (optional) | Messages get an **Open in Vectory** link. See [Server configuration](server-config.md). |
 
-Messages carry names and states: the device, pipeline, deployment and the issue's message. They never carry event contents. A name always reads as one line in a message: names can't hold line breaks or text-direction overrides (see [Build a pipeline](pipelines.md#find-and-organize-pipelines)), and one saved earlier shows each such character as a space.
+Messages carry names and states: the device, pipeline, deployment and the issue's message. They never carry event contents. A name always reads as one line in a message: names can't hold line breaks or text-direction overrides (see [Build a pipeline](pipelines.md#find-and-organize-pipelines)), and one saved earlier shows each such character as a space, with runs of spaces collapsed to one.
 
 ## Add a Slack channel
 
