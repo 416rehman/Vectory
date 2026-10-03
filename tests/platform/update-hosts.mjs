@@ -149,16 +149,17 @@ function rootOnlyInstallDir() {
 }
 
 /**
- * systemd shows a timer's monotonic intervals in one property, `TimersMonotonic={
- * OnBootUSec=15s ; next_elapse=... } { OnUnitInactiveUSec=30s ; ... }`; the
- * intervals are returned as members of their own.
+ * What `systemctl show` says of a timer, with its monotonic intervals as members
+ * of their own. systemd prints each interval as a line of the property
+ * `TimersMonotonic={ OnUnitInactiveUSec=30s ; next_elapse=... }`, the last one in
+ * the file first, so a reader that keeps one value per name sees one interval
+ * only: they are read from the whole text.
  */
-function monotonicIntervals(properties) {
-  const text = properties.TimersMonotonic ?? "";
+export function monotonicIntervals(shown) {
   const interval = (name) =>
-    new RegExp(`${name}=([^\\s;}]+)`).exec(text)?.[1] ?? null;
+    new RegExp(`${name}=([^\\s;}]+)`).exec(shown)?.[1] ?? null;
   return {
-    ...properties,
+    ...parseKeyValues(shown),
     OnBootUSec: interval("OnBootUSec"),
     OnUnitInactiveUSec: interval("OnUnitInactiveUSec"),
   };
@@ -198,19 +199,13 @@ export function linuxHost() {
   const sudo = (command, args, options = {}) =>
     run(command, args, { elevated: true, ...options });
   const shell = (script, options = {}) => sudo("sh", ["-c", script], options);
-  const show = (unit, properties) =>
-    parseKeyValues(
-      run(
-        "systemctl",
-        [
-          "show",
-          unit,
-          "--no-pager",
-          ...properties.map((p) => `--property=${p}`),
-        ],
-        { quiet: true },
-      ).stdout,
-    );
+  const showText = (unit, properties) =>
+    run(
+      "systemctl",
+      ["show", unit, "--no-pager", ...properties.map((p) => `--property=${p}`)],
+      { quiet: true },
+    ).stdout;
+  const show = (unit, properties) => parseKeyValues(showText(unit, properties));
 
   const host = {
     kind: "linux",
@@ -314,7 +309,7 @@ export function linuxHost() {
           "FragmentPath",
         ]),
         timer: monotonicIntervals(
-          show(units.timer, [
+          showText(units.timer, [
             "TimersMonotonic",
             "AccuracyUSec",
             "ActiveState",
