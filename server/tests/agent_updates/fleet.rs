@@ -148,6 +148,16 @@ async fn the_overview_says_where_an_update_rolled_back_or_failed_while_updates_a
     assert_eq!(group(&shown, "rolled_back").unwrap()["count"], 3);
     assert_eq!(group(&shown, "failed").unwrap()["count"], 1);
 
+    // An acknowledged issue is still not resolved: its device is still in the
+    // group, which is what acknowledging means for any other issue.
+    sqlx::query("UPDATE records SET data=json_set(data,'$.acknowledged',json('true')) WHERE kind='issue' AND json_extract(data,'$.stage')='agent_update'")
+        .execute(&r.f.state.pool)
+        .await
+        .unwrap();
+    let shown = overview(&r.f).await;
+    assert_eq!(group(&shown, "rolled_back").unwrap()["count"], 3);
+    assert_eq!(group(&shown, "failed").unwrap()["count"], 1);
+
     // A revoked device is not one that needs a person, whatever its issue says.
     revoke(&r.f, c).await;
     let shown = overview(&r.f).await;
