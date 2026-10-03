@@ -231,10 +231,18 @@ var (
 	updateFault         func(point string)
 )
 
+// noUpdateHost is what a test assigns to updateHostOverride to be an operating
+// system that has no update step: one whose step isn't built, or whose gate is
+// closed (update_gate.go). currentUpdateHost then answers nil, as it does there.
+type noUpdateHost struct{ updateHost }
+
 // currentUpdateHost is the operating system's host, or nil when this platform has
-// no update step.
+// no update step in this release.
 func currentUpdateHost() updateHost {
 	if updateHostOverride != nil {
+		if _, none := updateHostOverride.(noUpdateHost); none {
+			return nil
+		}
 		return updateHostOverride
 	}
 	return platformUpdateHost()
