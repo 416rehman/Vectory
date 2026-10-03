@@ -397,8 +397,11 @@ pub fn refusal(f: &Facts, release: &Release, statements: &Statements) -> Option<
             "COUNTER_REPLAYED"
         });
     }
+    // A running version that is not a plain `major.minor.patch` one (`0.1.0-dev`,
+    // `v0.1.0`, nothing at all) cannot be compared with the release's, so it is
+    // refused as a downgrade: nobody guesses which of the two is newer.
     let Some(running) = f.agent_version.as_deref().and_then(parse_version) else {
-        return refused("AGENT_TOO_OLD");
+        return refused("DOWNGRADE_REFUSED");
     };
     // The release was prepared by this server, with a valid version.
     let offered = parse_version(&release.version)?;
@@ -498,7 +501,7 @@ fn describe(code: &str, release: &Release, track_hint: bool) -> (String, Option<
         ),
         "ALREADY_RUNNING" => (format!("These hosts already run {version}."), None),
         "DOWNGRADE_REFUSED" => (
-            format!("These hosts run a newer agent than {version}, and a host never goes back."),
+            format!("These hosts run a newer agent than {version}, or one whose version can't be compared with it, and a host never goes back."),
             None,
         ),
         "VERSION_NOT_ON_TRACK" => (
