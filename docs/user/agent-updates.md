@@ -96,7 +96,7 @@ A host you added before you turned updates on has agreed to nothing, and so has 
 
 A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**. Its **Upgrade agent** command carries no update choice: running it upgrades the agent and leaves what the host agreed to as it is. When something about updates needs fixing on that host, such as the key it pins or the releases it takes, the command carries only that fix.
 
-<!-- verify-after-merge: that a Windows host takes updates in this release (windowsUpdatesInRelease is true in update_gate.go), and that the dashboard still writes no Upgrade agent command for Windows (canOptIn in dashboard/src/AgentUpgrade.tsx); if it now does, say so here -->
+<!-- verify-after-merge: that a Windows host takes updates in this release (windowsUpdatesInRelease is true in update_gate.go), and that the dashboard still writes no Upgrade agent command for Windows (upgradeCommand in dashboard/src/enrollmentCommands.ts returns none for it, and canOptIn in dashboard/src/AgentUpgrade.tsx follows updatesInRelease); if it now does, say so here -->
 The dashboard writes the **Upgrade agent** command for Linux and macOS hosts. For a Windows host, **Add device** carries the choice about updates when you add it. A Windows host added before agrees with `setup`, run in an elevated PowerShell on the host with the flags of the command above, and the same command with one flag changes one thing it agreed to. See [Agent updates in setup](cli.md#agent-updates-in-setup).
 
 ### What a host needs to take an update
