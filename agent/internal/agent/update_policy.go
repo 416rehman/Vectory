@@ -92,6 +92,23 @@ func (p UpdatePolicy) Fingerprints() []string {
 	return fingerprints
 }
 
+// SetPinnedKeys makes keys the pinned keys, in that order, for a caller that
+// decides the pins and nothing else: the privileged step after a rollover. A key
+// that was already pinned keeps the time it was pinned; a new key has none, and
+// is pinned when the policy is written. A key listed twice, or more keys than a
+// host pins, is refused when the policy is written, not here.
+func (p *UpdatePolicy) SetPinnedKeys(keys []ReleaseKey) {
+	pinnedAt := make(map[string]time.Time, len(p.Keys))
+	for _, pinned := range p.Keys {
+		pinnedAt[pinned.Key.Fingerprint()] = pinned.PinnedAt
+	}
+	pinned := make([]PinnedKey, len(keys))
+	for i, key := range keys {
+		pinned[i] = PinnedKey{Key: key, PinnedAt: pinnedAt[key.Fingerprint()]}
+	}
+	p.Keys = pinned
+}
+
 type updatePolicyWire struct {
 	Schema    string                `json:"schema"`
 	Consent   string                `json:"consent"`
