@@ -25,6 +25,14 @@ import (
 // writes the policy (a root-owned file outside the state directory) and
 // installs the privileged step only after the agent is installed and enrolled.
 // A command without update flags touches none of it.
+//
+// The key, the track and the windows can also be given without --updates. They
+// then amend what the host already agreed to: they change the parts they name
+// in the policy the host has, and keep the rest (the level, the parts they don't
+// name, a pause). Where the host agreed to nothing there is nothing to amend, and
+// setup refuses before it changes anything. The dashboard therefore never has to
+// say again what a host chose: whoever generates a command names only the part
+// to change, and the host keeps the choices it made itself.
 
 // SetupUpdates is what setup did about agent updates, for --json.
 type SetupUpdates struct {
@@ -38,6 +46,8 @@ type SetupUpdates struct {
 
 // updatePlan is the update flags of one setup run, checked.
 type updatePlan struct {
+	// consent is the level the host takes updates at when the run is done. For an
+	// amendment it is the level the host has, which the run keeps.
 	consent string
 	track   string
 	windows []string
@@ -45,13 +55,61 @@ type updatePlan struct {
 	wanted []string
 	// pins are the keys the server's list holds for them, found in a real run.
 	pins []ReleaseKey
+
+	// amend says the command has update flags and no --updates. It changes the
+	// parts the flags name, in the policy the host already has (base): the pinned
+	// keys when wanted isn't empty, the track when setTrack, the windows when
+	// setWindows. Everything else in the policy stays as it is.
+	amend                bool
+	setTrack, setWindows bool
+	base                 UpdatePolicy
 }
 
-// CheckUpdates refuses update flags that can't work on any host, before setup
-// does anything: the command ends with the usage exit code for them.
+// The refusals of an amendment: a host that agreed to nothing has nothing to
+// change, and one whose policy can't be used can't be amended either. Both end
+// with what gives the host's consent: a command with --updates and the key.
+const (
+	withKeyWords   = "Add --updates auto or --updates ask, with --update-key-sha256"
+	notAgreedWords = "This host hasn't agreed to agent updates, so there is nothing to change. " + withKeyWords + "."
+)
+
+// readBase reads what the host agreed to, through the root-owned path check, for
+// an amendment. It refuses, with the usage exit code, a host with no policy or a
+// policy that takes no update, and one whose policy can't be used, and changes
+// nothing.
+func (plan *updatePlan) readBase() error {
+	policy, basis, err := readUpdatePolicy(UpdateLocations())
+	switch {
+	case err == nil && basis != "" && policy.Consent != UpdateConsentOff:
+		plan.base, plan.consent = policy, policy.Consent
+		return nil
+	case err == nil:
+		return inputError(notAgreedWords)
+	case errors.Is(err, ErrUpdatePolicyInvalid):
+		return inputError("The update policy on this host can't be used (" + invalidPolicyWords(err) + "), so there is nothing to change. " + withKeyWords + ", to write it again.")
+	}
+	return inputError("The update policy on this host can't be read safely (" + untrustedDetail(err) + "), so there is nothing to change. Make it, and every directory above it, writable by " + updateRootWord() + " alone, then run the command again.")
+}
+
+// leaveOut is what an operator who doesn't want the update step leaves out of the
+// command: --updates, or, for an amendment, the update flags.
+func (plan *updatePlan) leaveOut() string {
+	if plan.amend {
+		return "the update flags"
+	}
+	return "--updates"
+}
+
+// CheckUpdates refuses update flags that can't work, before setup does anything:
+// the command ends with the usage exit code for them. Flags that can't work on
+// any host are refused for what they say. Flags without --updates change what
+// the host agreed to, so a host that agreed to nothing is refused too.
 func (o SetupOptions) CheckUpdates() error {
-	_, err := planUpdates(o)
-	return err
+	plan, err := planUpdates(o)
+	if err != nil || plan == nil || !plan.amend {
+		return err
+	}
+	return plan.readBase()
 }
 
 func planUpdates(o SetupOptions) (*updatePlan, error) {
@@ -69,20 +127,21 @@ func planUpdates(o SetupOptions) (*updatePlan, error) {
 		return nil, nil
 	}
 	switch o.Updates {
-	case UpdateConsentAuto, UpdateConsentAsk, UpdateConsentOff:
-	case "":
-		return nil, inputError(quoteList(given) + " go with --updates auto or --updates ask. Add --updates, or leave them out.")
+	case UpdateConsentAuto, UpdateConsentAsk, UpdateConsentOff, "":
 	default:
 		return nil, inputError(fmt.Sprintf("--updates takes auto, ask or off, and %q isn't one.", o.Updates))
 	}
-	plan := &updatePlan{consent: o.Updates}
+	// With no --updates the flags amend what the host agreed to; which host that is
+	// isn't known here (readBase asks it), and what they say is checked as for any
+	// other command.
+	plan := &updatePlan{consent: o.Updates, amend: o.Updates == ""}
 	if plan.consent == UpdateConsentOff {
 		if len(given) > 0 {
 			return nil, inputError("--updates off turns updates off. It doesn't take " + quoteList(given) + ".")
 		}
 		return plan, nil
 	}
-	if len(o.UpdateKeys) == 0 {
+	if !plan.amend && len(o.UpdateKeys) == 0 {
 		return nil, inputError("--updates " + plan.consent + " needs --update-key-sha256: the SHA-256 fingerprint of the release key this host pins. Add device writes it into the command.")
 	}
 	for _, value := range o.UpdateKeys {
@@ -97,18 +156,20 @@ func planUpdates(o SetupOptions) (*updatePlan, error) {
 	if len(plan.wanted) > maxPinnedKeys {
 		return nil, inputError(fmt.Sprintf("A host pins at most %d release keys, and %d were given with --update-key-sha256.", maxPinnedKeys, len(plan.wanted)))
 	}
-	plan.track = UpdateTrackPatch
-	if o.UpdateTrack != "" {
+	switch {
+	case o.UpdateTrack != "":
 		track, err := ParseReleaseTrack(o.UpdateTrack)
 		if err != nil {
 			return nil, err
 		}
-		plan.track = track
+		plan.track, plan.setTrack = track, true
+	case !plan.amend:
+		plan.track = UpdateTrackPatch
 	}
 	if _, err := ParseUpdateWindows(o.UpdateWindows); err != nil {
 		return nil, err
 	}
-	plan.windows = slices.Clone(o.UpdateWindows)
+	plan.windows, plan.setWindows = slices.Clone(o.UpdateWindows), len(o.UpdateWindows) > 0
 	return plan, nil
 }
 
@@ -134,27 +195,28 @@ func (r *setupRun) preflightUpdates(plan *updatePlan, choice serviceChoice, plat
 	if plan.consent == UpdateConsentOff {
 		return r.preflightWithdraw(dir)
 	}
+	leave := plan.leaveOut()
 	switch {
 	case choice.kind == "none" && choice.explicit:
-		return r.refuseUpdates("Agent updates need a service. The update step restarts the agent through its service manager, and --service none leaves that to you.", "Leave out --updates, or leave out --service none.")
+		return r.refuseUpdates("Agent updates need a service. The update step restarts the agent through its service manager, and --service none leaves that to you.", "Leave out "+leave+", or leave out --service none.")
 	case choice.kind == "none":
-		return r.refuseUpdates("Agent updates need a service manager, and this host has none ("+choice.reason+").", "Leave out --updates here, or run the agent on a host that has a service manager.")
+		return r.refuseUpdates("Agent updates need a service manager, and this host has none ("+choice.reason+").", "Leave out "+leave+" here, or run the agent on a host that has a service manager.")
 	}
 	switch r.host.updateEligibility(dir) {
 	case "PLATFORM_NOT_IN_RELEASE":
-		return r.refuseUpdates("Agent updates aren't in this release for "+platformName(platform.OS)+". "+byHand(), "Leave out --updates, and upgrade this host with the Upgrade agent command when a new agent is out.")
+		return r.refuseUpdates("Agent updates aren't in this release for "+platformName(platform.OS)+". "+byHand(), "Leave out "+leave+", and upgrade this host with the Upgrade agent command when a new agent is out.")
 	case "PACKAGE_MANAGED":
-		return r.refuseUpdates("This agent is installed from a package, and the package manager owns its file.", "Leave out --updates, and upgrade it with the package manager.")
+		return r.refuseUpdates("This agent is installed from a package, and the package manager owns its file.", "Leave out "+leave+", and upgrade it with the package manager.")
 	}
 	if problem := untrustedDirectory(filepath.Dir(agentPath)); problem != nil {
 		return r.refuseUpdates("Agent updates need an install directory that only "+updateRootWord()+" can change. "+untrustedDetail(problem)+".",
-			"Install the agent in a directory only "+updateRootWord()+" can write, such as "+DefaultPaths().Binary+", then run the command again. Or leave out --updates.")
+			"Install the agent in a directory only "+updateRootWord()+" can write, such as "+DefaultPaths().Binary+", then run the command again. Or leave out "+leave+".")
 	}
 	paths := UpdateLocations()
 	for _, dir := range []string{paths.PolicyDir, paths.StepDir} {
 		if problem := untrustedDirectory(dir); problem != nil {
 			return r.refuseUpdates("Agent updates keep what decides an install where only "+updateRootWord()+" can change it. "+untrustedDetail(problem)+".",
-				"Make "+dir+" and every directory above it "+updateRootWord()+"'s alone, then run the command again. Or leave out --updates.")
+				"Make "+dir+" and every directory above it "+updateRootWord()+"'s alone, then run the command again. Or leave out "+leave+".")
 		}
 	}
 	return nil
@@ -231,7 +293,7 @@ func updatesInstalled(dir string) bool {
 func (r *setupRun) resolveUpdateKeys(ctx context.Context, plan *updatePlan, origin string, trust releaseKeyTrust) error {
 	raw, err := fetchReleaseKeyBundle(ctx, origin, trust)
 	if errors.Is(err, errServerHasNoUpdates) {
-		return r.refuseUpdates("This server doesn't offer agent updates.", "Turn them on in Settings → Agent updates, or leave out --updates.")
+		return r.refuseUpdates("This server doesn't offer agent updates.", "Turn them on in Settings → Agent updates, or leave out "+plan.leaveOut()+".")
 	}
 	if err != nil {
 		var refusal *UpdateRefusal
@@ -443,6 +505,9 @@ func (r *setupRun) applyUpdates(plan *updatePlan, agentPath, dir string) error {
 	if plan.consent == UpdateConsentOff {
 		return r.withdrawUpdates(dir)
 	}
+	if plan.amend {
+		return r.amendUpdates(plan, agentPath, dir)
+	}
 	existing, err := ReadUpdatePolicy()
 	if err != nil {
 		existing = DefaultUpdatePolicy()
@@ -476,6 +541,110 @@ func sameUpdatePolicy(a, b UpdatePolicy) bool {
 	return a.Consent == b.Consent && a.Track == b.Track && a.Paused == b.Paused && slices.Equal(a.Windows, b.Windows) && slices.Equal(a.Fingerprints(), b.Fingerprints())
 }
 
+var (
+	// errAmendNotAgreed is what the edit of an amendment answers when the policy it
+	// finds no longer takes updates: a person withdrew the consent while setup ran,
+	// and an amendment never gives it back.
+	errAmendNotAgreed = errors.New("the host's consent to agent updates was withdrawn")
+	// errAmendNothing is what the edit answers when the policy already says what
+	// the flags name: nothing is written.
+	errAmendNothing = errors.New("the policy already says this")
+)
+
+// amended is p with the parts this command names changed, and nothing else: the
+// pinned keys (each key already pinned keeps the time it was pinned), the track
+// and the windows. The level, a pause and the parts not named stay as they are.
+func (plan *updatePlan) amended(p UpdatePolicy) UpdatePolicy {
+	next := p
+	if len(plan.wanted) > 0 {
+		next.SetPinnedKeys(plan.pins)
+	}
+	if plan.setTrack {
+		next.Track = plan.track
+	}
+	if plan.setWindows {
+		next.Windows = slices.Clone(plan.windows)
+	}
+	return next
+}
+
+// amendedParts names what differs between two policies, in the words of the step
+// line: "pinned keys", "track" and "windows".
+func amendedParts(before, after UpdatePolicy) []string {
+	var parts []string
+	if !slices.Equal(before.Fingerprints(), after.Fingerprints()) {
+		parts = append(parts, "pinned keys")
+	}
+	if before.Track != after.Track {
+		parts = append(parts, "track")
+	}
+	if !slices.Equal(before.Windows, after.Windows) {
+		parts = append(parts, "windows")
+	}
+	return parts
+}
+
+// amendUpdates is the Updates step of a command with update flags and no
+// --updates: it changes, in the policy the host has, the parts the flags name,
+// and installs the privileged step if it is missing. The policy is edited where it
+// is written (ChangeUpdatePolicy reads it again and writes only over what it
+// read), so a consent withdrawn in the meantime stays withdrawn and a write of the
+// update step isn't lost. A policy that already says what the flags name is left
+// as it is. The counter floors and the step's own state are never touched here.
+func (r *setupRun) amendUpdates(plan *updatePlan, agentPath, dir string) error {
+	saved := "The agent is installed and enrolled, but the update choices weren't changed"
+	var now UpdatePolicy
+	var parts []string
+	err := ChangeUpdatePolicy(func(p *UpdatePolicy) error {
+		if p.Consent == UpdateConsentOff {
+			return errAmendNotAgreed
+		}
+		next := plan.amended(*p)
+		now, parts = next, amendedParts(*p, next)
+		if len(parts) == 0 {
+			now = *p
+			return errAmendNothing
+		}
+		*p = next
+		return nil
+	})
+	switch {
+	case err == nil || errors.Is(err, errAmendNothing):
+	case errors.Is(err, errAmendNotAgreed):
+		return r.refuseUpdates(saved+": the consent to agent updates was withdrawn while setup ran.", withKeyWords+", to turn them on again.")
+	default:
+		return r.refuseUpdates(saved+": the update policy couldn't be changed ("+strings.TrimSuffix(sentence(err.Error()), ".")+").", "Fix the cause, then run the same command again; setup resumes where it stopped.")
+	}
+	if err := r.host.installUpdateStep(dir, agentPath); err != nil {
+		return r.refuseUpdates("The agent is installed and enrolled and the update policy is saved, but the update step couldn't be installed ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Until it is, this host takes no update.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
+	}
+	words := UpdatePolicyWords(now) + " (pinned)"
+	if len(parts) == 0 {
+		words += " · nothing changed"
+	} else {
+		words += " · changed: " + quoteList(parts)
+	}
+	if now.Paused {
+		words += " · paused on this host: " + CommandFor(dir, "sudo vectory update resume")
+	}
+	r.add("updates", "ok", "Updates", words, "")
+	r.result.Updates = &SetupUpdates{Consent: now.Consent, Track: now.Track, Windows: now.Windows, Keys: now.Fingerprints(), Paused: now.Paused}
+	return nil
+}
+
+// fingerprintsWords names keys by the short IDs of their fingerprints: "key
+// 3f9a1c0277de9b41", or "keys 3f9a1c0277de9b41, 05cc6c02351af0cb".
+func fingerprintsWords(fingerprints []string) string {
+	shown := make([]string, len(fingerprints))
+	for i, fingerprint := range fingerprints {
+		shown[i] = fingerprintPrefix(fingerprint)
+	}
+	if len(shown) == 1 {
+		return "key " + shown[0]
+	}
+	return "keys " + strings.Join(shown, ", ")
+}
+
 // withdrawUpdates is --updates off.
 func (r *setupRun) withdrawUpdates(dir string) error {
 	done, err := withdrawUpdates(dir, r.host.removeUpdateStep)
@@ -497,14 +666,35 @@ func (r *setupRun) planUpdateStep(plan *updatePlan, dir string) {
 		}
 		return
 	}
-	var shown []string
-	for _, fingerprint := range plan.wanted {
-		shown = append(shown, fingerprint[:16])
+	if plan.amend {
+		r.planAmendment(plan)
+		return
 	}
-	keys := "key " + shown[0]
-	if len(shown) > 1 {
-		keys = "keys " + strings.Join(shown, ", ")
-	}
-	r.add("updates", "plan", "Updates", "Would turn on updates: "+strings.Join([]string{UpdateConsentWords(plan.consent), UpdateTrackWords(plan.track), UpdateWindowsWords(plan.windows), keys}, " · ")+".",
+	r.add("updates", "plan", "Updates", "Would turn on updates: "+strings.Join([]string{UpdateConsentWords(plan.consent), UpdateTrackWords(plan.track), UpdateWindowsWords(plan.windows), fingerprintsWords(plan.wanted)}, " · ")+".",
 		"A real run checks the key against the server's own list before it changes anything.")
+}
+
+// planAmendment is what a dry run says about an amendment: the parts it would
+// change, each against what the host has now, or that it would change nothing.
+func (r *setupRun) planAmendment(plan *updatePlan) {
+	base := plan.base
+	var changes []string
+	if len(plan.wanted) > 0 && !slices.Equal(plan.wanted, base.Fingerprints()) {
+		changes = append(changes, "pin "+fingerprintsWords(plan.wanted)+" instead of "+UpdateKeysWords(base.PinnedKeys()))
+	}
+	if plan.setTrack && plan.track != base.Track {
+		changes = append(changes, "take "+UpdateTrackWords(plan.track)+" instead of "+UpdateTrackWords(base.Track))
+	}
+	if plan.setWindows && !slices.Equal(plan.windows, base.Windows) {
+		changes = append(changes, "start an update in "+UpdateWindowsWords(plan.windows)+" instead of "+UpdateWindowsWords(base.Windows))
+	}
+	if len(changes) == 0 {
+		r.add("updates", "plan", "Updates", "Would change nothing about updates: this host already has "+UpdatePolicyWords(base)+".", "")
+		return
+	}
+	fix := ""
+	if len(plan.wanted) > 0 {
+		fix = "A real run checks the key against the server's own list before it changes anything."
+	}
+	r.add("updates", "plan", "Updates", "Would change updates: "+strings.Join(changes, "; ")+". The rest of what this host agreed to stays as it is.", fix)
 }

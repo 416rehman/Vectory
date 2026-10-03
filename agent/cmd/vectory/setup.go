@@ -39,7 +39,12 @@ Agent updates are opt-in, once, here: --updates auto or ask, with the
 fingerprint of the release key to pin, lets the dashboard update this agent
 with builds that key signed. Setup checks the fingerprint against the server's
 own list of keys before it changes anything, and keeps the choice in a file
-only root can write. Without --updates this host never updates itself.
+only root can write. Without any update flag setup leaves that choice as it
+is, and a host that never agreed never updates itself. On a host that agreed,
+--update-key-sha256, --update-track and --update-window without --updates
+change only what they name (a new key re-pins the host) and keep the rest:
+the level, the other parts and a pause. On a host that agreed to nothing they
+are refused, with no other effect.
 Pinning a key trusts its holder with root on this host.`,
 	examples: []string{
 		`cd "$(mktemp -d)"`,
@@ -51,6 +56,8 @@ Pinning a key trusts its holder with root on this host.`,
 		"sudo vectory setup --server https://vectory.example.com:8443 --token-file /run/secrets/vectory-token --service none",
 		"sudo vectory setup --server https://vectory.example.com:8443 --dry-run",
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> --updates auto --update-key-sha256 <64-hex-fingerprint> --update-window 'Mon-Fri 02:00-04:00'",
+		"sudo vectory setup --server https://vectory.example.com:8443 --update-key-sha256 <64-hex-fingerprint>",
+		"sudo vectory setup --server https://vectory.example.com:8443 --update-track minor",
 		"sudo vectory setup --server https://vectory.example.com:8443 --updates off",
 	},
 	define: defineSetup,
@@ -78,10 +85,10 @@ func defineSetup(c *cli) func() int {
 	agentPath := c.HiddenString("agent-path", "where the service runs the agent from (set by the installer)")
 	dryRun := c.Bool("dry-run", "Check everything and show the plan without changing anything")
 	noWake := c.Bool("no-wake", noWakeHelp)
-	updates := c.String("updates", "", "LEVEL", "Agent updates this host takes from the dashboard: auto, ask (wait for sudo vectory update apply) or off; leave it out to change nothing")
-	updateKeys := c.Strings("update-key-sha256", "HEX", "SHA-256 fingerprint of a release key to pin, as Add device shows it; required with --updates auto or ask, repeat for up to 4 keys")
-	updateTrack := c.String("update-track", "", "TRACK", "Which releases the host takes: patch or minor (default patch)")
-	updateWindows := c.Strings("update-window", "SPEC", "When an update may start, such as 'Mon-Fri 02:00-04:00' or 'daily 01:00-03:00 UTC'; repeat for up to 7, leave it out for any time")
+	updates := c.String("updates", "", "LEVEL", "Agent updates this host takes from the dashboard: auto, ask (wait for sudo vectory update apply) or off; leave it out to keep what the host agreed to")
+	updateKeys := c.Strings("update-key-sha256", "HEX", "SHA-256 fingerprint of a release key to pin, as Add device shows it; repeat for up to 4 keys. Required with --updates auto or ask; without --updates it re-pins a host that already agreed")
+	updateTrack := c.String("update-track", "", "TRACK", "Which releases the host takes: patch or minor (default patch); without --updates it changes only the track of a host that already agreed")
+	updateWindows := c.Strings("update-window", "SPEC", "When an update may start, such as 'Mon-Fri 02:00-04:00' or 'daily 01:00-03:00 UTC'; repeat for up to 7, leave it out for any time; without --updates it replaces only the windows of a host that already agreed")
 	c.JSON("Print one JSON document instead of progress lines")
 	return func() int {
 		if *pin != "" && c.supplied("ca-file") {

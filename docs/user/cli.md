@@ -78,10 +78,10 @@ Copy the whole command from **Add device** rather than typing it: it carries you
 | `--adopt-existing` | Adopt the Vector that ran here as it is, although it loaded several files, a directory, includes or configuration chosen by an environment variable. The agent manages only its one JSON file; the others stay where they are, backed up. Can't be combined with `--keep-existing-vector`. |
 | `--dry-run` | Check everything and show the plan without changing anything. |
 | `--no-wake` | Check in on schedule only: turn wake-ups off (see [run](#run)). Saved as a local setting; `--no-wake=false` turns them back on. |
-| `--updates LEVEL` | How this host takes [agent updates](agent-updates.md): `auto`, `ask` or `off`. `auto` and `ask` need `--update-key-sha256`. Leave it out to change nothing. See [Agent updates in setup](#agent-updates-in-setup). |
-| `--update-key-sha256 HEX` | The fingerprint of the release key to pin, as **Add device** shows it: all 64 hexadecimal characters of the SHA-256 of the key's bytes, never a shortened form. Setup reads the keys from the server and pins the one whose fingerprint it computes to be this. Repeat the flag for up to 4 keys. Running setup again with other fingerprints re-pins: it replaces the pinned keys and keeps the host's counter floors. |
-| `--update-track TRACK` | The releases this host takes: `patch` (the default) or `minor`. `major` isn't a track. |
-| `--update-window SPEC` | When an update may start, such as `Mon-Fri 02:00-04:00` or `Sat,Sun 01:00-03:00 UTC`. Repeat the flag for up to 7 windows. Times are the host's own unless `UTC` follows. Without one, any time. |
+| `--updates LEVEL` | How this host takes [agent updates](agent-updates.md): `auto`, `ask` or `off`. `auto` and `ask` need `--update-key-sha256`. Leave it out to keep what the host agreed to: the three flags below then change only what they name, on a host that already agreed. See [Agent updates in setup](#agent-updates-in-setup). |
+| `--update-key-sha256 HEX` | The fingerprint of the release key to pin, as **Add device** shows it: all 64 hexadecimal characters of the SHA-256 of the key's bytes, never a shortened form. Setup reads the keys from the server and pins the one whose fingerprint it computes to be this. Repeat the flag for up to 4 keys. Running setup again with other fingerprints re-pins: it replaces the pinned keys and keeps the host's counter floors. Without `--updates` it re-pins a host that already agreed, and changes nothing else. |
+| `--update-track TRACK` | The releases this host takes: `patch` (the default) or `minor`. `major` isn't a track. Without `--updates` it changes only the track of a host that already agreed. |
+| `--update-window SPEC` | When an update may start, such as `Mon-Fri 02:00-04:00` or `Sat,Sun 01:00-03:00 UTC`. Repeat the flag for up to 7 windows. Times are the host's own unless `UTC` follows. Without one, any time. Without `--updates` it replaces only the windows of a host that already agreed. |
 | `--json` | Print the result as JSON for scripts. |
 
 If the server's certificates don't match the pin, `setup` stops before sending anything and prints both fingerprints in full, one above the other, with the first byte that differs:
@@ -110,7 +110,7 @@ Run again beside a running `vectory run`, setup says there is nothing to start. 
 
 ### Agent updates in setup
 
-A host takes agent updates only when the command that installed or upgraded it says so, once. **Add device** and **Upgrade agent** write these flags for you while the team has agent updates on, and the dashboard can't change what a host consented to afterwards. Without `--updates`, `setup` touches none of it.
+A host takes agent updates only when the command that installed or upgraded it says so, once. **Add device** and **Upgrade agent** write these flags for you while the team has agent updates on, and the dashboard can't change what a host consented to afterwards. Without an update flag, `setup` touches none of it: a host that agreed keeps what it chose, and the command for it carries no update flag. To change one part of what a host agreed to, run `setup` with only that flag: see [Change what a host agreed to](#change-what-a-host-agreed-to).
 
 ```sh
 sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> \
@@ -120,7 +120,7 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex
 | Flag | Meaning |
 | --- | --- |
 | `--updates LEVEL` | `auto` downloads and stages a build when an update rollout reaches the host, then applies it inside the window, if there is one. `ask` stages it and waits for someone on the host to run [`vectory update apply`](#update). `off` withdraws consent, deletes what the agent staged and removes the update step, and keeps the pinned keys. |
-| `--update-key-sha256 HEX` | Required with `auto` or `ask`: the fingerprint of the release key to pin, 64 hexadecimal characters (groups separated by spaces, colons or dashes are fine). Repeat it for up to 4 keys. Giving it again replaces the pinned keys and ends a stop after a fork. |
+| `--update-key-sha256 HEX` | Required with `auto` or `ask`: the fingerprint of the release key to pin, 64 hexadecimal characters (groups separated by spaces, colons or dashes are fine). Repeat it for up to 4 keys. Giving it again, with or without `--updates`, replaces the pinned keys and ends a stop after a fork. |
 | `--update-track TRACK` | `patch` (the default) takes releases with the same major and minor version as the agent that runs. `minor` takes newer minor releases too. `major` is refused: `This release offers patch and minor tracks. Upgrade to a new major version by hand.` |
 | `--update-window SPEC` | When an update may start: `DAYS HH:MM-HH:MM`, optionally followed by `UTC` (otherwise the host's local time). `DAYS` is `daily`, a day (`Mon`), a range (`Mon-Fri`) or a list (`Sat,Sun`). A window that ends before it starts crosses midnight. Repeat it for up to 7 windows. |
 
@@ -143,6 +143,40 @@ After the agent is installed and enrolled and before the service starts, `setup`
 ```
 
 `--dry-run` plans the step without asking the server for its keys: `Would turn on updates: automatic · patch releases · any time · key 3f9a1c0277de9b41.` With `--json`, `updates` holds `consent`, `track`, `windows` and `keys`.
+
+### Change what a host agreed to
+
+The key, the track and the windows can be given without `--updates`. They then amend what the host already agreed to: they change the parts they name and keep everything else, so no command has to say again what the host chose.
+
+```sh
+sudo vectory setup --server https://vectory.example.com:8443 --update-key-sha256 <64-hex-fingerprint>
+sudo vectory setup --server https://vectory.example.com:8443 --update-track minor
+sudo vectory setup --server https://vectory.example.com:8443 --update-window 'Sat,Sun 01:00-03:00 UTC'
+```
+
+| Flag alone | What it does |
+| --- | --- |
+| `--update-key-sha256 HEX` | Re-pins: the pinned keys become exactly the keys given (up to 4), found in the server's list by the fingerprint `setup` computes, as with `--updates`. A list that lies or lacks the key pins nothing. A key that stays pinned keeps the time it was pinned. |
+| `--update-track TRACK` | Changes the track only. |
+| `--update-window SPEC` | Replaces the windows only: the windows given are all the host has afterwards. To go back to any time, run `setup` with `--updates`, the key and no window, which gives the whole consent again. |
+
+Any combination applies the parts given. The level, the parts not named and a pause set with [`vectory update pause`](#update) stay as they are, and the counter floors and the update step's state are never touched. The update step is installed if it is missing, as when consent is given, and the command needs what consent needs: where `--updates` would stop with a reason and a fix, so does this, with the fix saying to leave out the update flags.
+
+`setup` refuses these flags with exit code `2` and no other effect when there is nothing to change. A host with no policy, or with consent `off`, gets:
+
+```text
+vectory setup: This host hasn't agreed to agent updates, so there is nothing to change. Add --updates auto or --updates ask, with --update-key-sha256.
+```
+
+A policy that can't be used says why (`The update policy on this host can't be used (…), so there is nothing to change.`), and the same command with `--updates` and the key writes it again. A policy that others could replace says `The update policy on this host can't be read safely (…)`: make the file and every directory above it writable by root alone. A consent that is withdrawn while `setup` runs, with `vectory update off`, stays withdrawn.
+
+The step line says what is now in force and what changed, and `updates` in the JSON result holds what is in force (`consent`, `track`, `windows`, `keys` and `paused`):
+
+```text
+[ok] Updates      ask on this host · minor and patch releases · any time · key 3f9a1c0277de9b41 (pinned) · changed: track
+```
+
+A run that finds the policy already as asked changes nothing and rewrites nothing, and says `nothing changed`. `--dry-run` says what it would change without asking the server for its keys, for example `Would change updates: take minor and patch releases instead of patch releases. The rest of what this host agreed to stays as it is.`
 
 ## install
 
@@ -494,7 +528,7 @@ The pinned key is kept. To turn updates on again, run the Upgrade agent command 
 
 It refuses while the update step applies or tries a build, and says when that ends: `vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that`.
 
-A host's level, releases, windows and pinned keys change only when someone runs `setup` again on it: the **Upgrade agent** command carries them. Nothing the server sends changes them.
+A host's level, releases, windows and pinned keys change only when someone runs `setup` again on it, with `--updates` for the whole consent or with `--update-key-sha256`, `--update-track` or `--update-window` alone for the one part ([Change what a host agreed to](#change-what-a-host-agreed-to)). Nothing the server sends changes them.
 
 ## Service commands
 

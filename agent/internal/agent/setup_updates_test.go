@@ -533,20 +533,26 @@ func TestSetupRefusesUpdateFlagsThatCantWorkOnAnyHost(t *testing.T) {
 		options SetupOptions
 		want    string
 	}{
-		"a major track":                        {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "major"}, "This release offers patch and minor tracks. Upgrade to a new major version by hand."},
-		"another track":                        {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "weekly"}, `"weekly" isn't an update track. Use patch or minor.`},
-		"another level":                        {SetupOptions{Updates: "always", UpdateKeys: []string{good}}, `--updates takes auto, ask or off, and "always" isn't one.`},
-		"no key":                               {SetupOptions{Updates: "auto"}, "--updates auto needs --update-key-sha256: the SHA-256 fingerprint of the release key this host pins. Add device writes it into the command."},
-		"no key with ask":                      {SetupOptions{Updates: "ask"}, "--updates ask needs --update-key-sha256"},
-		"a short fingerprint":                  {SetupOptions{Updates: "auto", UpdateKeys: []string{"3f9a1c0277de9b41"}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint of a release key"},
-		"a fingerprint that isn't hex":         {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("zz", 32)}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint"},
-		"five keys":                            {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("01", 32), strings.Repeat("02", 32), strings.Repeat("03", 32), strings.Repeat("04", 32), strings.Repeat("05", 32)}}, "A host pins at most 4 release keys, and 5 were given with --update-key-sha256."},
-		"a window that isn't one":              {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: []string{"Mon-Mon 02:00-04:00"}}, `"Mon-Mon 02:00-04:00" isn't an update window`},
-		"eight windows":                        {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: strings.Fields("daily daily daily daily daily daily daily daily")}, "A host takes at most 7 update windows, and 8 were given."},
-		"a key without a level":                {SetupOptions{UpdateKeys: []string{good}}, "--update-key-sha256 go with --updates auto or --updates ask. Add --updates, or leave them out."},
-		"a track and a window without a level": {SetupOptions{UpdateTrack: "minor", UpdateWindows: []string{"daily 01:00-03:00"}}, "--update-track and --update-window go with --updates auto or --updates ask."},
-		"off with a key":                       {SetupOptions{Updates: "off", UpdateKeys: []string{good}}, "--updates off turns updates off. It doesn't take --update-key-sha256."},
-		"off with a track and a window":        {SetupOptions{Updates: "off", UpdateTrack: "patch", UpdateWindows: []string{"daily 01:00-03:00"}}, "--updates off turns updates off. It doesn't take --update-track and --update-window."},
+		"a major track":                {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "major"}, "This release offers patch and minor tracks. Upgrade to a new major version by hand."},
+		"another track":                {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateTrack: "weekly"}, `"weekly" isn't an update track. Use patch or minor.`},
+		"another level":                {SetupOptions{Updates: "always", UpdateKeys: []string{good}}, `--updates takes auto, ask or off, and "always" isn't one.`},
+		"no key":                       {SetupOptions{Updates: "auto"}, "--updates auto needs --update-key-sha256: the SHA-256 fingerprint of the release key this host pins. Add device writes it into the command."},
+		"no key with ask":              {SetupOptions{Updates: "ask"}, "--updates ask needs --update-key-sha256"},
+		"a short fingerprint":          {SetupOptions{Updates: "auto", UpdateKeys: []string{"3f9a1c0277de9b41"}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint of a release key"},
+		"a fingerprint that isn't hex": {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("zz", 32)}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint"},
+		"five keys":                    {SetupOptions{Updates: "auto", UpdateKeys: []string{strings.Repeat("01", 32), strings.Repeat("02", 32), strings.Repeat("03", 32), strings.Repeat("04", 32), strings.Repeat("05", 32)}}, "A host pins at most 4 release keys, and 5 were given with --update-key-sha256."},
+		"a window that isn't one":      {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: []string{"Mon-Mon 02:00-04:00"}}, `"Mon-Mon 02:00-04:00" isn't an update window`},
+		"eight windows":                {SetupOptions{Updates: "auto", UpdateKeys: []string{good}, UpdateWindows: strings.Fields("daily daily daily daily daily daily daily daily")}, "A host takes at most 7 update windows, and 8 were given."},
+		// Flags without a level amend what a host agreed to; what they say is checked
+		// as anywhere else, before the host is looked at.
+		"a short fingerprint alone":     {SetupOptions{UpdateKeys: []string{"3f9a1c0277de9b41"}}, "--update-key-sha256 needs the 64-character SHA-256 fingerprint of a release key"},
+		"five keys alone":               {SetupOptions{UpdateKeys: []string{strings.Repeat("01", 32), strings.Repeat("02", 32), strings.Repeat("03", 32), strings.Repeat("04", 32), strings.Repeat("05", 32)}}, "A host pins at most 4 release keys, and 5 were given with --update-key-sha256."},
+		"a major track alone":           {SetupOptions{UpdateTrack: "major"}, "This release offers patch and minor tracks. Upgrade to a new major version by hand."},
+		"another track alone":           {SetupOptions{UpdateTrack: "weekly"}, `"weekly" isn't an update track. Use patch or minor.`},
+		"a window alone that isn't one": {SetupOptions{UpdateWindows: []string{"Mon-Mon 02:00-04:00"}}, `"Mon-Mon 02:00-04:00" isn't an update window`},
+		"eight windows alone":           {SetupOptions{UpdateWindows: strings.Fields("daily daily daily daily daily daily daily daily")}, "A host takes at most 7 update windows, and 8 were given."},
+		"off with a key":                {SetupOptions{Updates: "off", UpdateKeys: []string{good}}, "--updates off turns updates off. It doesn't take --update-key-sha256."},
+		"off with a track and a window": {SetupOptions{Updates: "off", UpdateTrack: "patch", UpdateWindows: []string{"daily 01:00-03:00"}}, "--updates off turns updates off. It doesn't take --update-track and --update-window."},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := tc.options.CheckUpdates()
