@@ -1,0 +1,686 @@
+//go:build !windows
+
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+// The privileged step on macOS: a launch daemon of its own, io.vectory.update, and
+// the calls the step makes to launchd about the agent's, io.vectory.agent. Every
+// decision of the step (the journal, the floors, the swap, the trial and the
+// rollback) is the shared reconciler's; this file is only what launchd and a
+// property list add to it. It has no build constraint beyond the Unix one, so that
+// the text it writes and reads, and the way it reads launchctl, are tested on
+// every Unix system; update_service_darwin.go binds it to the real launchctl.
+//
+// A launch daemon with StartInterval, not a file watch: every 30 seconds and at
+// boot (RunAtLoad), the step runs, finds its journal idle and no request, and
+// exits in milliseconds. Polling needs no launchd watch semantics, survives any
+// crash between runs, and gives the recovery run at boot the same entry point as
+// every other. An update waits at most 30 seconds for it.
+
+const (
+	// updateLaunchdLabel is how launchd knows the step. Its definition carries the
+	// same name.
+	updateLaunchdLabel = "io.vectory.update"
+	// updateStepInterval is StartInterval: how often launchd starts the step.
+	updateStepInterval = 30
+	// updateStepPath is the whole environment the step is given: the system's own
+	// PATH. The step passes cleanEnvironment to every process it starts as well.
+	updateStepPath = "/usr/bin:/bin:/usr/sbin:/sbin"
+	// updateStepLogFile is where launchd keeps the step's standard error, in the
+	// step's private directory. `vectory update-helper` keeps it short.
+	updateStepLogFile = "step.log"
+
+	// launchDaemonsDir is where launchd reads the definitions of system daemons.
+	launchDaemonsDir = "/Library/LaunchDaemons"
+	// macosPackageReceipt is what the installer package leaves when it installs the
+	// agent (packaging/macos/build-pkg.sh: identifier com.vectory.agent).
+	macosPackageReceipt = "/var/db/receipts/com.vectory.agent.bom"
+
+	// maxPlistFile bounds a definition as the step reads it.
+	maxPlistFile = 64 * 1024
+
+	// A bootstrap launchd refuses right after a bootout (it says "Input/output
+	// error" while the old job is still being torn down) is tried again.
+	launchdStartAttempts = 4
+	launchdStartPause    = 2 * time.Second
+)
+
+// macosUpdateHost is updateHost on a Mac: launchd runs the agent and the step.
+type macosUpdateHost struct {
+	unixUpdateHost
+	// daemonDir is where the two definitions are, /Library/LaunchDaemons.
+	daemonDir string
+	// receipt is the installer package's receipt.
+	receipt string
+	// agent drives the agent's launch daemon, and step the step's own.
+	agent, step launchdJob
+}
+
+var _ updateHost = (*macosUpdateHost)(nil)
+
+// newMacOSUpdateHost builds the host over a launchctl runner: the real one, or a
+// recorder in a test.
+func newMacOSUpdateHost(run func(ctx context.Context, args ...string) launchctlResult) *macosUpdateHost {
+	h := &macosUpdateHost{daemonDir: launchDaemonsDir, receipt: macosPackageReceipt}
+	h.agent = h.job("", run)
+	h.step = h.job(updateLaunchdLabel, run)
+	return h
+}
+
+// job makes the driver of one of the two daemons: label is empty for the agent's.
+func (h *macosUpdateHost) job(label string, run func(ctx context.Context, args ...string) launchctlResult) launchdJob {
+	job := launchdJob{label: label, run: run, now: time.Now, sleep: time.Sleep}
+	job.definition = h.definitionOf(job.name())
+	job.installed = func() bool {
+		_, err := os.Stat(job.definition)
+		return err == nil
+	}
+	return job
+}
+
+func (h *macosUpdateHost) definitionOf(label string) string {
+	return h.daemonDir + "/" + label + ".plist"
+}
+
+// ---------------------------------------------------------------- the step's definition
+
+// plistText makes a value fit for a string of a definition, or refuses it: a value
+// that isn't text, that holds a control character or that XML 1.0 can't carry
+// would be changed on the way in, and what launchd read would not be what the step
+// meant. xmlText escapes the rest.
+func plistText(what, value string) (string, error) {
+	if value == "" || !utf8.ValidString(value) {
+		return "", fmt.Errorf("%s isn't text a definition can hold", what)
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || r == '￾' || r == '￿' {
+			return "", fmt.Errorf("%s holds a control or invalid character, so it isn't written into a definition", what)
+		}
+	}
+	return xmlText(value), nil
+}
+
+// launchdUpdatePlist is the step's launch daemon, in the compact form launchdPlist
+// uses for the agent's. It runs as root (no UserName, no GroupName) from the
+// helper, the copy of the last committed build, with the system's own PATH and
+// nothing else in its environment. It is started at load and every 30 seconds, and
+// does no network I/O. Its standard error is a file in the step's private
+// directory; its standard output is nowhere. UpdateInstallDir isn't named: a launch
+// daemon has no sandbox to name it in.
+func launchdUpdatePlist(spec updateUnitSpec, paths UpdatePaths) (string, error) {
+	helper, err := plistText("the step's executable", spec.Helper)
+	if err != nil {
+		return "", err
+	}
+	state, err := plistText("the agent's state directory", spec.StateDir)
+	if err != nil {
+		return "", err
+	}
+	if _, err := plistText("the install directory", spec.InstallDir); err != nil {
+		return "", err
+	}
+	log, err := plistText("the step's log", paths.Private+"/"+updateStepLogFile)
+	if err != nil {
+		return "", err
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>` +
+		`<key>Label</key><string>` + updateLaunchdLabel + `</string>` +
+		`<key>ProgramArguments</key><array><string>` + helper + `</string><string>update-helper</string><string>--state-dir</string><string>` + state + `</string></array>` +
+		`<key>RunAtLoad</key><true/>` +
+		`<key>StartInterval</key><integer>` + strconv.Itoa(updateStepInterval) + `</integer>` +
+		`<key>EnvironmentVariables</key><dict><key>PATH</key><string>` + updateStepPath + `</string></dict>` +
+		`<key>StandardOutPath</key><string>/dev/null</string>` +
+		`<key>StandardErrorPath</key><string>` + log + `</string>` +
+		"</dict></plist>\n", nil
+}
+
+// InstallUnits writes the step's definition, loads it and has it start at once
+// (RunAtLoad), so that status.json is there for the agent to read. A job that is
+// loaded keeps what it loaded, so it is unloaded first and read again.
+func (h *macosUpdateHost) InstallUnits(spec updateUnitSpec) error {
+	plist, err := launchdUpdatePlist(spec, UpdateLocations())
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if _, loaded := h.step.loaded(ctx); loaded {
+		if err := h.step.bootoutContext(ctx); err != nil {
+			return err
+		}
+	}
+	if err := AtomicWrite(h.step.definition, []byte(plist)); err != nil {
+		return err
+	}
+	if err := os.Chmod(h.step.definition, 0o644); err != nil {
+		return err
+	}
+	// A job a person disabled stays disabled until it is enabled again, and refuses
+	// to load; setup's consent is the person's word. A host where this fails still
+	// loads it, and fails there with launchd's own reason.
+	_ = h.step.do(ctx, launchctlLimit, "enable", h.step.target())
+	return h.step.do(ctx, launchctlLimit, "bootstrap", "system", h.step.definition)
+}
+
+// RemoveUnits unloads the step's job and removes its definition. It reports
+// whether there was anything to remove, and the install directory the agent runs
+// from, which it learns from the agent's own definition before it removes anything:
+// the step left its previous build there.
+func (h *macosUpdateHost) RemoveUnits() (string, bool, error) {
+	ctx := context.Background()
+	_, statErr := os.Lstat(h.step.definition)
+	_, loaded := h.step.loaded(ctx)
+	if notExist(statErr) && !loaded {
+		return "", false, nil
+	}
+	installDir := h.installDirBehind(h.step.definition)
+	if loaded {
+		if err := h.step.bootoutContext(ctx); err != nil {
+			return installDir, true, err
+		}
+	}
+	if err := os.Remove(h.step.definition); err != nil && !notExist(err) {
+		return installDir, true, err
+	}
+	return installDir, true, nil
+}
+
+// installDirBehind is the directory that holds the agent's executable: the step's
+// definition names the state directory, and the agent's definition for that
+// directory names the executable. "" when either can't be read.
+func (h *macosUpdateHost) installDirBehind(stepDefinition string) string {
+	text, err := readDefinition(stepDefinition)
+	if err != nil {
+		return ""
+	}
+	dict, err := parsePropertyList([]byte(text))
+	if err != nil {
+		return ""
+	}
+	arguments, _ := dict["ProgramArguments"].([]any)
+	if len(arguments) != 4 || arguments[2] != "--state-dir" {
+		return ""
+	}
+	state, _ := arguments[3].(string)
+	agent, err := h.readAgentDefinition()
+	if err != nil || filepath.Clean(agent.StateDir) != filepath.Clean(state) {
+		return ""
+	}
+	return filepath.Dir(agent.Executable)
+}
+
+// readDefinition reads a launch daemon's definition through the path check: every
+// directory above it and the file are root's and closed to everyone else.
+func readDefinition(path string) (string, error) {
+	held, err := openRootOwned(path, rootOwnedFile)
+	if err != nil {
+		return "", err
+	}
+	defer held.Close()
+	data, err := held.ReadFile(maxPlistFile)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ---------------------------------------------------------------- the agent's service
+
+// launchdPrinted is what `launchctl print` says about a job that launchd knows.
+type launchdPrinted struct {
+	// State is launchd's word: "running", "not running", "waiting", "spawn
+	// scheduled" and a few more.
+	State string
+	// PID is the process, 0 when there is none.
+	PID int
+	// Runs counts the times launchd has started the job since it loaded it.
+	Runs int
+}
+
+// parseLaunchdPrint reads the top-level lines of `launchctl print system/<label>`:
+//
+//	system/io.vectory.agent = {
+//		active count = 1
+//		state = running
+//		arguments = {
+//			...
+//		}
+//		runs = 1
+//		pid = 4242
+//		...
+//	}
+//
+// Only the lines directly inside the job's braces count: a block inside it
+// (arguments, environment, endpoints) has lines of its own that look alike. A job
+// with no state, or no count of its runs, is an error: a manager that doesn't say
+// how often it started a job can't show that a build stayed up, and a build is
+// never taken as healthy on a guess.
+func parseLaunchdPrint(text string) (launchdPrinted, error) {
+	var printed launchdPrinted
+	var haveState, haveRuns bool
+	depth := 0
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+			continue
+		case line == "}":
+			depth--
+			continue
+		case strings.HasSuffix(line, "{"):
+			depth++
+			continue
+		}
+		if depth != 1 {
+			continue
+		}
+		key, value, ok := strings.Cut(line, " = ")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "state":
+			printed.State, haveState = value, true
+		case "pid":
+			pid, err := strconv.Atoi(value)
+			if err != nil || pid < 0 {
+				return launchdPrinted{}, fmt.Errorf("launchctl print gave the pid %q", safeText(value, 40))
+			}
+			printed.PID = pid
+		case "runs":
+			runs, err := strconv.Atoi(value)
+			if err != nil || runs < 0 {
+				return launchdPrinted{}, fmt.Errorf("launchctl print gave the count of runs %q", safeText(value, 40))
+			}
+			printed.Runs, haveRuns = runs, true
+		}
+	}
+	if !haveState {
+		return launchdPrinted{}, errors.New("launchctl print didn't say what state the agent service is in")
+	}
+	if !haveRuns {
+		return launchdPrinted{}, errors.New("launchctl print didn't say how often the agent service was started")
+	}
+	return printed, nil
+}
+
+// serviceState is what the step reads of it. launchd keeps a job that has
+// KeepAlive running or about to run, so there is no failed state to read: a job
+// that is running with a process is "active", a job that is loaded and isn't
+// (waiting out its throttle, or starting) is "activating", and a job launchd
+// doesn't know is "inactive". A build that can't start is seen as runs that count
+// up, which the step ends at three, or as a deadline.
+func (p launchdPrinted) serviceState() updateServiceState {
+	state := updateServiceState{State: "activating", PID: p.PID, Restarts: max(p.Runs-1, 0)}
+	if p.State == "running" && p.PID > 0 {
+		state.State = "active"
+	}
+	return state
+}
+
+// launchdNotLoaded says that launchctl print found no such job: exit status 113,
+// "Could not find service".
+func launchdNotLoaded(result launchctlResult) bool {
+	return result.status == 113 || strings.Contains(result.stderr, "Could not find service")
+}
+
+// ServiceState reads the agent's job from launchd.
+func (h *macosUpdateHost) ServiceState(ctx context.Context) (updateServiceState, error) {
+	result := h.agent.launchctl(ctx, launchdStatusLimit, "print", h.agent.target())
+	switch {
+	case result.status == 0:
+		printed, err := parseLaunchdPrint(result.stdout)
+		if err != nil {
+			return updateServiceState{}, err
+		}
+		return printed.serviceState(), nil
+	case launchdNotLoaded(result):
+		return updateServiceState{State: "inactive"}, nil
+	case ctx.Err() != nil:
+		return updateServiceState{}, ctx.Err()
+	}
+	return updateServiceState{}, launchctlFailure([]string{"print", h.agent.target()}, result)
+}
+
+// StopService unloads the agent's job (launchctl bootout), which waits for the
+// agent to drain Vector.
+func (h *macosUpdateHost) StopService(ctx context.Context) error {
+	return h.agent.controlContext(ctx, "stop")
+}
+
+// StartService loads the agent's job again, or kickstarts one that is loaded and
+// isn't running. launchd refuses a bootstrap in the moments after a bootout while
+// it tears the old job down, so a refusal is tried again a few times.
+func (h *macosUpdateHost) StartService(ctx context.Context) error {
+	var err error
+	for attempt := 0; attempt < launchdStartAttempts; attempt++ {
+		if attempt > 0 {
+			h.agent.sleep(launchdStartPause)
+		}
+		if err = h.agent.controlContext(ctx, "start"); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+// ---------------------------------------------------------------- reading the agent's definition
+
+// agentDefinition is what the step reads from the agent's launch daemon.
+type agentDefinition struct {
+	Account    string
+	Executable string
+	StateDir   string
+}
+
+// parseAgentDefinition reads the agent's definition: the account that runs it, and
+// ProgramArguments, which must be exactly `<exe> run --state-dir <dir>`, the line
+// setup writes for an executable and a state directory. There must be no Program
+// key, which would run another file than the one the arguments name. A definition
+// that is anything else isn't the one setup registered, and what it runs is no
+// longer what the step replaces.
+func parseAgentDefinition(text string) (agentDefinition, error) {
+	var agent agentDefinition
+	dict, err := parsePropertyList([]byte(text))
+	if err != nil {
+		return agent, fmt.Errorf("it isn't a property list the step reads: %v", err)
+	}
+	if label, _ := dict["Label"].(string); label != launchdLabel {
+		return agent, fmt.Errorf("its label isn't %s", launchdLabel)
+	}
+	if _, found := dict["Program"]; found {
+		return agent, errors.New("it names a Program, which would run another file than its arguments name")
+	}
+	agent.Account, _ = dict["UserName"].(string)
+	if agent.Account == "" {
+		return agent, errors.New("it doesn't name the account that runs it (UserName)")
+	}
+	arguments, _ := dict["ProgramArguments"].([]any)
+	if len(arguments) != 4 || arguments[1] != "run" || arguments[2] != "--state-dir" {
+		return agent, errors.New("its ProgramArguments aren't the line `vectory service-install` writes")
+	}
+	agent.Executable, _ = arguments[0].(string)
+	agent.StateDir, _ = arguments[3].(string)
+	for _, path := range []string{agent.Executable, agent.StateDir} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return agent, errors.New("its executable and state directory aren't clean absolute paths")
+		}
+	}
+	// What setup writes for this account, executable and state directory must be
+	// what is there: the same text for what identifies the service.
+	if plistIdentity(text) != plistIdentity(launchdPlist(agent.Executable, agent.StateDir, agent.Account)) {
+		return agent, errors.New("it isn't the definition `vectory service-install` writes for that account, executable and state directory")
+	}
+	return agent, nil
+}
+
+// readAgentDefinition reads the agent's definition through the path check.
+func (h *macosUpdateHost) readAgentDefinition() (agentDefinition, error) {
+	text, err := readDefinition(h.agent.definition)
+	if err != nil {
+		return agentDefinition{}, err
+	}
+	return parseAgentDefinition(text)
+}
+
+// Registered reads the agent's definition through the path check and says what it
+// runs and as whom. The definition must be root's alone, name an account that
+// exists, and run this state directory.
+func (h *macosUpdateHost) Registered(stateDir string) (registeredService, error) {
+	path := h.agent.definition
+	definition, err := h.readAgentDefinition()
+	switch {
+	case notExist(err):
+		return registeredService{}, newUpdateRefusal("NO_SERVICE", "no agent service is registered (%s doesn't exist)", path)
+	case err != nil:
+		// A definition somebody other than root could have written is refused as
+		// that; one that can't be read as the agent's is no service this step knows.
+		var refusal *UpdateRefusal
+		if errors.As(err, &refusal) {
+			return registeredService{}, err
+		}
+		return registeredService{}, newUpdateRefusal("NO_SERVICE", "%s isn't an agent service this step can update: %v", path, err)
+	}
+	if filepath.Clean(definition.StateDir) != filepath.Clean(stateDir) {
+		return registeredService{}, newUpdateRefusal("NO_SERVICE", "the registered service runs the state directory %s, not %s", definition.StateDir, stateDir)
+	}
+	account, err := user.Lookup(definition.Account)
+	if err != nil {
+		return registeredService{}, newUpdateRefusal("NO_SERVICE", "the service account %s doesn't exist", definition.Account)
+	}
+	uid, uidErr := strconv.ParseUint(account.Uid, 10, 32)
+	gid, gidErr := strconv.ParseUint(account.Gid, 10, 32)
+	if uidErr != nil || gidErr != nil {
+		return registeredService{}, newUpdateRefusal("NO_SERVICE", "the service account %s has no numeric user and group", definition.Account)
+	}
+	return registeredService{
+		Executable: definition.Executable, StateDir: definition.StateDir,
+		Account: updateAccount{Name: definition.Account, UID: uint32(uid), GID: uint32(gid)},
+	}, nil
+}
+
+// ---------------------------------------------------------------- what can't be updated
+
+// PackageManaged says whether a package manager owns the executable: the installer
+// package left its receipt, or the executable (with links resolved) is in a
+// directory a package manager owns, Homebrew's among them.
+func (h *macosUpdateHost) PackageManaged(executable string) (string, bool) {
+	if directory, managed := underPackageDirectory(packageCandidates(executable)); managed {
+		return "it is under " + directory, true
+	}
+	if _, err := os.Lstat(h.receipt); err == nil {
+		return "the installer package left its receipt (" + h.receipt + ")", true
+	}
+	return "", false
+}
+
+// StateDirReachable says yes: nothing hides a directory from a launch daemon that
+// runs as root.
+func (h *macosUpdateHost) StateDirReachable(string) error { return nil }
+
+// OpenInstall opens the install directory and the executable, after the path check:
+// a directory an administrator account owns refuses here, and /usr/local/bin is one
+// on a Mac where Homebrew took it. That refusal says so, and what to do: the update
+// step needs a directory only root can write, and Homebrew needs this one.
+func (h *macosUpdateHost) OpenInstall(executable string) (updateInstall, error) {
+	install, err := h.unixUpdateHost.OpenInstall(executable)
+	return install, explainInstallRefusal(err)
+}
+
+// homebrewBinDir is the directory Homebrew on an Intel Mac makes its own.
+const homebrewBinDir = "/usr/local/bin"
+
+// explainInstallRefusal adds to the refusal of /usr/local/bin for belonging to
+// an account other than root what a person on a Mac needs to know: Homebrew is why,
+// and the agent belongs where only root can write. Every other error is returned as
+// it is.
+func explainInstallRefusal(err error) error {
+	var refusal *UpdateRefusal
+	if errors.As(err, &refusal) && refusal.Code == codeUntrustedLocation && strings.HasPrefix(refusal.Detail, homebrewBinDir+" belongs to uid ") {
+		return untrustedLocation(refusal.Detail + " (Homebrew on an Intel Mac takes " + homebrewBinDir + "). Install the agent where only root can write")
+	}
+	return err
+}
+
+// ---------------------------------------------------------------- a small property list reader
+
+// parsePropertyList reads an XML property list of the kinds a launch daemon's
+// definition holds: a dict at the top, and in it strings, booleans, numbers,
+// arrays and dicts. Strings become string, booleans bool, an array []any and a
+// dict map[string]any; numbers, dates and data stay as their text, as plistScalar.
+// A duplicate key, a value without a key, an element it doesn't know, nesting
+// deeper than eight levels and more than 4096 elements are refused.
+func parsePropertyList(data []byte) (map[string]any, error) {
+	if len(data) > maxPlistFile {
+		return nil, errRootOwnedTooLarge
+	}
+	reader := &plistReader{decoder: xml.NewDecoder(bytes.NewReader(data))}
+	for {
+		token, err := reader.decoder.Token()
+		if err == io.EOF {
+			return nil, errors.New("there is no <plist>")
+		}
+		if err != nil {
+			return nil, err
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if start.Name.Local != "plist" {
+			return nil, fmt.Errorf("it starts with <%s>, not <plist>", start.Name.Local)
+		}
+		first, err := reader.next()
+		if err != nil {
+			return nil, err
+		}
+		dict, ok := first.(map[string]any)
+		if !ok {
+			return nil, errors.New("its top level isn't a dict")
+		}
+		return dict, nil
+	}
+}
+
+// plistScalar is a number, a date or data, kept as the text it was written as.
+type plistScalar string
+
+type plistReader struct {
+	decoder  *xml.Decoder
+	elements int
+}
+
+const (
+	plistMaxDepth    = 8
+	plistMaxElements = 4096
+)
+
+// next reads the next value inside the element the decoder is in: the first start
+// element is the value.
+func (r *plistReader) next() (any, error) {
+	for {
+		token, err := r.decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			return r.value(t, 1)
+		case xml.EndElement:
+			return nil, errors.New("it has no value")
+		}
+	}
+}
+
+func (r *plistReader) value(start xml.StartElement, depth int) (any, error) {
+	if depth > plistMaxDepth {
+		return nil, errors.New("it nests too deeply")
+	}
+	if r.elements++; r.elements > plistMaxElements {
+		return nil, errors.New("it has too many elements")
+	}
+	switch start.Name.Local {
+	case "string":
+		return r.text()
+	case "integer", "real", "date", "data":
+		text, err := r.text()
+		return plistScalar(text), err
+	case "true", "false":
+		return start.Name.Local == "true", r.decoder.Skip()
+	case "array":
+		items := []any{}
+		for {
+			token, err := r.decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			switch t := token.(type) {
+			case xml.StartElement:
+				item, err := r.value(t, depth+1)
+				if err != nil {
+					return nil, err
+				}
+				items = append(items, item)
+			case xml.EndElement:
+				return items, nil
+			}
+		}
+	case "dict":
+		dict := map[string]any{}
+		key, haveKey := "", false
+		for {
+			token, err := r.decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			switch t := token.(type) {
+			case xml.StartElement:
+				if t.Name.Local == "key" {
+					if haveKey {
+						return nil, fmt.Errorf("the key %q has no value", key)
+					}
+					text, err := r.text()
+					if err != nil {
+						return nil, err
+					}
+					if _, duplicate := dict[text]; duplicate {
+						return nil, fmt.Errorf("the key %q is there twice", text)
+					}
+					key, haveKey = text, true
+					continue
+				}
+				if !haveKey {
+					return nil, errors.New("a value has no key")
+				}
+				item, err := r.value(t, depth+1)
+				if err != nil {
+					return nil, err
+				}
+				dict[key], haveKey = item, false
+			case xml.EndElement:
+				if haveKey {
+					return nil, fmt.Errorf("the key %q has no value", key)
+				}
+				return dict, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("it holds <%s>, which a service definition doesn't", start.Name.Local)
+}
+
+// text reads the characters of the element the decoder is in, up to its end.
+func (r *plistReader) text() (string, error) {
+	var text strings.Builder
+	for {
+		token, err := r.decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		switch t := token.(type) {
+		case xml.CharData:
+			text.Write(t)
+		case xml.StartElement:
+			return "", fmt.Errorf("<%s> inside a text", t.Name.Local)
+		case xml.EndElement:
+			return text.String(), nil
+		}
+	}
+}
