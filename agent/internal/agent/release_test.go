@@ -1196,3 +1196,62 @@ func TestRolloverForkNeedsTwoVerifyingStatementsFromOnePinnedKey(t *testing.T) {
 		t.Errorf("a host that left the old key: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------- the published examples
+
+// The tools write what the contract shows. The examples come from a reference
+// implementation and the published test key, so the same key, the same bytes and
+// the same time give the same files, to the byte.
+func TestSigningToolsReproduceThePublishedExamples(t *testing.T) {
+	const examples = "contracts/fixtures/agent-release/examples/"
+	private, err := ParseReleasePrivateKey(repoFile(t, examples+"team-private-key.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := ParseReleaseKey(strings.TrimSuffix(string(repoFile(t, examples+"team.pub")), "\n"))
+	if err != nil || public.Fingerprint() != private.Fingerprint() {
+		t.Fatalf("the example's key pair: %v", err)
+	}
+
+	// release.json.sig: the signature covers the manifest without the line feed
+	// the example file ends with.
+	manifest := bytes.TrimSuffix(repoFile(t, examples+"release.json"), []byte("\n"))
+	file, err := BuildReleaseSignatures([]ReleaseSignature{releaseSignatureBy(public, private.SignRelease(manifest))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := repoFile(t, examples+"release.json.sig"); !bytes.Equal(file, want) {
+		t.Errorf("release.json.sig\n got %s\nwant %s", file, want)
+	}
+
+	// The rollover statement and its envelope.
+	var statement struct {
+		To       string `json:"to"`
+		IssuedAt string `json:"issued_at"`
+	}
+	if err := json.Unmarshal(repoFile(t, examples+"rollover.json"), &statement); err != nil {
+		t.Fatal(err)
+	}
+	next, err := ParseReleaseKey(statement.To)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := time.Parse(time.RFC3339, statement.IssuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := SignRollover(private, next, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published RolloverEnvelope
+	if err := json.Unmarshal(repoFile(t, examples+"rollover-envelope.json"), &published); err != nil {
+		t.Fatal(err)
+	}
+	if envelope != published {
+		t.Errorf("the rollover envelope\n got %+v\nwant %+v", envelope, published)
+	}
+	if statementBytes, _ := base64.StdEncoding.DecodeString(envelope.Statement); string(statementBytes) != strings.TrimSuffix(string(repoFile(t, examples+"rollover.json")), "\n") {
+		t.Errorf("the statement is %s", statementBytes)
+	}
+}

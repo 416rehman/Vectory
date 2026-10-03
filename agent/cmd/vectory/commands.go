@@ -96,6 +96,7 @@ func init() {
 			about:    "Without --purge nothing is deleted. With --purge the exact state directory is deleted after the service is removed; Vector and the managed configuration stay.",
 			examples: []string{"sudo vectory service-uninstall", "sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent"},
 			define:   defineUninstall},
+		releaseCommand,
 	}
 	linkVerbs(commands)
 }
