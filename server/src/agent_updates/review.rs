@@ -502,8 +502,8 @@ fn describe(code: &str, release: &Release, track_hint: bool) -> (String, Option<
             Some("Make the install path and every directory above it owned by root and not writable by others."),
         ),
         "READ_ONLY" => (
-            "The install directory is on a read-only file system.".into(),
-            Some("Make the install directory writable, or move the agent."),
+            "The install directory is on a read-only file system, or the agent or its directory carries a flag that forbids replacing it.".into(),
+            Some("Make the install directory writable and clear the flag, or move the agent."),
         ),
         "HELPER_NOT_RUNNING" => (
             "The privileged update step isn't running on these hosts.".into(),

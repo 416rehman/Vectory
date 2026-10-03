@@ -10,8 +10,9 @@ import (
 // packageDirectories hold what a package manager installs: an agent that lives in
 // one of them belongs to the package, and an update behind its back would be undone
 // by the next upgrade or reported as a modified file. /opt/homebrew and
-// /usr/local/Cellar are Homebrew's.
-var packageDirectories = []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/lib", "/opt/homebrew", "/usr/local/Cellar"}
+// /usr/local/Cellar are Homebrew's, and /opt/local is the prefix MacPorts installs
+// into.
+var packageDirectories = []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/lib", "/opt/homebrew", "/usr/local/Cellar", "/opt/local"}
 
 // packageCandidates are the paths an executable can be known by: the one it was
 // asked for, and the file a link at it leads to.

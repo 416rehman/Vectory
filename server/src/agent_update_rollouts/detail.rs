@@ -74,7 +74,9 @@ pub fn message(code: Option<&str>) -> Option<&'static str> {
         "UNTRUSTED_LOCATION" => {
             "The install path or a directory above it isn't owned by root, or others can write to it."
         }
-        "READ_ONLY" => "The install directory is on a read-only file system.",
+        "READ_ONLY" => {
+            "The install directory is on a read-only file system, or the agent or its directory carries a flag that forbids replacing it."
+        }
         "HELPER_NOT_RUNNING" => "The privileged update step isn't running on the host.",
         "SERVICE_DEFINITION_OUTDATED" => {
             "The build needs a newer service definition than the host has."

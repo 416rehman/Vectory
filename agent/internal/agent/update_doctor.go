@@ -59,6 +59,13 @@ func updateChecks(v UpdateView) []DoctorCheck {
 		add("updates-key", "fail", "Update key", "Stopped: "+conflictSentence(conflict)+".", upgrade+" with the right key; it pins that key and ends the stop.")
 	}
 
+	// A rollback that keeps showing while the agent's service isn't running is one that
+	// can't start the previous build yet.
+	if v.startingThePreviousBuild() {
+		add("updates-rollback", "warn", "Update rollback", "The update step is putting the previous build back, and the agent's service isn't running. It tries to start the previous build again every 30 seconds, and goes on until it can.",
+			"Look at "+lookAtWords()+": the step logs why each try failed.")
+	}
+
 	if v.Staged != nil && v.Staged.Complete && v.Policy.Consent == UpdateConsentAsk && v.Status != nil && v.Status.Stage == UpdateStageIdle {
 		what := "an update"
 		if v.Staged.Version != "" {
@@ -73,7 +80,7 @@ func updateChecks(v UpdateView) []DoctorCheck {
 		case last.Outcome == UpdateOutcomeCommitted:
 			add("updates-last", "ok", "Last update", words, "")
 		case last.Code == "ROLLBACK_UNHEALTHY":
-			add("updates-last", "fail", "Last update", sentence(words), "Check the network and the server; the previous build hasn't checked in either. "+AdminCommandFor(v.StateDir, "vectory doctor")+" shows the connection.")
+			add("updates-last", "fail", "Last update", sentence(words), "Look at the agent's service ("+agentServiceLook()+") and the update step's log ("+updateStepLogWords()+"), then at the network and the server: the Service, Check-in and connection checks above show them.")
 		default:
 			add("updates-last", "warn", "Last update", sentence(words), "Nothing to do here: the next release reaches this host. The dashboard shows how the rollout went.")
 		}
@@ -93,7 +100,8 @@ func updateEligibilityFix(v UpdateView) string {
 	case "UNTRUSTED_LOCATION":
 		return "Make every directory on the path of the agent, of the update policy and of the update step writable by root alone, and keep them so."
 	case "READ_ONLY":
-		return "Install the agent in a directory the update step can write (--install-dir), or make the install directory writable by it."
+		return "Install the agent in a directory the update step can write (--install-dir), or make the install directory writable by it. " +
+			"If the agent or its directory has an immutable or append-only flag, clear it (" + clearFlagWords() + "); the update step's log (" + updateStepLogWords() + ") names the path."
 	case "HELPER_NOT_RUNNING":
 		return "Run " + repinCommand(dir, v.Policy) + ": it installs the update step again."
 	case "SERVICE_DEFINITION_OUTDATED":

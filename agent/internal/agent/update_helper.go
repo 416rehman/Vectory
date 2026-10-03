@@ -66,6 +66,9 @@ const (
 	updateTrialDuration = 5 * time.Minute
 	updatePollInterval  = 2 * time.Second
 	updateRestartLimit  = 3
+	// A manager that loses the agent's service during a watch (serviceReloader) is
+	// asked to load it again at most this often in that watch.
+	updateReloadLimit = 2
 	// A status.json older than two minutes tells the agent the step isn't running,
 	// so a long wait refreshes it often.
 	updateStatusRefresh = 10 * time.Second
@@ -407,6 +410,12 @@ func inspectHost(host updateHost, stateDir, running string) hostFacts {
 	}
 	if install.ReadOnly() {
 		return fail("READ_ONLY", "the file system that holds %s is mounted read-only", service.Executable)
+	}
+	// A flag that forbids replacing the executable is found here, before anything is
+	// raised or stopped, and not by a swap that fails after the service has stopped and
+	// the release's counter is spent.
+	if why := install.Immutable(); why != "" {
+		return fail("READ_ONLY", "%s", why)
 	}
 	facts.code = UpdateEligible
 	return facts

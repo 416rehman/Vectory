@@ -279,3 +279,49 @@ func TestAnInstalledRecordThatIsMissingOrDamagedIsMadeAgainFromTheExecutableItse
 		})
 	}
 }
+
+// A swap the file system refuses leaves the service stopped, and the step starts it
+// again on the build that is there. A start the service manager doesn't take is no result
+// of the request: the run ends with an error and the journal says swapping still, and each
+// next run, which finds the old build installed, starts it again, until one does and the
+// request ends as interrupted. Ending the request at a failed start would leave the host
+// with no agent, because the runs that follow find an idle journal and start nothing.
+func TestAStartOfTheOldBuildThatFailsAfterARefusedSwapLeavesTheJournalForTheNextRun(t *testing.T) {
+	f := newStepFixture(t)
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+	f.host.cfg.SwapFails = "rename: input/output error"
+	f.host.cfg.StartFails = 3
+	oldDigest := f.executableDigest()
+
+	// The first run makes the swap that fails and starts the old build again; the two after
+	// it find the journal saying swapping, as a run after a crash does.
+	for run := 1; run <= 3; run++ {
+		err := f.run()
+		if err == nil || !strings.Contains(err.Error(), "couldn't start the agent service") || !strings.Contains(err.Error(), "the next run of the update step starts the service again") {
+			t.Fatalf("run %d, which couldn't start the agent, ended with: %v", run, err)
+		}
+		journal, found := f.journal()
+		if !found || journal.Stage != UpdateStageSwapping {
+			t.Fatalf("the journal after run %d: %+v (found %v)", run, journal, found)
+		}
+		if got := f.executableDigest(); got != oldDigest {
+			t.Errorf("the executable is %s after run %d, want the build it had, %s", got, run, oldDigest)
+		}
+		if state := f.service().State; state != "inactive" {
+			t.Errorf("the service is %s after run %d, which couldn't start it", state, run)
+		}
+		if got := f.counters().HighestCounters[f.public.Fingerprint()]; got != release.counter {
+			t.Errorf("the floor is %d after an attempt of counter %d", got, release.counter)
+		}
+		f.clock.advance(30 * time.Second)
+	}
+
+	f.mustRun()
+
+	f.requireAnswered(release, UpdateOutcomeFailed, "INTERRUPTED")
+	f.requireOldBuildRunning(oldDigest)
+	if history := strings.Join(f.service().History, ","); history != "start 0.1.0,stop,start 0.1.0" {
+		t.Errorf("the service's history: %s", history)
+	}
+}

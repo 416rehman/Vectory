@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 // The privileged step on macOS: a launch daemon of its own, io.vectory.update, and
@@ -55,10 +55,11 @@ const (
 	// maxPlistFile bounds a definition as the step reads it.
 	maxPlistFile = 64 * 1024
 
-	// A bootstrap launchd refuses right after a bootout (it says "Input/output
-	// error" while the old job is still being torn down) is tried again.
-	launchdStartAttempts = 4
-	launchdStartPause    = 2 * time.Second
+	// A start of the agent's job that launchd refuses (a bootstrap that answers
+	// "Input/output error", for one) or that doesn't show afterwards is tried again,
+	// every launchdStartPause, for launchdStartBound in all.
+	launchdStartBound = 60 * time.Second
+	launchdStartPause = 2 * time.Second
 )
 
 // macosUpdateHost is updateHost on a Mac: launchd runs the agent and the step.
@@ -70,17 +71,33 @@ type macosUpdateHost struct {
 	receipt string
 	// agent drives the agent's launch daemon, and step the step's own.
 	agent, step launchdJob
+	// startBound is how long a start of the agent's job keeps trying to have launchd
+	// show it. alive says whether a process is still there; a test replaces it.
+	startBound time.Duration
+	alive      func(pid int) bool
 }
 
 var _ updateHost = (*macosUpdateHost)(nil)
+var _ serviceReloader = (*macosUpdateHost)(nil)
 
 // newMacOSUpdateHost builds the host over a launchctl runner: the real one, or a
 // recorder in a test.
 func newMacOSUpdateHost(run func(ctx context.Context, args ...string) launchctlResult) *macosUpdateHost {
-	h := &macosUpdateHost{daemonDir: launchDaemonsDir, receipt: macosPackageReceipt}
+	h := &macosUpdateHost{daemonDir: launchDaemonsDir, receipt: macosPackageReceipt, startBound: launchdStartBound, alive: processExists}
 	h.agent = h.job("", run)
 	h.step = h.job(updateLaunchdLabel, run)
 	return h
+}
+
+// processExists says whether a process with this ID is there: kill with signal 0
+// sends nothing and only looks. EPERM says it exists and isn't this process's to
+// signal; only ESRCH says it is gone.
+func processExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := unix.Kill(pid, 0)
+	return err == nil || errors.Is(err, unix.EPERM)
 }
 
 // job makes the driver of one of the two daemons: label is empty for the agent's.
@@ -99,22 +116,6 @@ func (h *macosUpdateHost) definitionOf(label string) string {
 }
 
 // ---------------------------------------------------------------- the step's definition
-
-// plistText makes a value fit for a string of a definition, or refuses it: a value
-// that isn't text, that holds a control character or that XML 1.0 can't carry
-// would be changed on the way in, and what launchd read would not be what the step
-// meant. xmlText escapes the rest.
-func plistText(what, value string) (string, error) {
-	if value == "" || !utf8.ValidString(value) {
-		return "", fmt.Errorf("%s isn't text a definition can hold", what)
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) || r == '￾' || r == '￿' {
-			return "", fmt.Errorf("%s holds a control or invalid character, so it isn't written into a definition", what)
-		}
-	}
-	return xmlText(value), nil
-}
 
 // launchdUpdatePlist is the step's launch daemon, in the compact form launchdPlist
 // uses for the agent's. It runs as root (no UserName, no GroupName) from the
@@ -327,11 +328,15 @@ func parseLaunchdPrint(text string) (launchdPrinted, error) {
 }
 
 // serviceState is what the step reads of it. launchd keeps a job that has
-// KeepAlive running or about to run, so there is no failed state to read: a job
-// that is running with a process is "active", a job that is loaded and isn't
-// (waiting out its throttle, or starting) is "activating", and a job launchd
-// doesn't know is "inactive". A build that can't start is seen as runs that count
-// up, which the step ends at three, or as a deadline.
+// KeepAlive loaded when its process ends or is killed, and starts it again no sooner
+// than its ThrottleInterval (10 s in the agent's definition): `print` then says "spawn
+// scheduled" or "not running", the count of runs goes up and the last exit code or the
+// signal that ended it is shown. So there is no failed state to read: a job that is
+// running with a process is "active", and a job that is loaded and isn't (waiting out
+// its throttle, or starting) is "activating". A build that can't start is seen as
+// runs that count up, which the step ends at three, or as a deadline. A job launchd
+// doesn't know (updateServiceState.Unloaded) is "inactive": that is what a bootout
+// leaves, by the manager or by a person.
 func (p launchdPrinted) serviceState() updateServiceState {
 	state := updateServiceState{State: "activating", PID: p.PID, Restarts: max(p.Runs-1, 0)}
 	if p.State == "running" && p.PID > 0 {
@@ -349,12 +354,6 @@ func orDash(word string) string {
 	return word
 }
 
-// launchdNotLoaded says that launchctl print found no such job: exit status 113,
-// "Could not find service".
-func launchdNotLoaded(result launchctlResult) bool {
-	return result.status == 113 || strings.Contains(result.stderr, "Could not find service")
-}
-
 // ServiceState reads the agent's job from launchd.
 func (h *macosUpdateHost) ServiceState(ctx context.Context) (updateServiceState, error) {
 	result := h.agent.launchctl(ctx, launchdStatusLimit, "print", h.agent.target())
@@ -366,36 +365,108 @@ func (h *macosUpdateHost) ServiceState(ctx context.Context) (updateServiceState,
 		}
 		return printed.serviceState(), nil
 	case launchdNotLoaded(result):
-		return updateServiceState{State: "inactive", Detail: fmt.Sprintf("launchd doesn't know the job (launchctl print exited %d: %s)", result.status, safeText(strings.TrimSpace(result.stderr), 120))}, nil
+		return updateServiceState{State: "inactive", Unloaded: true, Detail: fmt.Sprintf("launchd doesn't know the job (launchctl print exited %d: %s)", result.status, safeText(strings.TrimSpace(result.stderr), 120))}, nil
 	case ctx.Err() != nil:
 		return updateServiceState{}, ctx.Err()
 	}
 	return updateServiceState{}, launchctlFailure([]string{"print", h.agent.target()}, result)
 }
 
-// StopService unloads the agent's job (launchctl bootout), which waits for the
-// agent to drain Vector.
+// StopService unloads the agent's job (launchctl bootout), which waits for the agent
+// to drain Vector, and reports it stopped only when launchd no longer lists the job
+// and the process the job had is gone. launchctl bootout returns when launchd has begun
+// to remove the job, not when it has (launchdJob.bootout), so the first of the two
+// waits is the job's, and the second is for the process: its ID is read from `print`
+// before the bootout, and `kill(pid, 0)` says ESRCH once it is gone. Both are bounded by
+// the stop limit.
 func (h *macosUpdateHost) StopService(ctx context.Context) error {
-	return h.agent.controlContext(ctx, "stop")
-}
-
-// StartService loads the agent's job again, or kickstarts one that is loaded and
-// isn't running. launchd refuses a bootstrap in the moments after a bootout while
-// it tears the old job down, so a refusal is tried again a few times.
-func (h *macosUpdateHost) StartService(ctx context.Context) error {
-	var err error
-	for attempt := 0; attempt < launchdStartAttempts; attempt++ {
-		if attempt > 0 {
-			h.agent.sleep(launchdStartPause)
-		}
-		if err = h.agent.controlContext(ctx, "start"); err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+	deadline := h.agent.now().Add(serviceStopLimit)
+	pid := 0
+	if result, loaded := h.agent.loaded(ctx); loaded {
+		if printed, err := parseLaunchdPrint(result.stdout); err == nil {
+			pid = printed.PID
 		}
 	}
-	return err
+	if err := h.agent.controlContext(ctx, "stop"); err != nil {
+		return err
+	}
+	for pid > 0 && h.alive(pid) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !h.agent.now().Before(deadline) {
+			return fmt.Errorf("the agent's process %d is still there after launchd unloaded its job, and %s have passed", pid, humanDuration(serviceStopLimit))
+		}
+		h.agent.sleep(launchdUnloadPoll)
+	}
+	return nil
+}
+
+// StartService has launchd load the agent's job and show it. It doesn't go through the
+// agent's own `service-start`, which acts on what `print` says at that instant: a job
+// still listed as running is taken for the agent and a bootstrap launchd accepts while
+// it removes a label disappears with it. It bootstraps the definition when `print`
+// says launchd has no such job, tries a refusal again every two seconds for a minute in
+// all, and confirms with `print` that launchd lists the job (loaded, whatever it is
+// doing: a job that is waiting out its throttle has started, and the watch judges it by
+// its runs); a job that isn't shown is bootstrapped again within the same minute. Only
+// a job that is shown ends it with nil. The stop that came before waits until launchd
+// has removed the old job (StopService), so a job that is listed now is the new
+// instance.
+func (h *macosUpdateHost) StartService(ctx context.Context) error {
+	job := h.agent
+	deadline := job.now().Add(h.startBound)
+	var last error
+	// gaveUp is the error of a start that has run out of its minute, with what launchd
+	// said last.
+	gaveUp := func() error {
+		if last == nil {
+			last = errors.New("launchd accepted the bootstrap and then didn't list the job")
+		}
+		return fmt.Errorf("launchd doesn't show the agent's job after %s: %w", humanDuration(h.startBound), last)
+	}
+	for {
+		printed := job.launchctl(ctx, launchdStatusLimit, "print", job.target())
+		pause := launchdStartPause
+		switch {
+		case printed.status == 0:
+			return nil
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case !job.now().Before(deadline):
+			// No new try after the minute; a job a bootstrap just made is still looked at
+			// once more, above.
+			return gaveUp()
+		case launchdNotLoaded(printed):
+			args := []string{"bootstrap", "system", job.definition}
+			if result := job.launchctl(ctx, launchctlLimit, args...); result.status == 0 {
+				// Accepted: a moment for launchd to settle, then a look at what it kept.
+				last, pause = nil, launchdUnloadPoll
+			} else if err := ctx.Err(); err != nil {
+				return err
+			} else {
+				last = launchctlFailure(args, result)
+			}
+		default:
+			last = launchctlFailure([]string{"print", job.target()}, printed)
+		}
+		job.sleep(pause)
+	}
+}
+
+// ReloadService loads the agent's job again when launchd doesn't know it, and says
+// whether it did. A job that launchd lists needs nothing. This is for a job that went
+// while a build was being tried (an administrator's bootout, or a removal that took the
+// job with it): the trial goes on with the job loaded again.
+func (h *macosUpdateHost) ReloadService(ctx context.Context) (bool, error) {
+	result := h.agent.launchctl(ctx, launchdStatusLimit, "print", h.agent.target())
+	if !launchdNotLoaded(result) {
+		return false, nil
+	}
+	if err := h.StartService(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ---------------------------------------------------------------- reading the agent's definition
@@ -441,8 +512,10 @@ func parseAgentDefinition(text string) (agentDefinition, error) {
 		}
 	}
 	// What setup writes for this account, executable and state directory must be
-	// what is there: the same text for what identifies the service.
-	if plistIdentity(text) != plistIdentity(launchdPlist(agent.Executable, agent.StateDir, agent.Account)) {
+	// what is there: the same text for what identifies the service. Values setup
+	// refuses to write can't be what it wrote.
+	written, err := launchdPlist(agent.Executable, agent.StateDir, agent.Account)
+	if err != nil || plistIdentity(text) != plistIdentity(written) {
 		return agent, errors.New("it isn't the definition `vectory service-install` writes for that account, executable and state directory")
 	}
 	return agent, nil

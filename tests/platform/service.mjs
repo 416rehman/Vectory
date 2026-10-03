@@ -721,6 +721,18 @@ async function lifecycle(evidence) {
         throw new Error(
           `Stopping took ${took} s, not under ${STOP_LIMIT_SECONDS} s.`,
         );
+      // `launchctl bootout` returns when launchd has begun to remove the job, not when
+      // it has finished, and the job is listed as running until then. The product's
+      // stop waits until launchd no longer lists it, so a start that follows at once
+      // meets no job that is leaving: a Mac that still lists it here would.
+      if (adapter.kind === "launchd") {
+        const listed = adapter.state();
+        evidence.observe("launchd_lists_the_job_when_stop_returns", listed.loaded);
+        if (listed.loaded)
+          throw new Error(
+            `${command} returned while launchd still lists the job:\n${listed.raw}`,
+          );
+      }
       await until(
         "the manager reports the service stopped",
         () => !adapter.state().running,
@@ -799,8 +811,14 @@ async function uninstall(evidence) {
       elevated: true,
       timeoutMs: 400000,
     });
-    // launchd forgets a job once its process has gone, and the agent takes up to
-    // its stop timeout to let Vector drain: wait for the manager to let go.
+    // launchd removes a booted-out job a moment after launchctl returns, and the agent
+    // takes up to its stop timeout to let Vector drain. The product's uninstall waits
+    // until launchd no longer lists the job, so on a Mac the registration is gone when
+    // the command has returned; the other managers are asked until they let go.
+    if (adapter.kind === "launchd" && !adapter.unregistered())
+      throw new Error(
+        `service-uninstall returned while launchd still knows the job or its definition is there:\n${adapter.describe()}`,
+      );
     await until(
       "the manager no longer knows the service",
       () => adapter.unregistered(),

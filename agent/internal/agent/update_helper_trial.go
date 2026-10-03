@@ -112,12 +112,18 @@ func (s *updateStep) binaryChanged(ctx context.Context, j *updateJournal, why st
 	return s.abort(j, "BINARY_CHANGED", why+": it is left as it is and taken as the running build")
 }
 
+// startService starts the agent's service for a build that is not on trial (the one
+// that was installed before, or the one a person put there). A start that fails or
+// can't be shown by the service manager is no result of the update: the step returns
+// the error and leaves the journal as it is, so that the next run, 30 seconds later,
+// starts the service again, and keeps on until it can. Ending the request would leave
+// the host without its agent until a reboot or a person came.
 func (s *updateStep) startService(ctx context.Context) error {
 	if err := s.host.StartService(ctx); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("couldn't start the agent service: %w", err)
+		return fmt.Errorf("couldn't start the agent service: %w. The update stays as it is, and the next run of the update step starts the service again", err)
 	}
 	return nil
 }
@@ -129,6 +135,10 @@ func (s *updateStep) startService(ctx context.Context) error {
 func (s *updateStep) resume(ctx context.Context) error {
 	j := s.journal
 	s.logf("continuing an update that was interrupted in %s", j.Stage)
+	// A run that can't take the update on keeps the status current: the agent calls a
+	// step whose status is older than two minutes not running, and a person reading it
+	// sees the stage the update is stuck in.
+	s.status(&j)
 	switch j.Stage {
 	case UpdateStagePreparing:
 		// Nothing but the step's own files and a temporary file beside the
@@ -241,6 +251,10 @@ type watchOutcome struct {
 	healthy        bool
 	code           string
 	firstCheckInMS *uint32
+	// unloaded says the watch ended because the service manager didn't know the service
+	// at all (updateServiceState.Unloaded), after it was loaded again as often as a
+	// watch does: nothing shows that the build was started, let alone that it failed.
+	unloaded bool
 }
 
 // watch looks every two seconds, until the build is healthy or the deadline.
@@ -255,12 +269,20 @@ type watchOutcome struct {
 // once with START_FAILED. At the deadline, a build that never checked in is
 // NO_CHECK_IN, and one that did but isn't healthy is UNHEALTHY.
 //
+// A manager that has lost the service (launchd, which doesn't know the job) is asked
+// to load it again, twice at most in one watch with a look in between, before its
+// "inactive" ends the watch: a job that went because an administrator booted it out, or
+// because a removal took it, says nothing about the build. The restarts are counted
+// from the first look, and from the first look after the count went down: a service
+// loaded again counts from the start.
+//
 // The health record is a file the service account writes: it can't prove the
 // build is healthy to anyone but the step, and a service account that forges it can
 // keep a build that was signed and doesn't work, which is a denial of service to
 // itself. It never makes the step install or keep anything unsigned.
 func (s *updateStep) watch(ctx context.Context, j *updateJournal, spec watchSpec) (watchOutcome, error) {
 	baseline := -1
+	reloads := 0
 	var firstCheckIn time.Time
 	refreshed := s.clock.Now()
 	for {
@@ -268,15 +290,39 @@ func (s *updateStep) watch(ctx context.Context, j *updateJournal, spec watchSpec
 		if ctx.Err() != nil {
 			return watchOutcome{}, ctx.Err()
 		}
+		judged := stateErr == nil
+		if judged && state.State == "inactive" && reloads < updateReloadLimit {
+			if reloader, ok := s.host.(serviceReloader); ok {
+				reloaded, err := reloader.ReloadService(ctx)
+				if ctx.Err() != nil {
+					return watchOutcome{}, ctx.Err()
+				}
+				switch {
+				case err != nil:
+					reloads++
+					s.logf("the service manager no longer knows the agent's service, and loading it again failed (%d of %d): %v", reloads, updateReloadLimit, err)
+				case reloaded:
+					reloads++
+					s.logf("the service manager no longer knew the agent's service (%s): the step loaded it again (%d of %d)", orNothing(state.Detail), reloads, updateReloadLimit)
+				}
+				// What was read above is out of date; the next look judges the service as
+				// it is then.
+				judged = false
+			}
+		}
 		restarts := 0
-		if stateErr == nil {
+		if judged {
 			if baseline < 0 {
+				baseline = state.Restarts
+			}
+			if state.Restarts < baseline {
+				s.logf("the service manager counts %d start(s) of the agent's service after it counted %d: it was loaded again, so the restarts are counted from here", state.Restarts, baseline)
 				baseline = state.Restarts
 			}
 			restarts = state.Restarts - baseline
 			if state.failed() || state.State == "inactive" || restarts >= updateRestartLimit {
 				s.logf("the service manager shows the agent's service %s after %d restart(s) since the watch began: %s", state.State, restarts, orNothing(state.Detail))
-				return watchOutcome{code: "START_FAILED"}, nil
+				return watchOutcome{code: "START_FAILED", unloaded: state.State == "inactive" && state.Unloaded}, nil
 			}
 		}
 		now := s.clock.Now()
@@ -584,9 +630,16 @@ func (s *updateStep) openWatchWindow(j *updateJournal) {
 // continueRollback stops the service, puts the previous build back after checking
 // it against the journal's digest, starts the service and watches the previous build
 // for the same health. Each step can be done again, so a crash anywhere in it is
-// resumed. If the previous build can't be put back, or isn't healthy within five
-// minutes, the step records ROLLBACK_UNHEALTHY and stops there: it leaves what is
-// installed in place and never alternates between builds.
+// resumed. If the previous build can't be put back, or was started, is loaded and isn't
+// healthy within five minutes, the step records ROLLBACK_UNHEALTHY and stops there: it
+// leaves what is installed in place and never alternates between builds.
+//
+// A start that fails, or that the service manager doesn't show (its service is gone
+// after the loads again that a watch makes), is not that: nothing shows the previous
+// build is unhealthy, only that it isn't running. The step returns the error and leaves
+// the journal saying rolling_back, so that the next run starts the previous build
+// again, 30 seconds later, and keeps on until it can. The request ends only with a
+// result about a build that ran.
 func (s *updateStep) continueRollback(ctx context.Context, j *updateJournal) error {
 	if s.install == nil {
 		return errors.New("the install directory can't be opened, so the rollback can't continue: " + s.eligibility)
@@ -640,8 +693,8 @@ func (s *updateStep) continueRollback(ctx context.Context, j *updateJournal) err
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		s.logf("the previous build's service didn't start: %v", err)
-		return s.endRolledBack(j, "ROLLBACK_UNHEALTHY")
+		s.status(j)
+		return fmt.Errorf("couldn't start the previous build: %w. The update stays rolling back, and the next run of the update step starts it again", err)
 	}
 	faultPoint("rollback:started")
 	s.openWatchWindow(j)
@@ -652,6 +705,10 @@ func (s *updateStep) continueRollback(ctx context.Context, j *updateJournal) err
 	})
 	if err != nil {
 		return err
+	}
+	if outcome.unloaded {
+		s.status(j)
+		return errors.New("the service manager doesn't know the agent's service although the previous build was started, so nothing shows that it runs. The update stays rolling back, and the next run of the update step starts it again")
 	}
 	if !outcome.healthy {
 		cause = "ROLLBACK_UNHEALTHY"

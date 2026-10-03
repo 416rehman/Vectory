@@ -58,10 +58,15 @@ type updateServiceState struct {
 	// State is the manager's own word: "active" (running), "activating" (starting,
 	// or waiting to restart), "failed" or "inactive".
 	State string
-	// Restarts counts the automatic restarts since the service was last started.
+	// Restarts counts the automatic restarts since the service was last started. A
+	// manager that was told to load the service again counts from the start: the
+	// count can go down.
 	Restarts int
 	// PID is the main process, 0 when there is none.
 	PID int
+	// Unloaded says the manager has no such service at all (launchd: no such job); State
+	// is "inactive" then. A unit that merely stopped is "inactive" and loaded.
+	Unloaded bool
 	// Detail is what the manager said, in words for the step's log when a build
 	// doesn't stay up. Nothing reads it to decide anything.
 	Detail string
@@ -105,7 +110,11 @@ type updateHost interface {
 	StateDirReachable(stateDir string) error
 
 	// ServiceState, StopService and StartService are the service manager. Stopping
-	// waits for Vector's graceful drain.
+	// waits for Vector's graceful drain and returns only when the service is
+	// stopped, and starting returns nil only when the manager shows the service
+	// started, whatever it is doing. A start that fails or can't be shown is an error,
+	// which the step reads as "start again at the next run": it never ends a request
+	// on one.
 	ServiceState(ctx context.Context) (updateServiceState, error)
 	StopService(ctx context.Context) error
 	StartService(ctx context.Context) error
@@ -157,6 +166,18 @@ type updateHost interface {
 	RemoveUnits() (installDir string, removed bool, err error)
 }
 
+// serviceReloader is implemented by a host whose service manager can lose the agent's
+// service without anyone having asked it to remove it (launchd, when a removal that
+// was already under way takes a job that was loaded in the meantime, or when an
+// administrator boots it out): the other managers keep a service they were told to
+// start, or say it stopped. The watch of a trial calls it when the manager says the
+// service is "inactive".
+type serviceReloader interface {
+	// ReloadService loads the agent's service again when the manager doesn't know it,
+	// and says whether it did. A manager that knows the service is left alone.
+	ReloadService(ctx context.Context) (reloaded bool, err error)
+}
+
 // updateInstall is the install directory and the executable in it, checked once
 // and held. The swap is made relative to the held directory, so that no component
 // of the path can change between the check and the use.
@@ -171,6 +192,11 @@ type updateInstall interface {
 	Style() string
 	// ReadOnly says that the file system is mounted read-only.
 	ReadOnly() bool
+	// Immutable says, in words that name the flag, why the file system won't let the
+	// step replace the executable although it is writable: the executable or its
+	// directory has a flag that forbids it (the immutable or append-only attribute of
+	// a Linux file system, uchg or schg on macOS). It is "" when neither has one.
+	Immutable() string
 	// FreeSpace is how many bytes the step may still write in the directory.
 	FreeSpace() (uint64, error)
 
@@ -240,13 +266,31 @@ var (
 
 // currentUpdateHost is the operating system's host, or nil when this platform has
 // no update step: its native proof isn't part of this build (updatesInRelease), or
-// no step is written for it yet.
+// no step is written for it yet. A test that replaced the gate's table is asking what a
+// build with that table does, so the table decides before the test's host (which
+// otherwise stands for the platform's and needs no gate).
 func currentUpdateHost() updateHost {
+	switch {
+	case updateGateOverride != nil && !updatesInRelease(runtime.GOOS):
+		return nil
+	case updateHostOverride != nil:
+		return updateHostOverride
+	case !updatesInRelease(runtime.GOOS):
+		return nil
+	}
+	return platformUpdateHost()
+}
+
+// removalUpdateHost is the operating system's host for taking a step away: the one
+// that an earlier build may have installed it with, whether or not this build ships
+// updates here. The gate says what a build may start, never what it may leave behind:
+// a build that doesn't ship updates on this system must still be able to remove a step
+// (and the launch daemon or service that runs it as root) that an earlier one made.
+// Only removal and uninstall use it. It is nil where no step is written for the
+// operating system at all.
+func removalUpdateHost() updateHost {
 	if updateHostOverride != nil {
 		return updateHostOverride
-	}
-	if !updatesInRelease(runtime.GOOS) {
-		return nil
 	}
 	return platformUpdateHost()
 }

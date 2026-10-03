@@ -18,11 +18,24 @@ import (
 // files to a directory, delete what a directory holds, change its permissions or
 // take it over, without changing st_mode. On such a path the service account could
 // replace the update policy (pinning its own key) or the executable the step
-// installs. An entry that allows any of those to an account other than root makes
-// the path untrusted, whatever it names and whether or not it is inherited: the
-// step creates files in the directories it checks, and an entry that only
-// children inherit still decides who may rewrite the files it makes there. An
-// entry that denies, or allows only reading, passes: they take nothing from root.
+// installs. An entry that allows an account other than root anything but reading,
+// looking at and searching what the path names makes the path untrusted, whatever
+// it names and whether or not it is inherited: the step creates files in the
+// directories it checks, and an entry that only children inherit still decides who
+// may rewrite the files it makes there. An entry that denies passes: it takes nothing
+// from root.
+//
+// The decision is an allow-list of rights, never a list of the rights to refuse. The
+// kernel gives an entry more rights than its bits name: kauth_acl_evaluate expands the
+// generic rights (KAUTH_ACE_GENERIC_ALL and KAUTH_ACE_GENERIC_WRITE) into write,
+// append, delete, delete_child, writeattr, writeextattr and writesecurity before it
+// compares them with what is asked, nothing rejects an entry that carries them when it
+// is set (chmod(1) can't make one; the access list functions, device management, an
+// entry an SMB share maps in and an entry a parent hands down can), and a right the
+// kernel doesn't define is one no check of the kernel's compares, so nothing says what
+// a later system makes of it. So an entry for an account other than root passes only
+// when every bit of its rights is one of those named in extRightsTolerated, and a bit
+// that isn't named there, defined or not, refuses the path.
 //
 // The principal of an entry is a GUID. Root's is the one macOS derives from user
 // ID 0, and it alone passes; every other principal, a user, the group everyone, the
@@ -50,18 +63,46 @@ const (
 	extACEPermit   = 1
 )
 
-// Rights (KAUTH_VNODE_*; the same values as acl_perm_t in sys/acl.h). A right has
-// two names, one for a file and one for a directory.
+// Rights (KAUTH_VNODE_*; the same values as acl_perm_t in sys/acl.h, and the generic
+// rights KAUTH_ACE_GENERIC_*, which an entry's rights word may also carry). A right
+// has two names, one for a file and one for a directory.
 const (
+	extRightReadData      = 1 << 1  // read; list
 	extRightWriteData     = 1 << 2  // write; add_file
+	extRightExecute       = 1 << 3  // execute; search
 	extRightDelete        = 1 << 4  // delete
 	extRightAppendData    = 1 << 5  // append; add_subdirectory
 	extRightDeleteChild   = 1 << 6  // delete_child
+	extRightReadAttr      = 1 << 7  // readattr
+	extRightWriteAttr     = 1 << 8  // writeattr
+	extRightReadExtAttr   = 1 << 9  // readextattr
+	extRightWriteExtAttr  = 1 << 10 // writeextattr
+	extRightReadSecurity  = 1 << 11 // readsecurity
 	extRightWriteSecurity = 1 << 12 // writesecurity: change the list and the mode
 	extRightTakeOwner     = 1 << 13 // chown
+	extRightSynchronize   = 1 << 20 // synchronize (for Windows interoperability)
 
-	// extRightsRefused are the rights an entry for anyone but root may not allow.
-	extRightsRefused = extRightWriteData | extRightDelete | extRightAppendData | extRightDeleteChild | extRightWriteSecurity | extRightTakeOwner
+	// The generic rights are expanded when an entry is evaluated: GENERIC_READ into
+	// read, readattr, readextattr and readsecurity, GENERIC_EXECUTE into execute,
+	// GENERIC_WRITE into write, append, delete, delete_child, writeattr, writeextattr
+	// and writesecurity, and GENERIC_ALL into all of those.
+	extRightGenericAll     = 1 << 21
+	extRightGenericExecute = 1 << 22
+	extRightGenericWrite   = 1 << 23
+	extRightGenericRead    = 1 << 24
+
+	// extRightsTolerated are the only rights an entry for an account other than root
+	// may allow: reading, listing, searching and executing, and what changes neither
+	// the content, the mode, the flags, the list nor a file's owner. writeattr (the
+	// timestamps) and writeextattr (the extended attributes) are tolerated on purpose:
+	// neither one lets an account write a file, add to or delete from a directory, or
+	// take it over. The generic read and execute rights expand to rights that are in
+	// this list and to nothing else. Every other bit, whether the kernel names it
+	// (write, append, delete, delete_child, writesecurity, chown, the generic write
+	// and the generic all rights) or not, refuses the path.
+	extRightsTolerated = extRightReadData | extRightExecute | extRightReadAttr | extRightWriteAttr |
+		extRightReadExtAttr | extRightWriteExtAttr | extRightReadSecurity | extRightSynchronize |
+		extRightGenericExecute | extRightGenericRead
 )
 
 // extPrincipal is the GUID of an account or a group.
@@ -127,7 +168,8 @@ func parseExtendedACL(blob []byte) ([]extEntry, error) {
 // extendedACLProblem says why an access list lets an account other than root change
 // what it guards, as the end of a sentence about the path ("has an access list
 // entry that allows add_file to gid 12"), or "" when it doesn't. directory says
-// which names the rights go by.
+// which names the rights go by. Only a right outside extRightsTolerated is named: an
+// entry that also allows reading is refused for the rest of what it allows.
 func extendedACLProblem(blob []byte, directory bool) (string, error) {
 	entries, err := parseExtendedACL(blob)
 	if err != nil {
@@ -137,30 +179,38 @@ func extendedACLProblem(blob []byte, directory bool) (string, error) {
 		if entry.kind != extACEPermit || entry.principal == extRoot {
 			continue
 		}
-		if granted := entry.rights & extRightsRefused; granted != 0 {
-			return fmt.Sprintf("has an access list entry that allows %s to %s", quoteList(extRightNames(granted, directory)), entry.principal), nil
+		if refused := entry.rights &^ extRightsTolerated; refused != 0 {
+			return fmt.Sprintf("has an access list entry that allows %s to %s", quoteList(extRightNames(refused, directory)), entry.principal), nil
 		}
 	}
 	return "", nil
 }
 
-// extRightNames names rights as chmod(1) does, in the order it lists them.
+// extRightNames names rights as chmod(1) does, in the order it lists them, then the
+// generic rights, which chmod has no name for, and then the bits that no right of the
+// kernel's is, together.
 func extRightNames(rights uint32, directory bool) []string {
 	write, appendName := "write", "append"
 	if directory {
 		write, appendName = "add_file", "add_subdirectory"
 	}
 	var names []string
+	named := uint32(0)
 	for _, right := range []struct {
 		bit  uint32
 		name string
 	}{
 		{extRightWriteData, write}, {extRightAppendData, appendName}, {extRightDelete, "delete"},
 		{extRightDeleteChild, "delete_child"}, {extRightWriteSecurity, "writesecurity"}, {extRightTakeOwner, "chown"},
+		{extRightGenericWrite, "generic_write"}, {extRightGenericAll, "generic_all"},
 	} {
+		named |= right.bit
 		if rights&right.bit != 0 {
 			names = append(names, right.name)
 		}
+	}
+	if unknown := rights &^ named; unknown != 0 {
+		names = append(names, fmt.Sprintf("an unknown right (%#x)", unknown))
 	}
 	return names
 }

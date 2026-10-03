@@ -35,6 +35,16 @@ func withdrawalTree(t *testing.T) (root string, paths UpdatePaths) {
 	return root, paths
 }
 
+// removesTheStep stands for the step's removal: it counts its calls and takes the
+// step's directory away, as the real one does, because a step is reported removed
+// only when its directory is gone.
+func removesTheStep(calls *int) func() error {
+	return func() error {
+		*calls++
+		return os.RemoveAll(UpdateLocations().StepDir)
+	}
+}
+
 // stagedIn makes what the agent keeps in the updates directory of a state
 // directory, and returns the file that stands for a staged build.
 func stagedIn(t *testing.T, state string) string {
@@ -72,7 +82,7 @@ func TestWithdrawingUpdatesDeletesWhatTheAgentStagedWhereRootAloneHoldsTheStateD
 		}
 	}
 	removed := 0
-	done, err := withdrawUpdates(state, func() error { removed++; return nil })
+	done, err := withdrawUpdates(state, removesTheStep(&removed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +152,7 @@ func TestWithdrawingUpdatesLeavesTheStagedFilesWhereAnotherAccountCouldSwapTheSt
 			root, _ := withdrawalTree(t)
 			state, refused, why, survivors := tc.build(t, root)
 			removed := 0
-			done, err := withdrawUpdates(state, func() error { removed++; return nil })
+			done, err := withdrawUpdates(state, removesTheStep(&removed))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +206,7 @@ func TestWithdrawingUpdatesSaysNothingAboutFilesThatAreNotThere(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root, _ := withdrawalTree(t)
 			state := build(t, root)
-			done, err := withdrawUpdates(state, func() error { return nil })
+			done, err := withdrawUpdates(state, removesTheStep(new(int)))
 			if err != nil || done.StagedLeft != nil || done.Discarded || !done.PolicyOff || !done.StepRemoved {
 				t.Fatalf("%+v %v", done, err)
 			}
@@ -221,7 +231,7 @@ func TestWithdrawingUpdatesRemovesALinkInPlaceOfTheStagedFilesAndDoesNotFollowIt
 	if err := os.Symlink(filepath.Dir(precious), UpdateExchangeFor(state).Dir); err != nil {
 		t.Skipf("no symbolic links here: %v", err)
 	}
-	done, err := withdrawUpdates(state, func() error { return nil })
+	done, err := withdrawUpdates(state, removesTheStep(new(int)))
 	if err != nil || !done.Discarded || done.StagedLeft != nil {
 		t.Fatalf("%+v %v", done, err)
 	}
