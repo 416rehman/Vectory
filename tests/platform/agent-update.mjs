@@ -598,11 +598,22 @@ async function install(evidence) {
 
 async function sandbox(evidence) {
   const host = updateHostFor();
+  // The pinned text is for an agent in /usr/local/bin; this host's is elsewhere.
   const golden = (name) =>
-    fs.readFileSync(
-      path.join(root, "agent", "internal", "agent", "testdata", "update", name),
-      "utf8",
-    );
+    fs
+      .readFileSync(
+        path.join(
+          root,
+          "agent",
+          "internal",
+          "agent",
+          "testdata",
+          "update",
+          name,
+        ),
+        "utf8",
+      )
+      .replaceAll('"/usr/local/bin"', `"${host.paths.installDir}"`);
   await evidence.step(
     "The step's service and timer are the text the product pins, word for word",
     () => {
