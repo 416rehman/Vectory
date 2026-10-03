@@ -149,9 +149,11 @@ After the agent is installed and enrolled and before the service starts, `setup`
 The key, the track and the windows can be given without `--updates`. They then amend what the host already agreed to: they change the parts they name and keep everything else, so no command has to say again what the host chose.
 
 ```sh
-sudo vectory setup --server https://vectory.example.com:8443 --update-key-sha256 <64-hex-fingerprint>
+sudo vectory setup --server https://vectory.example.com:8443 \
+  --update-key-sha256 <64-hex-fingerprint>
 sudo vectory setup --server https://vectory.example.com:8443 --update-track minor
-sudo vectory setup --server https://vectory.example.com:8443 --update-window 'Sat,Sun 01:00-03:00 UTC'
+sudo vectory setup --server https://vectory.example.com:8443 \
+  --update-window 'Sat,Sun 01:00-03:00 UTC'
 ```
 
 | Flag alone | What it does |
