@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,7 +75,7 @@ func TestOptionErrorsThatNoHostCouldAcceptAreInputErrors(t *testing.T) {
 		}
 	}
 	// A refusal that depends on the host is not the operator's typing.
-	if err := (InstallOptions{AddAllowances: &CapabilityPolicy{AllowedFileRoots: []string{string(filepath.Separator)}}}).validate(); err == nil || IsInputError(err) {
+	if err := (InstallOptions{AddAllowances: &CapabilityPolicy{AllowedFileRoots: []string{filepath.VolumeName(os.TempDir()) + string(filepath.Separator)}}}).validate(); err == nil || IsInputError(err) {
 		t.Errorf("the filesystem root: %v", err)
 	}
 	if err := validateMetricsChange(&[]string{"https://127.0.0.1:9598/metrics"}[0], false); err == nil || !IsInputError(err) || !strings.Contains(err.Error(), "https://127.0.0.1:9598/metrics can't be the metrics endpoint: must be http://") {
@@ -86,7 +87,7 @@ func TestSecretBindingMessagesSayWhichPathOrNameIsWrong(t *testing.T) {
 	if _, err := ReadSecretBindings("relative/bindings.json"); err == nil || !IsInputError(err) || !strings.Contains(err.Error(), "--secret-files relative/bindings.json isn't an absolute path") {
 		t.Errorf("a relative path: %v", err)
 	}
-	if _, err := ReadSecretBindings(filepath.Join(t.TempDir(), "missing.json")); err == nil || !strings.Contains(err.Error(), "can't be read: no such file or directory") {
+	if _, err := ReadSecretBindings(filepath.Join(t.TempDir(), "missing.json")); err == nil || !strings.Contains(err.Error(), "missing.json can't be read: ") {
 		t.Errorf("a missing file: %v", err)
 	}
 	for name, test := range map[string]struct {
