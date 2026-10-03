@@ -226,3 +226,23 @@ func TestWindowsSecurityDescriptorsForWhatRootMakes(t *testing.T) {
 		}
 	}
 }
+
+func TestEntryNamesOnWindowsArePlainNamesAndNeverDevices(t *testing.T) {
+	for _, name := range []string{
+		"policy.json", "status.json", "release.json.sig", "vectory.exe", ".policy.json.tmp-0123456789abcdef",
+		"COM0", "COM10", "lpt", "nul-x", "console.txt", "auxiliary", "a_b-c.d",
+	} {
+		if err := checkWindowsEntryName(name); err != nil {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"", ".", "..", "a.", "a b", "a:b", `a\b`, "a/b", "a*b", "a?b", "a<b", "a|b", `a"b`, "a~1", "POLICY~1.JSO", "é", "a\x00b", "a\nb",
+		"NUL", "nul", "Nul.txt", "CON", "con.json", "PRN", "aux", "AUX.x", "COM1", "com9.log", "Com3", "LPT1", "lpt9.txt", "CONIN$",
+		strings.Repeat("n", 256),
+	} {
+		if err := checkWindowsEntryName(name); err == nil {
+			t.Errorf("%q was accepted", name)
+		}
+	}
+}
