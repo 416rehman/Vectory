@@ -1328,10 +1328,15 @@ try {
       const group = dialog.locator("article", { hasText: "edge-01" });
       await expect(group).toContainText(`Fix ${both}`);
       await group.getByText("Commands for the hosts").click();
-      for (const name of ["edge-01", "edge-02"])
-        await expect(
-          group.getByLabel(`Upgrade command for ${name}`, { exact: true }),
-        ).toContainText(`--update-key-sha256 ${nextFingerprint}`);
+      // Both hosts get the same command, which carries only the key to pin, so
+      // they share one block.
+      const shared = group.getByLabel("Upgrade command for edge-01, edge-02", {
+        exact: true,
+      });
+      await expect(shared).toContainText(
+        `--update-key-sha256 ${nextFingerprint}`,
+      );
+      await expect(shared).not.toContainText("--updates");
     },
   );
 
