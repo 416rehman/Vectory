@@ -525,7 +525,10 @@ func (e *Engine) reportState(facts updateFacts) (state, release, code string, co
 	if policy.Paused || facts.localStop {
 		return UpdateStateIdle, "", "UPDATES_PAUSED", nil
 	}
-	if status != nil && status.Last != nil && decision.release != "" && status.Last.Release == decision.release {
+	if status != nil && status.Last != nil && decision.release != "" && status.Last.Release == decision.release &&
+		(decision.state == UpdateStateDownloading || decision.state == UpdateStateStaged) {
+		// The step has ended its request: the result says how, and nothing is
+		// waiting any more.
 		return UpdateStateIdle, "", "", nil
 	}
 	switch decision.state {
