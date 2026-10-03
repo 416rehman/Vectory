@@ -382,8 +382,9 @@ async fn pipeline_tests(
             "placeholders": [],
         })));
     }
-    // Vector runs a Lua step's code, and opens an enrichment table's file, when
-    // it builds them for a test: the tests of such a draft run on devices,
+    // Vector runs a Lua step's code, opens an enrichment table's file and a
+    // remap's program file, and asks an instance metadata service, when it
+    // builds them for a test: the tests of such a draft run on devices,
     // whoever asks the worker.
     if let Some(diagnostic) = validation::tests_on_devices_diagnostic(config)
         && config["tests"].as_array().is_some_and(|t| !t.is_empty())

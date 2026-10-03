@@ -329,6 +329,38 @@ describe("pipeline problems", () => {
     );
   });
 
+  it("says a remap's program file is read on devices once, in a sentence", () => {
+    // The two reasons a remap with a `file` brings read the same to a person.
+    const program: PipelineCheck = {
+      ...check,
+      valid: true,
+      diagnostics: [],
+      deferred_reasons: [
+        "A VRL program in a file is read on devices",
+        "device-local paths or external code files",
+      ],
+    };
+    const verdict = checkVerdict(program, 0);
+    expect(verdict).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks local files and paths before applying it.",
+    );
+    expect(verdict).not.toContain("A VRL program in a file");
+    expect(
+      checkVerdict(
+        {
+          ...program,
+          deferred_reasons: [
+            "Lua runs on devices",
+            "A VRL program in a file is read on devices",
+          ],
+        },
+        0,
+      ),
+    ).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks Lua code and local files and paths before applying it.",
+    );
+  });
+
   it("applies span and line fixes and refuses stale positions", () => {
     const program = '. = parse_nginx_log(.message, "combined")\n.ok = true';
     expect(applyFix(program, check.diagnostics![0] as any)).toBe(
