@@ -69,7 +69,7 @@ Verification is cofactorless with a canonical `S` and an `R` and a public key th
 
 ## Examples
 
-`examples/` holds one file for each format the contract quotes. The contract section contains each file in a code block, word for word, and `--check` fails when it does not; the files are also validated against the generated schemas in `contracts/protocol.schema.json`. They tell one story: a host called edge-02 pins the team key on 3 October, is offered agent 0.1.1 (counter 7) on the 4th and takes it in its window on the 5th.
+`examples/` holds one file for each format the contract quotes. The contract section contains each file in a code block, word for word, and `--check` fails when it does not; the files are also validated against the generated schemas in `contracts/protocol.schema.json`. Every file ends with one line feed except `release.json` and `rollover.json`, which a signature covers byte for byte and which are written exactly as signed (`vectory release verify --key examples/team.pub examples/release.json` verifies the example). They tell one story: a host called edge-02 pins the team key on 3 October, is offered agent 0.1.1 (counter 7) on the 4th and takes it in its window on the 5th.
 
 ## Regenerating
 
