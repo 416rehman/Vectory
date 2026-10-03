@@ -33,6 +33,14 @@ func hostileRune(r rune) bool {
 	return false
 }
 
+// refusedInName reports a character a member that names or identifies something
+// may not hold: whatever hostileRune names, and the byte order mark. It is the
+// server's rule for those members (db::refused_in_name): component IDs and
+// output names, versions, request and boot IDs, and directories. The agent sends
+// no such member that holds one, so the server never has to refuse a check-in
+// for it.
+func refusedInName(r rune) bool { return hostileRune(r) || r == 0xfeff }
+
 func spaceHostile(r rune) rune {
 	if hostileRune(r) {
 		return ' '

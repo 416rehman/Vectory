@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -1279,6 +1280,201 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		}
 		n, v = beatWith(nil)
 		okay(t, n, v)
+	})
+	t.Run("component-ids-follow-one-rule-and-a-device-that-reports-one-keeps-checking-in", func(t *testing.T) {
+		// A pipeline may name a component with any letters Vector accepts, and Vector
+		// logs about it by that name. The report is accepted as sent: such a device
+		// must not be refused its check-in. What the rule refuses (a control
+		// character, a path separator, a text-direction override, more than 128
+		// bytes) still refuses the whole check-in and leaves the device as it was.
+		key, csr := keyCSR(t)
+		own := h.token(map[string]any{"name": "component-id-rule", "expires_hours": 1, "max_uses": 1, "name_prefix": "sec-"})
+		n, credentials := h.enroll(own, "sec-component-ids", fmt.Sprintf("%x", serial()), csr)
+		okay(t, n, credentials)
+		agent := h.client(credentials, key)
+		defer agent.CloseIdleConnections()
+		id := credentials["device_id"].(string)
+		sent := 0
+		beatWith := func(extra map[string]any) (int, map[string]any) {
+			sent++
+			body := map[string]any{}
+			for k, v := range beat {
+				body[k] = v
+			}
+			body["nonce"], body["request_id"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(100 + sent)}, 32)), fmt.Sprintf("%x", serial())
+			for k, v := range extra {
+				body[k] = v
+			}
+			n, v, _ := h.req(agent, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+			return n, v
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		group := func(component string) map[string]any {
+			return map[string]any{"fingerprint": "0123456789abcdef", "level": "error", "message": "Mapping failed with event.", "component_id": component, "component_kind": "transform", "count": 1, "first_seen": now, "last_seen": now}
+		}
+		failed := func(over map[string]any) map[string]any {
+			diagnostic := map[string]any{"severity": "error", "code": "VRL_E100", "component_kind": "transform", "component_id": "out", "message": "Mapping failed."}
+			for k, v := range over {
+				diagnostic[k] = v
+			}
+			return map[string]any{"apply_state": "failed", "error": map[string]any{"code": "VALIDATION_FAILED", "stage": "validation", "message": "x", "diagnostics": []any{diagnostic}}}
+		}
+		device := func() map[string]any {
+			n, shown, _ := h.api("GET", "/devices/"+id, nil)
+			okay(t, n, shown)
+			return shown
+		}
+		if device()["last_seen"] != nil {
+			t.Fatal("a device that never checked in has a last_seen")
+		}
+		// The IDs the pipeline validator and Vector accept are reported as they are.
+		for _, component := range []string{"café", "日志", "٣", "a b", strings.Repeat("é", 64)} {
+			extra := failed(map[string]any{"component_id": component, "route_output": component})
+			extra["vector_log_summary"] = []any{group(component)}
+			n, v := beatWith(extra)
+			if n != 200 {
+				t.Fatalf("%q: HTTP %d %v", component, n, v)
+			}
+			shown := device()
+			if shown["last_seen"] == nil {
+				t.Fatalf("%q: the check-in didn't update last_seen", component)
+			}
+			items := shown["vector_log_summary"].(map[string]any)["items"].([]any)
+			if got := items[0].(map[string]any)["component_id"]; got != component {
+				t.Fatalf("%q: the stored component is %q", component, got)
+			}
+		}
+		// What the rule refuses leaves the device as it was. (A device may check in
+		// 30 times a minute, which bounds how many cases fit here; the rest of the
+		// shared fixture is judged by the server's and the agent's own tests.)
+		for name, component := range map[string]string{
+			"a control character": "out\x07",
+			"a slash":             "a/b",
+			"an override":         "a\u202eb",
+			"a byte order mark":   "a\ufeffb",
+			"129 bytes":           strings.Repeat("x", 129),
+		} {
+			before := device()
+			for member, extra := range map[string]map[string]any{
+				"log group":    {"vector_log_summary": []any{group(component)}},
+				"component_id": failed(map[string]any{"component_id": component}),
+				"route_output": failed(map[string]any{"route_output": component}),
+			} {
+				if n, v := beatWith(extra); n != 400 {
+					t.Fatalf("%s as a %s: HTTP %d %v", name, member, n, v)
+				}
+				if after := device(); !reflect.DeepEqual(before, after) {
+					t.Fatalf("%s as a %s changed the device record", name, member)
+				}
+			}
+		}
+		// None of those refusals leaves the device unable to check in.
+		if n, v := beatWith(nil); n != 200 {
+			t.Fatalf("HTTP %d %v", n, v)
+		}
+	})
+	t.Run("members-that-identify-things-refuse-characters-that-cannot-be-shown", func(t *testing.T) {
+		// Versions, request and boot IDs and the host's directories name or identify
+		// something: a control character, a line or paragraph separator, a
+		// text-direction embedding, override or isolate, or a byte order mark in one
+		// is refused, at enrollment and in every heartbeat, and changes nothing.
+		hostile := []struct{ name, text string }{
+			{"ESC", "\x1b"}, {"LF", "\n"}, {"a line separator", "\u2028"},
+			{"a right-to-left override", "\u202e"}, {"a left-to-right isolate", "\u2066"}, {"a byte order mark", "\ufeff"},
+		}
+		enrolling := h.token(map[string]any{"name": "identifying-members", "expires_hours": 1, "max_uses": 4, "name_prefix": "sec-"})
+		// Enrollment attempts are limited to 60 a minute per client, which bounds
+		// how many fit here: each member of the request with a line feed and with an
+		// override. Every character is tried on every member of a heartbeat below.
+		_, refusedCSR := keyCSR(t)
+		for _, member := range []string{"os", "arch", "agent_version", "vector_version", "request_id"} {
+			for _, c := range []string{"\n", "\u202e"} {
+				body := map[string]any{"protocol_version": 1, "request_id": fmt.Sprintf("%x", serial()), "token": enrolling, "name": "sec-identifying", "csr_pem": refusedCSR, "os": "linux", "arch": "amd64", "agent_version": "security-test", "vector_version": "0.58.0"}
+				body[member] = "x" + c + "y"
+				if n, v, _ := h.req(h.tls, h.https, "POST", "/agent/v1/enroll", body, "", ""); n != 401 {
+					t.Fatalf("enrollment with %q in %s: HTTP %d %v", c, member, n, v)
+				}
+			}
+		}
+		// A device may check in 30 times a minute: two devices share the members.
+		// The first enrolls with what a real release candidate says.
+		enrollAs := func(name string, over map[string]any) (*http.Client, string) {
+			key, csr := keyCSR(t)
+			body := map[string]any{"protocol_version": 1, "request_id": fmt.Sprintf("%x", serial()), "token": enrolling, "name": name, "csr_pem": csr, "os": "linux", "arch": "arm64", "agent_version": "security-test", "vector_version": "0.58.0"}
+			for k, v := range over {
+				body[k] = v
+			}
+			n, credentials, _ := h.req(h.tls, h.https, "POST", "/agent/v1/enroll", body, "", "")
+			okay(t, n, credentials)
+			return h.client(credentials, key), credentials["device_id"].(string)
+		}
+		for _, host := range []struct {
+			name    string
+			over    map[string]any
+			members []string
+		}{
+			{"sec-idm-versions", map[string]any{"agent_version": "0.58.1-rc.1+build.5", "vector_version": "0.58.1-rc.1"}, []string{"agent_version", "vector_version", "request_id"}},
+			{"sec-idm-places", nil, []string{"boot_id", "state_dir", "data_dir"}},
+		} {
+			agent, id := enrollAs(host.name, host.over)
+			sent := 0
+			beatWith := func(extra map[string]any) (int, map[string]any) {
+				sent++
+				body := map[string]any{}
+				for k, v := range beat {
+					body[k] = v
+				}
+				body["nonce"], body["request_id"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(10 + sent)}, 32)), fmt.Sprintf("%x", serial())
+				for k, v := range extra {
+					body[k] = v
+				}
+				n, v, _ := h.req(agent, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+				return n, v
+			}
+			device := func() map[string]any {
+				n, shown, _ := h.api("GET", "/devices/"+id, nil)
+				okay(t, n, shown)
+				return shown
+			}
+			with := func(member, value string) map[string]any {
+				switch member {
+				case "state_dir":
+					return map[string]any{"state_dir": "/var/lib/vectory" + value}
+				case "data_dir":
+					return map[string]any{"host_runtime": map[string]any{"data_dir": "/var/lib/vector" + value}}
+				}
+				return map[string]any{member: "0.58" + value + "0"}
+			}
+			if n, v := beatWith(nil); n != 200 {
+				t.Fatalf("%s: HTTP %d %v", host.name, n, v)
+			}
+			before := device()
+			for _, member := range host.members {
+				for _, c := range hostile {
+					if n, v := beatWith(with(member, c.text)); n != 400 {
+						t.Fatalf("%s with %s: HTTP %d %v", member, c.name, n, v)
+					}
+					if after := device(); !reflect.DeepEqual(before, after) {
+						t.Fatalf("%s with %s changed the device record", member, c.name)
+					}
+				}
+			}
+			// What real hosts report is accepted: versions with a pre-release and build
+			// metadata, a request and boot ID of any letters, and a state directory
+			// with spaces and letters of any alphabet.
+			for _, extra := range []map[string]any{
+				{"agent_version": "0.58.1-rc.1", "vector_version": "0.58.1-rc.1+x86_64-unknown-linux-gnu"},
+				{"boot_id": "boot id with spaces and ünïcode"},
+				{"state_dir": "/var/lib/vectory agent/état"},
+				{"state_dir": `D:\Données Müller\Vectory Agent`},
+				{"host_runtime": map[string]any{"data_dir": "/srv/日本語/vector"}},
+			} {
+				if n, v := beatWith(extra); n != 200 {
+					t.Fatalf("%v: HTTP %d %v", extra, n, v)
+				}
+			}
+			agent.CloseIdleConnections()
+		}
 	})
 	t.Run("revoked-pooled-connection-rejected", func(t *testing.T) {
 		n, v, _ := h.api("POST", "/devices/"+device["device_id"].(string)+"/revoke", map[string]any{})

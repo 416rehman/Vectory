@@ -1010,7 +1010,9 @@ async fn diagnostics_host_runtime_and_log_summaries_are_bounded_and_atomic() {
         with("code", json!("data_dir_missing")),
         with("severity", json!("fatal")),
         with("line", json!(0)),
-        with("component_id", json!("has space")),
+        // A space is part of an ID Vector accepts, so a device may report it; a
+        // path separator is not.
+        with("component_id", json!("has/slash")),
         top_level,
         runtime(json!({"data_dir":"/var/lib/vector","unknown":true})),
         runtime(json!({"data_dir_source":"somewhere"})),
@@ -1407,6 +1409,207 @@ async fn control_characters_in_identity_and_token_members_still_refuse_the_check
             "U+{code:04X}"
         );
     }
+}
+
+/// An ID as the shared fixture writes it: a string, a list of IDs joined
+/// together, or an ID repeated.
+fn built(id: &Value) -> String {
+    match id {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts.iter().map(built).collect(),
+        Value::Object(_) => built(&id["repeat"]).repeat(id["times"].as_u64().unwrap() as usize),
+        other => panic!("not an ID: {other}"),
+    }
+}
+
+async fn make_stale(s: &State) {
+    sqlx::query(
+        "UPDATE devices SET data=json_set(data,'$.last_seen','2026-01-01T00:00:00Z') WHERE id=?",
+    )
+    .bind(DEVICE)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+}
+
+// A pipeline may name a component with any letters Vector accepts, and Vector
+// logs about it by that name. The report of it is accepted and shown as sent:
+// a device that reports `café` keeps checking in.
+#[tokio::test]
+async fn a_component_with_a_non_ascii_name_is_reported_and_the_device_keeps_checking_in() {
+    let (_temp, s, _candidate) = fixture().await;
+    let longest = "\u{e9}".repeat(64);
+    assert_eq!(longest.len(), 128);
+    for id in ["café", "日志", "٣", "a b", longest.as_str()] {
+        make_stale(&s).await;
+        let mut v = failed_with(json!({
+            "severity": "error",
+            "code": "VRL_E100",
+            "component_kind": "transform",
+            "component_id": id,
+            "route_output": id,
+            "message": "Mapping failed."
+        }));
+        let mut g = log_group("Mapping failed with event.");
+        g["component_id"] = json!(id);
+        g["component_kind"] = json!("transform");
+        v["vector_log_summary"] = json!([g]);
+        let (status, body) = beat(&s, v).await;
+        assert_eq!(status, StatusCode::OK, "{id}: {body}");
+        let d = shown(&s).await;
+        assert!(d["last_seen"].as_str().unwrap() > "2026-06-01", "{id}");
+        assert_eq!(
+            d["vector_log_summary"]["items"][0]["component_id"],
+            json!(id)
+        );
+        let found = &d["configuration_attempt"]["error"]["diagnostics"][0];
+        assert_eq!(found["component_id"], json!(id));
+        assert_eq!(found["route_output"], json!(id));
+    }
+}
+
+// Every ID the shared fixture judges, through the heartbeat: what is refused
+// refuses the whole check-in and leaves the device as it was.
+#[tokio::test]
+async fn the_shared_fixture_of_component_ids_decides_the_heartbeat() {
+    let ids: Value = serde_json::from_str(include_str!(
+        "../../vector-catalog/fixtures/component-ids.json"
+    ))
+    .unwrap();
+    let cases = ids["cases"].as_array().unwrap();
+    // A device may check in 30 times a minute and each case sends three: a
+    // fresh server for each nine.
+    for chunk in cases.chunks(9) {
+        let (_temp, s, _candidate) = fixture().await;
+        for case in chunk {
+            let id = built(&case["id"]);
+            let valid = case["valid"].as_bool().unwrap();
+            for member in ["summary", "component_id", "route_output"] {
+                let v = match member {
+                    "summary" => {
+                        let mut g = log_group("Mapping failed with event.");
+                        g["component_id"] = json!(id);
+                        let mut v = verified(2, true);
+                        v["vector_log_summary"] = json!([g]);
+                        v
+                    }
+                    _ => {
+                        let mut d = diagnostic("Mapping failed.", "Check it.", "field");
+                        d[member] = json!(id);
+                        failed_with(d)
+                    }
+                };
+                let before = snapshot(&s).await;
+                let (status, error) = beat(&s, v).await;
+                if valid {
+                    assert_eq!(
+                        status,
+                        StatusCode::OK,
+                        "{member}: {}: {error}",
+                        case["name"]
+                    );
+                } else {
+                    assert_eq!(
+                        status,
+                        StatusCode::BAD_REQUEST,
+                        "{member}: {}: {error}",
+                        case["name"]
+                    );
+                    assert_eq!(snapshot(&s).await, before, "{member}: {}", case["name"]);
+                }
+            }
+        }
+    }
+}
+
+// The members that name or identify something refuse every character that
+// can't be shown safely, in one line, whatever it is: a version, a request or
+// boot ID, and the directories.
+#[tokio::test]
+async fn members_that_name_or_identify_things_refuse_characters_that_cannot_be_shown() {
+    let c = |code: u32| char::from_u32(code).unwrap().to_string();
+    let hostile = [
+        ("ESC", c(0x1b)),
+        ("LF", c(0x0a)),
+        ("a line separator", c(0x2028)),
+        ("a right-to-left override", c(0x202e)),
+        ("a left-to-right isolate", c(0x2066)),
+        ("a byte order mark", c(0xfeff)),
+    ];
+    let members: Vec<(&str, Box<dyn Fn(&str) -> Value>)> = vec![
+        (
+            "agent_version",
+            Box::new(|x| json!({"agent_version": format!("0.1.0{x}")})),
+        ),
+        (
+            "vector_version",
+            Box::new(|x| json!({"vector_version": format!("0.58.0{x}")})),
+        ),
+        (
+            "request_id",
+            Box::new(|x| json!({"request_id": format!("r{x}1")})),
+        ),
+        (
+            "boot_id",
+            Box::new(|x| json!({"boot_id": format!("b{x}1")})),
+        ),
+        (
+            "state_dir",
+            Box::new(|x| json!({"state_dir": format!("/var/lib/vectory{x}agent")})),
+        ),
+        (
+            "data_dir",
+            Box::new(|x| json!({"host_runtime": {"data_dir": format!("/var/lib/vector{x}data")}})),
+        ),
+    ];
+    for (member, build) in &members {
+        // A device may check in 30 times a minute: a fresh server for each member.
+        let (_temp, s, _candidate) = fixture().await;
+        for (name, x) in &hostile {
+            let mut v = verified(2, true);
+            for (key, value) in build(x).as_object().unwrap() {
+                v[key] = value.clone();
+            }
+            let before = snapshot(&s).await;
+            let (status, error) = beat(&s, v).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{member} with {name}: {error}"
+            );
+            assert_eq!(snapshot(&s).await, before, "{member} with {name}");
+        }
+    }
+}
+
+// What real hosts report is not narrowed: a release candidate and build
+// metadata in a version, and a state directory with spaces and letters of any
+// alphabet.
+#[tokio::test]
+async fn real_versions_and_directories_are_accepted() {
+    let (_temp, s, _candidate) = fixture().await;
+    for (key, value) in [
+        ("agent_version", json!("0.58.1-rc.1")),
+        ("agent_version", json!("1.2.3+build.20261003")),
+        (
+            "vector_version",
+            json!("0.58.1-rc.1+x86_64-unknown-linux-gnu"),
+        ),
+        ("request_id", json!("3f2b8f0c-6a1d-4c75-9d8e-0b1c2d3e4f5a")),
+        ("boot_id", json!("boot id with spaces and ünïcode")),
+        ("state_dir", json!("D:\\Données Müller\\Vectory Agent")),
+        ("state_dir", json!("/var/lib/vectory agent/état")),
+        ("state_dir", json!("/srv/日本語/vectory")),
+        ("state_dir", json!("/srv/a\u{200c}b\u{200d}c")),
+    ] {
+        let mut v = verified(2, true);
+        v[key] = value.clone();
+        let (status, error) = beat(&s, v).await;
+        assert_eq!(status, StatusCode::OK, "{key} {value}: {error}");
+    }
+    let mut v = verified(2, true);
+    v["host_runtime"] = json!({"data_dir": "D:\\Données de Vector\\data"});
+    assert_eq!(beat(&s, v).await.0, StatusCode::OK);
 }
 
 async fn audit_rows(s: &State, device: &str, action: &str) -> Vec<String> {

@@ -365,6 +365,13 @@ fn plain_text(value: &Value, most: usize, least: usize) -> Option<&str> {
         .filter(|text| (least..=most).contains(&text.len()) && !text.chars().any(char::is_control))
 }
 
+/// The name of one of a pipeline's tests: it names something the pipeline
+/// defines, so it is held to the rule for names (`db::refused_in_name`), as the
+/// other members that name or identify something are.
+fn test_name(value: &Value, most: usize) -> Option<&str> {
+    plain_text(value, most, 1).filter(|text| !text.chars().any(db::refused_in_name))
+}
+
 /// Validate this feature's heartbeat members, strictly: allowlisted keys,
 /// bounds and charsets, unknown keys refuse the whole heartbeat. Nothing here
 /// reads the database, so a refusal never leaves a partial write.
@@ -507,7 +514,7 @@ fn parse_tests(list: &Value) -> Result<Vec<Value>> {
             }
             let name = fields
                 .get("name")
-                .and_then(|name| plain_text(name, 200, 1))
+                .and_then(|name| test_name(name, 200))
                 .ok_or_else(bad)?;
             let passed = fields
                 .get("passed")

@@ -262,7 +262,7 @@ func (r *redactor) testResults(names []string, run candidateRun, failed bool) []
 // testName is a test's name as a result carries it: one line, redacted, bounded.
 func (r *redactor) testName(name string) string {
 	name = strings.Map(func(c rune) rune {
-		if unicode.IsControl(c) && !unicode.IsSpace(c) {
+		if unicode.IsControl(c) && !unicode.IsSpace(c) || c == 0xfeff {
 			return -1
 		}
 		return c
@@ -289,6 +289,15 @@ func boundBytes(text string, limit int) string {
 // maxValidationDiagnostics, failing tests first and at most maxValidationTests,
 // and the missing secrets sorted, without repeats and at most maxSecretNames.
 func (res *ValidationResult) sealed() *ValidationResult {
+	// A diagnostic the server wouldn't accept is left out: it would have the
+	// whole heartbeat refused.
+	kept := res.Diagnostics[:0]
+	for _, d := range res.Diagnostics {
+		if d, ok := reportableDiagnostic(d); ok {
+			kept = append(kept, d)
+		}
+	}
+	res.Diagnostics = kept
 	sort.SliceStable(res.Diagnostics, func(i, j int) bool {
 		return res.Diagnostics[i].Severity == "error" && res.Diagnostics[j].Severity != "error"
 	})
