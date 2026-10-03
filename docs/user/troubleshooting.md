@@ -271,6 +271,38 @@ A check passing is the device's own report that validation found no error. It is
 
 Removing or cancelling a deployment never stops Vector. See [Deploy and roll back](deployments.md).
 
+## An agent update doesn't happen
+
+Start with the device's page: its **Agent updates** card says what the host reported, in its own words, and **Not reported** when it sent nothing. Then read the reason, which is the agent's code with a sentence. The same reasons appear in the review's **Won't update** list and on the rollout page. See [Agent updates](agent-updates.md).
+
+| Reason | What to do |
+| --- | --- |
+| **Not reported**, or **This agent is too old** (`AGENT_TOO_OLD`) | The agent predates updates, or is below the release's minimum. Run its **Upgrade agent** command once, with a choice about updates. |
+| **Updates are off on this host** (`UPDATES_OFF`) | The host never agreed, or chose **Off**. Run its **Upgrade agent** command with **Automatic (recommended)** or **Ask on the host**. |
+| **Updates are paused on this host** (`UPDATES_PAUSED`) | Run `sudo vectory update resume` on the host. A host paused with `vectory pause` is paused for updates too. |
+| **This host doesn't pin the key that signed this release** (`KEY_NOT_PINNED`) | The release was signed by a key the host never pinned and can't reach through a rollover. Run its **Upgrade agent** command, which pins the current key. |
+| **The release's signature didn't verify on this host** (`SIGNATURE_INVALID`) or its **manifest broke a rule of its format** (`MANIFEST_INVALID`) | Don't retry. Withdraw the release and prepare it again, and check the signature with `vectory release verify`. |
+| **This release has expired** (`MANIFEST_EXPIRED`) | Prepare a new release. A release expires 180 days after it is prepared, by each host's own clock. |
+| **This host saw two successors of its key** (`KEY_ROLLOVER_CONFLICT`) | Someone else signed a statement from a key the host pins. Run its **Upgrade agent** command with the key you trust. See [If a key is stolen](agent-updates.md#if-a-key-is-stolen). |
+| **This build was tried here and rolled back** (`RELEASE_ALREADY_TRIED`), or **older than one this host already tried** (`COUNTER_REPLAYED`) | The host never tries a release twice. Prepare a new one with a higher counter. |
+| **This version is outside the releases this host takes** (`VERSION_NOT_ON_TRACK`) | The host takes patch releases only. Run **Upgrade agent** with **Minor releases too**. A new major version is an upgrade by hand. |
+| **This host already runs this version** (`ALREADY_RUNNING`), **runs a newer agent** (`DOWNGRADE_REFUSED`) | Nothing to fix. A host never goes backward. |
+| **A package manager owns this agent** (`PACKAGE_MANAGED`) | Update it with the package manager. |
+| **No service keeps this agent running** (`NO_SERVICE`) | Run it under a service, then use **Upgrade agent**. |
+| **A directory on the agent's path can be written by others** (`UNTRUSTED_LOCATION`), **The host can't write in the agent's install directory** (`READ_ONLY`) | Only root may own and write the agent's directories and every directory above them. Change who owns them or their permissions. |
+| **The update step on this host isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. |
+| **The host's service definition is older than this release needs** (`SERVICE_DEFINITION_OUTDATED`) | Run the **Upgrade agent** command once. |
+| **This release has no build for this host's platform** (`PLATFORM_NOT_IN_RELEASE`) | This server's catalog has no build of that version for it. Update the host by hand. |
+| **The download failed** (`DOWNLOAD_FAILED`), **didn't match the release's size and digest** (`ARTIFACT_MISMATCH`), **no room for the new build** (`DISK_FULL`) | The agent tries again at its next check-in, and gives up after three failures for one release. Check the disk space and the connection to the server. |
+| **The new build didn't report the version and platform the release names** (`PROBE_FAILED`) | The host installed nothing. Check that the build in the catalog is the one the release names. |
+| **Rolled back**: **couldn't start**, **didn't check in within 5 minutes**, **wasn't healthy**, **was interrupted** | The host took the new build back and won't try it again. Read `sudo vectory update status` and `sudo vectory logs` on the host, fix the cause, and roll out a new release. See [When a host rolls back](agent-updates.md#when-a-host-rolls-back). |
+| **The previous build isn't healthy either** (`ROLLBACK_UNHEALTHY`) | Run `sudo vectory update status` and `sudo vectory doctor`, then repair or reinstall the agent by hand. |
+| **The device stopped reporting after the update began** (`NO_REPORT`) | A build that couldn't check in would have been rolled back by now. Check the host: it may be off, or the agent may not run. |
+| **Waiting for the host** | The host is set to **Ask on the host**. Run `sudo vectory update apply` on it. |
+| **Waiting for its window** | The host installs when its update window opens. The device page shows when. |
+
+Updates also stop for reasons that aren't about one host. **Agent updates are stopped** at the top of **Devices → Agent updates** means an Operator or Administrator used **Stop all updates**: an administrator clears it in **Settings → Agent updates**. A rollout that stopped by itself names what stopped it: too many devices rolled back or failed, or an updated device stopped delivering. A device in two rollouts is refused in the second: wait for the first.
+
 ## Metrics are missing, or no events reach a destination
 
 **No metrics:** the pipeline needs a loopback Prometheus exporter fed by `internal_metrics` (**Add monitoring** adds one, and restricted devices run it without an allowance), and **Collect operational metrics** must be on. See [Enable real metrics](telemetry.md#enable-real-metrics). A rate needs two samples, and a dash means "not reported", not zero.
@@ -397,6 +429,15 @@ The bootstrap secret only creates the first administrator; it can't sign anyone 
 | `DEVICE_SYNC_PAUSED` | The device's configuration sync is paused. | Resume sync before retrying. |
 | `CAPACITY_BUSY` | The agent listener is at its connection limit. | Nothing: agents retry on their own. |
 | `IDEMPOTENCY_CONFLICT` | A request ID was reused for a different request. | Start a new request. |
+| `AGENT_UPDATES_OFF` (404) | Agent updates are off. | An administrator turns them on in **Settings → Agent updates**. |
+| `AGENT_UPDATES_STOPPED` (409) | Someone used **Stop all updates**, and no new rollout can start. | An administrator chooses **Clear the stop** in **Settings → Agent updates**. |
+| `AGENT_UPDATE_ROLLOUTS_ACTIVE` (409) | Updates can't be turned off while an update rollout is running. | Cancel it, or choose **Stop all updates**, then turn updates off. |
+| `CUSTODY_REQUIRED`, `CUSTODY_LOCKED` (409) | There is no release key, so a custody must be chosen, or the custody can't change while updates are on. | Choose who holds the key, or turn updates off and on again to change it. |
+| `RELEASE_KEY_INVALID` (422), `RELEASE_KEY_IN_USE` (409) | The text isn't a valid release key line, or the key is one this server already uses. | Paste the whole line `vectory release keygen` printed, from a key made for this purpose. |
+| `RELEASE_SIGNATURE_INVALID` (422) | No signature in the file is by the current key and verifies over this release. | Sign the file you downloaded for this release, with the current key, and upload `release.json.sig`. |
+| `RELEASE_NOT_IN_CATALOG`, `RELEASE_EXISTS`, `RELEASE_NOT_READY`, `RELEASE_STORAGE_FULL` | The catalog has no such build, the release exists, it isn't signed, withdrawn or expired, or 20 releases (or the release store's space) are in use. | Choose a build from **Newer builds**, sign or prepare the release again, or withdraw releases you no longer need. |
+| `UPDATE_REVIEW_CHANGED` (409) | A device, the release or the key changed since you reviewed. Nothing started. | Review again, then start. |
+| `UPDATE_ROLLOUT_OVERLAP`, `NOTHING_TO_UPDATE` (409) | A device is already in an update rollout, or the review has nobody who will update. | Wait for the other rollout, or fix what the review's **Won't update** list names. |
 
 ## Prepare a useful problem report
 
