@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -101,7 +100,7 @@ func UpdateExchangeFor(stateDir string) UpdateExchange {
 // sha256>. A name that isn't a digest is refused, so no path is ever built from
 // anything but 64 lowercase hex characters.
 func (e UpdateExchange) IncomingDir(manifestSHA256 string) (string, error) {
-	if !isUpdateDigest(manifestSHA256) {
+	if !isLowerHex64(manifestSHA256) {
 		return "", fmt.Errorf("%q isn't a SHA-256 digest", manifestSHA256)
 	}
 	return filepath.Join(e.Incoming, manifestSHA256), nil
@@ -169,38 +168,11 @@ func oneOf(value string, allowed []string) bool {
 
 // ---------------------------------------------------------------- values
 
-// isUpdateDigest reports whether text is 64 lowercase hexadecimal characters: a
-// SHA-256, a fingerprint, a boot ID.
-func isUpdateDigest(text string) bool {
-	if len(text) != 64 {
-		return false
-	}
-	for i := 0; i < len(text); i++ {
-		if c := text[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-// validUpdateVersion reports whether text is major.minor.patch: three numbers,
-// each 0 or one to nine digits that start with 1 to 9.
+// validUpdateVersion reports whether text is a version, as the release library
+// reads one: major.minor.patch.
 func validUpdateVersion(text string) bool {
-	parts := strings.Split(text, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" || len(part) > 9 || len(part) > 1 && part[0] == '0' {
-			return false
-		}
-		for i := 0; i < len(part); i++ {
-			if part[i] < '0' || part[i] > '9' {
-				return false
-			}
-		}
-	}
-	return true
+	_, err := ParseReleaseVersion(text)
+	return err == nil
 }
 
 // validUpdateText accepts the text of a member that names or identifies
@@ -292,7 +264,7 @@ func stringOrEmpty(value *string) string {
 
 // checkNullableDigest accepts an absent value or a digest.
 func checkNullableDigest(what string, value *string) error {
-	if value != nil && !isUpdateDigest(*value) {
+	if value != nil && !isLowerHex64(*value) {
 		return fmt.Errorf("%s %q isn't a SHA-256 digest", what, *value)
 	}
 	return nil
@@ -333,9 +305,9 @@ func ParseUpdateRequest(data []byte) (UpdateRequest, error) {
 	switch {
 	case wire.Schema != updateRequestSchema:
 		return invalid("the schema is %q, and this agent reads %q", wire.Schema, updateRequestSchema)
-	case !isUpdateDigest(wire.ManifestSHA256):
+	case !isLowerHex64(wire.ManifestSHA256):
 		return invalid("manifest_sha256 %q isn't a SHA-256 digest", wire.ManifestSHA256)
-	case !isUpdateDigest(wire.ArtifactSHA256):
+	case !isLowerHex64(wire.ArtifactSHA256):
 		return invalid("artifact_sha256 %q isn't a SHA-256 digest", wire.ArtifactSHA256)
 	case !updateRolloutID.MatchString(wire.RolloutID):
 		return invalid("rollout_id %q isn't a lowercase UUID", wire.RolloutID)
@@ -405,11 +377,11 @@ func ParseUpdateHealth(data []byte) (UpdateHealth, error) {
 	switch {
 	case wire.Schema != updateHealthSchema:
 		return invalid("the schema is %q, and this agent reads %q", wire.Schema, updateHealthSchema)
-	case !isUpdateDigest(wire.AgentSHA256):
+	case !isLowerHex64(wire.AgentSHA256):
 		return invalid("agent_sha256 %q isn't a SHA-256 digest", wire.AgentSHA256)
 	case !validUpdateText(wire.AgentVersion):
 		return invalid("agent_version isn't 1 to %d bytes of text without control characters", maxUpdateVersionBytes)
-	case !isUpdateDigest(wire.BootID):
+	case !isLowerHex64(wire.BootID):
 		return invalid("boot_id %q isn't 64 lowercase hexadecimal characters", wire.BootID)
 	case !oneOf(wire.Vector, updateVectors):
 		return invalid("vector %q isn't running, stopped or none", wire.Vector)
@@ -451,16 +423,6 @@ type updateRolloversWire struct {
 	Rollovers []RolloverEnvelope `json:"rollovers"`
 }
 
-// decodeUpdateBase64 decodes standard base64 with padding, canonical (the unused
-// bits are zero) and without whitespace.
-func decodeUpdateBase64(text string) ([]byte, bool) {
-	decoded, err := base64.StdEncoding.Strict().DecodeString(text)
-	if err != nil || base64.StdEncoding.EncodeToString(decoded) != text {
-		return nil, false
-	}
-	return decoded, true
-}
-
 // ParseUpdateRollovers reads the bytes of a rollovers.json: the offer's rollover
 // envelopes, at most 8, in the order a host follows them. It checks the shape of
 // each (canonical base64, a statement of at most 1,024 bytes, a signature of 64
@@ -482,11 +444,11 @@ func ParseUpdateRollovers(data []byte) ([]RolloverEnvelope, error) {
 		return invalid("holds %d rollover statements, and a host follows at most %d", len(wire.Rollovers), maxUpdateEnvelopes)
 	}
 	for i, envelope := range wire.Rollovers {
-		statement, ok := decodeUpdateBase64(envelope.Statement)
+		statement, ok := decodeCanonicalBase64(envelope.Statement)
 		if !ok || len(statement) == 0 || len(statement) > maxUpdateRolloverStatement {
 			return invalid("the statement of rollover %d isn't canonical base64 of 1 to %d bytes", i+1, maxUpdateRolloverStatement)
 		}
-		if signature, ok := decodeUpdateBase64(envelope.Signature); !ok || len(signature) != 64 {
+		if signature, ok := decodeCanonicalBase64(envelope.Signature); !ok || len(signature) != 64 {
 			return invalid("the signature of rollover %d isn't canonical base64 of 64 bytes", i+1)
 		}
 	}
@@ -530,9 +492,9 @@ type rolloverConflictWire struct {
 
 func (c *RolloverConflict) fromWire(wire rolloverConflictWire) error {
 	switch {
-	case !isUpdateDigest(wire.From):
+	case !isLowerHex64(wire.From):
 		return fmt.Errorf("rollover_conflict.from %q isn't a fingerprint", wire.From)
-	case len(wire.To) != 2 || !isUpdateDigest(wire.To[0]) || !isUpdateDigest(wire.To[1]):
+	case len(wire.To) != 2 || !isLowerHex64(wire.To[0]) || !isLowerHex64(wire.To[1]):
 		return errors.New("rollover_conflict.to isn't two fingerprints")
 	case wire.To[0] >= wire.To[1]:
 		return errors.New("rollover_conflict.to isn't two different fingerprints in ascending order")
@@ -589,7 +551,7 @@ type updateLastWire struct {
 
 func (l *UpdateLast) fromWire(wire updateLastWire) error {
 	switch {
-	case !isUpdateDigest(wire.Release):
+	case !isLowerHex64(wire.Release):
 		return fmt.Errorf("last.release %q isn't a SHA-256 digest", wire.Release)
 	case !oneOf(wire.Outcome, updateOutcomes):
 		return fmt.Errorf("last.outcome %q isn't committed, rolled_back, failed or refused", wire.Outcome)
@@ -709,7 +671,7 @@ func checkCounterFloors(what string, floors map[string]uint64) error {
 		return fmt.Errorf("%s has %d keys, and a host pins at most %d", what, len(floors), maxUpdateFingerprints)
 	}
 	for fingerprint, counter := range floors {
-		if !isUpdateDigest(fingerprint) {
+		if !isLowerHex64(fingerprint) {
 			return fmt.Errorf("%s names %q, which isn't a fingerprint", what, fingerprint)
 		}
 		if counter > MaxJSONCounter {
