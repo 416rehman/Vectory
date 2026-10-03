@@ -49,7 +49,7 @@ type ownerTrust struct {
 // rootOwnedTrust is what openRootOwned checks against. It is the one seam of the
 // path check: tests that need a tree they own assign it, and nothing else does,
 // so the binary that ships always trusts root alone (see
-// TestProductionAgentContainsNoTestHooks).
+// TestTheUpdateSeamsAreAssignedOnlyByTests).
 var rootOwnedTrust ownerTrust
 
 // judged reports whether the access list of the directory at path is judged.
