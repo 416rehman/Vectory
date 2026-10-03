@@ -1445,6 +1445,31 @@ pub async fn serve_tls(
     serve_tls_on(s, listener, config).await
 }
 
+pub const MAX_CONNECTIONS_VARIABLE: &str = "VECTORY_MAX_AGENT_CONNECTIONS";
+const DEFAULT_MAX_CONNECTIONS: usize = 16384;
+const MAX_CONNECTIONS_RANGE: std::ops::RangeInclusive<usize> = 64..=65536;
+/// Most agent connections accepted at once, for the value the variable holds
+/// (`None` when it is unset). Unset or empty is the default; anything that is
+/// not a whole number in the range is an error that names the variable, the
+/// value and the range, never a different limit.
+pub fn max_agent_connections(value: Option<&str>) -> anyhow::Result<usize> {
+    let Some(given) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(DEFAULT_MAX_CONNECTIONS);
+    };
+    given
+        .parse::<usize>()
+        .ok()
+        .filter(|limit| MAX_CONNECTIONS_RANGE.contains(limit))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{MAX_CONNECTIONS_VARIABLE} must be a whole number from {} to {}, not {:?}",
+                MAX_CONNECTIONS_RANGE.start(),
+                MAX_CONNECTIONS_RANGE.end(),
+                given.chars().take(40).collect::<String>()
+            )
+        })
+}
+
 /// The agent listener's loop over any source of connections. It returns only
 /// when the source can never accept again; a failed accept is logged, waited
 /// out and retried.
@@ -1455,11 +1480,9 @@ pub async fn serve_tls_on<A: Accept>(
 ) -> anyhow::Result<()> {
     let config = std::sync::Arc::new(config);
     let router = router(s);
-    let maximum_connections = std::env::var("VECTORY_MAX_AGENT_CONNECTIONS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(16384)
-        .clamp(64, 65536);
+    // The server has checked the variable before it started anything.
+    let maximum_connections =
+        max_agent_connections(std::env::var(MAX_CONNECTIONS_VARIABLE).ok().as_deref())?;
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(maximum_connections));
     let handshakes = std::sync::Arc::new(tokio::sync::Semaphore::new(handshake_slots(
         maximum_connections,
@@ -1603,5 +1626,32 @@ mod tests {
         assert_eq!(handshake_slots(1024), 128);
         assert_eq!(handshake_slots(8192), 1024);
         assert_eq!(handshake_slots(65536), 4096);
+    }
+
+    #[test]
+    fn the_connection_limit_is_a_whole_number_in_its_range_or_the_default() {
+        for (given, limit) in [
+            (None, 16384),
+            (Some(""), 16384),
+            (Some("  "), 16384),
+            (Some("64"), 64),
+            (Some(" 1024 "), 1024),
+            (Some("65536"), 65536),
+        ] {
+            assert_eq!(max_agent_connections(given).unwrap(), limit, "{given:?}");
+        }
+    }
+
+    #[test]
+    fn any_other_connection_limit_stops_the_server_naming_the_variable_value_and_range() {
+        for given in ["x", "30d", "1e3", "-1", "0", "63", "65537", "70000", "10.5"] {
+            let error = max_agent_connections(Some(given)).unwrap_err().to_string();
+            assert_eq!(
+                error,
+                format!(
+                    "VECTORY_MAX_AGENT_CONNECTIONS must be a whole number from 64 to 65536, not {given:?}"
+                )
+            );
+        }
     }
 }
