@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -417,10 +416,10 @@ func TestEligibilityOfAHostWithNoServiceRegisteredIsNoService(t *testing.T) {
 	updateHostOverride = nil
 	t.Cleanup(func() { updateHostOverride = nil })
 	got := UpdateEligibility("/nonexistent/vectory-state-for-a-test")
-	if runtime.GOOS == "linux" && got != "NO_SERVICE" {
-		t.Errorf("a Linux host with no such service: %s", got)
+	if currentUpdateHost() != nil && got != "NO_SERVICE" {
+		t.Errorf("a host with no such service: %s", got)
 	}
-	if runtime.GOOS != "linux" && got != "PLATFORM_NOT_IN_RELEASE" {
+	if currentUpdateHost() == nil && got != "PLATFORM_NOT_IN_RELEASE" {
 		t.Errorf("a platform with no step: %s", got)
 	}
 }

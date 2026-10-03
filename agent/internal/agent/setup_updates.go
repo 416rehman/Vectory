@@ -147,8 +147,7 @@ func (r *setupRun) preflightUpdates(plan *updatePlan, choice serviceChoice, plat
 		return r.refuseUpdates("This agent is installed from a package, and the package manager owns its file.", "Leave out --updates, and upgrade it with the package manager.")
 	}
 	if problem := untrustedDirectory(filepath.Dir(agentPath)); problem != nil {
-		return r.refuseUpdates("Agent updates need an install directory that only "+updateRootWord()+" can change. "+untrustedDetail(problem)+".",
-			"Install the agent in a directory only "+updateRootWord()+" can write, such as "+DefaultPaths().Binary+", then run the command again. Or leave out --updates.")
+		return r.refuseUpdates("Agent updates need an install directory that only "+updateRootWord()+" can change. "+untrustedDetail(problem)+".", installDirectoryFix(agentPath))
 	}
 	paths := UpdateLocations()
 	for _, dir := range []string{paths.PolicyDir, paths.StepDir} {
@@ -158,6 +157,17 @@ func (r *setupRun) preflightUpdates(plan *updatePlan, choice serviceChoice, plat
 		}
 	}
 	return nil
+}
+
+// installDirectoryFix says what to do about an install directory that others can
+// write. The place the agent usually goes is the example, unless that is the
+// directory that was refused (Homebrew on an Intel Mac takes /usr/local/bin): the
+// fix is then another directory, which the installer takes with --install-dir.
+func installDirectoryFix(agentPath string) string {
+	if filepath.Dir(agentPath) == filepath.Dir(DefaultPaths().Binary) {
+		return "Install the agent in another directory only " + updateRootWord() + " can write, with the installer's --install-dir, then run the command again. Or leave out --updates."
+	}
+	return "Install the agent in a directory only " + updateRootWord() + " can write, such as " + DefaultPaths().Binary + ", then run the command again. Or leave out --updates."
 }
 
 // untrustedDirectory says why the nearest directory that exists on the way to

@@ -57,10 +57,13 @@ type launchctlResult struct {
 	stdout, stderr string
 }
 
-// launchdJob drives the agent's launch daemon through launchctl. The command
-// runner and the clock are fields, so the stop and restart logic is tested
-// on every platform.
+// launchdJob drives a launch daemon through launchctl: the agent's, unless label
+// names another (the update step's own, update_launchd.go). The command runner
+// and the clock are fields, so the stop and restart logic is tested on every
+// platform.
 type launchdJob struct {
+	// label is the job's name; empty means the agent's.
+	label      string
 	definition string
 	run        func(ctx context.Context, args ...string) launchctlResult
 	installed  func() bool
@@ -68,7 +71,14 @@ type launchdJob struct {
 	sleep      func(time.Duration)
 }
 
-func (j launchdJob) target() string { return "system/" + launchdLabel }
+func (j launchdJob) name() string {
+	if j.label != "" {
+		return j.label
+	}
+	return launchdLabel
+}
+
+func (j launchdJob) target() string { return "system/" + j.name() }
 
 func (j launchdJob) launchctl(ctx context.Context, limit time.Duration, args ...string) launchctlResult {
 	ctx, cancel := context.WithTimeout(ctx, limit)
@@ -84,8 +94,11 @@ func launchctlFailure(args []string, result launchctlResult) error {
 	return errors.New(message)
 }
 
-func (j launchdJob) do(limit time.Duration, args ...string) error {
-	if result := j.launchctl(context.Background(), limit, args...); result.status != 0 {
+func (j launchdJob) do(ctx context.Context, limit time.Duration, args ...string) error {
+	if result := j.launchctl(ctx, limit, args...); result.status != 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return launchctlFailure(args, result)
 	}
 	return nil
@@ -99,7 +112,7 @@ func (j launchdJob) loaded(ctx context.Context) (launchctlResult, bool) {
 
 // status asks launchd about the daemon without changing it.
 func (j launchdJob) status(ctx context.Context) ServiceInfo {
-	info := ServiceInfo{Manager: "launchd", Name: launchdLabel}
+	info := ServiceInfo{Manager: "launchd", Name: j.name()}
 	if !j.installed() {
 		return info
 	}
@@ -122,31 +135,37 @@ func (j launchdJob) status(ctx context.Context) ServiceInfo {
 }
 
 func (j launchdJob) control(action string) error {
+	return j.controlContext(context.Background(), action)
+}
+
+// controlContext is control, which stops waiting when ctx ends: the privileged
+// step stops and starts the agent through it.
+func (j launchdJob) controlContext(ctx context.Context, action string) error {
 	switch action {
 	case "start":
-		status := j.status(context.Background())
+		status := j.status(ctx)
 		switch {
 		case status.Running():
 			return nil
 		case status.Enabled:
 			// Loaded but not running (crashed, throttled or spawn scheduled):
 			// bootstrap would fail with an I/O error.
-			return j.do(launchctlLimit, "kickstart", j.target())
+			return j.do(ctx, launchctlLimit, "kickstart", j.target())
 		}
-		return j.do(launchctlLimit, "bootstrap", "system", j.definition)
+		return j.do(ctx, launchctlLimit, "bootstrap", "system", j.definition)
 	case "restart":
 		// kickstart -k stops the agent, which drains Vector within ExitTimeOut,
 		// and starts it again from the loaded definition. Setup loads an
 		// updated definition with stop and start instead.
-		if _, loaded := j.loaded(context.Background()); loaded {
-			return j.do(serviceStopLimit, "kickstart", "-k", j.target())
+		if _, loaded := j.loaded(ctx); loaded {
+			return j.do(ctx, serviceStopLimit, "kickstart", "-k", j.target())
 		}
-		return j.do(launchctlLimit, "bootstrap", "system", j.definition)
+		return j.do(ctx, launchctlLimit, "bootstrap", "system", j.definition)
 	case "stop":
-		if _, loaded := j.loaded(context.Background()); !loaded {
+		if _, loaded := j.loaded(ctx); !loaded {
 			return nil
 		}
-		return j.bootout()
+		return j.bootoutContext(ctx)
 	}
 	return errors.New("invalid service operation")
 }
@@ -155,23 +174,32 @@ func (j launchdJob) control(action string) error {
 // the agent, which drains Vector first (up to ExitTimeOut). When that takes a
 // while, launchctl stops waiting with 36 "Operation now in progress" while the
 // job keeps stopping: wait until launchd no longer knows the job.
-func (j launchdJob) bootout() error {
+func (j launchdJob) bootout() error { return j.bootoutContext(context.Background()) }
+
+// bootoutContext is bootout, which stops waiting when ctx ends.
+func (j launchdJob) bootoutContext(ctx context.Context) error {
 	deadline := j.now().Add(serviceStopLimit)
 	args := []string{"bootout", j.target()}
-	result := j.launchctl(context.Background(), serviceStopLimit, args...)
+	result := j.launchctl(ctx, serviceStopLimit, args...)
 	if result.status == 0 {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if result.status != launchctlInProgress && !strings.Contains(result.stderr, "Operation now in progress") {
 		return launchctlFailure(args, result)
 	}
 	for {
 		// A real failure (the job isn't known) ends the wait; a timeout doesn't.
-		if j.launchctl(context.Background(), launchdStatusLimit, "print", j.target()).status > 0 {
+		if j.launchctl(ctx, launchdStatusLimit, "print", j.target()).status > 0 {
 			return nil
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !j.now().Before(deadline) {
-			return errors.New(launchdLabel + " is still stopping after " + humanDuration(serviceStopLimit) + "; check it with sudo launchctl print " + j.target())
+			return errors.New(j.name() + " is still stopping after " + humanDuration(serviceStopLimit) + "; check it with sudo launchctl print " + j.target())
 		}
 		j.sleep(time.Second)
 	}

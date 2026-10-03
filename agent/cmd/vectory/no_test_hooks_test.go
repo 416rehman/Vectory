@@ -42,10 +42,10 @@ func TestProductionAgentContainsNoTestHooks(t *testing.T) {
 	seams := map[string]bool{
 		"Fault": true, "createAtomicTemp": true,
 		// The update seams: the path check's trust and the update paths, the bounds of
-		// a transfer of an agent build, and the privileged step's host, clock and fault
-		// points.
+		// a transfer of an agent build, the privileged step's host, clock and fault
+		// points, and the table of the operating systems whose updates the build ships.
 		"rootOwnedTrust": true, "updateLocationsOverride": true, "updateDownloadDeadline": true, "updateDownloadStall": true,
-		"updateHostOverride": true, "updateClockOverride": true, "updateFault": true,
+		"updateHostOverride": true, "updateClockOverride": true, "updateFault": true, "updateGateOverride": true,
 	}
 	files, err := filepath.Glob(filepath.Join("..", "..", "internal", "agent", "*.go"))
 	if err != nil || len(files) == 0 {

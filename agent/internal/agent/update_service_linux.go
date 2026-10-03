@@ -410,25 +410,13 @@ func (h *linuxUpdateHost) Registered(stateDir string) (registeredService, error)
 
 // ---------------------------------------------------------------- what can't be updated
 
-// packageDirectories hold what a package manager installs: an agent that lives in
-// one of them belongs to the package, and an update behind its back would be undone
-// by the next upgrade or reported as a modified file.
-var packageDirectories = []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/lib", "/opt/homebrew", "/usr/local/Cellar"}
-
 // PackageManaged says whether a package manager owns the executable: it is in one
 // of the package directories (with links resolved), or the vectory package's list
 // of files holds it.
 func (h *linuxUpdateHost) PackageManaged(executable string) (string, bool) {
-	candidates := []string{executable}
-	if resolved, err := filepath.EvalSymlinks(executable); err == nil && resolved != executable {
-		candidates = append(candidates, resolved)
-	}
-	for _, candidate := range candidates {
-		for _, directory := range packageDirectories {
-			if candidate == directory || strings.HasPrefix(candidate, directory+"/") {
-				return "it is under " + directory, true
-			}
-		}
+	candidates := packageCandidates(executable)
+	if directory, managed := underPackageDirectory(candidates); managed {
+		return "it is under " + directory, true
 	}
 	file, err := os.Open(h.dpkgList)
 	if err != nil {
