@@ -12,7 +12,6 @@ import {
   type User,
 } from "./api";
 import {
-  hasCommandFix,
   observationText,
   reviewView,
   type AgentRelease,
@@ -27,12 +26,12 @@ import {
   canaryWhy,
   defaultSettings,
   forkText,
+  fixIsHostCommand,
   groupNeedsChoice,
   hostFixBlocks,
   hostFixCommand,
   levelLine,
   nameProblem,
-  olderKeyAdvice,
   previewRequest,
   reviewSentence,
   rolloutSettings,
@@ -231,9 +230,7 @@ export default function UpdateReviewDialog({
   }
 
   const view = reviewed ? reviewView(reviewed) : null;
-  const needsInstall = !!view?.wontUpdate.some((group) =>
-    hasCommandFix(group.code),
-  );
+  const needsInstall = !!view?.wontUpdate.some(fixIsHostCommand);
   const installResource = useResource<unknown>(
     needsInstall ? "/agent-install" : null,
     null,
@@ -506,10 +503,6 @@ export default function UpdateReviewDialog({
               form={picked.form}
               names={names}
               updates={updates}
-              signer={
-                releases.find((item) => item.id === picked.preview.release.id)
-                  ?.signer?.fingerprint ?? null
-              }
               install={install}
               installError={
                 installResource.error
@@ -599,7 +592,6 @@ function ReviewStep({
   form,
   names,
   updates,
-  signer,
   install,
   installError,
   busy,
@@ -610,8 +602,6 @@ function ReviewStep({
   form: ReviewForm;
   names: Record<string, string>;
   updates: AgentUpdates;
-  /** The fingerprint of the key that signed the release being reviewed. */
-  signer: string | null;
   install: AgentInstall | null;
   installError: string;
   busy: boolean;
@@ -733,7 +723,6 @@ function ReviewStep({
               <WontGroup
                 key={group.code}
                 group={group}
-                signer={signer}
                 install={install}
                 installError={installError}
                 currentKey={updates.current_key}
@@ -773,21 +762,16 @@ function ReviewStep({
 /** Devices that won't update for one reason, with what fixes it. */
 function WontGroup({
   group,
-  signer,
   install,
   installError,
   currentKey,
 }: {
   group: ReviewGroup;
-  signer: string | null;
   install: AgentInstall | null;
   installError: string;
   currentKey: AgentUpdates["current_key"];
 }) {
   const keyFingerprint = currentKey?.fingerprint ?? null;
-  // An older key signed this release: no command changes what these hosts pin
-  // in a way that reaches it, so the fix is another release.
-  const older = olderKeyAdvice(group.code, signer, keyFingerprint);
   return (
     <article className="update-wont" data-code={group.code}>
       <header>
@@ -797,17 +781,10 @@ function WontGroup({
         </span>
       </header>
       <p>{group.reason}</p>
-      {older ? (
+      {group.fix && (
         <p className="update-fix">
-          <strong>Fix</strong> This release was signed by key {older.signer},
-          not the current key {older.current}. {older.fix}
+          <strong>Fix</strong> {group.fix}
         </p>
-      ) : (
-        group.fix && (
-          <p className="update-fix">
-            <strong>Fix</strong> {group.fix}
-          </p>
-        )
       )}
       <p className="update-wont-names">
         {group.devices
@@ -828,7 +805,7 @@ function WontGroup({
               {forkText(device.successors!, keyFingerprint)}
             </p>
           ))}
-      {hasCommandFix(group.code) && !!group.fix && !older && (
+      {fixIsHostCommand(group) && (
         <HostFixes
           group={group}
           install={install}

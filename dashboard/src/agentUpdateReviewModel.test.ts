@@ -4,12 +4,12 @@ import {
   countWont,
   defaultSettings,
   forkText,
+  fixIsHostCommand,
   groupNeedsChoice,
   hostFixBlocks,
   hostFixCommand,
   levelLine,
   nameProblem,
-  olderKeyAdvice,
   previewRequest,
   reviewSentence,
   rolloutSettings,
@@ -324,30 +324,55 @@ describe("the command that fixes a device that won't update", () => {
   });
 });
 
-describe("hosts that pin no key reaching the signer of an older release", () => {
-  it("says a release is the fix, not a command, when an older key signed it", () => {
-    const advice = olderKeyAdvice(
-      "KEY_NOT_PINNED",
-      teamFingerprint,
-      nextFingerprint,
-    )!;
-    expect(advice.signer).toBe(teamFingerprint.slice(0, 16));
-    expect(advice.current).toBe(nextFingerprint.slice(0, 16));
-    expect(advice.fix).toMatch(/Withdraw this release and prepare it again/);
-    expect(advice.fix).toMatch(/Pinning the current key/);
+describe("which fixes are a command on the host", () => {
+  // The sentences the server gives a group of hosts that pin no key reaching
+  // the release's signer, one per kind of host the group holds.
+  const pin =
+    "Run the Upgrade agent command so the host pins the current release key.";
+  const signAgain =
+    "Withdraw this release and prepare it again so the current key signs it.";
+  const both = `${signAgain} Hosts that pin no key leading to the current key also need the Upgrade agent command, once.`;
+
+  it("offers commands when the fix sends the person to the Upgrade agent command", () => {
+    expect(fixIsHostCommand({ code: "KEY_NOT_PINNED", fix: pin })).toBe(true);
+    // A group of both kinds: the hosts that need the pin get their command.
+    expect(fixIsHostCommand({ code: "KEY_NOT_PINNED", fix: both })).toBe(true);
   });
 
-  it("is silent when the current key signed it, when either key is unknown, and for any other reason", () => {
-    expect(
-      olderKeyAdvice("KEY_NOT_PINNED", nextFingerprint, nextFingerprint),
-    ).toBeNull();
-    expect(olderKeyAdvice("KEY_NOT_PINNED", null, nextFingerprint)).toBeNull();
-    expect(olderKeyAdvice("KEY_NOT_PINNED", teamFingerprint, null)).toBeNull();
-    for (const code of [
-      "UPDATES_OFF",
-      "AGENT_TOO_OLD",
-      "KEY_ROLLOVER_CONFLICT",
-    ])
-      expect(olderKeyAdvice(code, teamFingerprint, nextFingerprint)).toBeNull();
+  it("offers none when the fix is only another release, which no command on the host brings", () => {
+    expect(fixIsHostCommand({ code: "KEY_NOT_PINNED", fix: signAgain })).toBe(
+      false,
+    );
+  });
+
+  it("offers none when the server gave no fix, or the group isn't one a command fixes", () => {
+    expect(fixIsHostCommand({ code: "KEY_NOT_PINNED", fix: null })).toBe(false);
+    expect(fixIsHostCommand({ code: "PACKAGE_MANAGED", fix: pin })).toBe(false);
+    expect(fixIsHostCommand({ code: "UNTRUSTED_LOCATION", fix: pin })).toBe(
+      false,
+    );
+  });
+
+  it("keeps offering them for every other command fix the server gives", () => {
+    for (const [code, fix] of [
+      [
+        "AGENT_TOO_OLD",
+        "Run the Upgrade agent command once; it installs an agent that takes updates.",
+      ],
+      [
+        "SERVICE_DEFINITION_OUTDATED",
+        "Run the Upgrade agent command once; it rewrites the service definition.",
+      ],
+      ["UPDATES_OFF", "Run the Upgrade agent command with updates on, once."],
+      [
+        "KEY_ROLLOVER_CONFLICT",
+        "Run the Upgrade agent command with the key you trust.",
+      ],
+      [
+        "VERSION_NOT_ON_TRACK",
+        "Run the Upgrade agent command with the minor track.",
+      ],
+    ] as const)
+      expect(fixIsHostCommand({ code, fix }), code).toBe(true);
   });
 });

@@ -234,26 +234,17 @@ export const groupNeedsChoice = (group: Pick<ReviewGroup, "code">) =>
   needsConsentChoice(group.code);
 
 /**
- * Hosts that pin no key reaching the release's signer, when the signer is not
- * the key this server signs with now. A host follows keys forward only, so
- * pinning the current key does not let it take a release an older key signed:
- * what fixes it is a release the current key signs. This says so, in place of a
- * command that would change nothing. It is null when the signer is current,
- * unknown, or the group is about something else.
+ * Whether the server's fix for a group is a command to run on the hosts. A host
+ * follows keys forward only, so for hosts an older key's release can't reach
+ * the fix is another release (the current key signs it), and no command on the
+ * host changes that. The server says which it is, per group, in the fix
+ * itself; the page offers commands only when that sentence sends the person to
+ * the Upgrade agent command, so it never offers one that would change nothing.
  */
-export function olderKeyAdvice(
-  code: string,
-  signer: string | null,
-  currentKey: string | null,
-): { signer: string; current: string; fix: string } | null {
-  if (code !== "KEY_NOT_PINNED" || !signer || !currentKey) return null;
-  if (signer === currentKey) return null;
-  return {
-    signer: shortKeyId(signer),
-    current: shortKeyId(currentKey),
-    fix: "Withdraw this release and prepare it again: the current key then signs it. Pinning the current key on the host doesn't let it take this one.",
-  };
-}
+export const fixIsHostCommand = (group: Pick<ReviewGroup, "code" | "fix">) =>
+  hasCommandFix(group.code) &&
+  !!group.fix &&
+  /\bUpgrade agent\b/.test(group.fix);
 
 /**
  * The fork a host is frozen on, for the review: the two successors it saw, as
