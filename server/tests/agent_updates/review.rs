@@ -424,6 +424,107 @@ async fn a_key_reaches_the_signer_by_itself_or_through_the_stored_statements() {
     assert_eq!(got["on-signer"], None);
 }
 
+/// What the review says fixes hosts that pin no key reaching the release's
+/// signer: pinning the current key, a release the current key signs, or both for
+/// a group that holds hosts of each kind.
+const PIN_THE_CURRENT_KEY: &str =
+    "Run the Upgrade agent command so the host pins the current release key.";
+const SIGN_AGAIN: &str = "Withdraw this release and prepare it again so the current key signs it.";
+const SIGN_AGAIN_AND_PIN: &str = "Withdraw this release and prepare it again so the current key signs it. Hosts that pin no key leading to the current key also need the Upgrade agent command, once.";
+
+/// The fix the review gives the hosts that pin no key reaching the signer.
+fn key_fix(review: &Value) -> Value {
+    review["wont_update"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["code"] == "KEY_NOT_PINNED")
+        .map(|group| group["fix"].clone())
+        .expect("a group of hosts that pin no key reaching the signer")
+}
+
+#[tokio::test]
+async fn hosts_that_pin_no_key_reaching_the_signer_are_told_what_would_reach_them() {
+    let f = fixture().await;
+    // An older key signed a release and the key was rotated since, so a statement
+    // leads from it to the current one. Another retired key leads nowhere.
+    let old = key(&f, "old", "server", "retired").await;
+    let lost = key(&f, "lost", "server", "retired").await;
+    let team = key(&f, "team", "server", "current").await;
+    introduce(&f, "team", "old").await;
+    switch(&f, true).await;
+    let from_old = release(&f, "0.1.1", 7, &old, &[("linux", "amd64")]).await;
+    let from_team = release(&f, "0.1.2", 8, &team, &[("linux", "amd64")]).await;
+    let on_team = host(&f, "on-team", "0.1.0", Some(member(&[&team]))).await;
+    let on_old = host(&f, "on-old", "0.1.0", Some(member(&[&old]))).await;
+    let on_lost = host(&f, "on-lost", "0.1.0", Some(member(&[&lost]))).await;
+    let nobody = host(
+        &f,
+        "nobody",
+        "0.1.0",
+        Some(member(&[&fingerprint("nobody")])),
+    )
+    .await;
+    let none = host(&f, "no-pins", "0.1.0", Some(member::<&str>(&[]))).await;
+
+    // An older key signed it. A host that pins only the current key follows keys
+    // forward only, so no command on the host reaches that key: the fix is a
+    // release the current key signs. The host that pins the older key takes it.
+    let review = preview(&f, &from_old.id, &[&on_team, &on_old], json!({})).await;
+    let got = places(&review);
+    assert_eq!(got["on-old"], None);
+    assert_eq!(got["on-team"].as_deref(), Some("KEY_NOT_PINNED"));
+    assert_eq!(key_fix(&review), json!(SIGN_AGAIN));
+    // Hosts that pin no key the server holds, or one that leads nowhere, need to
+    // pin the current key: another release would not reach them either.
+    for hosts in [
+        vec![&nobody],
+        vec![&none],
+        vec![&on_lost],
+        vec![&nobody, &none, &on_lost],
+    ] {
+        let review = preview(&f, &from_old.id, &hosts, json!({})).await;
+        assert_eq!(key_fix(&review), json!(PIN_THE_CURRENT_KEY), "{hosts:?}");
+    }
+    // A group of both is told both.
+    let review = preview(&f, &from_old.id, &[&on_team, &nobody, &on_lost], json!({})).await;
+    assert_eq!(key_fix(&review), json!(SIGN_AGAIN_AND_PIN));
+
+    // The current key signed it: another release would be signed the same, so
+    // every host that does not reach it needs to pin the current key.
+    let review = preview(
+        &f,
+        &from_team.id,
+        &[&on_team, &on_old, &nobody, &on_lost],
+        json!({}),
+    )
+    .await;
+    let got = places(&review);
+    assert_eq!(got["on-team"], None);
+    assert_eq!(
+        got["on-old"], None,
+        "the older key leads to the current one"
+    );
+    assert_eq!(got["nobody"].as_deref(), Some("KEY_NOT_PINNED"));
+    assert_eq!(got["on-lost"].as_deref(), Some("KEY_NOT_PINNED"));
+    assert_eq!(key_fix(&review), json!(PIN_THE_CURRENT_KEY));
+
+    // With no current key there is none to sign another release, so the advice
+    // is the one it always was.
+    sqlx::query("UPDATE agent_release_keys SET state='revoked',revoked_at=? WHERE fingerprint=?")
+        .bind("2026-10-04T00:00:00Z")
+        .bind(&team)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agent_update_settings SET current_key=NULL WHERE id=1")
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    let review = preview(&f, &from_old.id, &[&on_team], json!({})).await;
+    assert_eq!(key_fix(&review), json!(PIN_THE_CURRENT_KEY));
+}
+
 #[tokio::test]
 async fn a_device_more_than_eight_statements_behind_is_not_offered_the_release() {
     let f = fixture().await;
