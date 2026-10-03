@@ -318,10 +318,16 @@ func inspectHost(host updateHost, stateDir, running string) hostFacts {
 		facts.code, facts.detail = code, fmt.Sprintf(format, args...)
 		return facts
 	}
-	if service.Account.UID == 0 {
+	// The install directory is opened first, whatever else is wrong with the host,
+	// so that an update in progress can still be settled there (a trial that began
+	// before a package took the executable over, say): the answers below decide
+	// whether a new update starts, and this one decides whether the step can see.
+	install, openErr := host.OpenInstall(service.Executable)
+	facts.install = install
+	switch {
+	case service.Account.UID == 0:
 		return fail("NO_SERVICE", "the agent's service runs as root, so no update is applied: the service account must not be root")
-	}
-	if running != "" && running != service.Executable {
+	case running != "" && running != service.Executable:
 		return fail("NO_SERVICE", "the registered service runs %s, not %s", service.Executable, running)
 	}
 	if reason, managed := host.PackageManaged(service.Executable); managed {
@@ -330,14 +336,12 @@ func inspectHost(host updateHost, stateDir, running string) hostFacts {
 	if err := host.StateDirReachable(stateDir); err != nil {
 		return refused(err, "UNTRUSTED_LOCATION", facts)
 	}
-	install, err := host.OpenInstall(service.Executable)
-	if err != nil {
-		if notExist(err) {
+	if openErr != nil {
+		if notExist(openErr) {
 			return fail("NO_SERVICE", "the service's executable %s isn't there", service.Executable)
 		}
-		return refused(err, "UNTRUSTED_LOCATION", facts)
+		return refused(openErr, "UNTRUSTED_LOCATION", facts)
 	}
-	facts.install = install
 	if install.ReadOnly() {
 		return fail("READ_ONLY", "the file system that holds %s is mounted read-only", service.Executable)
 	}
