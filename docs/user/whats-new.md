@@ -47,7 +47,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - Agent downloads carry SHA-256 checksums but aren't signed.
 - A host takes agent updates only after someone ran a command on it that agreed to them. Hosts that haven't, agents that predate updates and platforms a release doesn't carry are upgraded on the host, one command per device; see [Upgrade many devices](agents.md#upgrade-many-devices).
 - Agent updates have no major track: a host takes patch releases, or minor releases too, and a new major version is an upgrade by hand. Who holds the release key is fixed while updates are on.
-- Reboot and upgrade tests aren't done on any platform, and the service tests run on Ubuntu 24.04, macOS 15 and Windows Server 2025 only. See [Compatibility](compatibility.md).
+- Reboot tests and a test of an upgrade from an earlier release aren't done on any platform, and the service tests, which include an agent update through a rollout, run on Ubuntu 24.04, macOS 15 and Windows Server 2025 only. See [Compatibility](compatibility.md).
 - On a restricted host, **Check on devices** reports one finding at a time (a missing secret first, then each allowance the host hasn't approved), so run it again after each fix.
 - Agent settings and groups can't be deleted or archived yet.
 - A deployment needs at least one device when you create it. A group with no devices can't be chosen yet, even with **Also include future group members**; add a device to the group first.

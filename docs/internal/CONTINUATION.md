@@ -14,7 +14,7 @@ Where Vectory stands, how to pick it up and what to do first, written so that a 
 
 ## State
 
-The branch this file is on, version `0.1.0-dev`: a developer preview, not production qualified, with no public release. The requirements checklist reads 69 Met, 46 Partial, 5 Missing and 2 Unverified of 122 rows; the five Missing rows are the invariants of agent updates ([ADR 0015](../adr/0015-operator-issued-agent-updates.md)), which are designed and not built. Nothing is signed and nothing is published; the release prerequisites that need the maintainer are at the end of [HANDOFF.md](HANDOFF.md).
+The branch this file is on, version `0.1.0`: a developer preview, not production qualified, with no public release. The requirements checklist reads 73 Met, 47 Partial, 0 Missing and 2 Unverified of 122 rows. Agent updates ([ADR 0015](../adr/0015-operator-issued-agent-updates.md)) are built, and a real service of each operating system takes, tries and takes back a build in CI ([RELEASE-0.1.md](RELEASE-0.1.md), gate 8). Nothing is signed and nothing is published; the release prerequisites that need the maintainer are at the end of [HANDOFF.md](HANDOFF.md).
 
 Landed since `a469266` (the details are in [CHANGELOG.md](../../CHANGELOG.md) and the user-facing [What's new](../user/whats-new.md)):
 
