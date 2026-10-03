@@ -129,6 +129,23 @@ func (f *stepFixture) requireOneCompleteExecutable(builds ...string) {
 	f.t.Fatalf("the executable is %s, which is neither of the builds %v: part of a file, or a file nobody installed", got, builds)
 }
 
+// requireOneCompleteExecutableOrTheGap is requireOneCompleteExecutable, or, where the
+// swap has two renames and the step was stopped between them (gap), says there is no
+// executable and the build that was installed is beside it, whole.
+func (f *stepFixture) requireOneCompleteExecutableOrTheGap(oldDigest, newDigest string, gap bool) {
+	f.t.Helper()
+	if !gap {
+		f.requireOneCompleteExecutable(oldDigest, newDigest)
+		return
+	}
+	if _, err := os.Stat(f.exe); err == nil {
+		f.t.Fatal("there is an executable at the moment between the two renames")
+	}
+	if got := fileDigest(f.t, filepath.Join(f.installDir, updatePreviousName)); got != oldDigest {
+		f.t.Fatalf("the build kept beside the executable is %s, and the one that was installed is %s", got, oldDigest)
+	}
+}
+
 type killRow struct {
 	point string
 	// want is where the next run leaves the update.
@@ -170,81 +187,87 @@ var goodUpdateBoundaries = []killRow{
 
 func TestKillingTheStepAtEveryBoundaryOfAGoodUpdateLeavesOneCompleteExecutableAndTheRightResult(t *testing.T) {
 	for _, row := range goodUpdateBoundaries {
-		t.Run(row.point, func(t *testing.T) {
-			f := newStepFixture(t)
-			oldDigest := f.executableDigest()
-			release := f.newRelease("0.1.1", "good", releaseOptions{})
-			f.stage(release)
+		t.Run(row.point, func(t *testing.T) { checkKillAtBoundary(t, newStepFixture, row, false) })
+	}
+}
 
-			if !f.runChildUntil(row.point) {
-				t.Fatalf("an update never reached %s", row.point)
-			}
-			f.requireOneCompleteExecutable(oldDigest, release.buildSHA())
-			if got := f.counters().HighestCounters[f.public.Fingerprint()]; (got == 7) != row.raised {
-				t.Fatalf("at %s the floor is %d on disk; it is raised from floor_raised on", row.point, got)
-			}
-			if journal, found := f.journal(); found && journal.active() && journal.Stage != UpdateStagePreparing && !row.raised {
-				t.Fatalf("the journal says %s before the floor was raised", journal.Stage)
-			}
+// checkKillAtBoundary kills the step at a boundary of a good update on the machine
+// newFixture makes, and checks what the next run leaves. gap says the directory holds
+// no executable at the kill: the moment between the two renames of a swap that has
+// two, with the previous build beside it, which the next run puts back.
+func checkKillAtBoundary(t *testing.T, newFixture func(*testing.T) *stepFixture, row killRow, gap bool) {
+	f := newFixture(t)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
 
-			f.clock.advance(30 * time.Second)
-			f.mustRun()
-			f.requireOneCompleteExecutable(oldDigest, release.buildSHA())
-			if entries, _ := os.ReadDir(f.paths.Probe); len(entries) != 0 {
-				t.Errorf("the probe directory holds %d files after the next run", len(entries))
+	if !f.runChildUntil(row.point) {
+		t.Fatalf("an update never reached %s", row.point)
+	}
+	f.requireOneCompleteExecutableOrTheGap(oldDigest, release.buildSHA(), gap)
+	if got := f.counters().HighestCounters[f.public.Fingerprint()]; (got == 7) != row.raised {
+		t.Fatalf("at %s the floor is %d on disk; it is raised from floor_raised on", row.point, got)
+	}
+	if journal, found := f.journal(); found && journal.active() && journal.Stage != UpdateStagePreparing && !row.raised {
+		t.Fatalf("the journal says %s before the floor was raised", journal.Stage)
+	}
+
+	f.clock.advance(30 * time.Second)
+	f.mustRun()
+	f.requireOneCompleteExecutable(oldDigest, release.buildSHA())
+	if entries, _ := os.ReadDir(f.paths.Probe); len(entries) != 0 {
+		t.Errorf("the probe directory holds %d files after the next run", len(entries))
+	}
+	for _, name := range f.beside() {
+		if strings.HasPrefix(name, updateStagedPrefix) || strings.HasSuffix(name, ".new") {
+			t.Errorf("a temporary file is left beside the executable: %s", name)
+		}
+	}
+	service := f.service()
+	status := f.status()
+	switch row.want {
+	case "committed":
+		if f.executableDigest() != release.buildSHA() || status.Last == nil || status.Last.Outcome != UpdateOutcomeCommitted || status.Last.Release != release.manifestSHA() {
+			t.Fatalf("after a kill at %s the update should have committed: %+v", row.point, status.Last)
+		}
+		if f.installedRecord().SHA256 != release.buildSHA() || service.Version != "0.1.1" || service.State != "active" {
+			t.Errorf("committed, and the host is %+v / %+v", f.installedRecord(), service)
+		}
+		if got := fileDigest(t, f.paths.HelperExecutable); got != release.buildSHA() {
+			t.Errorf("the helper copy is %s", got)
+		}
+		if !f.stagingEmpty() {
+			t.Error("the staging directory holds files after the commit")
+		}
+	case "interrupted":
+		if f.executableDigest() != oldDigest || status.Last == nil || status.Last.Outcome != UpdateOutcomeFailed || status.Last.Code != "INTERRUPTED" || status.Last.Release != release.manifestSHA() {
+			t.Fatalf("after a kill at %s the update should have been interrupted: %+v", row.point, status.Last)
+		}
+		if service.Version != "0.1.0" || service.State != "active" {
+			t.Errorf("the host after an interruption: %+v", service)
+		}
+		if _, found := f.journal(); found {
+			t.Error("a journal is left after an interruption")
+		}
+		if !f.stagingEmpty() {
+			t.Error("the staging directory holds files after an interruption")
+		}
+		if got := f.counters().HighestCounters[f.public.Fingerprint()]; (got == 7) != row.raised {
+			t.Errorf("the floor is %d after an interruption at %s", got, row.point)
+		}
+		// A request that is written again is a new question: it is applied when the
+		// floor never rose, and it is a replay when it did, which the host refuses.
+		f.clock.advance(time.Hour)
+		f.stage(release)
+		f.mustRun()
+		if row.raised {
+			f.requireAnswered(release, UpdateOutcomeRefused, "COUNTER_REPLAYED")
+			if f.executableDigest() != oldDigest {
+				t.Error("an interrupted release was tried again")
 			}
-			for _, name := range f.beside() {
-				if strings.HasPrefix(name, updateStagedPrefix) || strings.HasSuffix(name, ".new") {
-					t.Errorf("a temporary file is left beside the executable: %s", name)
-				}
-			}
-			service := f.service()
-			status := f.status()
-			switch row.want {
-			case "committed":
-				if f.executableDigest() != release.buildSHA() || status.Last == nil || status.Last.Outcome != UpdateOutcomeCommitted || status.Last.Release != release.manifestSHA() {
-					t.Fatalf("after a kill at %s the update should have committed: %+v", row.point, status.Last)
-				}
-				if f.installedRecord().SHA256 != release.buildSHA() || service.Version != "0.1.1" || service.State != "active" {
-					t.Errorf("committed, and the host is %+v / %+v", f.installedRecord(), service)
-				}
-				if got := fileDigest(t, f.paths.HelperExecutable); got != release.buildSHA() {
-					t.Errorf("the helper copy is %s", got)
-				}
-				if !f.stagingEmpty() {
-					t.Error("the staging directory holds files after the commit")
-				}
-			case "interrupted":
-				if f.executableDigest() != oldDigest || status.Last == nil || status.Last.Outcome != UpdateOutcomeFailed || status.Last.Code != "INTERRUPTED" || status.Last.Release != release.manifestSHA() {
-					t.Fatalf("after a kill at %s the update should have been interrupted: %+v", row.point, status.Last)
-				}
-				if service.Version != "0.1.0" || service.State != "active" {
-					t.Errorf("the host after an interruption: %+v", service)
-				}
-				if _, found := f.journal(); found {
-					t.Error("a journal is left after an interruption")
-				}
-				if !f.stagingEmpty() {
-					t.Error("the staging directory holds files after an interruption")
-				}
-				if got := f.counters().HighestCounters[f.public.Fingerprint()]; (got == 7) != row.raised {
-					t.Errorf("the floor is %d after an interruption at %s", got, row.point)
-				}
-				// A request that is written again is a new question: it is applied when the
-				// floor never rose, and it is a replay when it did, which the host refuses.
-				f.clock.advance(time.Hour)
-				f.stage(release)
-				f.mustRun()
-				if row.raised {
-					f.requireAnswered(release, UpdateOutcomeRefused, "COUNTER_REPLAYED")
-					if f.executableDigest() != oldDigest {
-						t.Error("an interrupted release was tried again")
-					}
-				} else if f.executableDigest() != release.buildSHA() || f.status().Last.Outcome != UpdateOutcomeCommitted {
-					t.Errorf("a release interrupted before its floor rose wasn't applied when it was offered again: %+v", f.status().Last)
-				}
-			}
-		})
+		} else if f.executableDigest() != release.buildSHA() || f.status().Last.Outcome != UpdateOutcomeCommitted {
+			t.Errorf("a release interrupted before its floor rose wasn't applied when it was offered again: %+v", f.status().Last)
+		}
 	}
 }
 
@@ -252,30 +275,41 @@ var rollbackBoundaries = []string{"rolling_back", "rollback:stopped", "rollback:
 
 func TestKillingTheStepAtEveryBoundaryOfARollbackStillEndsOnThePreviousBuild(t *testing.T) {
 	for _, point := range append([]string{"trial", "started"}, rollbackBoundaries...) {
-		t.Run(point, func(t *testing.T) {
-			f := newStepFixture(t)
-			oldDigest := f.executableDigest()
-			release := f.newRelease("0.1.2", "crash", releaseOptions{})
-			f.stage(release)
-			if !f.runChildUntil(point) {
-				t.Fatalf("a rollback never reached %s", point)
-			}
-			f.requireOneCompleteExecutable(oldDigest, release.buildSHA())
-			if f.counters().HighestCounters[f.public.Fingerprint()] != 7 {
-				t.Fatal("the floor isn't on disk during the trial")
-			}
-			f.clock.advance(30 * time.Second)
-			f.mustRun()
-			// A trial that was interrupted continues once and, the build still not
-			// starting, is taken back with the code that says why.
-			f.requireTakenBack(oldDigest, release, "START_FAILED")
-			if service := f.service(); service.Version != "0.1.0" || service.State != "active" {
-				t.Errorf("the host after a rollback that was interrupted at %s: %+v", point, service)
-			}
-			if got := f.installedRecord().SHA256; got != oldDigest {
-				t.Errorf("installed.json names %s after a rollback", got)
-			}
-		})
+		t.Run(point, func(t *testing.T) { checkKillDuringRollback(t, newStepFixture, point, false) })
+	}
+}
+
+// checkKillDuringRollback kills the step at a boundary of the rollback of a build
+// that never starts, on the machine newFixture makes, and checks that the next run
+// ends on the previous build. gap says the directory has no executable at the kill.
+func checkKillDuringRollback(t *testing.T, newFixture func(*testing.T) *stepFixture, point string, gap bool) {
+	f := newFixture(t)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.2", "crash", releaseOptions{})
+	f.stage(release)
+	if !f.runChildUntil(point) {
+		t.Fatalf("a rollback never reached %s", point)
+	}
+	if gap {
+		if _, err := os.Stat(f.exe); err == nil {
+			t.Fatal("there is an executable at the moment between the two renames of a rollback")
+		}
+	} else {
+		f.requireOneCompleteExecutable(oldDigest, release.buildSHA())
+	}
+	if f.counters().HighestCounters[f.public.Fingerprint()] != 7 {
+		t.Fatal("the floor isn't on disk during the trial")
+	}
+	f.clock.advance(30 * time.Second)
+	f.mustRun()
+	// A trial that was interrupted continues once and, the build still not
+	// starting, is taken back with the code that says why.
+	f.requireTakenBack(oldDigest, release, "START_FAILED")
+	if service := f.service(); service.Version != "0.1.0" || service.State != "active" {
+		t.Errorf("the host after a rollback that was interrupted at %s: %+v", point, service)
+	}
+	if got := f.installedRecord().SHA256; got != oldDigest {
+		t.Errorf("installed.json names %s after a rollback", got)
 	}
 }
 

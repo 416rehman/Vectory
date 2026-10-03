@@ -26,10 +26,19 @@ import (
 // for (so no alias, short name, substituted drive or mount point is on it), and
 // its owner and access list belong to SYSTEM, the Administrators and
 // TrustedInstaller alone (aclProblem, rootpath_acl.go, says what that means for
-// each component). Every handle stays open, without delete sharing, so none of
-// the directories can be renamed or removed while the value is in use; Windows
-// has no open-relative-to-a-handle call that Go exposes, so the *At methods name
-// the entry inside the held directory by path, which nothing but root can change.
+// each component).
+//
+// What keeps a component from changing between the check and the use is that
+// rule, which refuses every directory above the one that holds the object if
+// another account may delete, rename or take over what it holds, and the holder
+// and the object if another account may change them at all. Every handle stays
+// open besides, a directory with the right to list it and without delete sharing,
+// so that nothing that respects sharing, root included, can rename or remove one
+// of the directories while the value is in use. (A directory opened for its
+// attributes and its access list alone is not subject to sharing at all, which is
+// why the handles ask for the right to list.) Windows has no open-relative-to-a-
+// handle call that Go exposes, so the *At methods name the entry inside the held
+// directory by path, which nothing but root can change.
 
 // ownerTrust says whose ownership and access entries pass the path check. The
 // zero value is what ships: SYSTEM, the Administrators and TrustedInstaller.
@@ -93,20 +102,30 @@ func windowsPrefixes(path string) []string {
 }
 
 // openComponent opens one directory or file for the check. A directory is opened
-// for its attributes and its access list only, shared for reading and writing
-// but not for deletion, so it can't be renamed while it is held. A file is opened
-// for reading, shared with readers and with a rename over it, so that a writer
-// that replaces it atomically isn't kept waiting by a reader.
+// to list it and to read its attributes and its access list, shared for reading
+// and writing but not for deletion: another opener that asks to delete or rename
+// it is refused while it is held. Without the right to list it the open would be
+// outside sharing altogether, and nothing would be refused. A file is opened for
+// reading, shared with readers and with a rename over it, so that a writer that
+// replaces it atomically isn't kept waiting by a reader.
 func openComponent(path string, want rootOwnedKind) (windows.Handle, error) {
+	return openComponentWith(path, want, 0)
+}
+
+// openComponentWith is openComponent with more access: the caller that closes a
+// directory's access list asks for the right to change it.
+func openComponentWith(path string, want rootOwnedKind, more uint32) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return 0, err
 	}
-	access := uint32(windows.READ_CONTROL | windows.FILE_READ_ATTRIBUTES)
+	access := uint32(windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES) | more
 	share := uint32(windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE)
 	if want == rootOwnedFile {
 		access |= windows.FILE_GENERIC_READ
 		share = windows.FILE_SHARE_READ | windows.FILE_SHARE_DELETE
+	} else {
+		access |= windows.FILE_LIST_DIRECTORY
 	}
 	h, err := windows.CreateFile(name, access, share, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
@@ -176,28 +195,35 @@ func accountName(sid string) string {
 	return account
 }
 
-// judgeHandle reads the owning account and the access list from a handle and
-// refuses it, with UNTRUSTED_LOCATION, unless aclProblem finds nothing wrong.
-func judgeHandle(h windows.Handle, path string, role windowsRole, trust ownerTrust) error {
+// securityOf is who owns an open object and what its access list grants: the
+// owning account's SID (empty when there is none), whether there is an access list
+// at all, and its entries as aclProblem reads them.
+type securityOf struct {
+	owner   string
+	hasACL  bool
+	entries []aclEntry
+}
+
+// readSecurity reads the owning account and the access list from a handle.
+func readSecurity(h windows.Handle, path string) (securityOf, error) {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil || sd == nil {
 		if err == nil {
 			err = errors.New("no security descriptor")
 		}
-		return &fs.PathError{Op: "read the access list of", Path: path, Err: err}
+		return securityOf{}, &fs.PathError{Op: "read the access list of", Path: path, Err: err}
 	}
-	owner, _, err := sd.Owner()
-	if err != nil || owner == nil {
-		return untrustedLocation(path + " has no owner")
+	var found securityOf
+	if owner, _, err := sd.Owner(); err == nil && owner != nil {
+		found.owner = owner.String()
 	}
 	acl, _, aclErr := sd.DACL()
-	hasACL := aclErr == nil && acl != nil
-	var entries []aclEntry
-	if hasACL {
+	found.hasACL = aclErr == nil && acl != nil
+	if found.hasACL {
 		for i := uint32(0); i < uint32(acl.AceCount); i++ {
 			var ace *windows.ACCESS_ALLOWED_ACE
 			if err := windows.GetAce(acl, i, &ace); err != nil {
-				return &fs.PathError{Op: "read the access list of", Path: path, Err: err}
+				return securityOf{}, &fs.PathError{Op: "read the access list of", Path: path, Err: err}
 			}
 			entry := aclEntry{Type: ace.Header.AceType, Flags: ace.Header.AceFlags, Mask: uint32(ace.Mask)}
 			// Allow and deny entries share one layout. Any other kind has its
@@ -205,10 +231,23 @@ func judgeHandle(h windows.Handle, path string, role windowsRole, trust ownerTru
 			if entry.Type == windows.ACCESS_ALLOWED_ACE_TYPE || entry.Type == windows.ACCESS_DENIED_ACE_TYPE {
 				entry.SID = (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
 			}
-			entries = append(entries, entry)
+			found.entries = append(found.entries, entry)
 		}
 	}
-	if problem := aclProblem(owner.String(), hasACL, entries, role, trust.sid, accountName); problem != "" {
+	return found, nil
+}
+
+// judgeHandle reads the owning account and the access list from a handle and
+// refuses it, with UNTRUSTED_LOCATION, unless aclProblem finds nothing wrong.
+func judgeHandle(h windows.Handle, path string, role windowsRole, trust ownerTrust) error {
+	found, err := readSecurity(h, path)
+	if err != nil {
+		return err
+	}
+	if found.owner == "" {
+		return untrustedLocation(path + " has no owner")
+	}
+	if problem := aclProblem(found.owner, found.hasACL, found.entries, role, trust.sid, accountName); problem != "" {
 		return untrustedLocation(path + " " + problem)
 	}
 	return nil
@@ -304,9 +343,9 @@ func walkOwned(path string, kind rootOwnedKind, trust ownerTrust, create *create
 }
 
 // rootOwned is a path that was checked and is held open: every directory from
-// the root of the drive down to the last, which can't be renamed while the
-// value is open, and the file when the path names one. Its methods read and
-// write the entries of the held directory.
+// the root of the drive down to the last, each held without delete sharing, and
+// the file when the path names one. Its methods read and write the entries of the
+// held directory.
 type rootOwned struct {
 	handles []windows.Handle
 	file    *os.File
@@ -328,8 +367,13 @@ func openRootOwned(path string, kind rootOwnedKind) (*rootOwned, error) {
 
 // ensureRootOwnedDir is openRootOwned for a directory, which it makes with any
 // missing directory above it: the last with the access leaf names, the others
-// with what their parent gives. A directory that exists is judged, never changed.
+// with what their parent gives. A directory that exists is judged, never changed,
+// with one exception: the directory the update directories are made in is closed
+// to other accounts first (ensureUpdateRoot).
 func ensureRootOwnedDir(path string, leaf rootFilePerm) (*rootOwned, error) {
+	if err := ensureUpdateRoot(path); err != nil {
+		return nil, err
+	}
 	return walkOwned(path, rootOwnedDirectory, rootOwnedTrust, &createSpec{leaf: leaf})
 }
 
@@ -354,6 +398,15 @@ func canWriteRootOwned() bool {
 
 // Path is the path as it was asked for.
 func (r *rootOwned) Path() string { return r.path }
+
+// directoryHandle is the handle of the held directory: the last directory of the
+// path, which holds the file when the path names one.
+func (r *rootOwned) directoryHandle() (windows.Handle, error) {
+	if len(r.handles) == 0 {
+		return 0, fmt.Errorf("%s holds no directory", r.path)
+	}
+	return r.handles[len(r.handles)-1], nil
+}
 
 // File is the held file, or nil when the path named a directory.
 func (r *rootOwned) File() *os.File { return r.file }
@@ -460,8 +513,8 @@ func moveOver(from, to string) error {
 // WriteFile replaces name in the held directory with data, so that a crash
 // leaves the old file or the new one and never part of either: the bytes are
 // written and flushed to a new file beside it, which is then renamed over it
-// with write-through. The new file has the access perm names; a rootExecutable
-// file takes what the directory gives.
+// with write-through. The new file has exactly the access perm names, in an access
+// list of its own that nothing is inherited into (windowsSDDL).
 func (r *rootOwned) WriteFile(name string, data []byte, perm rootFilePerm) error {
 	if err := checkEntryName(name); err != nil {
 		return err

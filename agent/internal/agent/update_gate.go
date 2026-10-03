@@ -12,6 +12,12 @@ package agent
 // Linux must ship.
 //
 // Closing an operating system is one line below: set its constant to false.
+//
+// Windows is closed until the windows job of .github/workflows/platforms.yml is green
+// at the cut. That job builds every agent it uses with this line changed to true in a
+// copy of the source (openWindowsGate in tests/platform/update-lib.mjs), so it proves
+// the step as it ships; opening Windows for the release is changing this line, in the
+// commit that cites the green run.
 const (
 	linuxUpdatesInRelease   = true
 	macosUpdatesInRelease   = true

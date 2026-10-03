@@ -178,6 +178,11 @@ func ServiceControl(action string) error {
 		}
 		return startService(s)
 	case "uninstall":
+		// The update step goes first, and is refused while it is trying a build: the
+		// agent's service must not be removed under it.
+		if err := RemoveUpdateHelper(); err != nil {
+			return err
+		}
 		status, err := s.Query()
 		if err != nil {
 			return err
@@ -209,6 +214,12 @@ func startService(s *mgr.Service) error {
 // stopService asks the service to stop and waits until it has: the agent
 // first stops Vector, and the executable can only be replaced afterwards.
 func stopService(s *mgr.Service) error {
+	return stopServiceContext(context.Background(), s)
+}
+
+// stopServiceContext is stopService that gives up waiting when ctx ends, which the
+// update step needs: its own service is stopped while it waits.
+func stopServiceContext(ctx context.Context, s *mgr.Service) error {
 	status, err := s.Query()
 	if err != nil {
 		return err
@@ -224,9 +235,13 @@ func stopService(s *mgr.Service) error {
 	deadline := time.Now().Add(serviceStopLimit)
 	for status.State != svc.Stopped {
 		if time.Now().After(deadline) {
-			return errors.New("the Vectory service didn't stop in time")
+			return errors.New("the " + s.Name + " service didn't stop in time")
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 		if status, err = s.Query(); err != nil {
 			return err
 		}

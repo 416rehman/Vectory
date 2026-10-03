@@ -42,7 +42,7 @@ func TestTheGateShipsLinuxAndMacOSAsTheirLinesSayAndNoOtherSystem(t *testing.T) 
 	// An operating system the gate ships and that has a step has a host, and the others
 	// have none.
 	updateHostOverride = nil
-	hasStep := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+	hasStep := runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 	if shipped := updatesInRelease(runtime.GOOS) && hasStep; (currentUpdateHost() != nil) != shipped {
 		t.Errorf("%s: a host is %v, and the gate and the step say %v", runtime.GOOS, currentUpdateHost() != nil, shipped)
 	}
