@@ -275,6 +275,7 @@ func (s *updateStep) watch(ctx context.Context, j *updateJournal, spec watchSpec
 			}
 			restarts = state.Restarts - baseline
 			if state.failed() || state.State == "inactive" || restarts >= updateRestartLimit {
+				s.logf("the service manager shows the agent's service %s after %d restart(s) since the watch began: %s", state.State, restarts, orNothing(state.Detail))
 				return watchOutcome{code: "START_FAILED"}, nil
 			}
 		}
@@ -290,6 +291,11 @@ func (s *updateStep) watch(ctx context.Context, j *updateJournal, spec watchSpec
 			}
 		}
 		if !now.Before(spec.deadline) {
+			if stateErr != nil {
+				s.logf("at the deadline the service manager's view couldn't be read: %v", stateErr)
+			} else {
+				s.logf("at the deadline the service manager shows the agent's service %s after %d restart(s): %s", state.State, restarts, orNothing(state.Detail))
+			}
 			if firstCheckIn.IsZero() {
 				return watchOutcome{code: "NO_CHECK_IN"}, nil
 			}
@@ -303,6 +309,14 @@ func (s *updateStep) watch(ctx context.Context, j *updateJournal, spec watchSpec
 			return watchOutcome{}, err
 		}
 	}
+}
+
+// orNothing is what a service manager said, or a word that it said nothing, for a log.
+func orNothing(detail string) string {
+	if detail == "" {
+		return "it said no more"
+	}
+	return detail
 }
 
 // judgeHealth says whether a health record is a check-in of the build under watch

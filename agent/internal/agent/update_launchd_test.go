@@ -412,6 +412,7 @@ func TestTheServiceStateIsWhatLaunchctlPrintsAndNothingIsGuessed(t *testing.T) {
 		recorder.calls = nil
 		recorder.answer(print, c.result)
 		got, err := host.ServiceState(context.Background())
+		got.Detail = "" // what launchd said is the next test's
 		if (err != nil) != c.wantErr || got != c.want {
 			t.Errorf("%s: %+v, %v", name, got, err)
 		}
@@ -424,6 +425,35 @@ func TestTheServiceStateIsWhatLaunchctlPrintsAndNothingIsGuessed(t *testing.T) {
 	recorder.answer(print, launchctlResult{status: -1})
 	if _, err := host.ServiceState(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("a stopped step: %v", err)
+	}
+}
+
+// The step's log is all a person has of why a build didn't stay up, because the agent's
+// own standard error goes nowhere: the state carries what launchd said, in words.
+func TestTheServiceStateCarriesWhatLaunchdSaidForTheStepsLog(t *testing.T) {
+	host, recorder, _ := newTestMacOSHost(t)
+	const print = "print system/io.vectory.agent"
+	for name, c := range map[string]struct {
+		result launchctlResult
+		want   string
+	}{
+		"a job that ended with a code": {launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")}, `launchd says the job is "waiting" with pid 0, 2 run(s), last exit code 2`},
+		"a job that never exited":      {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, `last exit code (never exited)`},
+		"a job with no exit code":      {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, `with pid 4242, 1 run(s), last exit code -, immediate reason inefficient`},
+		"a job launchd doesn't know":   {notLoaded, `launchd doesn't know the job (launchctl print exited 113: Could not find service`},
+	} {
+		recorder.answer(print, c.result)
+		got, err := host.ServiceState(context.Background())
+		if err != nil || !strings.Contains(got.Detail, c.want) {
+			t.Errorf("%s: %q, %v; want it to say %q", name, got.Detail, err, c.want)
+		}
+	}
+	// What launchd prints is bounded and one line, whatever it holds.
+	hostile := "system/io.vectory.agent = {\n\tstate = " + strings.Repeat("x", 500) + "\n\tlast exit code = a\x1b[31m\nb\n\truns = 1\n}\n"
+	recorder.answer(print, launchctlResult{stdout: hostile})
+	got, err := host.ServiceState(context.Background())
+	if err != nil || len(got.Detail) > 400 || strings.ContainsAny(got.Detail, "\n\x1b") {
+		t.Errorf("a long state: %d bytes, %v", len(got.Detail), err)
 	}
 }
 

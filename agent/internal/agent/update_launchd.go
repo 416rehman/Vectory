@@ -250,6 +250,9 @@ type launchdPrinted struct {
 	PID int
 	// Runs counts the times launchd has started the job since it loaded it.
 	Runs int
+	// LastExit is launchd's words for how the process last ended ("(never exited)",
+	// "0", "78", "9: Killed: 9") and Reason why launchd started the job.
+	LastExit, Reason string
 }
 
 // parseLaunchdPrint reads the top-level lines of `launchctl print system/<label>`:
@@ -302,6 +305,10 @@ func parseLaunchdPrint(text string) (launchdPrinted, error) {
 				return launchdPrinted{}, fmt.Errorf("launchctl print gave the pid %q", safeText(value, 40))
 			}
 			printed.PID = pid
+		case "last exit code":
+			printed.LastExit = safeText(value, 60)
+		case "immediate reason":
+			printed.Reason = safeText(value, 60)
 		case "runs":
 			runs, err := strconv.Atoi(value)
 			if err != nil || runs < 0 {
@@ -330,7 +337,16 @@ func (p launchdPrinted) serviceState() updateServiceState {
 	if p.State == "running" && p.PID > 0 {
 		state.State = "active"
 	}
+	state.Detail = fmt.Sprintf("launchd says the job is %q with pid %d, %d run(s), last exit code %s, immediate reason %s", safeText(p.State, 40), p.PID, p.Runs, orDash(p.LastExit), orDash(p.Reason))
 	return state
+}
+
+// orDash is a word launchd didn't print, as a dash.
+func orDash(word string) string {
+	if word == "" {
+		return "-"
+	}
+	return word
 }
 
 // launchdNotLoaded says that launchctl print found no such job: exit status 113,
@@ -350,7 +366,7 @@ func (h *macosUpdateHost) ServiceState(ctx context.Context) (updateServiceState,
 		}
 		return printed.serviceState(), nil
 	case launchdNotLoaded(result):
-		return updateServiceState{State: "inactive"}, nil
+		return updateServiceState{State: "inactive", Detail: fmt.Sprintf("launchd doesn't know the job (launchctl print exited %d: %s)", result.status, safeText(strings.TrimSpace(result.stderr), 120))}, nil
 	case ctx.Err() != nil:
 		return updateServiceState{}, ctx.Err()
 	}
