@@ -955,7 +955,7 @@ export function windowsHost() {
         "step-counters.json": paths.counters,
         "step-installed.json": paths.installed,
         "policy.json": paths.policy,
-        "update-step.log": paths.stepLog,
+        "step.log": paths.stepLog,
       }))
         save(name, read(file));
       for (const unit of Object.values(units))
