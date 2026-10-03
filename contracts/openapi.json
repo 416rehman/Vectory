@@ -14909,16 +14909,6 @@
               }
             }
           },
-          "404": {
-            "description": "AGENT_UPDATES_OFF while updates are off, NOT_FOUND for an unknown ID",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
           "409": {
             "description": "Conflict or stale revision",
             "content": {
@@ -15039,16 +15029,6 @@
           },
           "403": {
             "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "AGENT_UPDATES_OFF while updates are off, NOT_FOUND for an unknown ID",
             "content": {
               "application/json": {
                 "schema": {
@@ -17523,6 +17503,16 @@
               }
             }
           },
+          "404": {
+            "description": "Agent updates are off, or no such digest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Conflict or stale revision",
             "content": {
@@ -17535,6 +17525,24 @@
           },
           "429": {
             "description": "Rate limit"
+          },
+          "503": {
+            "description": "CAPACITY_BUSY: the listener's request slots are taken; wait out Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -17581,6 +17589,16 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent updates are off",
             "content": {
               "application/json": {
                 "schema": {
@@ -37314,6 +37332,61 @@
             ],
             "description": "Null while updates are off."
           },
+          "frozen_devices": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "items": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "device_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "device_name": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 240
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rollover_conflict": {
+                          "$ref": "#/components/schemas/RolloverConflict"
+                        }
+                      },
+                      "required": [
+                        "device_id",
+                        "device_name",
+                        "rollover_conflict"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "total",
+                  "items"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hosts frozen on a fork of the rollover chain until they are re-pinned: the non-revoked devices whose latest report carries a rollover_conflict, at most 20 by name. Null while updates are off."
+          },
           "catalog": {
             "anyOf": [
               {
@@ -37338,6 +37411,7 @@
           "stopped",
           "active_rollouts",
           "fleet",
+          "frozen_devices",
           "catalog"
         ],
         "additionalProperties": false,

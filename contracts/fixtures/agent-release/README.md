@@ -2,7 +2,7 @@
 
 Shared test data for agent updates. The Rust server and the Go agent each implement the rules of the [Agent updates](../../CONTRACT.md#agent-updates) section of the contract, and both run every case in this directory, so a byte string that one accepts and the other refuses fails a test instead of reaching a host. The files are written by a third implementation, `rules.mjs`, with nothing but Node's own crypto, and checked in.
 
-Every key here is a published test key: its seed is in `vectors.json`. Never pin one on a real host.
+Every key here is a published test key: its seed is in `vectors.json`. Never pin one on a real host. `examples/team-private-key.txt` is the private key file of the test key `team` in the format `vectory release keygen` writes: a fixed test seed that `vectors.json` publishes, never a real key. It is named `.txt` because the repository ignores `*.key`.
 
 | File | What it holds |
 | --- | --- |
@@ -27,7 +27,7 @@ Both read every case and every key line, and require exactly the answer in the f
 
 - `keys`: `{name, seed_hex, public_key_line, fingerprint}`. The seed is 32 bytes of hex; the private key is the Ed25519 key of that seed, and the line and the fingerprint (the hex SHA-256 of the 32 public bytes) follow from it. Cases refer to keys by fingerprint.
 - `key_lines`: `{name, about, line, expect}` where `expect` is `{result:"valid", fingerprint, name}` or `{result:"refused", code:"RELEASE_KEY_INVALID"}`. Run the key rule of the contract on `line`. The cases include the eight canonical encodings of the points of order 1, 2, 4 and 8, non-canonical encodings (`y` equal to the field prime or above it, among them the alias `y + p` of a point of large order, and a set sign bit on a point whose `x` is 0), and bytes that are not on the curve.
-- `bundles`: `{name, about, bundle_b64, fingerprint, expect}`. What setup does with the bytes of `GET /agent/v1/release-keys` and the fingerprint the operator typed: compute each entry's fingerprint from its key bytes, ignore the `fingerprint` member for matching, refuse the whole bundle when a member disagrees with its key (`{result:"refused", code:"RELEASE_KEY_INVALID"}`), and otherwise pin the entry found (`{result:"valid", public_key}`) or find none (`{result:"absent"}`). Members setup does not know are ignored.
+- `bundles`: `{name, about, bundle_b64, fingerprint, expect}`. What setup does with the bytes of `GET /agent/v1/release-keys` and the fingerprint the operator typed: compute each entry's fingerprint from its key bytes, ignore the `fingerprint` member for matching, refuse the whole bundle when a `fingerprint` member is missing or disagrees with its key (`{result:"refused", code:"RELEASE_KEY_INVALID"}`), and otherwise pin the entry found (`{result:"valid", public_key}`) or find none (`{result:"absent"}`). Members setup does not know are ignored.
 - `cases`: one offered release and what a host decides.
 
 A case:
