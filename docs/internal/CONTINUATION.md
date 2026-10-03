@@ -50,7 +50,7 @@ Each command runs from the repository root unless it says otherwise. Set `VECTOR
 | Dashboard browsers | `cd dashboard && node tests/<name>-browser.mjs` (each harness serves the app with Vite and uses synthetic API replies; the list CI runs is in `.github/workflows/ci.yml`) |
 | Independent protocol suite | build `server`, then `VECTORY_SECURITY_SERVER=<path to vectory-server> go test -v tests/security/protocol_test.go` |
 | Contracts | `node contracts/generate.mjs` leaves no diff; `node tests/contracts.mjs` |
-| Docs and records | `node scripts/check-doc-links.mjs`, `node scripts/check-requirements.mjs`, `node scripts/check-ci-table.mjs`, `node --test help-center/scripts/*.test.mjs` |
+| Docs and records | `node scripts/check-doc-links.mjs`, `node scripts/check-requirements.mjs`, `node scripts/check-ci-table.mjs`, `node scripts/check-writing-rules.mjs`, `node --test scripts/*.test.mjs help-center/scripts/*.test.mjs` |
 | Help center | `cd help-center && npm run build` (also checks the dashboard's links into it) |
 | Capacity | `tests/load/README.md` |
 

@@ -60,7 +60,7 @@ The dashboard links to heading anchors, and people bookmark them. Before you ren
 
 1. Search the dashboard for the anchor: `grep -rn "section=\"old-anchor\"\|old-anchor" dashboard/src`.
 2. Add the old anchor to `help-center/legacy-anchors.json`, pointing at its new home. The build fails if an entry points nowhere.
-3. Tell the dashboard owner, so the link can move to the new anchor.
+3. Move the dashboard's link to the new anchor.
 
 The build checks every link in the pages, the Markdown copies, `llms.txt`, and the dashboard's `DocLink`, `HelpLink` and page-help targets.
 
