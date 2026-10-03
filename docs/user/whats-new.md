@@ -48,6 +48,8 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - On a restricted host, **Check on devices** reports one finding at a time (a missing secret first, then each allowance the host hasn't approved), so run it again after each fix.
 - Agent settings and groups can't be deleted or archived yet.
 - A deployment needs at least one device when you create it. A group with no devices can't be chosen yet, even with **Also include future group members**; add a device to the group first.
+- A destination that refuses events can raise up to three issues, and three notifications, for one cause (the destination can't deliver, the component is dropping events, the pipeline stopped delivering). They resolve together once delivery recovers.
+- A canary that stopped because a device wasn't delivering stays stopped after the destination recovers. Its deployment offers **Roll back or remove**, not a way to release the remaining devices.
 - The API uses session cookies; API tokens are planned.
 - One server per installation.
 
