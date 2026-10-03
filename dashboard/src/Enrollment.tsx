@@ -39,6 +39,7 @@ import {
 import TabLabel from "./TabLabel";
 import DocLink from "./DocLink";
 import { UpdateConsentFields } from "./UpdateConsentFields";
+import { updatesNotInRelease, updatesShip } from "./agentUpdatePlatforms";
 import {
   emptyConsent,
   readConsent,
@@ -446,6 +447,9 @@ export function Enrollment({
 
   const defaults = platformDefaults(os);
   const updatesOn = agentUpdates.on;
+  // The choice of how a host takes updates is made only for a system whose
+  // agent ships them: setup refuses the flags on any other.
+  const updatesChoice = updatesOn && updatesShip(os);
   const updateRead = readConsent(
     consent,
     agentUpdates.updates?.current_key?.fingerprint ?? null,
@@ -461,7 +465,7 @@ export function Enrollment({
     managedConfig,
     capabilityPolicy,
     vectorBinary,
-    updates: updatesOn ? updateRead.consent : undefined,
+    updates: updatesChoice ? updateRead.consent : undefined,
     trust: trust || undefined,
     caFile,
     installDir: os === "windows" ? "" : directoryPath(installDir),
@@ -549,7 +553,7 @@ export function Enrollment({
     !devices.error &&
     // With updates on, nothing is chosen for the host: how it takes them is
     // chosen first, even if that is Off.
-    (!updatesOn || (updateRead.chosen && !updateRead.problem));
+    (!updatesChoice || (updateRead.chosen && !updateRead.problem));
 
   const current =
     command && secret?.record.id === command.tokenId ? secret : null;
@@ -602,9 +606,9 @@ export function Enrollment({
       setError(
         !mode
           ? "Choose Restricted or Full Vector first."
-          : updatesOn && !updateRead.chosen
+          : updatesChoice && !updateRead.chosen
             ? "Choose how this host takes agent updates first."
-            : updatesOn && updateRead.problem
+            : updatesChoice && updateRead.problem
               ? updateRead.problem
               : "Check the highlighted settings under Advanced.",
       );
@@ -1178,28 +1182,43 @@ export function Enrollment({
             aria-labelledby="enroll-updates"
           >
             <h2 id="enroll-updates">2. Agent updates</h2>
-            <p className="control-muted">
-              The host agrees to updates when you run the command, and only
-              then. Nothing about it changes later unless someone runs a command
-              on it again.
-            </p>
-            <UpdateConsentFields
-              value={consent}
-              onChange={(patch) =>
-                setConsent((previous) => ({ ...previous, ...patch }))
-              }
-              read={updateRead}
-              signingKey={agentUpdates.updates?.current_key ?? null}
-              disabled={busy}
-              name="enroll-update-level"
-            />
-            <DocLink
-              topic="agent-updates"
-              section="what-a-host-agrees-to"
-              className="doc-term-link update-doc"
-            >
-              What a host agrees to
-            </DocLink>
+            {updatesChoice ? (
+              <>
+                <p className="control-muted">
+                  The host agrees to updates when you run the command, and only
+                  then. Nothing about it changes later unless someone runs a
+                  command on it again.
+                </p>
+                <UpdateConsentFields
+                  value={consent}
+                  onChange={(patch) =>
+                    setConsent((previous) => ({ ...previous, ...patch }))
+                  }
+                  read={updateRead}
+                  signingKey={agentUpdates.updates?.current_key ?? null}
+                  disabled={busy}
+                  name="enroll-update-level"
+                />
+                <DocLink
+                  topic="agent-updates"
+                  section="what-a-host-agrees-to"
+                  className="doc-term-link update-doc"
+                >
+                  What a host agrees to
+                </DocLink>
+              </>
+            ) : (
+              <p className="control-muted">
+                {updatesNotInRelease(os)}{" "}
+                <DocLink
+                  topic="installation"
+                  section="upgrade-an-existing-agent"
+                  className="doc-term-link update-doc"
+                >
+                  Upgrade an existing agent
+                </DocLink>
+              </p>
+            )}
           </section>
         )}
 
@@ -1264,9 +1283,9 @@ export function Enrollment({
                   <span className="control-muted" role="status">
                     {!mode
                       ? "Choose Restricted or Full Vector first."
-                      : updatesOn && !updateRead.chosen
+                      : updatesChoice && !updateRead.chosen
                         ? "Choose how this host takes agent updates first."
-                        : updatesOn && updateRead.problem
+                        : updatesChoice && updateRead.problem
                           ? updateRead.problem
                           : devices.error
                             ? "The device list must load before a command is created."
