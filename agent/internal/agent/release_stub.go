@@ -98,6 +98,13 @@ func (k ReleaseKey) Name() string { return k.name }
 // IsZero reports whether k is the zero value, which is not a key.
 func (k ReleaseKey) IsZero() bool { return !k.valid }
 
+// ReleaseResult is a host's last result: the SHA-256 of the manifest it was about
+// and its outcome.
+type ReleaseResult struct {
+	Release string
+	Outcome string
+}
+
 // RolloverEnvelope is a rollover statement and its signature as they travel:
 // the base64 of the statement's bytes and of its 64-byte signature.
 type RolloverEnvelope struct {
