@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-// Fails when a tracked text file describes how the project was built instead
-// of what it does: work-package, workstream, review-round and finding
-// identifiers, the words for the project's own working arrangements, personal
-// home directories and links to chat or session pages. The repository
-// describes the product and its design decisions on their merits.
+// Fails when a tracked text file carries a work-package, workstream, review-
+// round or finding identifier, wording for how work is organised, an absolute
+// home directory or a link to a chat or session page. The repository states
+// the product and its design decisions on their merits.
 //
 //   node scripts/check-writing-rules.mjs
 //
@@ -154,7 +153,13 @@ export function scanText(text, { accounts = new Set() } = {}) {
     const line = index + 1;
     for (const rule of RULES) {
       for (const hit of content.matchAll(rule.pattern))
-        found.push({ line, rule: rule.id, match: hit[0], why: rule.why, content });
+        found.push({
+          line,
+          rule: rule.id,
+          match: hit[0],
+          why: rule.why,
+          content,
+        });
     }
     for (const pattern of HOME_DIRECTORIES) {
       for (const hit of content.matchAll(pattern)) {
@@ -189,7 +194,9 @@ function globToRegExp(glob) {
 /** Whether an allowlist path pattern covers a file ("dir/" covers a directory). */
 export function pathMatches(pattern, file) {
   if (pattern.endsWith("/")) return file.startsWith(pattern);
-  return pattern.includes("*") ? globToRegExp(pattern).test(file) : pattern === file;
+  return pattern.includes("*")
+    ? globToRegExp(pattern).test(file)
+    : pattern === file;
 }
 
 /** Problems in the allowlist itself; an empty list means it can be trusted. */
@@ -215,14 +222,19 @@ export function allowlistProblems(allow) {
           if (!RULE_IDS.includes(rule))
             problems.push(`${where}: unknown rule "${rule}"`);
     }
-    if (entry.match !== undefined && (typeof entry.match !== "string" || !entry.match))
+    if (
+      entry.match !== undefined &&
+      (typeof entry.match !== "string" || !entry.match)
+    )
       problems.push(`${where}: match must be a non-empty string`);
   });
   for (const [index, account] of (allow.accounts ?? []).entries()) {
     if (typeof account.name !== "string" || !account.name)
       problems.push(`accounts[${index}]: a name is required`);
     if (typeof account.reason !== "string" || account.reason.trim().length < 12)
-      problems.push(`accounts[${index}]: a reason of at least a sentence is required`);
+      problems.push(
+        `accounts[${index}]: a reason of at least a sentence is required`,
+      );
   }
   return problems;
 }
@@ -283,7 +295,10 @@ function listFiles(root) {
 function main() {
   const root = path.resolve(import.meta.dirname, "..");
   const allow = JSON.parse(
-    fs.readFileSync(path.join(root, "scripts/writing-rules-allow.json"), "utf8"),
+    fs.readFileSync(
+      path.join(root, "scripts/writing-rules-allow.json"),
+      "utf8",
+    ),
   );
   const broken = allowlistProblems(allow);
   for (const problem of broken)
@@ -307,7 +322,9 @@ function main() {
     console.error(
       `${violation.file}:${violation.line}: [${violation.rule}] "${violation.match}": ${violation.why}`,
     );
-  for (const { index, paths } of unused.filter((item) => !missing.includes(item)))
+  for (const { index, paths } of unused.filter(
+    (item) => !missing.includes(item),
+  ))
     console.log(
       `note: allowlist entries[${index}] (${paths.join(", ")}) excused nothing; remove it if it is no longer needed.`,
     );
