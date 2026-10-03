@@ -1259,52 +1259,77 @@ try {
     },
   );
 
+  /** Reviews 0.1.1 after the key was rotated, with the server's one group. */
+  async function reviewAfterRotation(group) {
+    const scenario = richState();
+    scenario.updates.current_key = releaseKey({
+      fingerprint: nextFingerprint,
+      public_key: nextLine,
+    });
+    scenario.preview = previewBody({
+      will_update: [],
+      wont_update: [group],
+      warnings: [],
+    });
+    await load({ path: "agent-updates", scenario });
+    await page
+      .getByRole("article", { name: "Agent 0.1.1" })
+      .getByRole("button", { name: "Update devices…" })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Roll out agent 0.1.1" });
+    await dialog.getByRole("checkbox", { name: /Edge fleet/ }).check();
+    await dialog.getByRole("button", { name: "Review", exact: true }).click();
+    return dialog;
+  }
+  const again =
+    "Withdraw this release and prepare it again so the current key signs it.";
+
   await check(
-    "Review: hosts that pin the current key can't take a release an older key signed, and no command pretends they can",
+    "Review: hosts that pin the current key can't take a release an older key signed, and the fix is another release, not a command",
     async () => {
-      // The key was rotated after the release was signed: the release names
-      // the old key, the settings the new one, and the host pins the new one.
-      const scenario = richState();
-      scenario.updates.current_key = releaseKey({
-        fingerprint: nextFingerprint,
-        public_key: nextLine,
-      });
-      scenario.preview = previewBody({
-        will_update: [],
-        wont_update: [
-          {
-            code: "KEY_NOT_PINNED",
-            reason:
-              "edge-06 pins no key that reaches the key that signed 0.1.1.",
-            fix: "Run the Upgrade agent command so the host pins the current release key.",
-            devices: [
-              { device_id: id(6), device_name: "edge-06", successors: null },
-            ],
-          },
+      // The key was rotated after the release was signed: the server says the
+      // fix is a release the current key signs, and a command here changes
+      // nothing, so none is offered.
+      const dialog = await reviewAfterRotation({
+        code: "KEY_NOT_PINNED",
+        reason: "edge-06 pins no key that reaches the key that signed 0.1.1.",
+        fix: again,
+        devices: [
+          { device_id: id(6), device_name: "edge-06", successors: null },
         ],
-        warnings: [],
       });
-      await load({ path: "agent-updates", scenario });
-      await page
-        .getByRole("article", { name: "Agent 0.1.1" })
-        .getByRole("button", { name: "Update devices…" })
-        .click();
-      const dialog = page.getByRole("dialog", { name: "Roll out agent 0.1.1" });
-      await dialog.getByRole("checkbox", { name: /Edge fleet/ }).check();
-      await dialog.getByRole("button", { name: "Review", exact: true }).click();
       const group = dialog.locator("article", { hasText: "edge-06" });
       await expect(group).toContainText(
         "edge-06 pins no key that reaches the key that signed 0.1.1.",
       );
-      // The server's own fix names a command; here it would change nothing.
-      await expect(group).toContainText(
-        `This release was signed by key ${teamFingerprint.slice(0, 16)}, not the current key ${nextFingerprint.slice(0, 16)}. Withdraw this release and prepare it again`,
-      );
-      await expect(group).not.toContainText(
-        "Run the Upgrade agent command so the host pins the current release key.",
-      );
-      await expect(group.getByText("Commands for the host")).toHaveCount(0);
+      await expect(group).toContainText(`Fix ${again}`);
+      await expect(group).not.toContainText("Upgrade agent command");
+      await expect(group.getByText(/^Commands for the host/)).toHaveCount(0);
       await look("review-older-key");
+    },
+  );
+
+  await check(
+    "Review: a group of both kinds is told to prepare the release again and to run the command once, with commands for its hosts",
+    async () => {
+      const both = `${again} Hosts that pin no key leading to the current key also need the Upgrade agent command, once.`;
+      const dialog = await reviewAfterRotation({
+        code: "KEY_NOT_PINNED",
+        reason:
+          "These hosts pin no key that reaches the key that signed 0.1.1.",
+        fix: both,
+        devices: [
+          { device_id: id(1), device_name: "edge-01", successors: null },
+          { device_id: id(2), device_name: "edge-02", successors: null },
+        ],
+      });
+      const group = dialog.locator("article", { hasText: "edge-01" });
+      await expect(group).toContainText(`Fix ${both}`);
+      await group.getByText("Commands for the hosts").click();
+      for (const name of ["edge-01", "edge-02"])
+        await expect(
+          group.getByLabel(`Upgrade command for ${name}`, { exact: true }),
+        ).toContainText(`--update-key-sha256 ${nextFingerprint}`);
     },
   );
 
