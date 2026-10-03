@@ -25,6 +25,21 @@ func darwinSettingsACL(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer unix.Close(fd)
+	acl, err := darwinACLOfDescriptor(fd)
+	if err != nil || acl == nil {
+		return nil, err
+	}
+	if binary.LittleEndian.Uint32(acl[40:44])&(1<<16) != 0 {
+		return nil, errors.New("settings ACL defers inheritance until rename; cannot preserve it safely")
+	}
+	return acl, nil
+}
+
+// darwinACLOfDescriptor reads the extended access list of an open file or
+// directory as the kernel's kauth_filesec: the exact bytes, or nil when there is no
+// list. The path check reads each handle it holds with it (rootpath_extacl_darwin.go),
+// and the settings copy preserves lists with it.
+func darwinACLOfDescriptor(fd int) ([]byte, error) {
 	attributes := unix.Attrlist{Bitmapcount: 5, Commonattr: unix.ATTR_CMN_EXTENDED_SECURITY}
 	buffer := make([]byte, 12+darwinACLHeader+darwinACLEntry*darwinACLMaximum)
 	_, _, failure := syscall.Syscall6(unix.SYS_FGETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&attributes)), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0, 0)
@@ -33,7 +48,7 @@ func darwinSettingsACL(path string) ([]byte, error) {
 	}
 	length := int(binary.LittleEndian.Uint32(buffer[:4]))
 	if length < 12 || length > len(buffer) {
-		return nil, errors.New("unbounded settings ACL")
+		return nil, errors.New("unbounded ACL")
 	}
 	offset := int(int32(binary.LittleEndian.Uint32(buffer[4:8])))
 	size := int(binary.LittleEndian.Uint32(buffer[8:12]))
@@ -42,21 +57,18 @@ func darwinSettingsACL(path string) ([]byte, error) {
 	}
 	start := 4 + offset
 	if start < 12 || size < darwinACLHeader || start+size > length {
-		return nil, errors.New("invalid settings ACL reference")
+		return nil, errors.New("invalid ACL reference")
 	}
 	acl := append([]byte(nil), buffer[start:start+size]...)
 	if binary.LittleEndian.Uint32(acl[:4]) != 0x012cc16d {
-		return nil, errors.New("invalid settings ACL format")
+		return nil, errors.New("invalid ACL format")
 	}
 	count := binary.LittleEndian.Uint32(acl[36:40])
 	if count == darwinACLNone {
 		return nil, nil
 	}
 	if count > darwinACLMaximum || len(acl) != darwinACLHeader+darwinACLEntry*int(count) {
-		return nil, errors.New("unbounded settings ACL entries")
-	}
-	if binary.LittleEndian.Uint32(acl[40:44])&(1<<16) != 0 {
-		return nil, errors.New("settings ACL defers inheritance until rename; cannot preserve it safely")
+		return nil, errors.New("unbounded ACL entries")
 	}
 	return acl, nil
 }
