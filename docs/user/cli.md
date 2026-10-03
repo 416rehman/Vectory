@@ -160,7 +160,7 @@ sudo vectory setup --server https://vectory.example.com:8443 --update-window 'Sa
 | `--update-track TRACK` | Changes the track only. |
 | `--update-window SPEC` | Replaces the windows only: the windows given are all the host has afterwards. To go back to any time, run `setup` with `--updates`, the key and no window, which gives the whole consent again. |
 
-Any combination applies the parts given. The level, the parts not named and a pause set with [`vectory update pause`](#update) stay as they are, and the counter floors and the update step's state are never touched. The update step is installed if it is missing, as when consent is given, and the command needs what consent needs: where `--updates` would stop with a reason and a fix, so does this, with the fix saying to leave out the update flags.
+Any combination applies the parts given. The level, the parts not named and a pause set with [`vectory update pause`](#update) stay as they are, and the counter floors and the update step's state are never touched. The update step is installed if it is missing, as when consent is given. A command with no update flag, such as the Upgrade agent command of a host that already agreed, leaves the step alone: when the step isn't running, `vectory doctor` prints the command that installs it again, `setup` with the key the host pins. An amendment needs what consent needs: where `--updates` would stop with a reason and a fix, so does this, with the fix saying to leave out the update flags.
 
 `setup` refuses these flags with exit code `2` and no other effect when there is nothing to change. A host with no policy, or with consent `off`, gets:
 
