@@ -1661,8 +1661,18 @@ async fn retirement_marks_only_current_persistent_targets_removed() {
                 "completed"
             }
         );
+        // A revoked or removed device no longer follows the deployment however
+        // its target was stored; a snapshot keeps its stored state as history.
+        assert_eq!(targets["items"][0]["state"], "removed");
+        assert_eq!(summary["state_counts"], json!({"removed":1}));
+        let stored: String =
+            sqlx::query_scalar("SELECT state FROM deployment_targets WHERE deployment_id=?")
+                .bind(d["id"].as_str().unwrap())
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
         assert_eq!(
-            targets["items"][0]["state"],
+            stored,
             if case == "snapshot_revoke" {
                 "desired"
             } else {
@@ -1796,10 +1806,11 @@ async fn retirement_preserves_proof_and_frozen_history_across_resources_and_stat
                 .await
                 .1;
                 assert_eq!(summary["target_count"], 1);
-                assert_eq!(
-                    summary["verified_count"],
-                    if expected["state"] == "removed" { 0 } else { 1 }
-                );
+                // The stored row above keeps its proof either way, but a
+                // revoked device no longer follows the deployment, so it
+                // doesn't count as applied.
+                assert_eq!(summary["verified_count"], 0);
+                assert_eq!(summary["state_counts"], json!({"removed":1}));
             }
         }
     }
