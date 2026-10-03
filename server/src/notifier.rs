@@ -13,9 +13,11 @@
 //! - Offline and back-online facts come from a scan of check-in times, one
 //!   outage per device: announced once when it passes a channel's threshold,
 //!   and "back online" once after two check-ins, so a flapping device sends
-//!   nothing new. After the server starts, silence counts from the end of a
-//!   recovery window (`RECOVERY_WINDOW_SECONDS`), so a fleet that could not
-//!   reach the server is not reported offline the moment it returns.
+//!   nothing new. After the server starts, nothing is announced until a
+//!   recovery window (`RECOVERY_WINDOW_SECONDS`) ends, so a fleet that could
+//!   not reach the server is not reported offline the moment it returns; a
+//!   device already past a channel's threshold then is announced when the
+//!   window ends, and any other when its own threshold passes.
 //! - At most `RATE_LIMIT` messages go to a channel in any minute; the rest
 //!   are summarised in one digest. Quiet hours hold messages and send one
 //!   digest when they end. A failed send retries after 1, 5 and 30 minutes,
@@ -83,8 +85,9 @@ impl Default for Runtime {
 }
 impl Runtime {
     /// The server started at `now`: no device is reported offline before
-    /// `RECOVERY_WINDOW_SECONDS` have passed, and silence counts from the end
-    /// of that window for any device that has not checked in since.
+    /// `RECOVERY_WINDOW_SECONDS` have passed. Silence still counts from the
+    /// device's last check-in, so one that is past a channel's threshold when
+    /// the window ends is reported then.
     pub fn begin_recovery_window(&self, now: DateTime<Utc>) {
         *lock(&self.recovery_ends) = Some(now + Duration::seconds(RECOVERY_WINDOW_SECONDS));
     }
@@ -305,9 +308,12 @@ enum OutageChange {
 }
 /// Compare check-in times with open outages. A device is offline after three
 /// missed check-ins, as everywhere else in Vectory, and a channel announces it
-/// once it has been silent for the channel's minutes. Silence counts from the
-/// later of the last check-in and `recovery_ends`, the end of the time devices
-/// have to reconnect after the server started.
+/// once it has been silent for the channel's minutes, counted from its last
+/// check-in. Nothing is announced before `recovery_ends`, the end of the time
+/// devices have to reconnect after the server started, so a device that is
+/// already past its minutes when the window ends is announced then, and any
+/// other when its own minutes pass: the announcement is at the later of the
+/// two. A device that checks in during the window never reads as silent.
 async fn scan(
     db: &mut SqliteConnection,
     channels: &[&Channel],
@@ -315,7 +321,7 @@ async fn scan(
     recovery_ends: Option<DateTime<Utc>>,
     facts: &mut Vec<Fact>,
 ) -> Result<Vec<OutageChange>> {
-    let silent_from = |at: DateTime<Utc>| recovery_ends.map_or(at, |end| at.max(end));
+    let window_open = recovery_ends.is_some_and(|end| now < end);
     let rows = sqlx::query("SELECT id,revoked,policy,policy_generation,json_extract(data,'$.last_seen') AS last_seen,json_extract(data,'$.policy_generation') AS reported,json_extract(data,'$.heartbeat_floor_seconds') AS floor FROM devices")
         .fetch_all(&mut *db)
         .await?;
@@ -361,7 +367,7 @@ async fn scan(
         });
         let interval =
             crate::rollout::check_in_seconds(&policy, &evidence, row.get("policy_generation"));
-        let offline = (now - silent_from(last_seen.1)).num_seconds() > interval * 3;
+        let offline = !window_open && (now - last_seen.1).num_seconds() > interval * 3;
         match (offline, outage) {
             (true, outage) => {
                 // Nothing is stored until a channel is told: until then the
@@ -374,11 +380,12 @@ async fn scan(
                     if notified.contains(&channel.id) {
                         continue;
                     }
-                    let crossing = silent_from(since_time)
-                        + Duration::minutes(channel.rules.offline_minutes as i64);
+                    let passes =
+                        since_time + Duration::minutes(channel.rules.offline_minutes as i64);
+                    let announce_at = recovery_ends.map_or(passes, |end| passes.max(end));
                     // A channel reports outages that pass its threshold after
                     // it exists, not every device that was already gone.
-                    if now >= crossing && crossing >= channel.created_at {
+                    if now >= announce_at && passes >= channel.created_at {
                         notified.push(channel.id.clone());
                         facts.push(Fact {
                             identity: format!("device.offline:{device}:{since}:{}", channel.id),
@@ -405,9 +412,10 @@ async fn scan(
                 if notified.is_empty() {
                     changes.push(OutageChange::Remove(device));
                 } else if parse_time(&since).is_some_and(|since| last_seen.1 <= since) {
-                    // Not back: the recovery window only keeps a device that
-                    // has not checked in since the outage began from reading
-                    // as offline.
+                    // Not back: it has not checked in since the outage began.
+                    // During the recovery window no device reads as offline,
+                    // so this is a device announced before the restart that
+                    // is still silent.
                 } else if let Some(first) = returned_at.as_deref().and_then(parse_time) {
                     // The second check-in since the outage: back for real.
                     if last_seen.1 > first {

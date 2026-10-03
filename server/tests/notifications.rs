@@ -1479,21 +1479,24 @@ async fn devices_get_time_to_reconnect_after_the_server_starts_before_any_offlin
         "stale check-ins from before the start are not silence: {:?}",
         texts_of(&hook)
     );
-    // One device reconnects after its backoff and keeps checking in.
+    // One device reconnects after its backoff and keeps checking in. The other
+    // has been silent for seven minutes, two more than the channel's five, but
+    // nothing is reported while the window is open.
     let half_past = |minute: i64| started + Duration::minutes(minute) + Duration::seconds(30);
-    for minute in 3..=9 {
+    for minute in 3..=4 {
         checked_in(&f, &back, started + Duration::minutes(minute)).await;
         drain(&f, half_past(minute)).await;
     }
     assert!(
         texts_of(&hook).is_empty(),
-        "the other device is past the window but not yet silent for the channel's five minutes: {:?}",
+        "no alert inside the window, though the other device is past the channel's five minutes: {:?}",
         texts_of(&hook)
     );
-    // The other stays silent after the window: reported once the channel's
-    // minutes have passed, counted from the end of the window.
-    checked_in(&f, &back, started + Duration::minutes(10)).await;
-    drain(&f, half_past(10)).await;
+    // The window ends after five minutes. The other device was already past
+    // the channel's minutes, so it is reported then, and not a whole five
+    // minutes later.
+    checked_in(&f, &back, started + Duration::minutes(5)).await;
+    drain(&f, half_past(5)).await;
     assert_eq!(texts_of(&hook), ["edge-gone is offline"]);
     let offline = hook.requests()[0].json();
     assert_eq!(offline["event"]["device"]["id"], gone);
@@ -1501,12 +1504,141 @@ async fn devices_get_time_to_reconnect_after_the_server_starts_before_any_offlin
         offline["event"]["message"]
             .as_str()
             .unwrap()
-            .starts_with("No check-in for 17 min"),
-        "the message still counts from the last check-in: {offline}"
+            .starts_with("No check-in for 12 min"),
+        "the message counts from the last check-in: {offline}"
     );
+    for minute in 6..=9 {
+        checked_in(&f, &back, started + Duration::minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+    }
     checked_in(&f, &back, started + Duration::minutes(39)).await;
     drain(&f, started + Duration::minutes(40)).await;
     assert_eq!(texts_of(&hook), ["edge-gone is offline"], "once per outage");
+}
+
+fn texts_on(hook: &Receiver, path: &str) -> Vec<String> {
+    hook.requests()
+        .iter()
+        .filter(|r| r.head.split_whitespace().nth(1) == Some(path))
+        .map(|r| r.json()["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+// After a restart a device is reported at the later of its own minutes (from
+// its last check-in) and the end of the window: one that was already past its
+// minutes when the window ends is reported then, not a whole threshold later,
+// one that was silent only briefly at its own minutes, and one that returns
+// during the window never.
+#[tokio::test]
+async fn after_a_restart_a_device_is_reported_at_the_later_of_its_minutes_and_the_end_of_the_window()
+ {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let f = fixture().await;
+    let started = Utc::now() + Duration::seconds(5);
+    let minutes = |n: i64| Duration::minutes(n);
+    let fifteen_minutes = |path: &str| {
+        let mut body = webhook(
+            &hook.url(path),
+            true,
+            &["device.offline", "device.recovered"],
+        );
+        body["rules"]["offline_minutes"] = json!(15);
+        body
+    };
+    let early = channel(&f, fifteen_minutes("/early")).await;
+    let late = channel(&f, fifteen_minutes("/late")).await;
+    // One channel is old; the other is saved while the window is open, after
+    // two of the devices below have passed their fifteen minutes.
+    for (id, created) in [
+        (early["id"].as_str().unwrap(), started - Duration::hours(3)),
+        (late["id"].as_str().unwrap(), started + minutes(4)),
+    ] {
+        sqlx::query("UPDATE notification_channels SET created_at=? WHERE id=?")
+            .bind(stamp(created))
+            .bind(id)
+            .execute(&f.s.pool)
+            .await
+            .unwrap();
+    }
+    // Last check-ins before the stop, against a threshold of fifteen minutes:
+    // long past it; most of it (its minutes pass inside the window); only one
+    // minute of it; and a device that returns in the window.
+    device(&f, "edge-ancient", started - minutes(30)).await;
+    let long = device(&f, "edge-long", started - minutes(12)).await;
+    device(&f, "edge-brief", started - minutes(1)).await;
+    let returns = device(&f, "edge-returns", started - minutes(10)).await;
+    f.s.notifier.begin_recovery_window(started);
+    let half_past = |minute: i64| started + minutes(minute) + Duration::seconds(30);
+    for minute in 0..=4 {
+        if minute == 2 {
+            checked_in(&f, &returns, started + minutes(2)).await;
+        }
+        drain(&f, half_past(minute)).await;
+    }
+    assert!(
+        texts_of(&hook).is_empty(),
+        "nothing is reported while the window is open: {:?}",
+        texts_of(&hook)
+    );
+    // The window ends at minute five. The two that were past fifteen minutes
+    // are reported then, not at minute twenty.
+    checked_in(&f, &returns, started + minutes(5)).await;
+    drain(&f, half_past(5)).await;
+    let mut now: Vec<String> = texts_on(&hook, "/early");
+    now.sort();
+    assert_eq!(
+        now,
+        ["edge-ancient is offline", "edge-long is offline"],
+        "reported when the window ends"
+    );
+    // The channel saved during the window reports no outage that passed its
+    // minutes before it existed.
+    assert!(texts_on(&hook, "/late").is_empty());
+    let first = hook
+        .requests()
+        .into_iter()
+        .map(|r| r.json())
+        .find(|body| body["event"]["device"]["id"] == long)
+        .unwrap();
+    assert!(
+        first["event"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("No check-in for 17 min"),
+        "{first}"
+    );
+    // The device that was silent only briefly is reported at its own minutes,
+    // fifteen after its last check-in, and the one that returned never is.
+    for minute in 6..=13 {
+        checked_in(&f, &returns, started + minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+    }
+    assert_eq!(texts_on(&hook, "/early").len(), 2, "not yet, at minute 13");
+    for minute in 14..=30 {
+        checked_in(&f, &returns, started + minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+        if minute == 14 {
+            let mut at_minutes = texts_on(&hook, "/early");
+            at_minutes.sort();
+            assert_eq!(
+                at_minutes,
+                [
+                    "edge-ancient is offline",
+                    "edge-brief is offline",
+                    "edge-long is offline"
+                ],
+                "reported at its own minutes"
+            );
+        }
+    }
+    let mut every: Vec<String> = texts_on(&hook, "/early");
+    every.sort();
+    assert_eq!(every.len(), 3, "each once, and the returning device never");
+    assert_eq!(
+        texts_on(&hook, "/late"),
+        ["edge-brief is offline"],
+        "only what passed its minutes after the channel existed"
+    );
 }
 
 #[tokio::test]
