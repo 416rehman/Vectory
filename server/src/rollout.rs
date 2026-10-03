@@ -1140,6 +1140,9 @@ fn validate_request_inner(v: &Value, trusted_rollback: bool) -> Result<()> {
             "Deployment name must be null or a string of at most 120 characters",
         ));
     }
+    if let Some(name) = v["name"].as_str() {
+        db::refuse_hostile(name, "a deployment name")?;
+    }
     if v["version_id"].is_string() == v["policy"].is_object() {
         return Err(ApiError::invalid(
             "Provide exactly one version_id or complete policy",

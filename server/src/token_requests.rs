@@ -299,7 +299,7 @@ pub async fn create(db: &mut SqliteConnection, request: &Value, actor: &str) -> 
         return Err(ApiError::invalid("device_name must start with name_prefix"));
     }
     let scope = crate::enrollment_scope::parse(&payload, (!prefix.is_empty()).then_some(prefix))?;
-    let mut record = json!({"id":db::id(),"name":db::string(&payload,"name",120)?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
+    let mut record = json!({"id":db::id(),"name":db::name(&payload,"name",120,"a token name")?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
     scope.store(&mut record);
     if !device_name.is_empty() {
         record["device_name"] = json!(device_name);

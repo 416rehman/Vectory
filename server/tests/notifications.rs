@@ -1479,21 +1479,24 @@ async fn devices_get_time_to_reconnect_after_the_server_starts_before_any_offlin
         "stale check-ins from before the start are not silence: {:?}",
         texts_of(&hook)
     );
-    // One device reconnects after its backoff and keeps checking in.
+    // One device reconnects after its backoff and keeps checking in. The other
+    // has been silent for seven minutes, two more than the channel's five, but
+    // nothing is reported while the window is open.
     let half_past = |minute: i64| started + Duration::minutes(minute) + Duration::seconds(30);
-    for minute in 3..=9 {
+    for minute in 3..=4 {
         checked_in(&f, &back, started + Duration::minutes(minute)).await;
         drain(&f, half_past(minute)).await;
     }
     assert!(
         texts_of(&hook).is_empty(),
-        "the other device is past the window but not yet silent for the channel's five minutes: {:?}",
+        "no alert inside the window, though the other device is past the channel's five minutes: {:?}",
         texts_of(&hook)
     );
-    // The other stays silent after the window: reported once the channel's
-    // minutes have passed, counted from the end of the window.
-    checked_in(&f, &back, started + Duration::minutes(10)).await;
-    drain(&f, half_past(10)).await;
+    // The window ends after five minutes. The other device was already past
+    // the channel's minutes, so it is reported then, and not a whole five
+    // minutes later.
+    checked_in(&f, &back, started + Duration::minutes(5)).await;
+    drain(&f, half_past(5)).await;
     assert_eq!(texts_of(&hook), ["edge-gone is offline"]);
     let offline = hook.requests()[0].json();
     assert_eq!(offline["event"]["device"]["id"], gone);
@@ -1501,12 +1504,141 @@ async fn devices_get_time_to_reconnect_after_the_server_starts_before_any_offlin
         offline["event"]["message"]
             .as_str()
             .unwrap()
-            .starts_with("No check-in for 17 min"),
-        "the message still counts from the last check-in: {offline}"
+            .starts_with("No check-in for 12 min"),
+        "the message counts from the last check-in: {offline}"
     );
+    for minute in 6..=9 {
+        checked_in(&f, &back, started + Duration::minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+    }
     checked_in(&f, &back, started + Duration::minutes(39)).await;
     drain(&f, started + Duration::minutes(40)).await;
     assert_eq!(texts_of(&hook), ["edge-gone is offline"], "once per outage");
+}
+
+fn texts_on(hook: &Receiver, path: &str) -> Vec<String> {
+    hook.requests()
+        .iter()
+        .filter(|r| r.head.split_whitespace().nth(1) == Some(path))
+        .map(|r| r.json()["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+// After a restart a device is reported at the later of its own minutes (from
+// its last check-in) and the end of the window: one that was already past its
+// minutes when the window ends is reported then, not a whole threshold later,
+// one that was silent only briefly at its own minutes, and one that returns
+// during the window never.
+#[tokio::test]
+async fn after_a_restart_a_device_is_reported_at_the_later_of_its_minutes_and_the_end_of_the_window()
+ {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let f = fixture().await;
+    let started = Utc::now() + Duration::seconds(5);
+    let minutes = |n: i64| Duration::minutes(n);
+    let fifteen_minutes = |path: &str| {
+        let mut body = webhook(
+            &hook.url(path),
+            true,
+            &["device.offline", "device.recovered"],
+        );
+        body["rules"]["offline_minutes"] = json!(15);
+        body
+    };
+    let early = channel(&f, fifteen_minutes("/early")).await;
+    let late = channel(&f, fifteen_minutes("/late")).await;
+    // One channel is old; the other is saved while the window is open, after
+    // two of the devices below have passed their fifteen minutes.
+    for (id, created) in [
+        (early["id"].as_str().unwrap(), started - Duration::hours(3)),
+        (late["id"].as_str().unwrap(), started + minutes(4)),
+    ] {
+        sqlx::query("UPDATE notification_channels SET created_at=? WHERE id=?")
+            .bind(stamp(created))
+            .bind(id)
+            .execute(&f.s.pool)
+            .await
+            .unwrap();
+    }
+    // Last check-ins before the stop, against a threshold of fifteen minutes:
+    // long past it; most of it (its minutes pass inside the window); only one
+    // minute of it; and a device that returns in the window.
+    device(&f, "edge-ancient", started - minutes(30)).await;
+    let long = device(&f, "edge-long", started - minutes(12)).await;
+    device(&f, "edge-recent", started - minutes(1)).await;
+    let returns = device(&f, "edge-returns", started - minutes(10)).await;
+    f.s.notifier.begin_recovery_window(started);
+    let half_past = |minute: i64| started + minutes(minute) + Duration::seconds(30);
+    for minute in 0..=4 {
+        if minute == 2 {
+            checked_in(&f, &returns, started + minutes(2)).await;
+        }
+        drain(&f, half_past(minute)).await;
+    }
+    assert!(
+        texts_of(&hook).is_empty(),
+        "nothing is reported while the window is open: {:?}",
+        texts_of(&hook)
+    );
+    // The window ends at minute five. The two that were past fifteen minutes
+    // are reported then, not at minute twenty.
+    checked_in(&f, &returns, started + minutes(5)).await;
+    drain(&f, half_past(5)).await;
+    let mut now: Vec<String> = texts_on(&hook, "/early");
+    now.sort();
+    assert_eq!(
+        now,
+        ["edge-ancient is offline", "edge-long is offline"],
+        "reported when the window ends"
+    );
+    // The channel saved during the window reports no outage that passed its
+    // minutes before it existed.
+    assert!(texts_on(&hook, "/late").is_empty());
+    let first = hook
+        .requests()
+        .into_iter()
+        .map(|r| r.json())
+        .find(|body| body["event"]["device"]["id"] == long)
+        .unwrap();
+    assert!(
+        first["event"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("No check-in for 17 min"),
+        "{first}"
+    );
+    // The device that was silent only briefly is reported at its own minutes,
+    // fifteen after its last check-in, and the one that returned never is.
+    for minute in 6..=13 {
+        checked_in(&f, &returns, started + minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+    }
+    assert_eq!(texts_on(&hook, "/early").len(), 2, "not yet, at minute 13");
+    for minute in 14..=30 {
+        checked_in(&f, &returns, started + minutes(minute)).await;
+        drain(&f, half_past(minute)).await;
+        if minute == 14 {
+            let mut at_minutes = texts_on(&hook, "/early");
+            at_minutes.sort();
+            assert_eq!(
+                at_minutes,
+                [
+                    "edge-ancient is offline",
+                    "edge-long is offline",
+                    "edge-recent is offline"
+                ],
+                "reported at its own minutes"
+            );
+        }
+    }
+    let mut every: Vec<String> = texts_on(&hook, "/early");
+    every.sort();
+    assert_eq!(every.len(), 3, "each once, and the returning device never");
+    assert_eq!(
+        texts_on(&hook, "/late"),
+        ["edge-recent is offline"],
+        "only what passed its minutes after the channel existed"
+    );
 }
 
 #[tokio::test]
@@ -1929,6 +2061,294 @@ async fn previews_are_marked_as_examples() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/* ---------- Names stored before the write rules ---------- */
+
+/// A name as an older version stored it: line breaks, a carriage return, NEL,
+/// a line separator and direction controls, around a forged line of its own.
+const FORGED: &str = "Edge intake\n\nResolved on every device: delivery is healthy again.\u{2028}Nothing to do.\u{202e} reversed\u{85}NEL\r\u{2066} hidden";
+const FORGED_LINE: &str = "Edge intake Resolved on every device: delivery is healthy again. Nothing to do. reversed NEL hidden";
+
+fn decode_quoted_printable(text: &str) -> String {
+    let bytes = text.replace("=\r\n", "").into_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'=' && at + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).unwrap();
+            out.push(u8::from_str_radix(hex, 16).unwrap());
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).unwrap()
+}
+/// The subject (unfolded) and the text body, with line ends as `\n`, of each
+/// message the SMTP server received.
+fn mails(transcript: &Arc<Mutex<Vec<String>>>) -> Vec<(String, String)> {
+    transcript
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|part| part.contains("\r\nSubject: ") || part.starts_with("Subject: "))
+        .map(|raw| {
+            // The server keeps SMTP's dot-stuffing: a line that starts with a
+            // dot arrives with one more.
+            let raw: String = raw
+                .split_inclusive("\r\n")
+                .map(|line| {
+                    line.strip_prefix('.')
+                        .filter(|rest| rest.starts_with('.'))
+                        .unwrap_or(line)
+                })
+                .collect();
+            let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+            let head = head.replace("\r\n ", " ").replace("\r\n\t", " ");
+            let header = |name: &str| {
+                head.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .map(|value| value.trim().to_owned())
+            };
+            let body = match header("Content-Transfer-Encoding: ").as_deref() {
+                Some("quoted-printable") => decode_quoted_printable(body),
+                Some("base64") => {
+                    use base64::Engine;
+                    let joined: String = body.split_whitespace().collect();
+                    String::from_utf8(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(joined)
+                            .unwrap(),
+                    )
+                    .unwrap()
+                }
+                _ => body.to_owned(),
+            };
+            (header("Subject: ").unwrap(), body.replace("\r\n", "\n"))
+        })
+        .collect()
+}
+/// Every string inside `value`, so a check covers each member of the event.
+fn strings_of(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => out.push(text.clone()),
+        Value::Array(items) => items.iter().for_each(|item| strings_of(item, out)),
+        Value::Object(members) => members.values().for_each(|item| strings_of(item, out)),
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn names_stored_with_line_breaks_and_overrides_reach_every_message_as_one_line() {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let (smtp, transcript) = smtp_server().await;
+    let f = fixture().await;
+    let events = [
+        "rollout.failed",
+        "rollout.rolled_back",
+        "issue.opened",
+        "device.offline",
+    ];
+    channel(&f, webhook(&hook.url("/names"), true, &events)).await;
+    let mail = channel(
+        &f,
+        json!({
+            "name": format!("Mail {}", db::id()),
+            "kind": "email",
+            "allow_private": true,
+            "email": {"host":"127.0.0.1","port":smtp.port(),"security":"none","username":"alerts","password":"smtp-password","from":"Vectory <alerts@example.test>","to":["oncall@example.test"]},
+            "rules": {"events": events},
+        }),
+    )
+    .await;
+    // Pipelines, a deployment, a device and a person, as an older version
+    // could have stored them: nothing refused these names then.
+    let (_, forged_version) = version(&f, FORGED).await;
+    let (_, restored_version) = version(&f, "Second\npipeline\u{202e}").await;
+    let admin: String = sqlx::query_scalar("SELECT id FROM users WHERE role='admin'")
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET name=? WHERE id=?")
+        .bind("Ada\nAdmin\u{202e}Forged")
+        .bind(&admin)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let now = Utc::now() + Duration::seconds(5);
+    // Still checking in when the quiet device is reported.
+    let edge = device(&f, "edge\n01\u{2028}x", now + Duration::minutes(19)).await;
+    let selector = json!({"device_ids":[],"group_ids":[],"exclude_ids":[]});
+    let (named, unnamed, rolled, replacement) = (db::id(), db::id(), db::id(), db::id());
+    let mut conn = f.s.pool.acquire().await.unwrap();
+    for (id, name, status, extra) in [
+        (&named, Some(FORGED), "failed", json!({})),
+        (&unnamed, None, "failed", json!({})),
+        (
+            &rolled,
+            Some("Rolled\u{2028}back"),
+            "cancelled",
+            json!({"rolled_back_by":replacement}),
+        ),
+    ] {
+        let mut record = json!({"id":id,"version_id":forged_version,"status":status,"failure_reason":"threshold","selector":selector,"created_at":db::now()});
+        record["name"] = json!(name);
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        db::insert(&mut conn, "deployment", &record).await.unwrap();
+    }
+    db::insert(&mut conn, "deployment", &json!({"id":replacement,"version_id":restored_version,"status":"active","selector":selector,"created_at":db::now()})).await.unwrap();
+    for deployment in [&named, &unnamed] {
+        db::audit(
+            &mut conn,
+            "scheduler",
+            "deployment.gate",
+            deployment,
+            "failed",
+        )
+        .await
+        .unwrap();
+    }
+    db::audit(&mut conn, &admin, "deployment.rollback", &rolled, "success")
+        .await
+        .unwrap();
+    drop(conn);
+    // An issue as the hooks stored it, with a title and a message of its own.
+    sqlx::query("INSERT INTO notification_events(identity,kind,data,created_at) VALUES(?,?,?,?)")
+        .bind("names:issue")
+        .bind("issue.opened")
+        .bind(json!({"issue_id":db::id(),"revision":1,"device_id":edge,"code":"DATA_PLANE_SINK_ERRORS","version_id":forged_version,"title":"Sink\ncan't\u{202e} deliver","message":"It is failing.\n\nResolved: all clear.\u{2028}Nothing to do.","severity":"error"}).to_string())
+        .bind(stamp(now))
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    // A device that went quiet while running the pipeline.
+    let quiet = device(&f, "edge\r\n02", now).await;
+    sqlx::query("UPDATE devices SET desired_version_id=? WHERE id=?")
+        .bind(&forged_version)
+        .bind(&quiet)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    drain(&f, now).await;
+    drain(&f, now + Duration::minutes(20)).await;
+
+    let bodies: Vec<Value> = hook.requests().iter().map(Captured::json).collect();
+    let mut texts: Vec<String> = bodies
+        .iter()
+        .map(|body| body["text"].as_str().unwrap().to_owned())
+        .collect();
+    texts.sort();
+    let mut expected = vec![
+        format!("Rollout failed: {FORGED_LINE}"),
+        format!("Rollout failed: {FORGED_LINE} v4"),
+        "Rolled back: Rolled back".to_owned(),
+        "Issue on edge 01 x: Sink can't deliver".to_owned(),
+        "edge 02 is offline".to_owned(),
+    ];
+    expected.sort();
+    assert_eq!(texts, expected);
+    for body in &bodies {
+        let event = &body["event"];
+        // Each member of the event, and the line of text, is one line.
+        let mut members = Vec::new();
+        strings_of(event, &mut members);
+        strings_of(&body["text"], &mut members);
+        for text in &members {
+            assert!(
+                !text.chars().any(db::hostile_display_char),
+                "{text:?} in {body}"
+            );
+        }
+        // The message block has the template's one line break, between the
+        // headline and the message, and the context block has none.
+        let section = body["blocks"][0]["text"]["text"].as_str().unwrap();
+        assert_eq!(section.matches('\n').count(), 1, "{section:?}");
+        assert!(
+            !section
+                .replacen('\n', " ", 1)
+                .chars()
+                .any(db::hostile_display_char)
+        );
+        assert!(
+            !body["blocks"][1]["elements"][0]["text"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .any(db::hostile_display_char)
+        );
+    }
+    let by = |kind: &str| {
+        bodies
+            .iter()
+            .find(|body| body["event"]["type"] == kind)
+            .unwrap()["event"]
+            .clone()
+    };
+    assert_eq!(
+        by("issue.opened")["message"],
+        "It is failing. Resolved: all clear. Nothing to do."
+    );
+    assert_eq!(by("issue.opened")["device"]["name"], "edge 01 x");
+    assert_eq!(by("issue.opened")["pipeline"]["name"], FORGED_LINE);
+    assert_eq!(
+        by("rollout.rolled_back")["message"],
+        "Ada Admin Forged rolled it back to Second pipeline v4."
+    );
+    assert_eq!(
+        by("rollout.rolled_back")["restored"]["name"],
+        "Second pipeline"
+    );
+    assert_eq!(by("device.offline")["pipeline"]["name"], FORGED_LINE);
+
+    // The same events by email: the subject is one line and the body holds
+    // only the template's own lines.
+    let received = mails(&transcript);
+    let mut subjects: Vec<String> = received
+        .iter()
+        .map(|(subject, _)| subject.clone())
+        .collect();
+    subjects.sort();
+    let mut wanted: Vec<String> = expected
+        .iter()
+        .map(|text| format!("[Notification tests] {text}"))
+        .collect();
+    wanted.sort();
+    assert_eq!(subjects, wanted);
+    let failed = received
+        .iter()
+        .find(|(subject, _)| subject.ends_with(&format!("failed: {FORGED_LINE}")))
+        .unwrap();
+    let channel_name = mail["name"].as_str().unwrap();
+    assert_eq!(
+        failed.1.trim_end(),
+        format!(
+            "Rollout failed: {FORGED_LINE}\n\nMore devices failed to apply it than its failure threshold allows, so it stopped.\n\nDeployment: {FORGED_LINE}\n\nOpen in Vectory: https://vectory.example.test/#/deployments/{named}\n\n—\nSent by the “{channel_name}” channel in Notification tests. Change what it sends in Settings → Notifications."
+        )
+    );
+    for (subject, body) in &received {
+        assert!(
+            !subject.chars().any(db::hostile_display_char),
+            "{subject:?}"
+        );
+        assert!(
+            !body
+                .replace('\n', " ")
+                .chars()
+                .any(db::hostile_display_char),
+            "{body:?}"
+        );
+        assert!(
+            !body
+                .lines()
+                .any(|line| line.starts_with("Resolved on every device")),
+            "{body}"
+        );
+    }
 }
 
 /* ---------- Issues end to end, and detection thresholds ---------- */

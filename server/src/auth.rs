@@ -296,7 +296,14 @@ pub(crate) fn user_name(v: &Value) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("");
-    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+    if name.chars().any(db::hostile_display_char) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "NAME_INVALID",
+            format!("{}.", db::hostile_name_sentence("a name")),
+        ));
+    }
+    if name.is_empty() || name.chars().count() > 100 {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "NAME_INVALID",
@@ -1216,6 +1223,33 @@ mod tests {
         assert_eq!(
             user_name(&json!({"name":" "})).unwrap_err().code,
             "NAME_INVALID"
+        );
+    }
+
+    #[test]
+    fn a_person_name_holds_no_line_break_or_direction_control() {
+        assert_eq!(
+            user_name(&json!({"name":"José Núñez 運用"})).unwrap(),
+            "José Núñez 運用"
+        );
+        for code in [
+            0x07u32, 0x0a, 0x85, 0x2028, 0x2029, 0x202a, 0x202e, 0x2066, 0x2069,
+        ] {
+            let c = char::from_u32(code).unwrap();
+            let refused = user_name(&json!({"name": format!("Jane{c}Doe")})).unwrap_err();
+            assert_eq!(refused.code, "NAME_INVALID", "U+{code:04X}");
+            assert_eq!(
+                refused.message,
+                "Enter a name without line breaks, control characters or text-direction overrides.",
+                "U+{code:04X}"
+            );
+        }
+        // The long and empty cases keep their sentence.
+        assert_eq!(
+            user_name(&json!({"name":"x".repeat(101)}))
+                .unwrap_err()
+                .message,
+            "Enter a name of up to 100 characters."
         );
     }
 }

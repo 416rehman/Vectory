@@ -237,6 +237,198 @@ async fn outdated_worker_replies_are_refused() {
     worker.abort();
 }
 
+/// A writer that keeps everything logged while it is the default subscriber.
+#[derive(Clone, Default)]
+struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for Logs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl Logs {
+    fn lines(&self) -> Vec<String> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+/// A worker that speaks the right protocol and gives the unusable answer it is
+/// set to, on every path. Each member the server reads holds a marker where it
+/// takes text, so a log line that quoted the worker would show it.
+#[tokio::test]
+async fn an_answer_in_the_right_protocol_that_cannot_be_used_is_logged_with_a_fixed_phrase() {
+    use axum::{Json, Router, routing::post};
+    const MARKER: &str = "WORKER-TEXT-\u{1b}[31m-FORGED";
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let answer = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
+    let served = answer.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let worker = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/{path}",
+                post(move || {
+                    let served = served.clone();
+                    async move { Json(served.lock().unwrap().clone()) }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let (_state_dir, state) = public_state(&format!("http://{addr}")).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let config = json!({
+        "sources":{"sample":{"type":"demo_logs","format":"json"}},
+        "transforms":{"normalize":{"type":"remap","inputs":["sample"],"source":".message = upcase!(.message)"}},
+        "sinks":{"out":{"type":"blackhole","inputs":["normalize"]}},
+        "tests":[{"name":"Uppercase message","inputs":[{"insert_at":"normalize","type":"log","log_fields":{"message":"synthetic"}}],"outputs":[{"extract_from":"normalize","conditions":[{"type":"vrl","source":"assert_eq!(.message, \"SYNTHETIC\")"}]}]}]
+    });
+    let reply = |members: serde_json::Value| {
+        let mut answer_now = json!({"worker_protocol":vectory_server::validation::WORKER_PROTOCOL,"vector_version":vectory_server::validation::VECTOR_VERSION});
+        answer_now
+            .as_object_mut()
+            .unwrap()
+            .extend(members.as_object().unwrap().clone());
+        *answer.lock().unwrap() = answer_now;
+    };
+    let tested = || {
+        api(
+            &app,
+            "POST",
+            "/api/v1/configurations/test",
+            json!({"config": config}),
+            &editor,
+        )
+    };
+    let sampled = || {
+        api(
+            &app,
+            "POST",
+            "/api/v1/vrl/test",
+            json!({"transform":{"type":"remap","source":".a = 1"},"samples":[{"message":"x"}]}),
+            &editor,
+        )
+    };
+    let no_verdict = "its answer lacks a true-or-false verdict";
+    let bad_diagnostics = "its diagnostics are not in the expected form";
+    let bad_placeholder = "a placeholder it names is not in the draft";
+    // Each answer is judged by one more rule than the one before it, so each
+    // reason is the first rule the answer breaks.
+    let mut expected: Vec<(&str, &str)> = Vec::new();
+
+    // validate
+    for (members, reason) in [
+        (json!({"diagnostics":[MARKER]}), bad_diagnostics),
+        (
+            json!({"diagnostics":[],"placeholders":[MARKER]}),
+            bad_placeholder,
+        ),
+        (
+            json!({"diagnostics":[],"placeholders":[],"stubbed":[],"valid":MARKER,"static_checked":MARKER}),
+            no_verdict,
+        ),
+    ] {
+        reply(members);
+        let result = vectory_server::validation::validate_isolated(&state, &config)
+            .await
+            .unwrap();
+        assert_eq!(result["valid"], false, "{result}");
+        assert!(
+            result["errors"]
+                .to_string()
+                .contains("publication is blocked")
+        );
+        expected.push(("validate", reason));
+    }
+    // tests
+    for (members, reason) in [
+        (json!({"tests_run":MARKER}), no_verdict),
+        (
+            json!({"tests_run":true,"tests":MARKER}),
+            "its test results are not in the expected form",
+        ),
+        (
+            json!({"tests_run":true,"tests":[],"diagnostics":MARKER}),
+            bad_diagnostics,
+        ),
+        (
+            json!({"tests_run":true,"tests":[],"diagnostics":[],"placeholders":[MARKER]}),
+            bad_placeholder,
+        ),
+    ] {
+        reply(members);
+        let (status, body) = tested().await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "{body}"
+        );
+        assert!(!body.to_string().contains("WORKER-TEXT"), "{body}");
+        expected.push(("tests", reason));
+    }
+    // transform-test
+    for (members, reason) in [
+        (json!({"compiled":MARKER}), no_verdict),
+        (
+            json!({"compiled":true,"diagnostics":MARKER}),
+            bad_diagnostics,
+        ),
+        (
+            json!({"compiled":true,"diagnostics":[],"results":MARKER}),
+            "its sample results are not in the expected form",
+        ),
+        (
+            json!({"compiled":false,"diagnostics":[],"placeholders":[MARKER]}),
+            bad_placeholder,
+        ),
+    ] {
+        reply(members);
+        let (status, body) = sampled().await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "{body}"
+        );
+        assert!(!body.to_string().contains("WORKER-TEXT"), "{body}");
+        expected.push(("transform-test", reason));
+    }
+    worker.abort();
+
+    // One line for each unusable answer, with the path and a fixed phrase, and
+    // nothing the worker sent.
+    let lines: Vec<String> = logs
+        .lines()
+        .into_iter()
+        .filter(|line| line.contains("the isolated validator gave no usable answer"))
+        .collect();
+    assert_eq!(lines.len(), expected.len(), "{lines:#?}");
+    for (line, (path, reason)) in lines.iter().zip(&expected) {
+        assert!(line.contains(&format!("path=\"{path}\"")), "{line}");
+        assert!(line.contains(&format!("reason=\"{reason}\"")), "{line}");
+    }
+    let everything = logs.lines().join("\n");
+    assert!(!everything.contains("WORKER-TEXT"), "{everything}");
+    assert!(!everything.contains('\u{1b}'), "{everything:?}");
+}
+
 async fn start_worker(vector: &str) -> (tokio::process::Child, String, reqwest::Client) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

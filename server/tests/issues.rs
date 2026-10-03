@@ -1070,3 +1070,123 @@ async fn issue_groups_list_each_groups_newest_fifty_members_in_one_page() {
     let searched = get(&app, "/api/v1/issues/groups?search=edge-01", &admin).await;
     assert_eq!(searched["total"], 2);
 }
+
+/// A device's failed check-in, as the heartbeat route records it: the real
+/// writer of an issue, which keeps a code and no title.
+async fn fail_with(agent: &Router, code: &str, stage: &str) {
+    let heartbeat = json!({"protocol_version":1,"request_id":"issue-title-test","nonce":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","boot_id":"issue-boot","agent_version":"test","vector_version":"0.58.0","reported_generation":1,"policy_generation":0,"actual_sha256":null,"apply_state":"failed","local_paused":false,"remote_pause_acknowledged":false,"error":{"code":code,"stage":stage,"message":"PRIVATE_AGENT_DIAGNOSTIC"}});
+    let (status, body) = call(agent, "POST", "/agent/v1/heartbeat", heartbeat, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+// An issue record keeps its code, not its title, so the audit log builds the
+// name of an issue event from the code, as the issue list does. Every role
+// that reads the log reads issues, and sees the same name.
+#[tokio::test]
+async fn issue_events_are_named_by_their_title_on_their_device_for_every_role() {
+    let (_temp, s, app, admin) = fixture().await;
+    let operator = actor(&s, "operator").await;
+    let viewer = actor(&s, "viewer").await;
+    let id = device_record(&s, 1, "edge-nyc-02", false).await;
+    let version = db::id();
+    insert(
+        &s,
+        "version",
+        &json!({"id":version,"sha256":db::hash("{}\n"),"size":3,"artifact":"{}\n"}),
+    )
+    .await;
+    sqlx::query("UPDATE devices SET desired_version_id=?,desired_generation=1,policy_generation=0 WHERE id=?").bind(&version).bind(&id).execute(&s.pool).await.unwrap();
+    let fingerprint = db::hash("issue-title-credential");
+    sqlx::query(
+        "INSERT INTO credentials(fingerprint,device_id,expires_at,signing_key_id) VALUES(?,?,?,?)",
+    )
+    .bind(&fingerprint)
+    .bind(&id)
+    .bind("2099-01-01T00:00:00Z")
+    .bind(s.keys.active_signing_id())
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let agent =
+        device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(fingerprint))));
+    fail_with(&agent, "APPLY_FAILED", "apply").await;
+    fail_with(&agent, "VALIDATION_FAILED", "validation").await;
+    let apply = db::hash(format!("{id}:{version}:APPLY_FAILED:apply"));
+    let validation = db::hash(format!("{id}:{version}:VALIDATION_FAILED:validation"));
+    // The record the writer made holds a code and no title.
+    let stored: String = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND id=?")
+        .bind(&apply)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert!(!stored.contains("\"title\""), "{stored}");
+    // An operator acknowledges one issue and reopens it, and acknowledges the
+    // other.
+    for (issue, action, revision, reason) in [
+        (&apply, "acknowledge", 1, "Looking into it"),
+        (&apply, "reopen", 2, "It failed again"),
+        (&validation, "acknowledge", 1, ""),
+    ] {
+        let (status, body) = call(
+            &app,
+            "POST",
+            &format!("/api/v1/issues/{issue}/{action}"),
+            json!({"revision":revision,"reason":reason}),
+            Some(&operator),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{action}: {body}");
+    }
+    for (role, reader) in [
+        ("viewer", &viewer),
+        ("operator", &operator),
+        ("admin", &admin),
+    ] {
+        let history = get(&app, "/api/v1/audit/history?page_size=50", reader).await;
+        let rows = |action: &str, issue: &str| -> Vec<Value> {
+            history["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["action"] == action && row["target"] == issue)
+                .cloned()
+                .collect()
+        };
+        for (action, issue, title) in [
+            (
+                "issue.acknowledge",
+                &apply,
+                "The device couldn't apply the configuration on edge-nyc-02",
+            ),
+            (
+                "issue.reopen",
+                &apply,
+                "The device couldn't apply the configuration on edge-nyc-02",
+            ),
+            (
+                "issue.acknowledge",
+                &validation,
+                "Vector rejected the configuration on edge-nyc-02",
+            ),
+        ] {
+            let found = rows(action, issue);
+            assert_eq!(found.len(), 1, "{role} {action}");
+            assert_eq!(found[0]["target_name"], title, "{role} {action}");
+            assert_eq!(found[0]["target_kind"], "issue", "{role} {action}");
+            assert_eq!(found[0]["target_exists"], true, "{role} {action}");
+            assert_eq!(found[0]["device_name"], "edge-nyc-02", "{role} {action}");
+        }
+        // The log is searchable by the name it now carries.
+        let found = get(
+            &app,
+            "/api/v1/audit/history?search=rejected%20the%20configuration",
+            reader,
+        )
+        .await;
+        assert_eq!(found["total"], 1, "{role}");
+    }
+    // The name is what the issue list shows, to the same readers.
+    let shown = get(&app, &format!("/api/v1/issues/{validation}"), &viewer).await;
+    assert_eq!(shown["title"], "Vector rejected the configuration");
+}

@@ -13,9 +13,11 @@
 //! - Offline and back-online facts come from a scan of check-in times, one
 //!   outage per device: announced once when it passes a channel's threshold,
 //!   and "back online" once after two check-ins, so a flapping device sends
-//!   nothing new. After the server starts, silence counts from the end of a
-//!   recovery window (`RECOVERY_WINDOW_SECONDS`), so a fleet that could not
-//!   reach the server is not reported offline the moment it returns.
+//!   nothing new. After the server starts, nothing is announced until a
+//!   recovery window (`RECOVERY_WINDOW_SECONDS`) ends, so a fleet that could
+//!   not reach the server is not reported offline the moment it returns; a
+//!   device already past a channel's threshold then is announced when the
+//!   window ends, and any other when its own threshold passes.
 //! - At most `RATE_LIMIT` messages go to a channel in any minute; the rest
 //!   are summarised in one digest. Quiet hours hold messages and send one
 //!   digest when they end. A failed send retries after 1, 5 and 30 minutes,
@@ -83,8 +85,9 @@ impl Default for Runtime {
 }
 impl Runtime {
     /// The server started at `now`: no device is reported offline before
-    /// `RECOVERY_WINDOW_SECONDS` have passed, and silence counts from the end
-    /// of that window for any device that has not checked in since.
+    /// `RECOVERY_WINDOW_SECONDS` have passed. Silence still counts from the
+    /// device's last check-in, so one that is past a channel's threshold when
+    /// the window ends is reported then.
     pub fn begin_recovery_window(&self, now: DateTime<Utc>) {
         *lock(&self.recovery_ends) = Some(now + Duration::seconds(RECOVERY_WINDOW_SECONDS));
     }
@@ -305,9 +308,12 @@ enum OutageChange {
 }
 /// Compare check-in times with open outages. A device is offline after three
 /// missed check-ins, as everywhere else in Vectory, and a channel announces it
-/// once it has been silent for the channel's minutes. Silence counts from the
-/// later of the last check-in and `recovery_ends`, the end of the time devices
-/// have to reconnect after the server started.
+/// once it has been silent for the channel's minutes, counted from its last
+/// check-in. Nothing is announced before `recovery_ends`, the end of the time
+/// devices have to reconnect after the server started, so a device that is
+/// already past its minutes when the window ends is announced then, and any
+/// other when its own minutes pass: the announcement is at the later of the
+/// two. A device that checks in during the window never reads as silent.
 async fn scan(
     db: &mut SqliteConnection,
     channels: &[&Channel],
@@ -315,7 +321,7 @@ async fn scan(
     recovery_ends: Option<DateTime<Utc>>,
     facts: &mut Vec<Fact>,
 ) -> Result<Vec<OutageChange>> {
-    let silent_from = |at: DateTime<Utc>| recovery_ends.map_or(at, |end| at.max(end));
+    let window_open = recovery_ends.is_some_and(|end| now < end);
     let rows = sqlx::query("SELECT id,revoked,policy,policy_generation,json_extract(data,'$.last_seen') AS last_seen,json_extract(data,'$.policy_generation') AS reported,json_extract(data,'$.heartbeat_floor_seconds') AS floor FROM devices")
         .fetch_all(&mut *db)
         .await?;
@@ -361,7 +367,7 @@ async fn scan(
         });
         let interval =
             crate::rollout::check_in_seconds(&policy, &evidence, row.get("policy_generation"));
-        let offline = (now - silent_from(last_seen.1)).num_seconds() > interval * 3;
+        let offline = !window_open && (now - last_seen.1).num_seconds() > interval * 3;
         match (offline, outage) {
             (true, outage) => {
                 // Nothing is stored until a channel is told: until then the
@@ -374,11 +380,12 @@ async fn scan(
                     if notified.contains(&channel.id) {
                         continue;
                     }
-                    let crossing = silent_from(since_time)
-                        + Duration::minutes(channel.rules.offline_minutes as i64);
+                    let passes =
+                        since_time + Duration::minutes(channel.rules.offline_minutes as i64);
+                    let announce_at = recovery_ends.map_or(passes, |end| passes.max(end));
                     // A channel reports outages that pass its threshold after
                     // it exists, not every device that was already gone.
-                    if now >= crossing && crossing >= channel.created_at {
+                    if now >= announce_at && passes >= channel.created_at {
                         notified.push(channel.id.clone());
                         facts.push(Fact {
                             identity: format!("device.offline:{device}:{since}:{}", channel.id),
@@ -405,9 +412,10 @@ async fn scan(
                 if notified.is_empty() {
                     changes.push(OutageChange::Remove(device));
                 } else if parse_time(&since).is_some_and(|since| last_seen.1 <= since) {
-                    // Not back: the recovery window only keeps a device that
-                    // has not checked in since the outage began from reading
-                    // as offline.
+                    // Not back: it has not checked in since the outage began.
+                    // During the recovery window no device reads as offline,
+                    // so this is a device announced before the restart that
+                    // is still silent.
                 } else if let Some(first) = returned_at.as_deref().and_then(parse_time) {
                     // The second check-in since the outage: back for real.
                     if last_seen.1 > first {
@@ -457,6 +465,15 @@ async fn device_groups(db: &mut SqliteConnection, device: &str) -> Result<BTreeS
         .into_iter()
         .collect())
 }
+/// A stored name as one line of a message, bounded to `max` characters. Names
+/// saved before the write rules refused line breaks and text-direction
+/// controls can still hold them, so every name that reaches a message passes
+/// through here. A name with nothing printable left is `fallback`.
+fn named(name: Option<&str>, max: usize, fallback: &str) -> String {
+    name.map(|name| bounded(&db::one_line(name), max))
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
+}
 async fn device_name(
     db: &mut SqliteConnection,
     device: &str,
@@ -466,7 +483,8 @@ async fn device_name(
     )
     .bind(device)
     .fetch_optional(&mut *db)
-    .await?)
+    .await?
+    .map(|(name, version)| (named(Some(&name), 120, "A device"), version)))
 }
 /// `{id,name,version_number}` of the pipeline a version belongs to.
 async fn pipeline(db: &mut SqliteConnection, version: Option<&str>) -> Result<Option<Value>> {
@@ -480,7 +498,7 @@ async fn pipeline(db: &mut SqliteConnection, version: Option<&str>) -> Result<Op
     .fetch_optional(&mut *db)
     .await?;
     Ok(row.and_then(|(id, name, number)| {
-        Some(json!({"id": id?, "name": name.unwrap_or_else(|| "A pipeline".into()), "version_number": number}))
+        Some(json!({"id": id?, "name": named(name.as_deref(), 120, "A pipeline"), "version_number": number}))
     }))
 }
 fn pipeline_label(p: &Value) -> String {
@@ -540,16 +558,14 @@ async fn context(
             groups = device_groups(db, device).await?;
             let p = pipeline(db, data["version_id"].as_str()).await?;
             pipeline_id = p.as_ref().and_then(|p| p["id"].as_str().map(str::to_owned));
-            let title = data["title"]
-                .as_str()
-                .unwrap_or("A device reported a problem");
+            let title = named(data["title"].as_str(), 160, "A device reported a problem");
             notice["device"] = json!({"id": device, "name": name});
             notice["pipeline"] = p.clone().unwrap_or(Value::Null);
             notice["issue"] = json!({"id": data["issue_id"], "code": data["code"], "resolved_reason": data["resolved_reason"]});
             notice["path"] = json!(format!("/#/issues?device={device}"));
             if kind == "issue.opened" {
                 notice["headline"] = json!(format!("Issue on {name}: {title}"));
-                notice["message"] = data["message"].clone();
+                notice["message"] = json!(named(data["message"].as_str(), 400, ""));
             } else {
                 notice["headline"] = json!(format!("Resolved on {name}: {title}"));
                 notice["message"] = json!(match data["resolved_reason"].as_str() {
@@ -574,13 +590,17 @@ async fn context(
                 None => None,
             };
             pipeline_id = p.as_ref().and_then(|p| p["id"].as_str().map(str::to_owned));
-            let name = match (&record, &p) {
-                (Some(r), _) if r["name"].as_str().is_some_and(|n| !n.trim().is_empty()) => {
-                    bounded(r["name"].as_str().unwrap_or(""), 120)
+            let given = record
+                .as_ref()
+                .map(|r| named(r["name"].as_str(), 120, ""))
+                .filter(|name| !name.is_empty());
+            let name = match (given, &p) {
+                (Some(name), _) => name,
+                (None, Some(p)) => pipeline_label(p),
+                (None, None) if record.as_ref().is_some_and(|r| r["policy"].is_object()) => {
+                    "Agent settings".to_owned()
                 }
-                (_, Some(p)) => pipeline_label(p),
-                (Some(r), None) if r["policy"].is_object() => "Agent settings".to_owned(),
-                _ => "A deployment".to_owned(),
+                (None, None) => "A deployment".to_owned(),
             };
             if let Some(r) = &record {
                 for group in r["selector"]["group_ids"].as_array().into_iter().flatten() {
@@ -609,10 +629,11 @@ async fn context(
                     "Devices that applied it stopped delivering events, so the next wave waits. Resume it once delivery is fixed.".to_owned(),
                 ),
                 ("rollout.rolled_back", _) => {
-                    let actor: Option<String> = sqlx::query_scalar("SELECT substr(name,1,120) FROM users WHERE id=?")
+                    let actor: Option<String> = sqlx::query_scalar::<_, String>("SELECT substr(name,1,120) FROM users WHERE id=?")
                         .bind(data["actor"].as_str().unwrap_or(""))
                         .fetch_optional(&mut *db)
-                        .await?;
+                        .await?
+                        .map(|name| named(Some(&name), 120, "Someone"));
                     // What the rollback restored: the version its replacement deploys.
                     restored = match record.as_ref().and_then(|r| r["rolled_back_by"].as_str()) {
                         Some(replacement) => match db::record(db, "deployment", replacement).await {
@@ -1196,7 +1217,7 @@ pub fn test_notice(channel: &Channel, now: DateTime<Utc>) -> Value {
         "test": true,
         "occurred_at": stamp(now),
         "headline": "Test message from Vectory",
-        "message": format!("This is a test from the “{}” channel. Nothing happened in your fleet: if you can read this, notifications reach you here.", bounded(&channel.name, 80)),
+        "message": format!("This is a test from the “{}” channel. Nothing happened in your fleet: if you can read this, notifications reach you here.", named(Some(&channel.name), 80, "Channel")),
         "context": ["Test message"],
         "path": "/#/notifications",
         "device": Value::Null, "pipeline": Value::Null, "deployment": Value::Null, "issue": Value::Null,
@@ -1370,7 +1391,7 @@ pub fn webhook_body(s: &crate::App, notice: &Value) -> Value {
 pub fn email_content(s: &crate::App, channel_name: &str, notice: &Value) -> (String, String) {
     let headline = notice["headline"].as_str().unwrap_or("");
     let subject = bounded(
-        &format!("[{}] {headline}", s.settings.instance_name).replace(['\r', '\n'], " "),
+        &db::one_line(&format!("[{}] {headline}", s.settings.instance_name)),
         200,
     );
     let mut body = format!(
@@ -1395,7 +1416,7 @@ pub fn email_content(s: &crate::App, channel_name: &str, notice: &Value) -> (Str
     }
     body.push_str(&format!(
         "\n—\nSent by the “{}” channel in {}. Change what it sends in Settings → Notifications.\n",
-        bounded(channel_name, 80),
+        named(Some(channel_name), 80, "Channel"),
         s.settings.instance_name
     ));
     (subject, body)
