@@ -16,7 +16,7 @@ const sourceDir = path.join(root, "tests", "platform", "hostile-update-server");
 export function buildHostileServer(directory) {
   fs.mkdirSync(directory, { recursive: true });
   const binary = path.join(directory, "hostile-update-server");
-  run("go", ["build", "-o", binary, "."], {
+  run("go", ["build", "-buildvcs=false", "-o", binary, "."], {
     cwd: sourceDir,
     timeoutMs: 300000,
   });

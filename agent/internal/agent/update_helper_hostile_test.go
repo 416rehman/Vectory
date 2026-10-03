@@ -4,6 +4,9 @@ package agent
 
 import (
 	"bytes"
+	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -178,6 +181,69 @@ func TestAStagedFileThatBelongsToAnotherAccountIsRefused(t *testing.T) {
 	})
 }
 
+func TestOpenServiceFileOpensOnlyARegularFileOfTheServiceAccountWithinItsBound(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := os.Geteuid()
+	if owner == 0 {
+		owner = 65534
+	}
+	account := updateAccount{Name: "svc", UID: uint32(owner), GID: uint32(owner)}
+	write := func(name string, size int, uid int) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if os.Geteuid() == 0 {
+			if err := os.Chown(path, uid, uid); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write("small", 100, owner)
+	host := unixUpdateHost{}
+
+	t.Run("a file of the account that is exactly as large as the bound", func(t *testing.T) {
+		file, err := host.OpenServiceFile(dir, "small", account, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.File.Close()
+		if file.Size != 100 {
+			t.Errorf("the size is %d", file.Size)
+		}
+	})
+	t.Run("a file one byte over the bound", func(t *testing.T) {
+		if _, err := host.OpenServiceFile(dir, "small", account, 99); !errors.Is(err, errServiceFileTooLarge) {
+			t.Errorf("got %v", err)
+		}
+	})
+	t.Run("a file that isn't there", func(t *testing.T) {
+		if _, err := host.OpenServiceFile(dir, "missing", account, 100); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("got %v", err)
+		}
+	})
+	if os.Geteuid() != 0 {
+		return
+	}
+	var refusal *UpdateRefusal
+	t.Run("a file of another account", func(t *testing.T) {
+		other := updateAccount{Name: "other", UID: account.UID + 1, GID: account.GID + 1}
+		if _, err := host.OpenServiceFile(dir, "small", other, 100); !errors.As(err, &refusal) || refusal.Code != "UNTRUSTED_LOCATION" {
+			t.Errorf("got %v", err)
+		}
+	})
+	t.Run("a service account that is root", func(t *testing.T) {
+		write("rootfile", 100, 0)
+		if _, err := host.OpenServiceFile(dir, "rootfile", updateAccount{Name: "root", UID: 0, GID: 0}, 100); !errors.As(err, &refusal) || refusal.Code != "UNTRUSTED_LOCATION" {
+			t.Errorf("got %v", err)
+		}
+	})
+}
+
 func TestAStagedFileThatIsLargerThanItsBoundIsRefusedWithoutBeingCopied(t *testing.T) {
 	grow := func(name string, size int64) func(f *stepFixture, release *fakeRelease) {
 		return func(f *stepFixture, release *fakeRelease) {
@@ -251,6 +317,56 @@ func TestABuildReplacedBeforeTheStepCopiesItFailsTheSignedDigest(t *testing.T) {
 	f.mustRun()
 	f.requireAnswered(release, UpdateOutcomeFailed, "ARTIFACT_MISMATCH")
 	f.requireUnchanged(before)
+}
+
+// The build is held to the signed digest where each copy of it is made, before the
+// next copy: one byte differs and the size is the signed size, at the three places a
+// byte could change (the agent's file, the step's copy before the probe's copy is
+// made, and the step's copy after the probe ran), and the first check that sees it
+// answers, before anything runs or is put beside the executable.
+func TestEveryCopyOfTheBuildIsHeldToTheSignedDigestBeforeTheNextCopyIsMade(t *testing.T) {
+	for name, c := range map[string]struct {
+		point     string
+		inStaging bool
+		code      string
+		probes    int
+	}{
+		"the agent's file, before it is copied":                        {"verified", false, "ARTIFACT_MISMATCH", 0},
+		"the step's copy, before the probe's copy is made":             {"built", true, "PROBE_FAILED", 0},
+		"the step's copy, after the probe ran and before it is staged": {"probed", true, "ARTIFACT_MISMATCH", 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newStepFixture(t)
+			release := f.newRelease("0.1.1", "good", releaseOptions{})
+			f.stage(release)
+			other := bytes.Clone(release.build)
+			other[len(other)/2] ^= 0x01
+			changed := false
+			updateFault = func(point string) {
+				if point != c.point || changed {
+					return
+				}
+				changed = true
+				if c.inStaging {
+					if err := os.WriteFile(filepath.Join(f.paths.Staging, UpdateBuildFile(runtime.GOOS)), other, 0o600); err != nil {
+						t.Error(err)
+					}
+					return
+				}
+				f.host.writeAsAccount(filepath.Join(f.incoming(release), UpdateBuildFile(runtime.GOOS)), other, f.clock.Now())
+			}
+			before := f.snapshot()
+			f.mustRun()
+			if !changed {
+				t.Fatalf("the step never reached %s", c.point)
+			}
+			f.requireAnswered(release, outcomeOf(c.code, true), c.code)
+			f.requireUnchanged(before)
+			if len(f.host.probeCalls) != c.probes {
+				t.Errorf("the probe ran %d times, want %d: %v", len(f.host.probeCalls), c.probes, f.host.probeCalls)
+			}
+		})
+	}
 }
 
 func TestAForgedRequestCanOnlyNameWhatIsStagedAndSigned(t *testing.T) {
@@ -569,5 +685,45 @@ func TestACopyThatTheSourceDoesNotFillOrOverfillsIsRefusedAndLeavesNothing(t *te
 	}
 	if info, err := os.Stat(filepath.Join(dir.Path(), "copy")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("the copy: %v, %v", info, err)
+	}
+}
+
+// replacingReader runs replace once, when the source is exhausted: the moment a
+// copy has been written and not yet read back.
+type replacingReader struct {
+	io.Reader
+	replace func()
+	done    bool
+}
+
+func (r *replacingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err == io.EOF && !r.done {
+		r.done = true
+		r.replace()
+	}
+	return n, err
+}
+
+func TestACopyWhoseNameIsReplacedBeforeItIsReadBackIsNotBelieved(t *testing.T) {
+	f := newStepFixture(t)
+	dir, err := ensureRootOwnedDir(filepath.Join(f.root, "scratch"), rootPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	// The file that takes the name has the same bytes, so that only the check that the
+	// name still refers to the file that was written can tell.
+	other := filepath.Join(dir.Path(), "other")
+	if err := os.WriteFile(other, []byte("abcdefghij"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := &replacingReader{Reader: strings.NewReader("abcdefghij"), replace: func() {
+		if err := os.Rename(other, filepath.Join(dir.Path(), "copy")); err != nil {
+			t.Error(err)
+		}
+	}}
+	if digest, err := (unixUpdateHost{}).CopyInto(dir, "copy", rootPrivate, source, 10); err == nil {
+		t.Errorf("a copy whose name was replaced was believed: %s", digest)
 	}
 }
