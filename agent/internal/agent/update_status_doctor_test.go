@@ -147,6 +147,14 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 			want: map[string]verdict{"updates-host": {"fail", "no service manager runs this agent, or the registered service doesn't run this executable for this state directory (NO_SERVICE).", asAdmin("vectory service-install") + " --state-dir '/srv/agent state'"}},
 		},
 		{
+			// READ_ONLY is a file system mounted read-only, and a flag on the executable or
+			// its directory (the step's log says which, with the path and the command).
+			name: "an install directory the step can't write to",
+			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), Status: step(func(s *UpdateStatus) { s.Eligibility = "READ_ONLY" }), StepRunning: true, Eligibility: "READ_ONLY"},
+			want: map[string]verdict{"updates-host": {"fail", "the update step can't write to the install directory: its file system is read-only, or the agent or its directory has a flag that forbids replacing it (READ_ONLY).",
+				"If the agent or its directory has an immutable or append-only flag, clear it (" + clearFlagWords() + "); the update step's log (" + updateStepLogWords() + ") names the path."}},
+		},
+		{
 			name: "an operating system whose updates are not in this release",
 			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), Status: step(func(s *UpdateStatus) { s.Eligibility = "PLATFORM_NOT_IN_RELEASE" }), StepRunning: true, Eligibility: "PLATFORM_NOT_IN_RELEASE"},
 			want: map[string]verdict{"updates-host": {"info", "", ""}},
@@ -187,7 +195,33 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 					s.Last = lastResult(UpdateOutcomeRolledBack, "ROLLBACK_UNHEALTHY", "0.1.0", "0.1.1")
 					s.Last.At = now.Add(-2 * time.Hour)
 				})},
-			want: map[string]verdict{"updates-last": {"fail", "Rolled back from 0.1.1 at 18:00, and the previous build hasn't checked in either: check the network and the server; this host won't try 0.1.1 again.", "Check the network and the server"}},
+			// It says what the step found, in the two ways it ends with this code, and sends the
+			// person to the agent's service and the step's log before the network and the server.
+			want: map[string]verdict{"updates-last": {"fail", "Rolled back from 0.1.1 at 18:00, but the previous build isn't healthy either (it didn't report healthy within 5 minutes of its start, or it couldn't be put back): look at the agent's service and the update step's log, then at the network and the server; this host won't try 0.1.1 again.",
+				"Look at the agent's service (" + agentServiceLook() + ") and the update step's log (" + updateStepLogWords() + "), then at the network and the server"}},
+		},
+		{
+			name: "a rollback that can't start the previous build",
+			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Eligibility: UpdateEligible,
+				Status:       step(func(s *UpdateStatus) { s.Stage, s.FromVersion, s.ToVersion = UpdateStageRollingBack, "0.1.0", "0.1.1" }),
+				AgentService: &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "stopped"}},
+			want: map[string]verdict{"updates-rollback": {"warn",
+				"The update step is putting the previous build back, and the agent's service isn't running. It tries to start the previous build again every 30 seconds, and goes on until it can.",
+				"Look at the agent's service (" + agentServiceLook() + ") and the update step's log (" + updateStepLogWords() + "): the step logs why each try failed."}},
+		},
+		{
+			name: "a rollback whose previous build runs",
+			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Eligibility: UpdateEligible,
+				Status:       step(func(s *UpdateStatus) { s.Stage, s.FromVersion, s.ToVersion = UpdateStageRollingBack, "0.1.0", "0.1.1" }),
+				AgentService: &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "running", PID: 812}},
+			other: []string{"updates-rollback"},
+		},
+		{
+			name: "a trial of a build whose service isn't running yet",
+			view: UpdateView{StateDir: "/var/lib/vectory-agent", ReadAt: now, Policy: viewPolicy(t, UpdateConsentAuto), StepRunning: true, Eligibility: UpdateEligible,
+				Status:       step(func(s *UpdateStatus) { s.Stage, s.FromVersion, s.ToVersion = UpdateStageTrial, "0.1.0", "0.1.1" }),
+				AgentService: &ServiceInfo{Manager: "service manager", Name: "vectory", Installed: true, State: "stopped"}},
+			other: []string{"updates-rollback"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

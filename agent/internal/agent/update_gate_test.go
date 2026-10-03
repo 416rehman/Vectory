@@ -48,9 +48,27 @@ func TestTheGateShipsLinuxAndMacOSAsTheirLinesSayAndNoOtherSystem(t *testing.T) 
 	}
 }
 
+// inertHost stands for the operating system's host on a machine the step was never
+// installed on: removal asks it for the step's units and it has none. Any other call is
+// a mistake of the test, and panics.
+type inertHost struct {
+	updateHost
+	removals int
+}
+
+func (h *inertHost) RemoveUnits() (string, bool, error) {
+	h.removals++
+	return "", false, nil
+}
+
 func TestAnOperatingSystemOutsideTheReleaseHasNoStepAndEveryFunctionOfTheStepSaysSo(t *testing.T) {
 	closeUpdateGate(t)
 	paths := useUpdateRoots(t)
+	// Removal is the one function that asks the operating system's host whatever the gate
+	// says, and this is a host with nothing installed, so that the test touches nothing
+	// of the machine it runs on.
+	inert := &inertHost{}
+	updateHostOverride = inert
 	if currentUpdateHost() != nil {
 		t.Fatal("a build that ships nothing has a host")
 	}
@@ -70,6 +88,9 @@ func TestAnOperatingSystemOutsideTheReleaseHasNoStepAndEveryFunctionOfTheStepSay
 	// There is no step to remove, and removing it changes nothing.
 	if err := RemoveUpdateHelper(); err != nil {
 		t.Errorf("removing the step: %v", err)
+	}
+	if inert.removals != 1 {
+		t.Errorf("removal asked the host for the step's units %d times, want once: the gate doesn't decide it", inert.removals)
 	}
 	for _, path := range []string{paths.StepDir, paths.PolicyDir} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {

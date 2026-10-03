@@ -478,7 +478,8 @@ Staged       0.1.1 (14.5 MB) · offered 01:58
 | **Eligibility** | Whether this host can take an update and, when it can't, why, with the code: `PACKAGE_MANAGED`, `NO_SERVICE`, `UNTRUSTED_LOCATION`, `READ_ONLY`, `HELPER_NOT_RUNNING`, `SERVICE_DEFINITION_OUTDATED` or `PLATFORM_NOT_IN_RELEASE`. |
 | **Update step** | Whether the update step ran in the last two minutes (it runs every 30 seconds), and when. |
 | **Stopped** | Two successors of a pinned key were seen (a fork), with their short IDs. The host takes no update until it is pinned again with `setup --update-key-sha256`. |
-| **In progress** | A build being applied, tried (with when the trial ends) or taken back. |
+| **In progress** | A build being applied, tried (with when the trial ends) or taken back. A rollback that can't start the previous build says that the agent's service isn't running and that the update step is trying to start the previous build again, every 30 seconds until it can. |
+| **Look at** | Only while a rollback can't start the previous build: the agent's service as its manager shows it (`systemctl status vectory.service`, `sudo launchctl print system/io.vectory.agent` or `sc.exe query Vectory`) and the update step's log. |
 | **Staged** | The build the agent staged for the update step, and when it was offered. It says `no build is staged for it` for the minute or so in which the update step reads an offer that has none, which is how the agent hands it the evidence of a fork. |
 | **Last result** | How the last update ended, such as `rolled back from 0.1.1 at 02:19: it didn't check in within 5 minutes; this host won't try 0.1.1 again`. |
 
@@ -539,6 +540,8 @@ The pinned key is kept. To turn updates on again, run the Upgrade agent command 
 ```
 
 It refuses while the update step applies or tries a build, and says when that ends: `vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that`.
+
+It removes the update step, and the root launch daemon, timer or service that runs it, even where this build doesn't ship updates for the operating system and an earlier build installed it. It says the update step is removed only when the step's directory is gone. Where the build has no update step for the system at all and the directory is there, `off` stops with an error that names it and says to delete it yourself, and `service-uninstall` does the same.
 
 Root deletes what the agent staged from a directory that the agent's account owns, so it deletes only through a path that only root can change: every directory down to the one that holds the agent's state directory must belong to root, be no link and be writable by no one else. Where that isn't so, `off` still withdraws consent and removes the update step, deletes nothing, and says so:
 

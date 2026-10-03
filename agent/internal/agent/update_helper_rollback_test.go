@@ -282,3 +282,100 @@ func TestAStepKilledAfterItFreedTheCopyOfABuildFinishesTheTrialWhateverTheBuildD
 		}
 	})
 }
+
+// ---------------------------------------------------------------- a start the service manager doesn't take
+
+// requireRollbackWaitingForAStart says the rollback put the previous build back and
+// couldn't start it: nothing ended, the journal and the status say the rollback is going
+// on, the files of the request are still there, and the agent isn't running.
+func (f *stepFixture) requireRollbackWaitingForAStart(oldDigest string, release *fakeRelease) {
+	f.t.Helper()
+	journal, found := f.journal()
+	if !found || journal.Stage != UpdateStageRollingBack || journal.Code != "START_FAILED" {
+		f.t.Fatalf("the journal of a rollback that couldn't start the previous build: %+v (found %v)", journal, found)
+	}
+	if got := f.executableDigest(); got != oldDigest {
+		f.t.Errorf("the executable is %s, the rollback had put the previous build %s back", got, oldDigest)
+	}
+	if status := f.status(); status.Stage != UpdateStageRollingBack || (status.Last != nil && status.Last.Release == release.manifestSHA()) {
+		f.t.Errorf("the status: stage %s, last %+v", status.Stage, status.Last)
+	}
+	if f.service().State != "inactive" {
+		f.t.Errorf("the service after a start that failed: %+v", f.service())
+	}
+	if f.stagingEmpty() {
+		f.t.Error("the staging directory was emptied before the request ended")
+	}
+}
+
+// A start the service manager doesn't take says nothing about the previous build, which
+// nobody has seen run: the rollback is not over, and the request doesn't end as
+// ROLLBACK_UNHEALTHY. Each run, every 30 seconds, ends with an error and leaves the journal
+// saying rolling_back, and the first run that starts the previous build ends the request
+// with the result of a build that ran. Ending it at the first failure would leave the
+// host with no agent, because the runs that follow find an idle journal and start nothing.
+func TestARollbackWhoseStartFailsLeavesTheJournalRollingBackAndEachRunStartsThePreviousBuildAgain(t *testing.T) {
+	f := newStepFixture(t)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.2", "crash", releaseOptions{})
+	f.stage(release)
+	armed := false
+	updateFault = func(point string) {
+		// After the trial's own start, which worked: the next two starts fail.
+		if point == "rollback:restored" && !armed {
+			armed = true
+			f.host.cfg.StartFails = 2
+		}
+	}
+
+	for run := 1; run <= 2; run++ {
+		err := f.run()
+		if err == nil || !strings.Contains(err.Error(), "couldn't start the previous build") || !strings.Contains(err.Error(), "the next run of the update step starts it again") {
+			t.Fatalf("run %d, which couldn't start the previous build, ended with: %v", run, err)
+		}
+		f.requireRollbackWaitingForAStart(oldDigest, release)
+		f.clock.advance(30 * time.Second)
+	}
+
+	f.mustRun()
+
+	f.requireTakenBack(oldDigest, release, "START_FAILED")
+	service := f.service()
+	if service.Version != "0.1.0" || service.State != "active" {
+		t.Errorf("the host after the rollback: %+v", service)
+	}
+	if starts := strings.Count(strings.Join(service.History, ","), "start 0.1.0"); starts != 2 {
+		t.Errorf("the previous build was started %d times in all (the first before the update, and one after the starts that failed): %v", starts, service.History)
+	}
+}
+
+// A rollback whose start keeps failing never turns into the end of the request by
+// itself, however long it lasts: the step has nothing but the next run to offer, and
+// it offers it for as long as it takes.
+func TestARollbackWhoseStartKeepsFailingNeverEndsTheRequest(t *testing.T) {
+	f := newStepFixture(t)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.2", "crash", releaseOptions{})
+	f.stage(release)
+	armed := false
+	updateFault = func(point string) {
+		if point == "rollback:restored" && !armed {
+			armed = true
+			f.host.cfg.StartFails = 1000
+		}
+	}
+
+	// Two hours of runs, 30 seconds apart: well past the five minutes a rollback is
+	// watched for, and past the deadline the journal carries.
+	for i := 0; i < 240; i++ {
+		if err := f.run(); err == nil {
+			t.Fatalf("run %d didn't fail although the service manager takes no start", i+1)
+		}
+		f.clock.advance(30 * time.Second)
+	}
+	f.requireRollbackWaitingForAStart(oldDigest, release)
+
+	f.host.cfg.StartFails = 0
+	f.mustRun()
+	f.requireTakenBack(oldDigest, release, "START_FAILED")
+}

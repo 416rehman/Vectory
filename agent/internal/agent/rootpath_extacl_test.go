@@ -139,7 +139,7 @@ func TestTheMessageNamesTheRightsAndTheAccountTheWayAPersonReadsThem(t *testing.
 // What takes nothing from root passes: entries that deny, entries that allow only
 // what reading and looking need, root's own, and kinds that give nothing.
 func TestEntriesThatTakeNothingFromRootPass(t *testing.T) {
-	everything := uint32(extRightsRefused)
+	everything := uint32(kernelChangeRights)
 	for name, blob := range map[string][]byte{
 		"a denial of every right":                                              kauthBlob(kauthEntry{kauthGroup(12), kauthDeny, everything}),
 		"a denial of delete, as a home folder has":                             kauthBlob(kauthEntry{kauthGroup(12), kauthDeny, extRightDelete}),

@@ -865,7 +865,7 @@ const reviewTitles: Record<string, string> = {
   PACKAGE_MANAGED: "Installed by a package manager",
   NO_SERVICE: "No service keeps the agent running",
   UNTRUSTED_LOCATION: "Install path others can write",
-  READ_ONLY: "Install directory is read-only",
+  READ_ONLY: "Install directory can't be written",
   HELPER_NOT_RUNNING: "Update step isn't running",
   SERVICE_DEFINITION_OUTDATED:
     "Service definition is older than this release needs",
@@ -1009,7 +1009,7 @@ export function lastResultText(
         .join(" · ");
     case "rolled_back":
       return last.code === "ROLLBACK_UNHEALTHY"
-        ? `Rolled back from ${to}, and the previous build hasn't checked in either. Run sudo vectory update status on the host. This device won't try ${to} again.`
+        ? `Rolled back from ${to}, but the previous build isn't healthy either. Run sudo vectory update status on the host. This device won't try ${to} again.`
         : `Rolled back from ${to}: ${rollbackClause(last.code)}. This device won't try ${to} again; it takes the next release.`;
     case "failed":
       return `Couldn't update to ${to}: ${lowerFirst(codeText(last.code || "").reason)} Nothing was installed.`;

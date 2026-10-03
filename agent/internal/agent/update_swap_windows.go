@@ -75,6 +75,10 @@ func (i *windowsInstall) ReadOnly() bool {
 	return err == nil && readOnly
 }
 
+// Immutable is "": the immutable and append-only flags are a Unix file system's, and
+// what decides on Windows is the access list the path check reads.
+func (i *windowsInstall) Immutable() string { return "" }
+
 func (i *windowsInstall) FreeSpace() (uint64, error) {
 	free, err := freeBytes(i.held.dirPath)
 	if err != nil {

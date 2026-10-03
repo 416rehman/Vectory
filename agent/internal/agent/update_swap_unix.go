@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -52,6 +53,20 @@ func (i *unixInstall) Style() string { return updateSwapRename }
 func (i *unixInstall) ReadOnly() bool {
 	st, err := statfsOf(i.held)
 	return err == nil && statfsReadOnly(st)
+}
+
+// Immutable looks at the flags of the executable and of the directory that holds it,
+// through the handles (update_flags.go): a flag that forbids replacing the executable,
+// or adding and removing files beside it, is found before the service stops.
+func (i *unixInstall) Immutable() string {
+	var found []string
+	if words := immutableWords(i.path, "replace it", fileFlagsOf(i.held.file)); words != "" {
+		found = append(found, words)
+	}
+	if words := immutableWords(filepath.Dir(i.path), "add or remove files in it", fileFlagsOf(i.held.dir)); words != "" {
+		found = append(found, words)
+	}
+	return strings.Join(found, " ")
 }
 
 func (i *unixInstall) FreeSpace() (uint64, error) {

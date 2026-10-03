@@ -833,7 +833,7 @@ describe("a device's own report", () => {
         time,
       ),
     ).toMatch(
-      /^Rolled back from 0\.1\.1, and the previous build hasn't checked in either\./,
+      /^Rolled back from 0\.1\.1, but the previous build isn't healthy either\./,
     );
     expect(
       lastResultText(

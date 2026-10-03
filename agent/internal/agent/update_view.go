@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -71,13 +72,23 @@ type UpdateView struct {
 	Staged *StagedUpdate
 	// Health is what the agent last wrote after a check-in, nil when it wrote none.
 	Health *UpdateHealth
+	// AgentService is the agent's service as its manager shows it. It is read only
+	// while the step's status shows a rollback, for what it says about one that doesn't
+	// end: the previous build can't be started, and the step tries again at each run.
+	// nil where it wasn't read.
+	AgentService *ServiceInfo
 }
 
 // ReadUpdateView reads the host's update policy, the step's status and what the
 // agent staged and last reported, at the time now. It never fails: what it can't
 // read is left empty and, where it matters, explained.
 func ReadUpdateView(dir string, now time.Time) UpdateView {
-	return readUpdateView(dir, now, UpdateEligibility)
+	v := readUpdateView(dir, now, UpdateEligibility)
+	if v.Status != nil && v.Status.Stage == UpdateStageRollingBack {
+		service := ServiceStatus(context.Background())
+		v.AgentService = &service
+	}
+	return v
 }
 
 // readUpdateView is ReadUpdateView with the step's own answer about a host that
@@ -268,7 +279,10 @@ func (v UpdateView) lastWords() (words string, ok bool) {
 			from = "an update"
 		}
 		if last.Code == "ROLLBACK_UNHEALTHY" {
-			words = "rolled back from " + from + " at " + at + ", and the previous build hasn't checked in either: check the network and the server"
+			// The step ended the request with this code in two cases, and the words are true of
+			// both: the previous build was started and didn't report healthy within its five
+			// minutes, or it couldn't be put back, and the build that was tried stays.
+			words = "rolled back from " + from + " at " + at + ", but the previous build isn't healthy either (it didn't report healthy within 5 minutes of its start, or it couldn't be put back): look at the agent's service and the update step's log, then at the network and the server"
 		} else {
 			words = "rolled back from " + from + " at " + at + ": " + updateCodeWords(last.Code)
 		}
@@ -323,9 +337,29 @@ func (v UpdateView) busyWords() string {
 		}
 		return words
 	case UpdateStageRollingBack:
-		return "rolling back from " + s.ToVersion
+		words := "rolling back from " + s.ToVersion
+		if v.startingThePreviousBuild() {
+			words += " · the agent's service isn't running, and the update step is trying to start the previous build again (every 30 seconds until it can)"
+		}
+		return words
 	}
 	return ""
+}
+
+// startingThePreviousBuild says the step shows a rollback while the agent's service
+// isn't running: the update step is putting the previous build back and starts it as
+// soon as it can. A rollback that can't start it keeps this state, and the step tries
+// again at each of its runs, 30 seconds apart; the journal says rolling_back until a
+// start works.
+func (v UpdateView) startingThePreviousBuild() bool {
+	return v.Status != nil && v.Status.Stage == UpdateStageRollingBack && v.AgentService != nil && !v.AgentService.Running()
+}
+
+// lookAtWords says what to look at when the previous build can't be started: the
+// agent's service as its manager shows it, and what the update step logged about each
+// try.
+func lookAtWords() string {
+	return "the agent's service (" + agentServiceLook() + ") and the update step's log (" + updateStepLogWords() + ")"
 }
 
 // conflictSentence says what a fork is and what to do about it.
@@ -388,6 +422,9 @@ func (v UpdateView) Rows() []UpdateRow {
 	}
 	if words := v.busyWords(); words != "" {
 		rows = append(rows, UpdateRow{"In progress", words})
+	}
+	if v.startingThePreviousBuild() {
+		rows = append(rows, UpdateRow{"Look at", lookAtWords()})
 	}
 	if v.Staged != nil {
 		rows = append(rows, UpdateRow{"Staged", v.stagedRow()})
