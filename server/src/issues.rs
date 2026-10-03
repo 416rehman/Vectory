@@ -974,4 +974,124 @@ mod tests {
             assert!(!plan.contains("SCAN i"), "{plan}");
         }
     }
+
+    /// A reason ends only the issues it says something about: a verified
+    /// configuration says nothing of delivery or of the agent, a removed
+    /// assignment says nothing of the agent, and only the device going away ends
+    /// every kind.
+    #[tokio::test]
+    async fn a_reason_resolves_only_the_issues_it_says_something_about() {
+        const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
+        const OTHER: &str = "10000000-0000-4000-8000-000000000002";
+        for (reason, ended) in [
+            ("verified", vec!["APPLY_FAILED"]),
+            ("unassigned", vec!["APPLY_FAILED", "DATA_PLANE_STALLED"]),
+            (
+                "revoked",
+                vec![
+                    "AGENT_UPDATE_ROLLED_BACK",
+                    "APPLY_FAILED",
+                    "DATA_PLANE_STALLED",
+                ],
+            ),
+        ] {
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+            let mut conn = pool.acquire().await.unwrap();
+            for device in [DEVICE, OTHER] {
+                for (code, stage) in [
+                    ("APPLY_FAILED", "apply"),
+                    ("DATA_PLANE_STALLED", "data_plane"),
+                ] {
+                    db::insert(
+                        &mut conn,
+                        "issue",
+                        &json!({"id":db::hash(format!("{device}:{code}")),"device_id":device,"code":code,"stage":stage,"count":1,"reports":1,"first_seen":db::now(),"resolved":false,"revision":1}),
+                    )
+                    .await
+                    .unwrap();
+                }
+                record_agent_update(
+                    &mut conn,
+                    AgentUpdateFailure {
+                        device_id: device,
+                        release_version: "0.1.1",
+                        outcome: "rolled_back",
+                        code: "UNHEALTHY",
+                        rollout_id: "r1",
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            resolve_device(&mut conn, DEVICE, reason).await.unwrap();
+            let rows: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT json_extract(data,'$.device_id'),json_extract(data,'$.code'),COALESCE(json_extract(data,'$.resolved_reason'),'') FROM records WHERE kind='issue' AND json_extract(data,'$.resolved')=1 ORDER BY 2",
+            )
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+            let got: Vec<&str> = rows.iter().map(|row| row.1.as_str()).collect();
+            assert_eq!(got, ended, "{reason}: {rows:?}");
+            assert!(
+                rows.iter().all(|row| row.0 == DEVICE && row.2 == reason),
+                "{reason}: only its own device's, by that reason: {rows:?}"
+            );
+        }
+    }
+
+    /// An update the device verified ends the update issues and nothing else,
+    /// and says nothing to a channel.
+    #[tokio::test]
+    async fn a_verified_update_ends_only_the_update_issues_of_its_device() {
+        const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
+        const OTHER: &str = "10000000-0000-4000-8000-000000000002";
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        for device in [DEVICE, OTHER] {
+            for (version, outcome) in [("0.1.1", "rolled_back"), ("0.1.2", "failed")] {
+                record_agent_update(
+                    &mut conn,
+                    AgentUpdateFailure {
+                        device_id: device,
+                        release_version: version,
+                        outcome,
+                        code: "PROBE_FAILED",
+                        rollout_id: "r1",
+                    },
+                )
+                .await
+                .unwrap();
+            }
+        }
+        db::insert(
+            &mut conn,
+            "issue",
+            &json!({"id":db::hash("plain"),"device_id":DEVICE,"code":"APPLY_FAILED","stage":"apply","count":1,"reports":1,"first_seen":db::now(),"resolved":false,"revision":1}),
+        )
+        .await
+        .unwrap();
+        resolve_agent_update(&mut conn, DEVICE).await.unwrap();
+        let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT json_extract(data,'$.device_id'),json_extract(data,'$.code'),COALESCE(json_extract(data,'$.resolved'),0),COALESCE(json_extract(data,'$.resolved_reason'),'') FROM records WHERE kind='issue' ORDER BY 1,2",
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+        let ended: Vec<(&str, &str, i64, &str)> = rows
+            .iter()
+            .map(|row| (row.0.as_str(), row.1.as_str(), row.2, row.3.as_str()))
+            .collect();
+        assert_eq!(
+            ended,
+            [
+                (DEVICE, "AGENT_UPDATE_FAILED", 1, "verified"),
+                (DEVICE, "AGENT_UPDATE_ROLLED_BACK", 1, "verified"),
+                (DEVICE, "APPLY_FAILED", 0, ""),
+                (OTHER, "AGENT_UPDATE_FAILED", 0, ""),
+                (OTHER, "AGENT_UPDATE_ROLLED_BACK", 0, ""),
+            ]
+        );
+    }
 }
