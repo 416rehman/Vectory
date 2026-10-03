@@ -23,6 +23,7 @@ pub mod device_recovery_requests;
 pub mod device_revocation;
 pub mod device_validations;
 pub mod effective_config;
+pub mod enrollment_audit;
 pub mod enrollment_scope;
 pub mod error;
 pub mod fleet;
@@ -276,6 +277,11 @@ impl App {
                     remaining,
                 )
             })
+    }
+    /// What `key` has counted in its current window, 0 when it has none.
+    pub fn counted(&self, key: &str) -> u32 {
+        self.limit_partition(key)
+            .map_or(0, |mut ledger| ledger.count(key))
     }
     /// The sign-in failure ledger. A poisoned lock still yields the ledger:
     /// failure accounting must never fail open.

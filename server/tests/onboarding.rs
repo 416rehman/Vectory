@@ -1175,6 +1175,131 @@ async fn one_noisy_client_cannot_block_enrollment_for_the_fleet() {
     assert_eq!(audited, 2, "one per client and reason each minute");
 }
 
+async fn audited(s: &State, action: &str) -> Vec<Value> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT r.data FROM audit_sequence q JOIN records r ON r.kind='audit' AND r.id=q.audit_id WHERE json_extract(r.data,'$.action')=? ORDER BY q.sequence",
+    )
+    .bind(action)
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    rows.iter().map(|row| json_of(row.as_bytes())).collect()
+}
+
+// Refusals from many addresses are each written once a minute, but all clients
+// together write at most the shared number of rows: the rest are counted, and
+// one row for the minute says how many, once.
+#[tokio::test]
+async fn refusals_from_many_addresses_write_a_bounded_number_of_rows_and_one_summary() {
+    use vectory_server::enrollment_audit::{
+        REFUSAL_ROWS_PER_MINUTE, SUMMARY_ACTION, record_at, settle,
+    };
+    let f = fixture(|_, _| {}).await;
+    let minute = chrono::DateTime::parse_from_rfc3339("2026-10-03T04:06:20Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let refusal = |n: u32| json!({"reason_code":"TOKEN_UNKNOWN","client_address":format!("10.9.{}.{}", n / 250, n % 250)});
+    for n in 0..300 {
+        record_at(&f.s, refusal(n), minute).await.unwrap();
+    }
+    assert_eq!(
+        audited(&f.s, "device.enroll").await.len(),
+        REFUSAL_ROWS_PER_MINUTE as usize,
+        "the shared budget of a minute"
+    );
+    // The row for what was left out is written when the minute is settled,
+    // once, and never for a minute that left nothing out.
+    assert!(audited(&f.s, SUMMARY_ACTION).await.is_empty());
+    let key = minute.timestamp().div_euclid(60);
+    settle(&f.s, key).await.unwrap();
+    settle(&f.s, key).await.unwrap();
+    settle(&f.s, key - 5).await.unwrap();
+    let summaries = audited(&f.s, SUMMARY_ACTION).await;
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(
+        summaries[0]["details"]["summary"],
+        "240 further refusals in the minute from 04:06 UTC were not written"
+    );
+    assert_eq!(summaries[0]["actor"], "anonymous");
+    // The next minute has its own budget, and settles the one before it only
+    // once.
+    for n in 0..70 {
+        record_at(&f.s, refusal(n), minute + chrono::Duration::seconds(60))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        audited(&f.s, "device.enroll").await.len(),
+        2 * REFUSAL_ROWS_PER_MINUTE as usize
+    );
+    assert_eq!(audited(&f.s, SUMMARY_ACTION).await.len(), 1);
+    settle(&f.s, key + 1).await.unwrap();
+    let summaries = audited(&f.s, SUMMARY_ACTION).await;
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(
+        summaries[1]["details"]["summary"],
+        "10 further refusals in the minute from 04:07 UTC were not written"
+    );
+    // The log names it for what it is, and shows the sentence.
+    let history = f
+        .get(
+            &f.api,
+            &format!("/api/v1/audit/history?action={SUMMARY_ACTION}"),
+            "vectory.example.test",
+        )
+        .await;
+    assert_eq!(history.0, StatusCode::OK);
+    assert_eq!(json_of(&history.2)["total"], 2);
+}
+
+// The route itself: every refusal is either a row or counted in a summary.
+#[tokio::test]
+async fn every_refusal_from_a_flood_of_addresses_is_a_row_or_in_a_summary() {
+    use vectory_server::enrollment_audit::{REFUSAL_ROWS_PER_MINUTE, SUMMARY_ACTION, settle};
+    let f = fixture(|_, _| {}).await;
+    let device = device::router(f.s.clone());
+    let junk = json!({"protocol_version":1,"token":"0".repeat(64)});
+    let total = REFUSAL_ROWS_PER_MINUTE + 70;
+    for n in 0..total {
+        // Every request comes from a different address.
+        let [_, a, b, c] = n.to_be_bytes();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/agent/v1/enroll")
+            .header("content-type", "application/json")
+            .body(Body::from(junk.to_string()))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, a, b, c], 40000))));
+        assert_eq!(send(&device, request).await.0, StatusCode::UNAUTHORIZED);
+    }
+    let now = chrono::Utc::now().timestamp().div_euclid(60);
+    for minute in [now - 1, now] {
+        settle(&f.s, minute).await.unwrap();
+    }
+    let written = audited(&f.s, "device.enroll").await.len();
+    let left_out: usize = audited(&f.s, SUMMARY_ACTION)
+        .await
+        .iter()
+        .map(|row| {
+            row["details"]["summary"]
+                .as_str()
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+        })
+        .sum();
+    assert!(
+        written < total as usize,
+        "{written} rows for {total} refusals"
+    );
+    assert_eq!(written + left_out, total as usize);
+}
+
 #[tokio::test]
 async fn repeated_refusals_for_a_real_token_are_recorded_once_per_reason_and_minute() {
     let f = fixture(|_, _| {}).await;
