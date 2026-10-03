@@ -36572,7 +36572,7 @@
           "rollover_conflict"
         ],
         "additionalProperties": false,
-        "description": "private/counters.json: the counter floors the privileged step keeps, raised and synced when it journals swapping and never lowered, moved or removed (at most 16 keys, the lowest going first), and the fork it found, cleared only by re-pinning."
+        "description": "private/counters.json: the counter floors the privileged step keeps, raised and synced just before it journals swapping and never lowered, moved or removed (at most 16 keys, the lowest going first), and the fork it found, cleared only by re-pinning."
       },
       "UpdateInstalled": {
         "type": "object",

@@ -97,11 +97,15 @@ export function rootReaders({ paths, sudo }) {
   return readers;
 }
 
-/** The capabilities of the step's unit, as the bits /proc reports. */
+/**
+ * The capabilities of the step's unit, as the bits /proc reports: the probe runs as
+ * the service account (CAP_SETUID, CAP_SETGID) and is ended with a signal
+ * (CAP_KILL), and the step reads the service account's private files
+ * (CAP_DAC_OVERRIDE). It changes no owner and no mode of a file it doesn't own,
+ * so it has neither CAP_CHOWN nor CAP_FOWNER.
+ */
 const CAPABILITIES = {
-  CAP_CHOWN: 0,
   CAP_DAC_OVERRIDE: 1,
-  CAP_FOWNER: 3,
   CAP_KILL: 5,
   CAP_SETGID: 6,
   CAP_SETUID: 7,

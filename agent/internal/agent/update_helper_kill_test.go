@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -185,6 +186,11 @@ var goodUpdateBoundaries = []killRow{
 	{"commit:cleaned", "committed", true},
 }
 
+// journalSaysSwapping names the boundaries, among those an update is interrupted at,
+// from which the journal says swapping: the step has begun to replace the executable's
+// name, stopped the service or linked the previous build, which a later run puts right.
+var journalSaysSwapping = map[string]bool{"swapping": true, "stopped": true, "swap:linked": true, "swap:previous_kept": true}
+
 func TestKillingTheStepAtEveryBoundaryOfAGoodUpdateLeavesOneCompleteExecutableAndTheRightResult(t *testing.T) {
 	for _, row := range goodUpdateBoundaries {
 		t.Run(row.point, func(t *testing.T) { checkKillAtBoundary(t, newStepFixture, row, false) })
@@ -200,6 +206,7 @@ func checkKillAtBoundary(t *testing.T, newFixture func(*testing.T) *stepFixture,
 	oldDigest := f.executableDigest()
 	release := f.newRelease("0.1.1", "good", releaseOptions{})
 	f.stage(release)
+	asItWas := f.snapshot()
 
 	if !f.runChildUntil(row.point) {
 		t.Fatalf("an update never reached %s", row.point)
@@ -255,6 +262,20 @@ func checkKillAtBoundary(t *testing.T, newFixture func(*testing.T) *stepFixture,
 		if got := f.counters().HighestCounters[f.public.Fingerprint()]; (got == 7) != row.raised {
 			t.Errorf("the floor is %d after an interruption at %s", got, row.point)
 		}
+		// An interruption before the journal says swapping leaves the host exactly as it
+		// was: the executable, the service, the pins, the policy and what is beside the
+		// executable. The floor is the one thing it may have spent, because it is raised
+		// just before the journal is written. Later ones leave the same executable and
+		// policy, and the next run puts the rest right.
+		if !journalSaysSwapping[row.point] {
+			var ignore []string
+			if row.raised {
+				ignore = []string{"counters"}
+			}
+			f.requireUnchanged(asItWas, ignore...)
+		} else if after := f.snapshot(); after.executable != asItWas.executable || !bytes.Equal(after.policy, asItWas.policy) || !bytes.Equal(after.installed, asItWas.installed) {
+			t.Errorf("an interruption at %s changed the executable, the policy or the record of what is installed", row.point)
+		}
 		// A request that is written again is a new question: it is applied when the
 		// floor never rose, and it is a replay when it did, which the host refuses.
 		f.clock.advance(time.Hour)
@@ -265,13 +286,22 @@ func checkKillAtBoundary(t *testing.T, newFixture func(*testing.T) *stepFixture,
 			if f.executableDigest() != oldDigest {
 				t.Error("an interrupted release was tried again")
 			}
+			// A release with a higher counter is a new question, and it installs.
+			f.clock.advance(time.Hour)
+			next := f.newRelease("0.1.2", "good", releaseOptions{counter: 8})
+			f.stage(next)
+			f.mustRun()
+			f.requireAnswered(next, UpdateOutcomeCommitted, "")
+			if f.executableDigest() != next.buildSHA() || f.counters().HighestCounters[f.public.Fingerprint()] != 8 {
+				t.Errorf("a release with a higher counter wasn't installed after the interruption: %+v", f.status().Last)
+			}
 		} else if f.executableDigest() != release.buildSHA() || f.status().Last.Outcome != UpdateOutcomeCommitted {
 			t.Errorf("a release interrupted before its floor rose wasn't applied when it was offered again: %+v", f.status().Last)
 		}
 	}
 }
 
-var rollbackBoundaries = []string{"rolling_back", "rollback:stopped", "rollback:restored", "rollback:started", "rolled_back", "rollback:status"}
+var rollbackBoundaries = []string{"rollback:build_freed", "rolling_back", "rollback:stopped", "rollback:restored", "rollback:started", "rolled_back", "rollback:status"}
 
 func TestKillingTheStepAtEveryBoundaryOfARollbackStillEndsOnThePreviousBuild(t *testing.T) {
 	for _, point := range append([]string{"trial", "started"}, rollbackBoundaries...) {

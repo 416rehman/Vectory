@@ -251,6 +251,10 @@ Most rollbacks have one of these reasons:
 | **The update was interrupted** (`INTERRUPTED`) | A crash or power loss stopped it more than once. |
 | **The previous build isn't healthy either** (`ROLLBACK_UNHEALTHY`) | Run `sudo vectory update status` and `sudo vectory doctor` on the host. |
 
+The previous build gets five minutes from the moment it starts again, however long the new build took to stop.
+
+**An update interrupted before the host replaced the agent** isn't a rollback. A crash or a power cut while the update step prepared the build changes nothing on the host: it runs the agent it ran. The rollout page shows the device as **Failed**, the device page says the update was interrupted and nothing was installed, and **Needs you** says the update didn't finish. Prepare a new release to try again. The host counts a release as tried a moment before it replaces the agent, so a crash in that moment can spend the release's counter. The same release is then refused as **Already tried a newer release** (`COUNTER_REPLAYED`), and a new release with a higher counter installs.
+
 ## Rotate or replace the release key
 
 A key changes in one of two ways, and hosts follow either without a command. A statement signed by the old key names its successor. A host that pinned the old key follows it the next time it's offered a release the new key signed.
@@ -288,7 +292,7 @@ Revoking a key stops this server from offering anything it signed. It doesn't un
 2. Revoke the stolen key, then set a new one with **Set a release key…**.
 3. Run each affected host's **Upgrade agent** command, which now pins the new key. It re-pins and changes nothing else: the host keeps its level, its track, its windows and any pause. **Settings → Agent updates** lists the hosts that pin the revoked key, and the review gives each one's command. This step stays manual, host by host.
 
-A thief who holds the key before you roll it over can sign a statement of their own from it. A host that sees two successors of one key stops accepting updates and reports `KEY_ROLLOVER_CONFLICT`. **Settings → Agent updates** lists them as hosts frozen on a fork, and each one needs its **Upgrade agent** command with the key you trust.
+A thief who holds the key before you roll it over can sign a statement of their own from it. A host that sees two successors of one key stops accepting updates and reports `KEY_ROLLOVER_CONFLICT`. Its update step writes that down on the host within a minute, so it stays stopped when the offer goes away, when the agent restarts, and for a release signed by one of the two successors that carries only one of the statements. **Settings → Agent updates** lists them as hosts frozen on a fork, and each one needs its **Upgrade agent** command with the key you trust.
 
 ## Update one host by hand
 
@@ -303,8 +307,8 @@ sudo vectory update off
 ```
 
 - `status` shows the policy, the keys the host pins, what it is doing and the result of its last update.
-- `apply` installs a build a host set to **Ask on the host** has staged. Before it does, it reads what the agent last reported and stops if the offer was withdrawn or the agent hasn't checked in for five minutes. That check is advice: the file it reads is written by the agent, so it can warn you but can't prove an offer is still good. `--force` applies anyway, after you confirm on a terminal.
-- `pause` keeps the host's choices and stops every download and install until `resume`.
+- `apply` installs a build a host set to **Ask on the host** has staged. Before it does, it reads what the agent last reported and stops if the offer was withdrawn or the agent hasn't checked in for five minutes. That check is advice: the file it reads is written by the agent, so it can warn you but can't prove an offer is still good. `--force` applies anyway, after you confirm on a terminal. If an earlier `apply` was interrupted after the swap, `apply` refuses and leaves the update to the update step, which settles it by itself, usually within a minute or two. `status` shows where it stands.
+- `pause` keeps the host's choices and stops every download and install until `resume`. `sudo vectory pause`, which holds back every change on the host, does the same: the update step leaves a build the agent staged waiting until you run `sudo vectory resume`.
 - `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried. Where the directory above the agent's state directory could be changed by another account, it deletes nothing and tells you the staged files are yours to delete; see [Agent CLI](cli.md#update-off).
 
 Every verb but `status` needs root. See [Agent CLI](cli.md#update) for what each prints.

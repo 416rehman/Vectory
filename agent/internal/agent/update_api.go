@@ -305,11 +305,15 @@ func removeUnits(host updateHost, journal *updateJournal) error {
 // verifies the signed manifest, the pins and the policy itself, so force changes
 // nothing here.
 //
-// The process that does this is the installed agent, which runs from its own file
-// and is unaffected when the swap replaces it: the rollback, if there is one, is
-// made by this process, which is the build that was installed before. A person who
-// interrupts it (Ctrl-C) leaves the update to the step's next run, which settles
-// it as it settles a crash.
+// The process that does this is the installed agent. It keeps running from its own
+// file when the swap replaces the name, so the rollback, if there is one, is made by
+// this process, which is the build that was installed before. A person who
+// interrupts it (Ctrl-C), a crash or a power cut leaves an update that has swapped
+// to the step's timer, which settles it from the helper copy, the last build proven
+// on this host, as it settles any crash. A second apply never takes it over: from
+// the swap on, the installed agent is the build under trial, so apply says the
+// update step is settling it (UpdateBeingSettledError) and changes nothing. An update still in preparing has
+// swapped nothing, and apply ends it itself.
 func ApplyStagedUpdate(ctx context.Context, dir string, force bool, progress func(string)) error {
 	return runUpdateStep(ctx, dir, stepApply, progress)
 }

@@ -29,6 +29,11 @@ func failure(code, format string, args ...any) *stepFailure {
 // it: nothing is wrong, and nothing is recorded.
 var errOfferWithdrawn = errors.New("the agent withdrew the offer while the step was reading it")
 
+// errPausedWhilePreparing says `vectory pause` was run while the step prepared a
+// request. A pause is not a decision about a release, so the request waits where the
+// agent left it: nothing is answered, and nothing on the host has changed.
+var errPausedWhilePreparing = errors.New("`vectory pause` was run while the step prepared the update, so the update waits")
+
 // prepare accepts a request that the host's consent allows. It returns when the
 // request has ended, or the swap has been made and the trial is over.
 func (s *updateStep) prepare(ctx context.Context, request UpdateRequest) error {
@@ -46,9 +51,10 @@ func (s *updateStep) prepare(ctx context.Context, request UpdateRequest) error {
 	switch {
 	case err == nil:
 		return s.stopAndSwap(ctx, &j)
-	case errors.Is(err, errOfferWithdrawn):
+	case errors.Is(err, errOfferWithdrawn), errors.Is(err, errPausedWhilePreparing):
 		// Nothing is wrong, and nothing is answered: the agent took the offer back
-		// (or never staged what the request names), and says so itself.
+		// (or never staged what the request names) and says so itself, or a person
+		// paused the host, and the request waits for the pause to end.
 		s.logf("%v", err)
 		s.cleanUp(&j)
 		if err := s.dropJournal(); err != nil {
@@ -243,12 +249,16 @@ func (s *updateStep) verifyOffer(manifest, signatures []byte, envelopes []Rollov
 
 // recheckPolicy reads the policy again, right before the step commits to the swap:
 // a person who paused updates, turned them off or pinned the host to other keys
-// while the step was copying and probing is not overtaken. The offer is decided
-// again under what the policy says now.
+// while the step was copying and probing is not overtaken, and neither is one who
+// ran `vectory pause`, which makes the request wait. The offer is decided again
+// under what the policy says now.
 func (s *updateStep) recheckPolicy(manifest, signatures []byte, envelopes []RolloverEnvelope, running updateBuild) (Verified, error) {
 	s.policy, _, s.policyErr = readUpdatePolicy(s.paths)
 	if code, detail := s.consentRefusal(); code != "" {
 		return Verified{}, failure(code, "%s", detail)
+	}
+	if s.mode != stepApply && s.localPauseHolds() {
+		return Verified{}, errPausedWhilePreparing
 	}
 	return s.verifyOffer(manifest, signatures, envelopes, running)
 }
@@ -272,13 +282,98 @@ func (s *updateStep) lastForVerification() *ReleaseResult {
 }
 
 // recordConflict writes the fork the verification found, synced, so that every
-// later request is refused until the host is pinned again.
+// later request is refused until the host is pinned again. A fork that is already
+// recorded is not written again.
 func (s *updateStep) recordConflict(refusal *UpdateRefusal) error {
 	if len(refusal.Successors) != 2 {
 		return nil
 	}
-	s.counters.RolloverConflict = &RolloverConflict{From: refusal.From, To: [2]string{refusal.Successors[0], refusal.Successors[1]}}
+	conflict := RolloverConflict{From: refusal.From, To: [2]string{refusal.Successors[0], refusal.Successors[1]}}
+	if have := s.counters.RolloverConflict; have != nil && *have == conflict {
+		return nil
+	}
+	s.counters.RolloverConflict = &conflict
 	return writeUpdateCounters(s.private, s.counters)
+}
+
+// forkWords says what a recorded fork means to this host, for the log and for the
+// result of a request it refuses.
+func forkWords(conflict *RolloverConflict) string {
+	return fmt.Sprintf("two statements from key %s name different successors, %s and %s: this host takes no update until it is pinned again",
+		shortFingerprint(conflict.From), shortFingerprint(conflict.To[0]), shortFingerprint(conflict.To[1]))
+}
+
+// recordFork decides the offer's statements before consent makes the request wait,
+// from the three small files the agent staged for it, read as they are and never
+// written anywhere. Two statements of one pinned key that name different successors
+// are written to counters.json, synced, and end the request: it is answered refused
+// with KEY_ROLLOVER_CONFLICT whatever the host's consent says about when a request
+// may go on, and recorded reports that.
+//
+// The agent verifies every offer itself and hands one that forks to the step with no
+// build, so this is where a fork becomes the host's record. The step takes nothing the
+// agent says: the manifest must be the one the request names, and the verification is
+// the step's own, with its pins and its floors. Any other result goes on as it did, and
+// the request is verified again from copies at its turn, before a byte of the build is
+// copied, so nothing is decided here that is not decided there. A file that can't be
+// used is left for that turn to say so.
+//
+// It copies no build and makes nothing in the step's scratch directories, and it
+// leaves the executable, the journal, the floors, the installed record and the helper
+// copy as they are. An error is a fork that couldn't be written down: the request
+// stays, and the next run looks at it again.
+func (s *updateStep) recordFork(request UpdateRequest) (recorded bool, err error) {
+	incoming, err := s.exchange.IncomingDir(request.ManifestSHA256)
+	if err != nil {
+		return false, nil
+	}
+	var small [3][]byte
+	for i, file := range []struct {
+		name  string
+		limit int64
+	}{{UpdateReleaseFile, MaxReleaseManifest}, {UpdateSignaturesFile, MaxReleaseSignatures}, {UpdateRolloversFile, MaxUpdateRollovers}} {
+		if small[i], err = s.readServiceFile(incoming, file.name, file.limit); err != nil {
+			if !errors.Is(err, errOfferWithdrawn) {
+				s.logf("the offer's %s can't be read before the request's turn: %v", file.name, err)
+			}
+			return false, nil
+		}
+	}
+	manifest, signatures := small[0], small[1]
+	envelopes, err := ParseUpdateRollovers(small[2])
+	if err != nil || Digest(manifest) != request.ManifestSHA256 {
+		return false, nil
+	}
+	running := updateBuild{Version: "unknown"}
+	if s.haveInstalled {
+		running = updateBuild{Version: s.installed.Version, SHA256: s.installed.SHA256}
+	}
+	var failed *stepFailure
+	switch _, err := s.verifyOffer(manifest, signatures, envelopes, running); {
+	case err == nil:
+		return false, nil
+	case !errors.As(err, &failed):
+		return false, fmt.Errorf("the offer shows a fork of a pinned key, and it couldn't be written down: %w", err)
+	case failed.code != "KEY_ROLLOVER_CONFLICT":
+		return false, nil
+	}
+	faultPoint("fork:recorded")
+	detail := failed.detail
+	if conflict := s.counters.RolloverConflict; conflict != nil {
+		detail = forkWords(conflict)
+	}
+	return true, s.finishWithout(request.ManifestSHA256, failed.code, detail)
+}
+
+// readServiceFile reads one of the agent's small files whole, with the checks of
+// openServiceFile, and leaves no copy.
+func (s *updateStep) readServiceFile(dir, name string, limit int64) ([]byte, error) {
+	file, err := s.openServiceFile(dir, name, limit, "MANIFEST_INVALID")
+	if err != nil {
+		return nil, err
+	}
+	defer file.File.Close()
+	return readBounded(file.File, file.Size)
 }
 
 // runningBuild is the build that is installed now: its digest from the file

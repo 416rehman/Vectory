@@ -42,6 +42,14 @@ import (
 // has started on it. Everything the agent writes here belongs to the service
 // account, so the step reads it only by copying and never trusts it: the files are
 // requests, never authority.
+//
+// An offer whose statements fork a pinned key is refused like any other, and it is
+// the one refused offer that is also handed to the step, with no build: its three
+// small files and a request (refuseFork). The agent verifies every offer itself, so
+// no request would otherwise reach the step for it, and a host that saw a fork
+// would report it once and then take the next offer that carries only one of the
+// two statements. The step is what makes a fork the host's record, in root's
+// files, where it holds until the host is pinned again.
 
 const (
 	// updateReleasePath is where the server serves a release's build, followed by
@@ -405,6 +413,10 @@ func (e *Engine) stepUpdates(ctx context.Context, check *ValidationRequest) {
 		if !errors.As(err, &refusal) {
 			refusal = newUpdateRefusal(codeManifestInvalid, "the release can't be verified")
 		}
+		if isForkRefusal(refusal) {
+			e.refuseFork(ex, facts, offer, refusal)
+			return
+		}
 		e.refuseUpdate(ex, facts, offer.ManifestSHA256, "", refusal, false)
 		return
 	}
@@ -491,7 +503,7 @@ func (e *Engine) refuseUpdate(ex UpdateExchange, facts updateFacts, release, ver
 		code = codeManifestInvalid
 	}
 	decision := updateDecision{state: UpdateStateRefused, release: release, code: code, version: version}
-	if code == codeKeyRolloverConflict && refusal.From != "" && len(refusal.Successors) == 2 {
+	if isForkRefusal(refusal) {
 		decision.conflict = &RolloverConflict{From: refusal.From, To: [2]string{refusal.Successors[0], refusal.Successors[1]}}
 	}
 	e.setDecision(decision)
@@ -508,6 +520,58 @@ func (e *Engine) refuseUpdate(ex UpdateExchange, facts updateFacts, release, ver
 		what = "Agent update " + version
 	}
 	e.sayOnce("refused", fmt.Sprintf("%s was refused (%s): %s.", what, code, updateCodeWords(code)))
+}
+
+// isForkRefusal says the verification refused the offer because two statements of
+// one pinned key name different successors, and names the key and both of them.
+func isForkRefusal(refusal *UpdateRefusal) bool {
+	return refusal.Code == codeKeyRolloverConflict && refusal.From != "" && len(refusal.Successors) == 2
+}
+
+// refuseFork refuses an offer whose statements fork a pinned key, and gives the step
+// the evidence: the offer's release.json, release.json.sig and rollovers.json in the
+// incoming directory of its manifest, and a request that names the manifest and this
+// platform's build, written last. No build is downloaded or staged for it, so a
+// request for a release that forks has no build beside it.
+//
+// The agent has decided the offer itself and reports it as refused whatever the step
+// does; what it hands over is what makes the host remember. The step reads the files
+// and verifies the offer again itself, and records the fork in root's files only when
+// it finds one, so nothing here is believed: it is a request, as every file the agent
+// writes is. The evidence is handed over once for each manifest. It is written again
+// only while it is missing, never once the step's last result names the release (the
+// step has answered it, whether or not it found the fork), and not while the step is
+// at work, since the request is the step's one input and the offer is still offered
+// at the next check-in. What was staged for another offer goes, as it does for any
+// refusal.
+func (e *Engine) refuseFork(ex UpdateExchange, facts updateFacts, offer *agentOffer, refusal *UpdateRefusal) {
+	digest, status := offer.ManifestSHA256, facts.status
+	if status != nil && status.Last != nil && status.Last.Release == digest {
+		e.refuseUpdate(ex, facts, digest, "", refusal, false)
+		return
+	}
+	e.refuseUpdate(ex, facts, digest, "", refusal, true)
+	e.cleanUpdateFiles(ex, status, digest)
+	if status != nil && status.Stage != UpdateStageIdle {
+		return
+	}
+	if err := e.handOverOffer(ex, offer); err != nil {
+		e.sayOnce("fork", "The agent couldn't give the update step the evidence of a fork of a pinned key ("+ex.Dir+"): "+err.Error()+". It tries again at its next check-in.")
+	}
+}
+
+// handOverOffer writes an offer's three small files and its request, and no build.
+func (e *Engine) handOverOffer(ex UpdateExchange, offer *agentOffer) error {
+	dir, err := ex.IncomingDir(offer.ManifestSHA256)
+	if err != nil {
+		return err
+	}
+	for _, path := range []string{ex.Dir, ex.Incoming, dir} {
+		if err := ensureUpdateDir(path); err != nil {
+			return err
+		}
+	}
+	return e.writeOffer(ex, dir, offer, offer.Artifact.SHA256)
 }
 
 // withdrawOffer ends everything the agent did for an offer: the transfer, what
@@ -759,9 +823,17 @@ func (e *Engine) transferFailed(ex UpdateExchange, facts updateFacts, release, v
 
 // writeUpdateStage writes release.json, release.json.sig and rollovers.json beside
 // the staged build, then request.json, which tells the step there is something to
-// apply. Each is written whole or not at all (AtomicWrite), the request last, and
-// a file that already holds the bytes is left alone.
+// apply.
 func (e *Engine) writeUpdateStage(ex UpdateExchange, dir string, v Verified, offer *agentOffer) error {
+	return e.writeOffer(ex, dir, offer, v.Artifact.SHA256)
+}
+
+// writeOffer writes the offer's release.json, release.json.sig and rollovers.json
+// into dir, then request.json naming the manifest and the build with the digest
+// artifact. Each is written whole or not at all (AtomicWrite), the request last, and
+// a file that already holds the bytes is left alone, so writing it again changes
+// nothing.
+func (e *Engine) writeOffer(ex UpdateExchange, dir string, offer *agentOffer, artifact string) error {
 	rollovers, err := MarshalUpdateRollovers(offer.Rollovers)
 	if err != nil {
 		return err
@@ -778,7 +850,7 @@ func (e *Engine) writeUpdateStage(ex UpdateExchange, dir string, v Verified, off
 			return err
 		}
 	}
-	request := UpdateRequest{ManifestSHA256: v.ManifestSHA256, ArtifactSHA256: v.Artifact.SHA256, RolloutID: offer.RolloutID, OfferedAt: e.now().Truncate(time.Second)}
+	request := UpdateRequest{ManifestSHA256: offer.ManifestSHA256, ArtifactSHA256: artifact, RolloutID: offer.RolloutID, OfferedAt: e.now().Truncate(time.Second)}
 	if have, err := ReadUpdateRequest(ex.Request); err == nil && have.ManifestSHA256 == request.ManifestSHA256 && have.ArtifactSHA256 == request.ArtifactSHA256 && have.RolloutID == request.RolloutID {
 		return nil
 	}

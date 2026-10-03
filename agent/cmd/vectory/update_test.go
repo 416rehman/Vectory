@@ -303,12 +303,16 @@ func TestUpdateApplyIsRefusedWhereThereIsNothingToApply(t *testing.T) {
 			"vectory: updates are paused on this host. Resume them first: " + asAdmin("vectory update resume") + " --state-dir "},
 		"the host is paused": {func(h *updateHost) { h.view.LocalPaused = true },
 			"vectory: vectory pause holds back every change on this host, updates included. Resume it first: " + asAdmin("vectory resume") + " --state-dir "},
+		"an update that already began is being settled": {func(h *updateHost) {
+			h.stage(time.Minute, true)
+			h.view.Status = &agent.UpdateStatus{Stage: agent.UpdateStageTrial, FromVersion: "0.1.0", ToVersion: "0.1.1"}
+		}, "vectory: an update that already began is being settled by the background update step. This command leaves it to that step, which finishes it by itself, usually within a minute or two. See where it stands: " + asAdmin("vectory update status") + " --state-dir "},
 		"nothing is staged": {func(h *updateHost) {},
 			"vectory: nothing is staged on this host. The agent stages a build when an update rollout reaches it; " + asAdmin("vectory update status") + " --state-dir "},
-		"the build is still arriving": {func(h *updateHost) {
+		"a request with no build beside it": {func(h *updateHost) {
 			h.stage(time.Minute, true)
 			h.view.Staged.Complete = false
-		}, "vectory: the staged build isn't complete: the agent is still downloading it. Try again in a minute"},
+		}, "vectory: no build is staged for the offer, so there is nothing to apply. See where things stand: " + asAdmin("vectory update status") + " --state-dir "},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newUpdateHost(t)
@@ -318,6 +322,38 @@ func TestUpdateApplyIsRefusedWhereThereIsNothingToApply(t *testing.T) {
 				t.Fatalf("%d %q %q", code, stdout, stderr)
 			}
 		})
+	}
+}
+
+// An update the step is trying or taking back is the step's to settle, whatever the agent last
+// reported about the offer: the offer is withdrawn while an update is under way, which
+// would otherwise send a person to --force, and apply says so before it asks anything.
+// It fails like every other refusal does, and nothing is applied.
+func TestUpdateApplyLeavesAnUpdateThatHasSwappedToTheStepBeforeItAsksAnything(t *testing.T) {
+	for _, stage := range []string{agent.UpdateStageSwapping, agent.UpdateStageTrial, agent.UpdateStageRollingBack} {
+		t.Run(stage, func(t *testing.T) {
+			h := newUpdateHost(t)
+			h.stage(10*time.Minute, false)
+			h.view.Status = &agent.UpdateStatus{Stage: stage, FromVersion: "0.1.0", ToVersion: "0.1.1"}
+			want := agent.UpdateBeingSettledError(h.dir).Error()
+
+			code, stdout, stderr := h.run(noTerminalAt, "apply")
+			if code != 1 || stdout != "" || stderr != "vectory: "+want+"\n" || len(h.applied) != 0 {
+				t.Fatalf("%d %q %q", code, stdout, stderr)
+			}
+			code, stdout, stderr = h.run(noTerminalAt, "apply", "--json")
+			var out map[string]any
+			if code != 1 || stderr != "" || json.Unmarshal([]byte(stdout), &out) != nil || out["error"] != want || len(out) != 1 || len(h.applied) != 0 {
+				t.Fatalf("%d %q %q", code, stdout, stderr)
+			}
+		})
+	}
+	// An update that is only being prepared has swapped nothing: apply goes on.
+	h := newUpdateHost(t)
+	h.stage(time.Minute, true)
+	h.view.Status = &agent.UpdateStatus{Stage: agent.UpdateStagePreparing, FromVersion: "0.1.0", ToVersion: "0.1.1"}
+	if code, _, stderr := h.run(noTerminalAt, "apply"); code != 0 || stderr != "" || len(h.applied) != 1 {
+		t.Fatalf("an update that was only being prepared: %d %q %v", code, stderr, h.applied)
 	}
 }
 
@@ -354,6 +390,31 @@ func TestUpdateApplyReportsWhatTheStepRecorded(t *testing.T) {
 			}
 			if strings.Contains(stdout, "Updated:") {
 				t.Fatal("a build that wasn't kept was called updated")
+			}
+		})
+	}
+}
+
+// When the update step won't be taken over, because it is busy or because it is settling
+// an update that already began, apply fails the one way every refusal of the step does:
+// the words on standard error and exit 1, or with --json an error member and exit 1.
+func TestUpdateApplyThatTheStepAnswersWithATryAgainFailsAndSaysWhyInJSON(t *testing.T) {
+	for name, message := range map[string]string{
+		"the step is working":                    "another run of the update step is working now; try again in a minute",
+		"the step is settling an earlier update": "an update that already began is being settled by the background update step. This command leaves it to that step, which finishes it by itself, usually within a minute or two. See where it stands: sudo vectory update status",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newUpdateHost(t)
+			h.stage(time.Minute, true)
+			h.applyErr = errors.New(message)
+			code, stdout, stderr := h.run(noTerminalAt, "apply", "--json")
+			var out map[string]any
+			if code != 1 || stderr != "" || json.Unmarshal([]byte(stdout), &out) != nil || out["error"] != message || len(out) != 1 {
+				t.Fatalf("%d %q %q", code, stdout, stderr)
+			}
+			code, stdout, stderr = h.run(noTerminalAt, "apply")
+			if code != 1 || !strings.HasSuffix(stderr, message+"\n") || !strings.HasPrefix(stderr, "vectory: ") || strings.Contains(stdout, "Updated:") {
+				t.Fatalf("%d %q %q", code, stdout, stderr)
 			}
 		})
 	}

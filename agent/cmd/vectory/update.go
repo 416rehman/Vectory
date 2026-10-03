@@ -260,10 +260,14 @@ func applyBlocker(dir string, view agent.UpdateView) error {
 		return errors.New("updates are paused on this host. Resume them first: " + agent.AdminCommandFor(dir, "vectory update resume"))
 	case view.LocalPaused:
 		return errors.New("vectory pause holds back every change on this host, updates included. Resume it first: " + agent.AdminCommandFor(dir, "vectory resume"))
+	case view.StepIsSettlingAnUpdate():
+		return agent.UpdateBeingSettledError(dir)
 	case view.Staged == nil:
 		return errors.New("nothing is staged on this host. The agent stages a build when an update rollout reaches it; " + agent.AdminCommandFor(dir, "vectory update status") + " shows where things stand")
 	case !view.Staged.Complete:
-		return errors.New("the staged build isn't complete: the agent is still downloading it. Try again in a minute")
+		// A request that has no build beside it holds the files the update step judges
+		// an offer from (a fork of a pinned key): there is nothing here to apply.
+		return errors.New("no build is staged for the offer, so there is nothing to apply. See where things stand: " + agent.AdminCommandFor(dir, "vectory update status"))
 	}
 	return nil
 }
