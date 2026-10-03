@@ -24,10 +24,16 @@ use sqlx::{Row as _, SqliteConnection};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A device that was offered a release and reported nothing for this long is
-/// skipped.
+/// skipped, and so is one that has been downloading it, or has had it staged,
+/// for this long without a change.
 const OFFER_SILENCE_MINUTES: i64 = 60;
 /// A device silent this long after it started applying, or restarted, failed.
 const APPLY_SILENCE_MINUTES: i64 = 30;
+/// A rollout that still has work to do and made no progress for this long is
+/// ended: nothing it waits for will ever come.
+const STALL_HOURS: i64 = 24;
+/// The safety net looks at a rollout no more often than this.
+const STALL_LOOK_SECONDS: i64 = 3600;
 /// The code a server gives a target that fell silent; never an agent.
 pub const NO_REPORT: &str = "NO_REPORT";
 const MAX_AUDITED_DEVICES: usize = 100;
@@ -68,15 +74,23 @@ const LOOK_SECONDS: i64 = 10;
 /// Large rollouts, with the clock of the last time they were advanced.
 static LOOKED: std::sync::Mutex<BTreeMap<String, DateTime<Utc>>> =
     std::sync::Mutex::new(BTreeMap::new());
-/// Whether a large rollout was advanced a moment ago; when it was not, now is
+/// Rollouts the safety net looked at, with the clock of the last look.
+static STALL_LOOKED: std::sync::Mutex<BTreeMap<String, DateTime<Utc>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+/// Whether `rollout` was looked at within `seconds`; when it was not, now is
 /// remembered as the time it was.
-fn looked_recently(rollout: &str, now: DateTime<Utc>) -> bool {
-    let Ok(mut looked) = LOOKED.lock() else {
+fn looked_within(
+    looked: &std::sync::Mutex<BTreeMap<String, DateTime<Utc>>>,
+    rollout: &str,
+    now: DateTime<Utc>,
+    seconds: i64,
+) -> bool {
+    let Ok(mut looked) = looked.lock() else {
         return false;
     };
     if looked
         .get(rollout)
-        .is_some_and(|at| now >= *at && (now - *at).num_seconds() < LOOK_SECONDS)
+        .is_some_and(|at| now >= *at && (now - *at).num_seconds() < seconds)
     {
         return true;
     }
@@ -85,6 +99,10 @@ fn looked_recently(rollout: &str, now: DateTime<Utc>) -> bool {
     }
     looked.insert(rollout.to_owned(), now);
     false
+}
+/// Whether a large rollout was advanced a moment ago.
+fn looked_recently(rollout: &str, now: DateTime<Utc>) -> bool {
+    looked_within(&LOOKED, rollout, now, LOOK_SECONDS)
 }
 
 pub fn terminal(state: &str) -> bool {
@@ -258,24 +276,54 @@ fn decide(
         return Some(("restarted", None));
     }
     let report = report?;
-    if report.release() != Some(target.manifest_sha256.as_str()) {
-        return None;
+    let state = if report.release() == Some(target.manifest_sha256.as_str()) {
+        match report.state() {
+            "downloading" => Some("downloading"),
+            "staged" => Some("staged"),
+            "waiting_for_host" => Some("waiting_for_host"),
+            "waiting_for_window" => Some("waiting_for_window"),
+            "applying" | "trial" => Some("applying"),
+            "refused" => Some("refused"),
+            "failed" => Some("failed"),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let Some(state) = state else {
+        return dropped(target, report);
+    };
+    // A paused host keeps nothing waiting: it only finishes what it started.
+    if report.paused() && !matches!(state, "applying" | "refused" | "failed") {
+        return dropped(target, report);
     }
     let code = report.code().map(str::to_owned);
-    let state = match report.state() {
-        "downloading" => "downloading",
-        "staged" => "staged",
-        "waiting_for_host" => "waiting_for_host",
-        "waiting_for_window" => "waiting_for_window",
-        "applying" | "trial" => "applying",
-        "refused" => "refused",
-        "failed" => "failed",
-        _ => return None,
-    };
     let code = matches!(state, "refused" | "failed")
         .then_some(code)
         .flatten();
     (rank(state) > current).then_some((state, code))
+}
+
+/// A target that reported holding the offer, and a report that no longer does:
+/// the host dropped it (it was paused, turned updates off, or holds another
+/// release), so the target is skipped with what the report says, or
+/// `NO_REPORT` when it says nothing. A target not reported on yet is left
+/// alone: a report lags the offer by one check-in. A result of this very
+/// release in the report is the privileged step's to prove, not a dropped offer.
+fn dropped(target: &OpenTarget, report: &Report) -> Option<(&'static str, Option<String>)> {
+    let held = matches!(
+        target.state.as_str(),
+        "downloading" | "staged" | "waiting_for_host" | "waiting_for_window"
+    );
+    let result = report
+        .last()
+        .is_some_and(|last| last["release"] == target.manifest_sha256.as_str());
+    (held && !result).then(|| {
+        (
+            "skipped",
+            Some(report.code().unwrap_or(NO_REPORT).to_owned()),
+        )
+    })
 }
 
 /// A check-in of a device that has a target that has not ended: remember what
@@ -363,23 +411,31 @@ pub async fn step(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) ->
         return Ok(());
     }
     sweep(conn, s, now).await?;
-    let active: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM agent_update_rollouts WHERE status='active' ORDER BY created_at,id",
-    )
-    .fetch_all(&mut *conn)
-    .await?;
-    for id in active {
-        let rollout = super::load(conn, &id).await?;
-        advance(conn, s, now, &rollout).await?;
+    expire(conn, now).await?;
+    // Every rollout is read once, and each release once however many rollouts
+    // offer it: what a tick costs follows the rollouts there are.
+    let mut releases: BTreeMap<String, Release> = BTreeMap::new();
+    for rollout in super::active(conn).await? {
+        if !releases.contains_key(&rollout.release_id) {
+            let release = agent_releases::load(conn, &rollout.release_id).await?;
+            releases.insert(rollout.release_id.clone(), release);
+        }
+        let release = &releases[&rollout.release_id];
+        if advance(conn, s, now, &rollout, release).await? {
+            stalled(conn, &rollout, now).await?;
+        }
     }
     Ok(())
 }
 
-/// Ends the targets that fell silent: an offer nobody reported on for an hour
-/// is skipped, and a device silent for half an hour after it started applying
-/// (or restarted) failed with `NO_REPORT`, unless its identity was revoked: its
+/// Ends the targets that fell silent: an offer nobody reported on for an hour,
+/// and a download or a staged build that has not changed for an hour, are
+/// skipped, and a device silent for half an hour after it started applying (or
+/// restarted) failed with `NO_REPORT`, unless its identity was revoked: its
 /// silence then says nothing of the build, and it opens no issue that nothing
-/// could ever resolve.
+/// could ever resolve. A device that held a download or a staged build is
+/// skipped with the last code its host reported, or `NO_REPORT` when it never
+/// gave one.
 ///
 /// Only the targets that wait for a report are read, through their partial
 /// index (the first term of the `WHERE` is the index's own, which is what lets
@@ -390,7 +446,7 @@ async fn sweep(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) -> Re
     let offered_before = instant(now - Duration::minutes(OFFER_SILENCE_MINUTES));
     let applying_before = instant(now - Duration::minutes(APPLY_SILENCE_MINUTES));
     let mut rows = sqlx::query(&format!(
-        "{OPEN_TARGET} WHERE t.state IN ('offered','downloading','staged','applying','restarted') AND ((t.state='offered' AND COALESCE(t.released_at,t.updated_at)<=?) OR (t.state IN ('applying','restarted') AND t.updated_at<=?))"
+        "{OPEN_TARGET} WHERE t.state IN ('offered','downloading','staged','applying','restarted') AND ((t.state IN ('offered','downloading','staged') AND t.updated_at<=?) OR (t.state IN ('applying','restarted') AND t.updated_at<=?))"
     ))
     .bind(&offered_before)
     .bind(&applying_before)
@@ -409,12 +465,58 @@ async fn sweep(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) -> Re
     for row in rows {
         let target = open_target(&row);
         let started = matches!(target.state.as_str(), "applying" | "restarted");
-        let (state, code) = if started && !target.revoked {
-            ("failed", Some(NO_REPORT))
+        let held = matches!(target.state.as_str(), "downloading" | "staged");
+        let code = if held && !target.revoked {
+            // What the host said last; what it was silent about is the server's.
+            let said: Option<String> = sqlx::query_scalar(
+                "SELECT json_extract(report,'$.code') FROM agent_update_reports WHERE device_id=?",
+            )
+            .bind(&target.device_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
+            Some(said.unwrap_or_else(|| NO_REPORT.to_owned()))
         } else {
-            ("skipped", None)
+            None
         };
-        move_target(conn, s, &at, "scheduler", &target, state, code).await?;
+        let (state, code) = if started && !target.revoked {
+            ("failed", Some(NO_REPORT.to_owned()))
+        } else {
+            ("skipped", code)
+        };
+        move_target(conn, s, &at, "scheduler", &target, state, code.as_deref()).await?;
+    }
+    Ok(())
+}
+
+/// Ends the rollouts of a release that expired, as cancelled with the reason
+/// `release_expired`: a release past its expiry is offered to nobody, and a
+/// rollout of it can only wait for ever. What was not started is withdrawn and
+/// a device that is applying finishes, as when a release is withdrawn. One audit
+/// row for each release.
+async fn expire(conn: &mut SqliteConnection, now: DateTime<Utc>) -> Result<()> {
+    let at = instant(now);
+    let expired: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT rel.id FROM agent_update_rollouts ro JOIN agent_releases rel ON rel.id=ro.release_id WHERE ro.status IN ('active','paused') AND rel.state='ready' AND rel.expires_at<=? ORDER BY rel.id",
+    )
+    .bind(&at)
+    .fetch_all(&mut *conn)
+    .await?;
+    for id in expired {
+        let release = agent_releases::load(conn, &id).await?;
+        let ended = cancel_release(conn, &id, "release_expired", &at).await?;
+        agent_updates::audit(
+            conn,
+            "scheduler",
+            "agent_release.expire",
+            &id,
+            "success",
+            json!({"release_id":id,"version":release.version,"counter":release.counter,"manifest_sha256":release.manifest_sha256,"cancelled_rollouts":ended.rollouts.len()}),
+        )
+        .await?;
+        for device in &ended.devices {
+            crate::wake::ask(device);
+        }
     }
     Ok(())
 }
@@ -428,6 +530,41 @@ pub async fn counts(conn: &mut SqliteConnection, rollout: &str) -> Result<BTreeM
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows.into_iter().collect())
+}
+
+/// What a step needs of a rollout's targets, in one grouped read: how many are
+/// in each state, the last stage released, and how many devices of the canary
+/// verified.
+struct Tally {
+    counts: BTreeMap<String, i64>,
+    latest: Option<i64>,
+    proven: i64,
+}
+impl Tally {
+    fn n(&self, state: &str) -> i64 {
+        self.counts.get(state).copied().unwrap_or(0)
+    }
+}
+async fn tally(conn: &mut SqliteConnection, rollout: &str) -> Result<Tally> {
+    let rows: Vec<(String, i64, Option<i64>, i64)> = sqlx::query_as(
+        "SELECT state,count(*),max(stage),sum(CASE WHEN stage=0 THEN 1 ELSE 0 END) FROM agent_update_targets WHERE rollout_id=? GROUP BY state",
+    )
+    .bind(rollout)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut tally = Tally {
+        counts: BTreeMap::new(),
+        latest: None,
+        proven: 0,
+    };
+    for (state, count, stage, canary) in rows {
+        tally.latest = tally.latest.max(stage);
+        if state == "verified" {
+            tally.proven = canary;
+        }
+        tally.counts.insert(state, count);
+    }
+    Ok(tally)
 }
 
 /// The open data-plane issues (identity and occurrence count) of these devices.
@@ -458,22 +595,33 @@ async fn open_delivery_issues(
 ///
 /// It reads the open data-plane issues, through the index of an issue's state,
 /// and looks each one's device up among the rollout's verified targets: the
-/// cost follows the problems there are, not the devices that updated.
-pub async fn degraded(conn: &mut SqliteConnection, rollout: &str) -> Result<i64> {
+/// cost follows the problems there are, not the devices that updated. A device
+/// the observation no longer watches (its access was revoked, or it has been
+/// silent for longer than it can be waited for) is not counted: nobody will hear
+/// from it again, and what its issue says is not the build's to answer for.
+pub async fn degraded(conn: &mut SqliteConnection, rollout: &super::Row) -> Result<i64> {
     let open: Vec<(String, String, i64, String)> = sqlx::query_as(
         "SELECT t.device_id,i.id,COALESCE(json_extract(i.data,'$.count'),0),t.baseline_issues FROM records i JOIN agent_update_targets t ON t.device_id=json_extract(i.data,'$.device_id') WHERE i.kind='issue' AND (CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'resolved' WHEN json_type(i.data,'$.acknowledged')='true' THEN 'acknowledged' ELSE 'open' END) IN ('open','acknowledged') AND COALESCE(json_extract(i.data,'$.code'),'') GLOB 'DATA_PLANE_*' AND t.rollout_id=? AND t.state='verified'",
     )
-    .bind(rollout)
+    .bind(&rollout.id)
     .fetch_all(&mut *conn)
     .await?;
-    let mut degraded: BTreeSet<&str> = BTreeSet::new();
-    for (device, issue, count, baseline) in &open {
-        let baseline: BTreeMap<String, i64> = serde_json::from_str(baseline).unwrap_or_default();
-        if baseline.get(issue).is_none_or(|before| count > before) {
+    let mut degraded: BTreeSet<String> = BTreeSet::new();
+    for (device, issue, count, baseline) in open {
+        let baseline: BTreeMap<String, i64> = serde_json::from_str(&baseline).unwrap_or_default();
+        if baseline.get(&issue).is_none_or(|before| count > *before) {
             degraded.insert(device);
         }
     }
-    Ok(i64::try_from(degraded.len()).unwrap_or(i64::MAX))
+    if degraded.is_empty() {
+        return Ok(0);
+    }
+    let facts = agent_updates::review::facts(conn, &degraded, &rollout.id).await?;
+    let counted = facts
+        .iter()
+        .filter(|device| !device.gone(rollout.settings.observation_seconds))
+        .count();
+    Ok(i64::try_from(counted).unwrap_or(i64::MAX))
 }
 
 /// Whether the device can be released a build now: nothing in the review
@@ -483,26 +631,32 @@ fn releasable(f: &Facts, release: &Release, statements: &Statements) -> bool {
     refusal(f, release, statements).is_none() && f.online() && !f.paused()
 }
 
+/// One step of an active rollout. It answers whether the rollout is stuck: it
+/// could not move for a reason that may last, so the safety net should look at
+/// it. One that moved, or waits as it should (an observation runs, a host or a
+/// window is waited for), is not stuck.
 async fn advance(
     conn: &mut SqliteConnection,
     s: &State,
     now: DateTime<Utc>,
     rollout: &super::Row,
-) -> Result<()> {
+    release: &Release,
+) -> Result<bool> {
     let at = instant(now);
-    let release = agent_releases::load(conn, &rollout.release_id).await?;
     if !release.offerable(&at) {
-        return Ok(());
+        // `expire` ended the rollouts of an expired release and a withdrawal
+        // those of a withdrawn one: what is left has nothing to offer.
+        return Ok(true);
     }
-    let counts = counts(conn, &rollout.id).await?;
-    let n = |state: &str| counts.get(state).copied().unwrap_or(0);
+    let tally = tally(conn, &rollout.id).await?;
+    let n = |state: &str| tally.n(state);
     let settings = &rollout.settings;
     if n("verified") > LARGE_ROLLOUT && looked_recently(&rollout.id, now) {
-        return Ok(());
+        return Ok(false);
     }
     let hard = n("rolled_back") + n("failed");
     let degraded = if n("verified") > 0 {
-        degraded(conn, &rollout.id).await?
+        degraded(conn, rollout).await?
     } else {
         0
     };
@@ -512,68 +666,65 @@ async fn advance(
         } else {
             "data_plane"
         };
-        return fail(conn, rollout, reason, &at).await;
+        fail(conn, rollout, reason, &at).await?;
+        return Ok(false);
     }
     let in_flight = n("offered") + n("downloading") + n("staged") + n("applying") + n("restarted");
     let waiting = n("waiting_for_host") + n("waiting_for_window");
     let pending = n("pending");
-    let latest: Option<i64> =
-        sqlx::query_scalar("SELECT max(stage) FROM agent_update_targets WHERE rollout_id=?")
-            .bind(&rollout.id)
-            .fetch_one(&mut *conn)
-            .await?;
-    let Some(latest) = latest else {
+    let Some(latest) = tally.latest else {
         if pending == 0 && in_flight == 0 && waiting == 0 {
             // Every device ended before anything was released.
-            return fail(conn, rollout, "threshold", &at).await;
+            fail(conn, rollout, "threshold", &at).await?;
+            return Ok(false);
         }
-        return release_canary(conn, s, now, rollout, &release).await;
+        return Ok(!release_canary(conn, s, now, rollout, release).await?);
     };
     if in_flight > 0 {
-        return clear_observation(conn, rollout).await;
+        clear_observation(conn, rollout, &at).await?;
+        return Ok(true);
     }
-    if latest == 0 {
-        let proven: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM agent_update_targets WHERE rollout_id=? AND stage=0 AND state='verified'",
-        )
-        .bind(&rollout.id)
-        .fetch_one(&mut *conn)
-        .await?;
-        if proven == 0 {
-            if waiting > 0 {
-                // A canary that waits for a person has not proved anything yet.
-                return clear_observation(conn, rollout).await;
-            }
-            // Nothing of the canary updated, and nothing is left that could.
-            return fail(conn, rollout, "threshold", &at).await;
+    if latest == 0 && tally.proven == 0 {
+        if waiting > 0 {
+            // A canary that waits for a person has not proved anything yet.
+            clear_observation(conn, rollout, &at).await?;
+            return Ok(false);
         }
+        // Nothing of the canary updated, and nothing is left that could.
+        fail(conn, rollout, "threshold", &at).await?;
+        return Ok(false);
     }
-    // The observation: every verified device keeps checking in on the new build.
-    let Some(evidence) = watched(conn, rollout, &release).await? else {
-        return clear_observation(conn, rollout).await;
+    // The observation: every verified device that can still be watched keeps
+    // checking in on the new build.
+    let Some(evidence) = watched(conn, rollout, release, latest == 0).await? else {
+        clear_observation(conn, rollout, &at).await?;
+        return Ok(true);
     };
     let started = rollout
         .observation_started_at
         .as_deref()
         .and_then(|started| DateTime::parse_from_rfc3339(started).ok());
     if started.is_none() || rollout.observation_evidence.as_deref() != Some(evidence.as_str()) {
-        sqlx::query("UPDATE agent_update_rollouts SET observation_started_at=?,observation_evidence=? WHERE id=?")
+        sqlx::query("UPDATE agent_update_rollouts SET observation_started_at=?1,observation_evidence=?2,progressed_at=?1 WHERE id=?3")
             .bind(&at)
             .bind(&evidence)
             .bind(&rollout.id)
             .execute(&mut *conn)
             .await?;
-        return Ok(());
+        return Ok(false);
     }
     let waited = now.signed_duration_since(started.unwrap_or_default());
     if waited.num_seconds() < settings.observation_seconds {
-        return Ok(());
+        return Ok(false);
     }
     if pending > 0 {
-        match release_batch(conn, s, now, rollout, &release, latest + 1).await? {
-            // Looked for a moment ago, or released a stage: nothing to end yet.
-            None | Some(1..) => return Ok(()),
-            Some(0) if waiting > 0 => return Ok(()),
+        match release_batch(conn, s, now, rollout, release, latest + 1).await? {
+            // Released a stage: nothing to end yet.
+            Some(1..) => return Ok(false),
+            // Looked for a moment ago, or found nobody to release while a host
+            // is waited for: pending devices that cannot be released hold it.
+            None => return Ok(true),
+            Some(0) if waiting > 0 => return Ok(true),
             Some(0) => {}
         }
         // Nothing left to release and nobody to wait for: what never became
@@ -584,18 +735,26 @@ async fn advance(
             .execute(&mut *conn)
             .await?;
     } else if waiting > 0 {
-        return Ok(());
+        return Ok(false);
     }
-    complete(conn, rollout, &at).await
+    complete(conn, rollout, &at).await?;
+    Ok(false)
 }
 
-/// The verified devices, as a fingerprint, when every one of them checked in
-/// within three of its intervals and runs the offered build; `None` when one
-/// went silent or fell back (which restarts the observation).
+/// The verified devices the observation watches, as a fingerprint, when every
+/// one of them checked in within three of its intervals and runs the offered
+/// build; `None` when one went silent or fell back (which restarts the
+/// observation).
+///
+/// A device that will not come back is not watched: one that is revoked, or
+/// whose last check-in is older than the larger of three of its intervals and
+/// the observation's own length, neither holds the observation nor counts as
+/// degraded. The canary still needs one device it can watch to pass.
 async fn watched(
     conn: &mut SqliteConnection,
     rollout: &super::Row,
     release: &Release,
+    canary: bool,
 ) -> Result<Option<String>> {
     let verified: BTreeSet<String> = sqlx::query_scalar(
         "SELECT device_id FROM agent_update_targets WHERE rollout_id=? AND state='verified'",
@@ -606,27 +765,85 @@ async fn watched(
     .into_iter()
     .collect();
     let devices = agent_updates::review::facts(conn, &verified, &rollout.id).await?;
+    let mut watching: BTreeSet<&str> = BTreeSet::new();
     for device in &devices {
+        if device.gone(rollout.settings.observation_seconds) {
+            continue;
+        }
         let on_the_build = release
             .artifact_for(&device.os, &device.arch)
             .is_some_and(|artifact| device.agent_sha256.as_deref() == Some(&artifact.sha256));
-        if device.revoked || !device.online() || !on_the_build {
+        if !device.online() || !on_the_build {
             return Ok(None);
         }
+        watching.insert(device.id.as_str());
+    }
+    if canary && watching.is_empty() {
+        return Ok(None);
     }
     Ok(Some(db::hash(
-        verified.iter().cloned().collect::<Vec<_>>().join(","),
+        watching.into_iter().collect::<Vec<_>>().join(","),
     )))
 }
 
-async fn clear_observation(conn: &mut SqliteConnection, rollout: &super::Row) -> Result<()> {
+/// Ends the observation, if one was running: it counts as progress.
+async fn clear_observation(
+    conn: &mut SqliteConnection,
+    rollout: &super::Row,
+    at: &str,
+) -> Result<()> {
     if rollout.observation_started_at.is_some() || rollout.observation_evidence.is_some() {
-        sqlx::query("UPDATE agent_update_rollouts SET observation_started_at=NULL,observation_evidence=NULL WHERE id=?")
+        sqlx::query("UPDATE agent_update_rollouts SET observation_started_at=NULL,observation_evidence=NULL,progressed_at=? WHERE id=?")
+            .bind(at)
             .bind(&rollout.id)
             .execute(&mut *conn)
             .await?;
     }
     Ok(())
+}
+
+/// The safety net. A rollout that is stuck (`advance` says so) and made no
+/// progress for a day fails as `stalled`: unstarted offers are withdrawn, and
+/// devices that are applying finish. Progress is a change of any target, a stage
+/// released, an observation that started or ended, or the rollout resuming. The
+/// rollout's own record holds the last of the kinds that are not a target's; the
+/// targets are read only once that record is a day old, and then no more than
+/// once an hour for a rollout.
+async fn stalled(
+    conn: &mut SqliteConnection,
+    rollout: &super::Row,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let day = Duration::hours(STALL_HOURS);
+    let instant_of = |at: &str| {
+        DateTime::parse_from_rfc3339(at)
+            .ok()
+            .map(|at| at.with_timezone(&Utc))
+    };
+    let Some(anchor) = instant_of(
+        rollout
+            .progressed_at
+            .as_deref()
+            .unwrap_or(&rollout.created_at),
+    ) else {
+        return Ok(());
+    };
+    if now - anchor < day || looked_within(&STALL_LOOKED, &rollout.id, now, STALL_LOOK_SECONDS) {
+        return Ok(());
+    }
+    let newest: Option<String> =
+        sqlx::query_scalar("SELECT max(updated_at) FROM agent_update_targets WHERE rollout_id=?")
+            .bind(&rollout.id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let last = newest
+        .as_deref()
+        .and_then(instant_of)
+        .map_or(anchor, |at| at.max(anchor));
+    if now - last < day {
+        return Ok(());
+    }
+    fail(conn, rollout, "stalled", &instant(now)).await
 }
 
 /// The devices that held an offer when a rollout was withdrawn from them.
@@ -745,20 +962,21 @@ pub async fn canary_order(conn: &mut SqliteConnection, devices: &[&Facts]) -> Re
     Ok(ranked)
 }
 
+/// Releases the canary when it can; whether it did.
 async fn release_canary(
     conn: &mut SqliteConnection,
     s: &State,
     now: DateTime<Utc>,
     rollout: &super::Row,
     release: &Release,
-) -> Result<()> {
+) -> Result<bool> {
     if throttled(&rollout.id, now) {
-        return Ok(());
+        return Ok(false);
     }
     let candidates = candidates(conn, rollout, release).await?;
     if candidates.holding || candidates.ready.is_empty() {
         note_empty(&rollout.id, now);
-        return Ok(());
+        return Ok(false);
     }
     let ready: Vec<&Facts> = candidates.ready.iter().collect();
     let ranked = canary_order(conn, &ready).await?;
@@ -772,7 +990,8 @@ async fn release_canary(
         .filter_map(|id| candidates.ready.iter().find(|device| device.id == *id))
         .collect();
     note_released(&rollout.id);
-    release_stage(conn, s, &instant(now), rollout, 0, &chosen).await
+    release_stage(conn, s, &instant(now), rollout, 0, &chosen).await?;
+    Ok(true)
 }
 
 /// The next batch: the pending devices that can be released now, in device ID
@@ -829,7 +1048,8 @@ async fn release_stage(
             .execute(&mut *conn)
             .await?;
     }
-    sqlx::query("UPDATE agent_update_rollouts SET observation_started_at=NULL,observation_evidence=NULL WHERE id=?")
+    sqlx::query("UPDATE agent_update_rollouts SET observation_started_at=NULL,observation_evidence=NULL,progressed_at=? WHERE id=?")
+        .bind(at)
         .bind(&rollout.id)
         .execute(&mut *conn)
         .await?;

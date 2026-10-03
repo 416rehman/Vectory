@@ -37730,7 +37730,8 @@
               {
                 "enum": [
                   "threshold",
-                  "data_plane"
+                  "data_plane",
+                  "stalled"
                 ]
               },
               {
@@ -37745,7 +37746,8 @@
                   "operator",
                   "stop",
                   "key_revoked",
-                  "release_withdrawn"
+                  "release_withdrawn",
+                  "release_expired"
                 ]
               },
               {
@@ -37913,7 +37915,7 @@
           "degraded": {
             "type": "integer",
             "minimum": 0,
-            "description": "verified targets on which a data-plane issue (DATA_PLANE_*) is open; they count as failures during an observation."
+            "description": "verified targets on which a data-plane issue (DATA_PLANE_*) is open; they count as failures during an observation. A device that is revoked, or silent for longer than the larger of three of its check-in intervals and observation_seconds, is not counted."
           },
           "request_id": {
             "type": "string",
@@ -38219,7 +38221,8 @@
               {
                 "enum": [
                   "threshold",
-                  "data_plane"
+                  "data_plane",
+                  "stalled"
                 ]
               },
               {
@@ -38234,7 +38237,8 @@
                   "operator",
                   "stop",
                   "key_revoked",
-                  "release_withdrawn"
+                  "release_withdrawn",
+                  "release_expired"
                 ]
               },
               {
@@ -38402,7 +38406,7 @@
           "degraded": {
             "type": "integer",
             "minimum": 0,
-            "description": "verified targets on which a data-plane issue (DATA_PLANE_*) is open; they count as failures during an observation."
+            "description": "verified targets on which a data-plane issue (DATA_PLANE_*) is open; they count as failures during an observation. A device that is revoked, or silent for longer than the larger of three of its check-in intervals and observation_seconds, is not counted."
           },
           "request_id": {
             "type": "string",

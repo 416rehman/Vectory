@@ -653,6 +653,13 @@ fn update_keys(action: &str) -> Option<&'static [&'static str]> {
             "reason",
             "cancelled_rollouts",
         ],
+        "agent_release.expire" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "cancelled_rollouts",
+        ],
         "agent_update_rollout.release" => &["stage", "device_ids", "released_count"],
         "agent_update_rollout.gate" => &["gate_state", "reason", "verified_count"],
         "device.agent_update" => &[

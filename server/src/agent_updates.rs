@@ -343,6 +343,10 @@ impl Report {
     pub fn code(&self) -> Option<&str> {
         self.member["code"].as_str()
     }
+    /// The host's policy is paused.
+    pub fn paused(&self) -> bool {
+        self.member["paused"] == true
+    }
     pub fn last(&self) -> Option<&Value> {
         self.member.get("last")
     }

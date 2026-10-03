@@ -172,10 +172,14 @@ pub async fn context(
                 .and_then(|r| r.failure_reason.as_deref())
                 .or(data["failure_reason"].as_str());
             notice["headline"] = json!(format!("Agent update failed: {name}"));
-            notice["message"] = json!(if reason == Some("data_plane") {
-                "Devices that took it stopped delivering events, so it stopped before the next stage."
-            } else {
-                "More devices rolled back or failed than its failure threshold allows, so it stopped."
+            notice["message"] = json!(match reason {
+                Some("data_plane") => {
+                    "Devices that took it stopped delivering events, so it stopped before the next stage."
+                }
+                Some("stalled") => "It made no progress for 24 hours, so it stopped.",
+                _ => {
+                    "More devices rolled back or failed than its failure threshold allows, so it stopped."
+                }
             });
             let mut lines = vec![format!("Agent update: {name}")];
             if let Some(found) = &found {

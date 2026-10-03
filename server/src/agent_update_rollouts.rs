@@ -108,6 +108,9 @@ pub struct Row {
     pub cancel_reason: Option<String>,
     pub observation_started_at: Option<String>,
     pub observation_evidence: Option<String>,
+    /// When the rollout last made progress of its own: it resumed, released a
+    /// stage, or an observation started or ended. Null until then.
+    pub progressed_at: Option<String>,
     pub revision: i64,
     pub created_at: String,
     pub created_by_name: Option<String>,
@@ -116,7 +119,7 @@ pub struct Row {
     pub failed_at: Option<String>,
     pub cancelled_at: Option<String>,
 }
-const COLUMNS: &str = "id,name,release_id,selector,canary_device_ids,canary_size,batch_size,observation_seconds,failure_threshold,status,failure_reason,cancel_reason,observation_started_at,observation_evidence,revision,created_at,created_by_name,paused_at,completed_at,failed_at,cancelled_at";
+const COLUMNS: &str = "id,name,release_id,selector,canary_device_ids,canary_size,batch_size,observation_seconds,failure_threshold,status,failure_reason,cancel_reason,observation_started_at,observation_evidence,progressed_at,revision,created_at,created_by_name,paused_at,completed_at,failed_at,cancelled_at";
 fn row_of(row: &sqlx::sqlite::SqliteRow) -> Result<Row> {
     let named: Vec<String> =
         serde_json::from_str(&row.get::<String, _>("canary_device_ids")).unwrap_or_default();
@@ -137,6 +140,7 @@ fn row_of(row: &sqlx::sqlite::SqliteRow) -> Result<Row> {
         cancel_reason: row.get("cancel_reason"),
         observation_started_at: row.get("observation_started_at"),
         observation_evidence: row.get("observation_evidence"),
+        progressed_at: row.get("progressed_at"),
         revision: row.get("revision"),
         created_at: row.get("created_at"),
         created_by_name: row.get("created_by_name"),
@@ -156,6 +160,15 @@ pub async fn load(conn: &mut SqliteConnection, id: &str) -> Result<Row> {
     .await?
     .ok_or_else(ApiError::missing)?;
     row_of(&row)
+}
+/// Every active rollout, oldest first: what a scheduler step advances.
+pub async fn active(conn: &mut SqliteConnection) -> Result<Vec<Row>> {
+    let rows = sqlx::query(&format!(
+        "SELECT {COLUMNS} FROM agent_update_rollouts WHERE status='active' ORDER BY created_at,id"
+    ))
+    .fetch_all(&mut *conn)
+    .await?;
+    rows.iter().map(row_of).collect()
 }
 
 /// `{id,version,counter,manifest_sha256}` of a release.
@@ -185,7 +198,7 @@ pub async fn view(conn: &mut SqliteConnection, row: &Row) -> Result<Value> {
         );
     }
     let degraded = if counts.get("verified").copied().unwrap_or(0) > 0 {
-        engine::degraded(conn, &row.id).await?
+        engine::degraded(conn, row).await?
     } else {
         0
     };
@@ -630,7 +643,8 @@ async fn transition(
                     "Only a paused update rollout can be resumed.",
                 ));
             }
-            sqlx::query("UPDATE agent_update_rollouts SET status='active',paused_at=NULL,observation_started_at=NULL,observation_evidence=NULL,revision=revision+1 WHERE id=?")
+            sqlx::query("UPDATE agent_update_rollouts SET status='active',paused_at=NULL,observation_started_at=NULL,observation_evidence=NULL,progressed_at=?,revision=revision+1 WHERE id=?")
+                .bind(&now)
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
