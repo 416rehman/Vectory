@@ -53,7 +53,8 @@ const (
 	// Administrators write, and the agent's service reads).
 	rootReadable
 	// rootExecutable: root writes it and others read and run it (0755; Windows:
-	// the access the directory gives).
+	// SYSTEM, the Administrators and TrustedInstaller write it, and the Users and
+	// the agent's service read and run it).
 	rootExecutable
 )
 

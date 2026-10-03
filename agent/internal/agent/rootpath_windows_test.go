@@ -313,20 +313,34 @@ func TestOpenRootOwnedSaysWhenSomethingIsMissingAndRefusesTheWrongKind(t *testin
 	}
 }
 
-// The directories of a held path can't be renamed while the value is open: the
-// handles are held without delete sharing.
+// Every directory of a held path, from the root of the drive down to the one that
+// holds the object, is held with the right to list it and without delete sharing,
+// so nothing that respects sharing (root included) can rename one of them, or move
+// another directory into its place, while the value is open. A directory opened for
+// its attributes and its access list alone would be outside sharing, and nothing
+// would be refused; that is why the handles ask for the right to list.
 func TestOpenRootOwnedHeldDirectoryCannotBeRenamedOrReplaced(t *testing.T) {
 	tree, file := policyTree(t)
 	holder := filepath.Dir(file)
 	r := mustOpen(t, file, rootOwnedFile)
-	if err := os.Rename(holder, holder+"-moved"); err == nil {
-		t.Error("the held directory was renamed")
-	}
-	if err := os.Rename(filepath.Join(tree, "a", "b"), filepath.Join(tree, "a", "b-moved")); err == nil {
-		t.Log("a directory above the held one was renamed; the handle still refers to what was checked")
+	for _, held := range []string{holder, filepath.Dir(holder), filepath.Join(tree, "a"), tree} {
+		moved := held + "-moved"
+		if err := os.Rename(held, moved); err == nil {
+			t.Errorf("%s was renamed while the path was held", held)
+			_ = os.Rename(moved, held)
+		} else {
+			t.Logf("renaming %s while it is held: %v", held, err)
+		}
 	}
 	if data, err := r.ReadFile(16); err != nil || string(data) != "good" {
 		t.Errorf("read after the attempts: %q, %v", data, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Once the value is closed the directories are free again.
+	if err := os.Rename(holder, holder+"-moved"); err != nil {
+		t.Errorf("the directory can't be renamed after the path is closed: %v", err)
 	}
 }
 

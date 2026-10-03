@@ -70,6 +70,17 @@ const (
 	updateHealthBeforeFile = "health-before.json"
 )
 
+// updatePreviousFor is the name the build that a swap replaces is kept under
+// beside the executable: a hidden name where the swap makes a second name of the
+// old file (Linux and macOS), and the executable's own name with .previous on
+// Windows, where the old file itself steps aside (the contract's swap member).
+func updatePreviousFor(goos string) string {
+	if goos == "windows" {
+		return "vectory.exe.previous"
+	}
+	return updatePreviousName
+}
+
 // stepMode says who asked for this run.
 type stepMode int
 

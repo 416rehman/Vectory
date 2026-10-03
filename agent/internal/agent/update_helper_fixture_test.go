@@ -120,6 +120,9 @@ type fakeConfig struct {
 	// CopyENOSPC names a directory, as the step holds it, in which the copy of the
 	// build runs out of room.
 	CopyENOSPC string `json:"copy_enospc"`
+	// TwoRenames makes the install swap the way Windows does: the executable steps
+	// aside and the staged file takes its place, with no executable in between.
+	TwoRenames bool `json:"two_renames"`
 }
 
 const fakeBigDisk = 1 << 40
@@ -416,6 +419,15 @@ func (h *fakeHost) FreeSpace(dir *rootOwned) (uint64, error) {
 
 func (h *fakeHost) OpenInstall(executable string) (updateInstall, error) {
 	inner, err := openUnixInstall(executable)
+	if err != nil && h.cfg.TwoRenames && notExist(err) {
+		// Where the swap has two renames the executable can be missing, and the install
+		// is opened without it, as Windows opens it, beside the not-exist error.
+		directory, dirErr := openRootOwned(filepath.Dir(executable), rootOwnedDirectory)
+		if dirErr != nil {
+			return nil, err
+		}
+		return &fakeInstall{unixInstall: &unixInstall{held: directory, name: filepath.Base(executable), path: executable}, cfg: &h.cfg}, err
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -461,11 +473,44 @@ func (i *fakeInstall) Stage(name string, src io.Reader, size int64) (string, err
 func (i *fakeInstall) Swap(staged, previous string) error {
 	switch i.cfg.SwapFails {
 	case "":
+		if i.cfg.TwoRenames {
+			return i.twoRenames().swap(staged, previous)
+		}
 		return i.unixInstall.Swap(staged, previous)
 	case "read-only":
 		return fmt.Errorf("%w: the file system became read-only", errUpdateReadOnly)
 	}
 	return errors.New(i.cfg.SwapFails)
+}
+
+func (i *fakeInstall) Style() string {
+	if i.cfg.TwoRenames {
+		return updateSwapTwoRenames
+	}
+	return i.unixInstall.Style()
+}
+
+func (i *fakeInstall) Restore(previous string) error {
+	if i.cfg.TwoRenames {
+		return i.twoRenames().restore(previous)
+	}
+	return i.unixInstall.Restore(previous)
+}
+
+// twoRenames is the install directory as the two-rename swap sees it, over the
+// Unix primitives: the sequence is the one Windows runs, on renames that replace.
+func (i *fakeInstall) twoRenames() twoRenames {
+	return twoRenames{
+		executable: i.name,
+		rename:     func(from, to string) error { return i.held.RenameAt(from, to) },
+		present: func(name string) (bool, error) {
+			_, err := os.Lstat(filepath.Join(filepath.Dir(i.path), name))
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+	}
 }
 
 // ---------------------------------------------------------------- the fixture
