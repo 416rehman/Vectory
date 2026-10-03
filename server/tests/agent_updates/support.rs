@@ -118,7 +118,11 @@ pub async fn fixture_with(tune: impl FnOnce(&mut Settings)) -> Fixture {
 
 /// A server with updates on and one current key, held by the server.
 pub async fn fixture_on() -> Fixture {
-    let f = fixture().await;
+    fixture_on_with(|_| {}).await
+}
+/// ... with settings of its own.
+pub async fn fixture_on_with(tune: impl FnOnce(&mut Settings)) -> Fixture {
+    let f = fixture_with(tune).await;
     key(&f, "team", "server", "current").await;
     switch(&f, true).await;
     f

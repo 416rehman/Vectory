@@ -29,6 +29,7 @@ use serde_json::{Map, Value, json};
 use sqlx::{Row, SqliteConnection};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+pub mod notify;
 pub mod offer;
 pub mod review;
 pub use review::{Facts, OPEN_STATES, Refusal, RolloutSettings, Statements, facts};

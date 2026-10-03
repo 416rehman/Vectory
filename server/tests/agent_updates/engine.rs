@@ -13,15 +13,22 @@ const OLD_BOOT: &str = "boot-old";
 const NEW_BOOT: &str = "boot-new";
 
 /// A server with updates on, a release of 0.1.1 and devices that run 0.1.0.
-struct Rig {
-    f: Fixture,
-    team: String,
-    release: Release,
-    ids: Vec<String>,
+pub(super) struct Rig {
+    pub(super) f: Fixture,
+    pub(super) team: String,
+    pub(super) release: Release,
+    pub(super) ids: Vec<String>,
 }
 impl Rig {
-    async fn build(devices: usize) -> Rig {
-        let f = fixture_on().await;
+    pub(super) async fn build(devices: usize) -> Rig {
+        Rig::build_with(devices, |_| {}).await
+    }
+    /// ... on a server with settings of its own.
+    pub(super) async fn build_with(
+        devices: usize,
+        tune: impl FnOnce(&mut vectory_server::Settings),
+    ) -> Rig {
+        let f = fixture_on_with(tune).await;
         let team = fingerprint("team");
         let release = release(&f, "0.1.1", 7, &team, &[("linux", "amd64")]).await;
         let mut ids = Vec::new();
@@ -38,24 +45,24 @@ impl Rig {
             ids,
         }
     }
-    fn old_sha() -> String {
+    pub(super) fn old_sha() -> String {
         db::hash("running 0.1.0 linux amd64")
     }
-    fn new_sha(&self) -> String {
+    pub(super) fn new_sha(&self) -> String {
         self.release.sha256("linux", "amd64")
     }
-    fn idle(&self) -> Value {
+    pub(super) fn idle(&self) -> Value {
         member(&[&self.team])
     }
     /// A report about this release in `state`.
-    fn about(&self, state: &str) -> Value {
+    pub(super) fn about(&self, state: &str) -> Value {
         with(
             self.idle(),
             json!({"state":state,"release":self.release.manifest_sha256}),
         )
     }
     /// The result of the privileged step for this release.
-    fn result(&self, outcome: &str, code: Option<&str>) -> Value {
+    pub(super) fn result(&self, outcome: &str, code: Option<&str>) -> Value {
         with(
             self.idle(),
             json!({"last":{
@@ -65,33 +72,33 @@ impl Rig {
         )
     }
     /// A check-in of the build the device has been running, in its own process.
-    async fn old(&self, device: &str, report: &Value) -> Value {
+    pub(super) async fn old(&self, device: &str, report: &Value) -> Value {
         report_in(&self.f, device, "0.1.0", &Self::old_sha(), OLD_BOOT, report).await
     }
     /// A check-in of the new build, in a process of its own.
-    async fn new(&self, device: &str, report: &Value) -> Value {
+    pub(super) async fn new(&self, device: &str, report: &Value) -> Value {
         report_in(&self.f, device, "0.1.1", &self.new_sha(), NEW_BOOT, report).await
     }
-    async fn start(&self, devices: &[&String], rollout: Value) -> String {
+    pub(super) async fn start(&self, devices: &[&String], rollout: Value) -> String {
         start(&self.f, &self.release.id, devices, rollout).await["id"]
             .as_str()
             .unwrap()
             .to_owned()
     }
-    async fn state(&self, rollout: &str, device: &str) -> String {
+    pub(super) async fn state(&self, rollout: &str, device: &str) -> String {
         target(&self.f, rollout, device).await.0
     }
-    async fn code(&self, rollout: &str, device: &str) -> Option<String> {
+    pub(super) async fn code(&self, rollout: &str, device: &str) -> Option<String> {
         target(&self.f, rollout, device).await.1
     }
-    async fn states(&self, rollout: &str) -> Vec<(String, String)> {
+    pub(super) async fn states(&self, rollout: &str) -> Vec<(String, String)> {
         sqlx::query_as("SELECT device_id,state FROM agent_update_targets WHERE rollout_id=? ORDER BY device_id")
             .bind(rollout)
             .fetch_all(&self.f.state.pool)
             .await
             .unwrap()
     }
-    async fn count(&self, rollout: &str, state: &str) -> i64 {
+    pub(super) async fn count(&self, rollout: &str, state: &str) -> i64 {
         sqlx::query_scalar(
             "SELECT count(*) FROM agent_update_targets WHERE rollout_id=? AND state=?",
         )
@@ -102,7 +109,7 @@ impl Rig {
         .unwrap()
     }
     /// The rollout as the API shows it.
-    async fn show(&self, rollout: &str) -> Value {
+    pub(super) async fn show(&self, rollout: &str) -> Value {
         ok(
             &self.f,
             "GET",
@@ -112,12 +119,12 @@ impl Rig {
         )
         .await
     }
-    async fn status(&self, rollout: &str) -> String {
+    pub(super) async fn status(&self, rollout: &str) -> String {
         status(&self.f, rollout).await
     }
     /// A device the rollout released: it takes the offer through every state a
     /// device reports until it is `applying`.
-    async fn apply(&self, rollout: &str, device: &str) {
+    pub(super) async fn apply(&self, rollout: &str, device: &str) {
         self.old(device, &self.about("downloading")).await;
         self.old(device, &self.about("staged")).await;
         self.old(device, &self.about("applying")).await;
@@ -125,7 +132,7 @@ impl Rig {
     }
     /// A device that is verified and runs the new build, without the check-ins
     /// that would get it there: for what a check-in would disturb.
-    async fn force_verified(&self, rollout: &str, device: &str) {
+    pub(super) async fn force_verified(&self, rollout: &str, device: &str) {
         sqlx::query("UPDATE agent_update_targets SET state='verified',verified_at=? WHERE rollout_id=? AND device_id=?")
             .bind(db::now())
             .bind(rollout)
@@ -142,7 +149,7 @@ impl Rig {
             .unwrap();
     }
     /// ... and on to `verified`.
-    async fn verify(&self, rollout: &str, device: &str) {
+    pub(super) async fn verify(&self, rollout: &str, device: &str) {
         self.apply(rollout, device).await;
         self.new(device, &self.about("trial")).await;
         assert_eq!(self.state(rollout, device).await, "restarted");
