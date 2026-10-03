@@ -96,8 +96,10 @@ pub struct OpenTarget {
     pub release_version: String,
     pub manifest_sha256: String,
     pub artifact_sha256: Option<String>,
+    /// The device's identity was revoked: it never checks in again.
+    pub revoked: bool,
 }
-const OPEN_TARGET: &str = "SELECT t.rollout_id,t.device_id,t.device_name,t.state,t.from_version,t.boot_id_before,ro.release_id,rel.version AS release_version,rel.manifest_sha256,\
+const OPEN_TARGET: &str = "SELECT t.rollout_id,t.device_id,t.device_name,t.state,t.from_version,t.boot_id_before,ro.release_id,rel.version AS release_version,rel.manifest_sha256,d.revoked AS revoked,\
     (SELECT a.sha256 FROM agent_release_artifacts a WHERE a.release_id=rel.id AND a.os=json_extract(d.data,'$.os') AND a.arch=json_extract(d.data,'$.arch')) AS artifact_sha256 \
     FROM agent_update_targets t JOIN agent_update_rollouts ro ON ro.id=t.rollout_id JOIN agent_releases rel ON rel.id=ro.release_id JOIN devices d ON d.id=t.device_id";
 fn open_target(row: &sqlx::sqlite::SqliteRow) -> OpenTarget {
@@ -112,6 +114,7 @@ fn open_target(row: &sqlx::sqlite::SqliteRow) -> OpenTarget {
         release_version: row.get("release_version"),
         manifest_sha256: row.get("manifest_sha256"),
         artifact_sha256: row.get("artifact_sha256"),
+        revoked: row.get("revoked"),
     }
 }
 
@@ -346,8 +349,9 @@ pub async fn step(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) ->
 
 /// Ends the targets that fell silent: an offer nobody reported on for an hour
 /// is skipped, a device silent for half an hour after it started applying (or
-/// restarted) failed with `NO_REPORT`, and a revoked device ends what it was
-/// waiting for.
+/// restarted) failed with `NO_REPORT`, and a device that was revoked is skipped
+/// whatever it was waiting for: its silence says nothing of the build, and it
+/// opens no issue that nothing could ever resolve.
 async fn sweep(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) -> Result<()> {
     let at = instant(now);
     let offered_before = instant(now - Duration::minutes(OFFER_SILENCE_MINUTES));
@@ -362,7 +366,7 @@ async fn sweep(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) -> Re
     for row in rows {
         let target = open_target(&row);
         let started = matches!(target.state.as_str(), "applying" | "restarted");
-        let (state, code) = if started {
+        let (state, code) = if started && !target.revoked {
             ("failed", Some(NO_REPORT))
         } else {
             ("skipped", None)
