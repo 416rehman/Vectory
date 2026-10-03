@@ -52,9 +52,20 @@ func processUserSID() (string, error) {
 // after them) is made closed to every account but root, before anything is made in
 // it, so that no local account can make the update directories first. Any other
 // directory is made with what its parent passes on.
+//
+// ensureStateRoot has already made and judged the update root for a process that can
+// write what root owns, before anything above a private directory is made. This is
+// for a caller that comes this way without it, and it judges what is there when it
+// is done: a directory that another account made first is refused, not taken for the
+// one this call made. A process that can't make the Administrators the owner (it isn't
+// elevated) makes the directory with what ProgramData gives a new folder, as it always
+// did, and the path check judges it when the update step looks.
 func makeSharedDirectory(dir string) error {
-	if root, ok := updateRootFor(dir); ok && strings.EqualFold(root, dir) {
-		if makeDirectory(dir, updateRootSDDL(ServiceName)) == nil {
+	if root, ok := updateRootFor(dir); ok && strings.EqualFold(root, dir) && canWriteRootOwned() {
+		if action, owner, err := closeRoot(dir, updateRootSDDL(ServiceName)); err == nil {
+			if action == stateRootRefuse {
+				return &stateRootError{Path: dir, Owner: ownerName(owner)}
+			}
 			return nil
 		}
 	}

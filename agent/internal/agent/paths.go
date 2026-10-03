@@ -28,13 +28,10 @@ func DefaultPaths() Paths {
 func defaultPathsFor(goos, programData, programFiles string) Paths {
 	switch goos {
 	case "windows":
-		if programData == "" {
-			programData = `C:\ProgramData`
-		}
 		if programFiles == "" {
 			programFiles = `C:\Program Files`
 		}
-		base := strings.TrimRight(programData, `\/`) + `\Vectory`
+		base := windowsUpdateRoot(programData)
 		return Paths{
 			StateDir:      base + `\agent`,
 			ManagedConfig: base + `\managed\vector.json`,

@@ -398,24 +398,23 @@ func (h *windowsUpdateHost) RemoveUnits() (string, bool, error) {
 
 // ---------------------------------------------------------------- the step's service runs
 
-// updateStepLog is where the step's service writes what the step logs, in its
+// updateStepLogFile is where the step's service writes what the step logs, in its
 // private directory: a service has no standard error, and the log is what a person
 // looks at when an update did not go as it should. It starts again when it grows past
-// a megabyte.
-const (
-	updateStepLogFile = "update-step.log"
-	maxUpdateStepLog  = 1 << 20
-)
+// a megabyte (maxUpdateStepLog).
+const updateStepLogFile = "update-step.log"
 
-// redirectStepLog points the step's log at its file and returns what undoes it.
+// redirectStepLog points the step's log at its file and returns what undoes it. The
+// file is opened as the step opens its other files, through the private directory the
+// path check judged and holds (openStepLog): a link, a name that isn't a plain file, or
+// a file that isn't root's is refused. Then the log isn't redirected: the step goes on,
+// and says so on the standard error it still has, which is a console's when a person
+// runs the step in one, and nothing under the service manager.
 func redirectStepLog() func() {
-	path := filepath.Join(UpdateLocations().Private, updateStepLogFile)
-	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
-	if info, err := os.Stat(path); err == nil && info.Size() > maxUpdateStepLog {
-		flags |= os.O_TRUNC
-	}
-	file, err := os.OpenFile(path, flags, 0o600)
+	private := UpdateLocations().Private
+	file, err := openStepLog(private)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "update step: its log %s isn't used: %v\n", filepath.Join(private, updateStepLogFile), err)
 		return func() {}
 	}
 	previous := os.Stderr
@@ -424,6 +423,17 @@ func redirectStepLog() func() {
 		os.Stderr = previous
 		_ = file.Close()
 	}
+}
+
+// openStepLog opens the step's log in its private directory, which it walks from the
+// root of the drive without following a link and holds while the file is opened.
+func openStepLog(private string) (*os.File, error) {
+	held, err := openRootOwned(private, rootOwnedDirectory)
+	if err != nil {
+		return nil, err
+	}
+	defer held.Close()
+	return openLogIn(held, updateStepLogFile)
 }
 
 // updateServiceRestartCode is the error of its own with which the step's service ends
