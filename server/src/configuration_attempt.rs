@@ -77,7 +77,9 @@ fn token(value: &Value, max: usize, extra: &[u8]) -> bool {
 const NO_PRINTABLE_MESSAGE: &str = "Vector reported an error.";
 
 /// Validate redacted agent diagnostics: at most 10 records of at most 512
-/// bytes, each field allowlisted and bounded. Unknown fields reject the
+/// bytes, each field allowlisted and bounded. A `component_id` and a
+/// `route_output` follow the one rule for IDs a device reports
+/// (`validation::reported_component_id`). Unknown fields reject the
 /// heartbeat rather than being silently dropped. The `message`, `hint` and
 /// `field` are display text drawn from Vector's own output, which can echo
 /// event data: a control character in one is replaced (`db::display_text`) and
@@ -112,7 +114,9 @@ pub fn diagnostics_up_to(list: &Value, most: usize) -> Result<Value> {
                             .all(|b| !b.is_ascii_lowercase())
                 }
                 "component_kind" => matches!(value.as_str(), Some("source" | "transform" | "sink")),
-                "component_id" | "route_output" => token(value, 100, b"_.-"),
+                "component_id" | "route_output" => value
+                    .as_str()
+                    .is_some_and(crate::validation::reported_component_id),
                 "field" | "message" | "hint" => {
                     let most = match key.as_str() {
                         "field" => 128,
@@ -432,4 +436,127 @@ pub fn was_verified(marker: &Value, attempt: &Value, uses_secrets: bool) -> bool
         && (!uses_secrets
             || marker["secret_revision"].as_i64().unwrap_or(0)
                 >= attempt["secret_revision"].as_i64().unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bounds the agent keeps to when it builds a diagnostic: its
+    /// `finalize` reads this file too (`report_bounds_test.go`).
+    fn bounds_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/report-bounds.json"
+        ))
+        .expect("the fixture is JSON")
+    }
+
+    fn bound(fixture: &Value, name: &str) -> usize {
+        fixture["bounds"][name].as_u64().expect(name) as usize
+    }
+
+    fn short(code: &str) -> Value {
+        json!({"severity":"error","code":code,"message":"m"})
+    }
+
+    #[test]
+    fn a_diagnostic_is_measured_and_bounded_as_the_shared_fixture_says() {
+        let fixture = bounds_fixture();
+        assert_eq!(bound(&fixture, "diagnostic_bytes"), MAX_DIAGNOSTIC_BYTES);
+        assert_eq!(bound(&fixture, "diagnostics"), MAX_DIAGNOSTICS);
+        let records = fixture["records"].as_array().expect("records");
+        assert!(records.len() >= 12, "{} records", records.len());
+        for entry in records {
+            let name = &entry["name"];
+            let record = &entry["record"];
+            assert_eq!(
+                serde_json::to_vec(record).unwrap().len() as u64,
+                entry["bytes"].as_u64().expect("bytes"),
+                "{name}"
+            );
+            let accepted = diagnostics(&json!([record])).is_ok();
+            assert_eq!(
+                accepted,
+                entry["accepted"].as_bool().expect("accepted"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_counts_and_the_text_bounds_are_the_shared_fixtures() {
+        let fixture = bounds_fixture();
+        let most = bound(&fixture, "diagnostics");
+        let list = |count: usize| Value::Array((0..count).map(|_| short("CODE")).collect());
+        assert!(diagnostics(&list(most)).is_ok());
+        assert!(diagnostics(&list(most + 1)).is_err());
+        let check = bound(&fixture, "check_diagnostics");
+        assert!(diagnostics_up_to(&list(check), check).is_ok());
+        assert!(diagnostics_up_to(&list(check + 1), check).is_err());
+        for (key, name) in [
+            ("message", "diagnostic_message_chars"),
+            ("hint", "diagnostic_hint_chars"),
+            ("field", "diagnostic_field_chars"),
+        ] {
+            let limit = bound(&fixture, name);
+            // Two-byte characters where the record stays under its size bound
+            // (the hint and the field): the bound counts characters, not bytes.
+            let filler = if key == "message" { "m" } else { "\u{e9}" };
+            let with = |chars: usize| {
+                let mut record = short("CODE");
+                record[key] = json!(filler.repeat(chars));
+                json!([record])
+            };
+            assert!(diagnostics(&with(limit)).is_ok(), "{key} at {limit}");
+            assert!(diagnostics(&with(limit + 1)).is_err(), "{key} over {limit}");
+        }
+    }
+
+    #[test]
+    fn component_and_output_names_follow_the_one_rule_for_ids_a_device_reports() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/component-ids.json"
+        ))
+        .expect("the fixture is JSON");
+        // An id is a string, a list of ids joined together, or an id repeated.
+        fn build(id: &Value) -> String {
+            match id {
+                Value::String(text) => text.clone(),
+                Value::Array(parts) => parts.iter().map(build).collect(),
+                Value::Object(_) => {
+                    build(&id["repeat"]).repeat(id["times"].as_u64().unwrap() as usize)
+                }
+                other => panic!("not an id: {other}"),
+            }
+        }
+        for case in fixture["cases"].as_array().expect("cases") {
+            let id = build(&case["id"]);
+            let valid = case["valid"].as_bool().expect("valid");
+            for key in ["component_id", "route_output"] {
+                let mut record = short("CODE");
+                record[key] = json!(id);
+                assert_eq!(
+                    diagnostics(&json!([record])).is_ok(),
+                    valid,
+                    "{key}: {}",
+                    case["name"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn what_is_reported_is_what_is_kept() {
+        let kept = diagnostics(&json!([{
+            "severity": "error",
+            "code": "VRL_E100",
+            "component_kind": "transform",
+            "component_id": "café",
+            "route_output": "日志",
+            "message": "Mapping failed."
+        }]))
+        .unwrap();
+        assert_eq!(kept[0]["component_id"], "café");
+        assert_eq!(kept[0]["route_output"], "日志");
+    }
 }

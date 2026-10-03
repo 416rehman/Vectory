@@ -307,6 +307,28 @@ pub fn hostile_display_char(c: char) -> bool {
     c.is_control() || matches!(u32::from(c), 0x2028 | 0x2029 | 0x202a..=0x202e | 0x2066..=0x2069)
 }
 
+/// A character a member that names or identifies something may not hold: what
+/// `hostile_display_char` refuses, and the byte order mark, which is invisible
+/// and has no place inside a name, a version or a path. Display text is
+/// forgiving (`display_text` replaces such a character); a member the server
+/// acts on or shows as a name is not, so one rule judges them all: component
+/// IDs and output names, versions, request and boot IDs, and directories.
+pub fn refused_in_name(c: char) -> bool {
+    hostile_display_char(c) || c == '\u{feff}'
+}
+
+/// `string`, for a member that names or identifies something: the same bounds
+/// (not empty, at most `max` bytes) and no character `refused_in_name`.
+pub fn name_string<'a>(v: &'a Value, key: &str, max: usize) -> Result<&'a str> {
+    let x = string(v, key, max)?;
+    if x.chars().any(refused_in_name) {
+        return Err(ApiError::invalid(format!(
+            "{key} has invalid length or characters"
+        )));
+    }
+    Ok(x)
+}
+
 /// Text a device reports for people to read: a log message, or a diagnostic's
 /// message, hint or field. It is best effort, so a character that can't be
 /// shown safely is replaced and never a reason to refuse the check-in: each one
@@ -389,6 +411,59 @@ mod telemetry_retention_tests {
         .unwrap_err();
         assert!(!error.contains('\n'), "{error}");
         assert!(error.len() < 200, "{error}");
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    fn refused(text: &str) -> bool {
+        name_string(&json!({"v": text}), "v", 128).is_err()
+    }
+
+    #[test]
+    fn a_name_refuses_what_display_text_replaces_and_the_byte_order_mark() {
+        // Built from code points: C0 and C1 controls, DEL, the line and
+        // paragraph separators, the embedding, override and isolate controls,
+        // and the byte order mark.
+        for code in [
+            0x00, 0x07, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0x2028, 0x2029, 0x202a, 0x202b,
+            0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
+        ] {
+            let c = char::from_u32(code).unwrap();
+            assert!(refused_in_name(c), "U+{code:04X}");
+            assert!(refused(&format!("0.1{c}")), "U+{code:04X} at the end");
+            assert!(refused(&format!("{c}0.1")), "U+{code:04X} at the start");
+        }
+    }
+
+    #[test]
+    fn real_versions_and_paths_are_names() {
+        for text in [
+            "0.1.0",
+            "0.58.1-rc.1",
+            "0.58.0+build.20260926",
+            "linux",
+            "amd64",
+            "C:\\Program Files\\Vectory Agent",
+            "D:\\Données Müller\\Vectory Agent",
+            "/var/lib/vectory agent/état",
+            "日本語のディレクトリ",
+            // Marks and joiners that scripts use inside words stay.
+            "a\u{200c}b\u{200d}c\u{200e}d\u{200f}e\u{061c}f",
+        ] {
+            assert!(!refused(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_bounds_are_the_same_as_for_any_string() {
+        assert!(refused(""));
+        assert!(refused(&"x".repeat(129)));
+        assert!(!refused(&"x".repeat(128)));
+        assert!(name_string(&json!({}), "v", 128).is_err());
+        assert!(name_string(&json!({"v": 7}), "v", 128).is_err());
     }
 }
 

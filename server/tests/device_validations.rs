@@ -941,10 +941,14 @@ async fn results_are_bounded_and_an_oversized_one_refuses_the_whole_heartbeat() 
     // Close to the 512-byte bound of one diagnostic, under it.
     let diagnostic = |n: usize| json!({"severity":"error","code":"INVALID_ADDRESS","component_id":"in","field":"address","message":format!("{n:02} {}", "m".repeat(197)),"hint":"h".repeat(150)});
     let name = |n: usize| format!("{n}-{}", "t".repeat(190));
-    // One too many diagnostics, tests or names, or an overlong text: refused,
-    // and the heartbeat's other changes are not kept.
+    // One too many diagnostics, tests or names, an overlong text, or a test's
+    // name with a character that can't be shown safely: refused, and the
+    // heartbeat's other changes are not kept.
     let long = "x".repeat(513);
     for oversized in [
+        json!({"tests":[{"name":"routes\u{202e}errors","passed":true}]}),
+        json!({"tests":[{"name":"routes\u{2028}errors","passed":true}]}),
+        json!({"tests":[{"name":"routes\u{feff}errors","passed":true}]}),
         json!({"diagnostics":(0..21).map(diagnostic).collect::<Vec<_>>()}),
         json!({"tests":(0..101).map(|n| json!({"name":name(n),"passed":true})).collect::<Vec<_>>()}),
         json!({"tests":[{"name":"t","passed":false,"message":long}]}),
