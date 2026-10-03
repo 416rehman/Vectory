@@ -1,0 +1,1 @@
+{"schema":"vectory.agent-release-signatures.v1","signatures":[{"key":"05cc6c02351af0cb1be9877e7cdcd326c68310018746cb7bbbf6beb29392618b","signature":"92Djw+8q0PShRNfEeTrnmFmFFmfd/QA+Tc/tmfgVAh+hAMMtcEOYJAoAav8IQCXEql5SQcO3rdpCDDaQGqlbAA=="}]}
