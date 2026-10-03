@@ -1,6 +1,6 @@
 # Archived review scripts
 
-These scripts were written to produce evidence for `docs/internal/ACCEPTANCE.md` and `docs/internal/HANDOFF.md` while the first version of each feature was reviewed. **None of them runs from a clean checkout today, none is run by CI, and none is maintained.** They stay in the repository, with their history, so a reviewer can see exactly what was checked and how. The evidence files they wrote into `docs/evidence/` are no longer in the tree, which is why the two internal documents link to files that do not exist.
+These scripts produced review evidence while the first version of each feature was built. **None of them runs from a clean checkout today, none is run by CI, and none is maintained.** They stay in the repository, with their history, so a reader can see exactly what was checked and how. The evidence files they wrote into `docs/evidence/` are no longer in the tree.
 
 Do not copy one back just to make a check pass. If a guarantee below matters again, extend the maintained check named in the last column, or revive the script properly (the notes say which ones are worth it).
 
@@ -36,7 +36,7 @@ Every script finds the repository root two folders above its own location, so to
 | --- | --- | --- |
 | `enrollment-review.mjs` | Four enrollment probes: mode instructions and reporting, token reuse, preview identity and generation. | `dashboard/tests/enrollment-browser.mjs` and `enrollment-connection-browser.mjs` (both CI), `dashboard/src/enrollmentCommands.test.ts` (CI). |
 | `pause-review.mjs` | Three pause-policy probes: what a pause preview says and the preserved effective policy. | `tests/security/device-retry-context-review.mjs` opens the pause review from the device page; `dashboard/tests/deployments-browser.mjs` (CI), `device-assignment-browser.mjs` (not in CI), `dashboard/src/deploymentReviewModel.test.ts` (CI). |
-| `target-review.mjs` | Six target-review probes: exclusions, restricted and full boundaries, variable handling. | `dashboard/tests/deployments-browser.mjs` (CI), `target-handoff-browser.mjs` (not in CI), `dashboard/src/deploymentVariables.test.ts` (CI). |
+| `target-review.mjs` | Six target-review probes: exclusions, restricted and full boundaries, variable handling. | `dashboard/tests/deployments-browser.mjs` (CI), `target-handoff-browser.mjs` (CI), `dashboard/src/deploymentVariables.test.ts` (CI). |
 | `enrollment-request-review.mjs` | Sixteen groups on creating an enrollment token when the reply is slow, lost or wrong: reminders that survive a reload, exact cancellation, no token shown twice. | The Add device flow it drives (a wizard with a Continue button) was replaced by one verified command that the operator watches connect, so every group stops at its first step. Coverage today: `enrollment-browser.mjs` and `enrollment-connection-browser.mjs` (CI), `dashboard/src/enrollmentTokenRequests.test.ts` (CI). Worth reviving once the Add device redesign settles. |
 
 ## Drive screens that were rewritten, so they need rewriting rather than updating

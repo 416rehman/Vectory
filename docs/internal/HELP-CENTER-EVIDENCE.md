@@ -1,6 +1,6 @@
 # Platform help verification — 2026-09-26
 
-> **Historical record of 2026-09-26.** The evidence files it names were not committed; see commit `c88758e` ("Generated evidence JSON and screenshots from local review runs are not committed"). They are named below in backticks instead of linked, so you can see what each passage claimed. Current evidence: the CI workflow `checks` for the commit under test and `docs/internal/REQUIREMENTS.md`. CI now runs the isolated help harness this record describes (step "Exercise bundled help and account workflows on a fresh instance", `node help-center/tests/ci.mjs`) and the Markdown and link tests (step "Check help Markdown, links, writing rules and reference drift").
+> **Historical record of 2026-09-26.** The evidence files it names were not committed. They are named below in backticks instead of linked, so you can see what each passage claimed. Current evidence: the CI workflow `checks` for the commit under test and `docs/internal/REQUIREMENTS.md`. CI now runs the isolated help harness this record describes (step "Exercise bundled help and account workflows on a fresh instance", `node help-center/tests/ci.mjs`) and the Markdown and link tests (step "Check help Markdown, links, writing rules and reference drift").
 
 The platform Help center uses Astro Starlight 0.42.4, Astro 7.3.5 and local Pagefind search. It is built into the dashboard distribution and served by the actual Rust server at `/help/`. The API reference remains a separate appendix.
 

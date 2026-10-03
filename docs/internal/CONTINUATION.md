@@ -1,13 +1,13 @@
 # Continuing the work
 
-Where Vectory stands, how to pick it up and what to do first, written so the next engineer can start without the conversation that produced it. Read [AGENTS.md](../../AGENTS.md) and the binding [product specification](../product-specification.md) first. Companion documents:
+Where Vectory stands, how to pick it up and what to do first, written so that a new contributor can start from the repository alone. Read [AGENTS.md](../../AGENTS.md) and the binding [product specification](../product-specification.md) first. Companion documents:
 
 | Document | What it is |
 | --- | --- |
 | [WORK-QUEUE.md](WORK-QUEUE.md) | What to build or fix, in order, with scope and acceptance |
 | [docs/security/OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) | Eleven open findings from an independent security review, each with its fix and test |
 | [AUTHORING-GAPS.md](AUTHORING-GAPS.md) | What an operator still cannot do with Vector from Vectory, and the defects found while authoring |
-| [REVIEW-PLAYBOOK.md](REVIEW-PLAYBOOK.md) | How to review a batch of changes with fresh eyes; run it at the end of each batch |
+| [REVIEW-PLAYBOOK.md](REVIEW-PLAYBOOK.md) | A checklist for reviewing a batch of changes, by area; run it at the end of each batch |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | Each requirement of the specification, its status and the test behind it (checked by CI) |
 | [HANDOFF.md](HANDOFF.md) | What works and what proves it, tested platforms, capacity, release prerequisites; it describes commit `a469266`, and the list below says what changed since |
 | [CI.md](CI.md) | What each CI job proves and does not |
@@ -56,15 +56,15 @@ Each command runs from the repository root unless it says otherwise. Set `VECTOR
 
 A few security harnesses (`tests/security/*.mjs`) write `docs/evidence/*.json` when they pass. Do not commit stray evidence files from a local run.
 
-**Playwright in a constrained container.** The harnesses call `chromium.launch()` with its defaults, so they need the Chromium build that the pinned Playwright expects. Where only another build is installed (the container this work was done in had one at `/opt/pw-browsers/chromium`, and downloading browsers was not allowed), run a harness with a small `node --require <preload>.cjs` file that patches `chromium.launch` to pass `executablePath` and sets `page.setDefaultNavigationTimeout` high, because on a loaded machine the first Vite compile of the whole app can outlast the default navigation timeout. Leave the assertion timeouts as the harness sets them. `scripts/capture-screenshots.mjs` takes `VECTORY_CHROMIUM` instead.
+**Playwright in a constrained container.** The harnesses call `chromium.launch()` with its defaults, so they need the Chromium build that the pinned Playwright expects. Where only another build is installed (for example a container without network access that ships Chromium under `/opt/pw-browsers`), run a harness with a small `node --require <preload>.cjs` file that patches `chromium.launch` to pass `executablePath` and sets `page.setDefaultNavigationTimeout` high, because on a loaded machine the first Vite compile of the whole app can outlast the default navigation timeout. Leave the assertion timeouts as the harness sets them. `scripts/capture-screenshots.mjs` takes `VECTORY_CHROMIUM` instead.
 
-**Disk.** `server/target` is about 3 GB and `dashboard/node_modules` 0.6 GB; harness output accumulates under `.local/` (everything but `.local/tools` can be deleted). A worker that builds in its own checkout should delete `target/` when it finishes.
+**Disk.** `server/target` is about 3 GB and `dashboard/node_modules` 0.6 GB; harness output accumulates under `.local/` (everything but `.local/tools` can be deleted). A scratch checkout that builds should delete `target/` when it finishes.
 
-**No Docker.** The container this work was done in had no container runtime and none should be started there; the compose stack is exercised only by the `compose` job in CI.
+**No container runtime needed.** The compose stack is exercised only by the `compose` job in CI; everything else here runs without one.
 
 ## Known unstable or unproven
 
-1. **The help-popover harness flakes** (`dashboard/tests/schema-control-browser.mjs`, the test named "help pointer hover and clicks close on departure and reopen without losing focus behavior"). In CI it failed in runs 65, 66 and 69 and passed in run 67, always at the same line: after the Close button was clicked, `help.focus()` on the trigger and `await expect(popup).toBeVisible()` times out, and the popup is not in the page at all. On the development machine it passed every time the whole file ran and failed only about once in 40 to 150 repetitions of this one test in a long browser session, so CI's browser (Playwright's own headless shell; the development container only had an older Chromium) behaves differently from it. Reproduce with the repeat knob:
+1. **The help-popover harness flakes** (`dashboard/tests/schema-control-browser.mjs`, the test named "help pointer hover and clicks close on departure and reopen without losing focus behavior"). In CI it failed in runs 65, 66 and 69 and passed in run 67, always at the same line: after the Close button was clicked, `help.focus()` on the trigger and `await expect(popup).toBeVisible()` times out, and the popup is not in the page at all. On a development machine it passed every time the whole file ran and failed only about once in 40 to 150 repetitions of this one test in a long browser session, so CI's browser (Playwright's own headless shell) behaves differently from the older Chromium used locally. Reproduce with the repeat knob:
 
    ```sh
    cd dashboard
@@ -95,4 +95,4 @@ A few security harnesses (`tests/security/*.mjs`) write `docs/evidence/*.json` w
 
 ## Writing rules for the repository
 
-Text in the repository (code, comments, tests, test names, docs, the changelog and commit messages) says what the product does and why, on its own merits. It does not name who asked for something, review rounds, work-package identifiers, conversations or other products used as inspiration, and it does not carry business context. Commit messages carry at most one attribution trailer and no session or chat links.
+Text in the repository (code, comments, tests, test names, docs, the changelog and commit messages) says what the product does and why, on its own merits. `node scripts/check-writing-rules.mjs` checks the mechanical part in CI; scripts/writing-rules-allow.json lists the few exceptions, each with its reason. Commit messages say what changed and why, and carry at most one attribution trailer.

@@ -1,14 +1,14 @@
 {
   "config": {
     "argv": [
-      "C:\\Program Files\\nodejs\\node.exe",
+      "node",
       "dashboard\\node_modules\\@playwright\\test\\cli.js",
       "test",
       "e2e/account-lifecycle.spec.ts",
       "--workers=1"
     ],
     "configFile": "dashboard\\playwright.config.ts",
-    "rootDir": "C:dashboard/e2e",
+    "rootDir": "dashboard/e2e",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
@@ -24,7 +24,7 @@
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "C:dashboard/test-results",
+        "outputDir": "dashboard/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -32,7 +32,7 @@
         },
         "id": "",
         "name": "",
-        "testDir": "C:dashboard/e2e",
+        "testDir": "dashboard/e2e",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"

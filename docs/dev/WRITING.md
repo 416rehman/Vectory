@@ -15,7 +15,7 @@ Short, confident, precise and friendly.
 
 ## Shape of a page
 
-Every page starts with an H1 and a one- or two-sentence lead that says what the page helps you do. The lead becomes the page's description in search and in `llms.txt`.
+Every page starts with an H1 and a one- or two-sentence lead paragraph that says what the page helps you do. The lead paragraph becomes the page's description in search and in `llms.txt`.
 
 A task page runs:
 
