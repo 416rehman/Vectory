@@ -36,7 +36,7 @@ The target set is every device you selected, plus the members of every group you
 | **Only the selected devices** | Fixed when you deploy. | A controlled release to a reviewed list. |
 | **Also include future group members** | Follows group membership. New members get the version too. | Groups whose new devices should inherit it. |
 
-Scheduled deployments always use a fixed list.
+Scheduled deployments always use a fixed list. A group needs at least one device when you create the deployment, even with **Also include future group members**: the dashboard doesn't offer an empty selection yet.
 
 The review also blocks devices that can't run the version, and says why:
 
