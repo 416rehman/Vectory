@@ -405,4 +405,36 @@ async fn a_person_name_is_one_line_and_a_channel_name_still_is() {
         error["error"]["message"],
         "Enter a channel name without line breaks, control characters or text-direction overrides"
     );
+    // A person's name and a channel's name are trimmed of surrounding white
+    // space before they are judged, so a line break only around the name is
+    // dropped and the stored name holds none.
+    let jane = ok(
+        &f,
+        &f.admin,
+        "POST",
+        "/api/v1/users",
+        json!({"name":"\n Jane Doe \u{2028}","email":"jane@example.test","password":"a-long-enough-passphrase-1","role":"viewer"}),
+    )
+    .await;
+    assert_eq!(jane["name"], "Jane Doe");
+    // A character trimming leaves alone is still refused at an end.
+    let (status, error) = call(
+        &f,
+        &f.admin,
+        "POST",
+        "/api/v1/users",
+        json!({"name":"Joan Doe\u{202e}","email":"joan@example.test","password":"a-long-enough-passphrase-1","role":"viewer"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["error"]["code"], "NAME_INVALID");
+    let channel = ok(
+        &f,
+        &f.admin,
+        "POST",
+        "/api/v1/notifications/channels",
+        json!({"name":"On call\n","kind":"webhook","allow_private":true,"webhook":{"url":"http://127.0.0.1:9/x"},"rules":{"events":["issue.opened"]}}),
+    )
+    .await;
+    assert_eq!(channel["name"], "On call");
 }
