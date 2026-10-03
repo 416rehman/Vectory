@@ -119,7 +119,7 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex
 
 | Flag | Meaning |
 | --- | --- |
-| `--updates LEVEL` | `auto` downloads and stages a build when an update rollout reaches the host, then applies it inside the window, if there is one. `ask` stages it and waits for someone on the host to run [`vectory update apply`](#update). `off` withdraws consent, deletes what the agent staged and removes the update step, and keeps the pinned keys. |
+| `--updates LEVEL` | `auto` downloads and stages a build when an update rollout reaches the host, then applies it inside the window, if there is one. `ask` stages it and waits for someone on the host to run [`vectory update apply`](#update). `off` withdraws consent, deletes what the agent staged (it leaves the files, and says so, where [`update off`](#update-off) can't delete them safely) and removes the update step, and keeps the pinned keys. |
 | `--update-key-sha256 HEX` | Required with `auto` or `ask`: the fingerprint of the release key to pin, 64 hexadecimal characters (groups separated by spaces, colons or dashes are fine). Repeat it for up to 4 keys. Giving it again, with or without `--updates`, replaces the pinned keys and ends a stop after a fork. |
 | `--update-track TRACK` | `patch` (the default) takes releases with the same major and minor version as the agent that runs. `minor` takes newer minor releases too. `major` is refused: `This release offers patch and minor tracks. Upgrade to a new major version by hand.` |
 | `--update-window SPEC` | When an update may start: `DAYS HH:MM-HH:MM`, optionally followed by `UTC` (otherwise the host's local time). `DAYS` is `daily`, a day (`Mon`), a range (`Mon-Fri`) or a list (`Sat,Sun`). A window that ends before it starts crosses midnight. Repeat it for up to 7 windows. |
@@ -527,6 +527,14 @@ The pinned key is kept. To turn updates on again, run the Upgrade agent command 
 ```
 
 It refuses while the update step applies or tries a build, and says when that ends: `vectory: an update is being tried on this host; it ends by 02:19. Run the command again after that`.
+
+Root deletes what the agent staged from a directory that the agent's account owns, so it deletes only through a path that only root can change: every directory down to the one that holds the agent's state directory must belong to root, be no link and be writable by no one else. Where that isn't so, `off` still withdraws consent and removes the update step, deletes nothing, and says so:
+
+```text
+The staged files in /srv/vectory/agent/updates were not deleted: the directory above the agent's state isn't owned by root, so root won't delete through it. Delete them yourself.
+```
+
+On Windows it says `an administrator` where it says `root`. With `--json`, `staged_left` is `null` when nothing was left, and otherwise holds `path`, `code` (`UNTRUSTED_LOCATION`), `detail` (the directory the check refused, and why) and `message`. `setup --updates off` says the same in an extra Updates step, and in `updates.staged_left` of its `--json` document. Running the command again after the directory is put right deletes them.
 
 A host's level, releases, windows and pinned keys change only when someone runs `setup` again on it, with `--updates` for the whole consent or with `--update-key-sha256`, `--update-track` or `--update-window` alone for the one part ([Change what a host agreed to](#change-what-a-host-agreed-to)). Nothing the server sends changes them.
 

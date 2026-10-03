@@ -122,6 +122,14 @@ func newConsentFixture(t *testing.T) *consentFixture {
 	root := filepath.Dir(filepath.Dir(filepath.Dir(paths.PolicyDir)))
 	f := &consentFixture{t: t, server: newSetupServer(t), paths: paths, root: root, key: testReleaseKey(t, "team"), eligibility: UpdateEligible}
 	options, dir, managed := setupFixture(t)
+	// No link on the way to the state directory. Withdrawing updates deletes what
+	// the agent staged there only through a path that root alone can change, and
+	// that check refuses a link at any depth: on macOS the temporary directory is
+	// behind /var, which is one.
+	if real, err := filepath.EvalSymlinks(filepath.Dir(dir)); err == nil {
+		dir, managed = filepath.Join(real, filepath.Base(dir)), filepath.Join(real, "managed", "vector.json")
+		options.StateDir, options.ManagedConfig = dir, managed
+	}
 	f.options, f.dir, f.managed = options, dir, managed
 	f.agent = filepath.Join(root, "usr", "local", "bin", "vectory")
 	vector := fakeVector(t, VectorVersion)

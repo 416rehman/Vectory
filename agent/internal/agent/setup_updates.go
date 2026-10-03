@@ -42,6 +42,9 @@ type SetupUpdates struct {
 	// Keys are the fingerprints the host pins now.
 	Keys   []string `json:"keys,omitempty"`
 	Paused bool     `json:"paused,omitempty"`
+	// StagedLeft is set when --updates off left the files the agent staged where
+	// they are: root won't delete through a directory that others can change.
+	StagedLeft *UpdateLeft `json:"staged_left,omitempty"`
 }
 
 // updatePlan is the update flags of one setup run, checked.
@@ -657,7 +660,12 @@ func (r *setupRun) withdrawUpdates(dir string) error {
 		return r.refuseUpdates("The agent is installed and enrolled, but turning updates off didn't finish: "+strings.TrimSuffix(sentence(err.Error()), ".")+". "+done.saved(), "Fix the cause, then run the same command again; setup resumes where it stopped.")
 	}
 	r.add("updates", "ok", "Updates", done.line(), "")
-	r.result.Updates = &SetupUpdates{Consent: UpdateConsentOff}
+	r.result.Updates = &SetupUpdates{Consent: UpdateConsentOff, StagedLeft: done.StagedLeft}
+	if done.StagedLeft != nil {
+		// Updates are off all the same; the files the agent staged are for a person to
+		// delete, and the step says so in its own words.
+		r.add("updates-staged", "warn", "Updates", done.StagedLeft.Message(), "")
+	}
 	return nil
 }
 
