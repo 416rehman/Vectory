@@ -22,3 +22,8 @@ ALTER TABLE agent_update_rollouts RENAME COLUMN cancel_reason_next TO cancel_rea
 -- too, and is read from the targets. Null until then: the rollout's creation is
 -- the last progress.
 ALTER TABLE agent_update_rollouts ADD COLUMN progressed_at TEXT;
+
+-- What hosts report about updates is kept only while updates are on. A server
+-- with updates off kept it all the same until now, and a counter a host
+-- reported then must not move the next release's: those reports go.
+DELETE FROM agent_update_reports WHERE (SELECT enabled FROM agent_update_settings WHERE id=1)=0;

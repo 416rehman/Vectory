@@ -306,7 +306,7 @@ Every verb but `status` needs root. See [Agent CLI](cli.md#update) for what each
 
 ## Turn off agent updates
 
-In **Settings → Agent updates**, choose **Turn off…** and enter your password. It's refused while an update rollout is running: cancel it, or choose **Stop all updates**, first. Hosts keep the consent they gave and the build they run. The key, who holds it and a stop are kept, so turning updates on again with the same key needs no re-pinning.
+In **Settings → Agent updates**, choose **Turn off…** and enter your password. It's refused while an update rollout is running: cancel it, or choose **Stop all updates**, first. Hosts keep the consent they gave and the build they run. The key, who holds it and a stop are kept, so turning updates on again with the same key needs no re-pinning. While updates are off, Vectory doesn't read or keep what hosts report about updates, and it deletes what it had: each host reports again at its next check-in once you turn updates on. A device that was still finishing an update gets its waiting time again from the moment you turn them on, so it isn't failed for the time they were off.
 
 ## Limits
 

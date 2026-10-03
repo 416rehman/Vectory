@@ -1,7 +1,8 @@
 //! A rollout never stays open for ever. What a target waits for ends, a device
 //! that will not come back is not waited for, a release that expired ends its
 //! rollouts, and a rollout that can't go on is ended by the safety net after a
-//! day.
+//! day. Updates turned off and on again don't count the time they were off as
+//! silence.
 use super::{engine::Rig, support::*};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
@@ -41,6 +42,29 @@ async fn data_plane_issue(f: &Fixture, device: &str) {
     )
     .await
     .unwrap();
+}
+
+/// A turn of the setting through its route, as an administrator makes it.
+async fn turn(f: &Fixture, enabled: bool) -> Value {
+    let current = ok(f, "GET", "/api/v1/agent-updates", Value::Null, &f.admin).await;
+    ok(
+        f,
+        "PUT",
+        "/api/v1/agent-updates/settings",
+        json!({"enabled":enabled,"current_password":PASSWORD,"revision":current["revision"]}),
+        &f.admin,
+    )
+    .await
+}
+
+async fn target_age(f: &Fixture, rollout: &str, device: &str, minutes: i64) {
+    sqlx::query("UPDATE agent_update_targets SET updated_at=? WHERE rollout_id=? AND device_id=?")
+        .bind(instant(Utc::now() - Duration::minutes(minutes)))
+        .bind(rollout)
+        .bind(device)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -592,4 +616,63 @@ async fn any_change_of_a_target_is_progress_and_the_net_looks_once_an_hour() {
     step(&r.f, at + Duration::minutes(26 * 60 + 5)).await;
     assert_eq!(r.status(&rollout).await, "failed");
     assert_eq!(r.show(&rollout).await["failure_reason"], "stalled");
+}
+
+// ---------------------------------------------------------------------------
+// Updates turned off and on again
+
+#[tokio::test]
+async fn turning_updates_off_and_on_again_does_not_count_the_time_they_were_off_as_silence() {
+    let r = Rig::build(2).await;
+    let rollout = all_canary(&r).await;
+    step(&r.f, Utc::now()).await;
+    let [finished, quiet] = [&r.ids[0], &r.ids[1]];
+    r.apply(&rollout, finished).await;
+    r.apply(&rollout, quiet).await;
+    // The documented order: Stop all updates, then turn updates off.
+    ok(
+        &r.f,
+        "POST",
+        "/api/v1/agent-updates/stop",
+        json!({"reason":"A bad build"}),
+        &r.f.operator,
+    )
+    .await;
+    assert_eq!(r.state(&rollout, finished).await, "applying");
+    turn(&r.f, false).await;
+    // The trial commits while updates are off: nothing is heard of it.
+    r.new(finished, &r.about("trial")).await;
+    r.new(finished, &r.result("committed", None)).await;
+    assert_eq!(r.state(&rollout, finished).await, "applying");
+    // Half an hour and more passes before they are turned on again.
+    for device in [finished, quiet] {
+        target_age(&r.f, &rollout, device, 31).await;
+    }
+    turn(&r.f, true).await;
+    let age: String = sqlx::query_scalar(
+        "SELECT updated_at FROM agent_update_targets WHERE rollout_id=? AND device_id=?",
+    )
+    .bind(&rollout)
+    .bind(finished)
+    .fetch_one(&r.f.state.pool)
+    .await
+    .unwrap();
+    assert!(
+        age > instant(Utc::now() - Duration::minutes(1)),
+        "the silence starts again when updates are turned on: {age}"
+    );
+    step(&r.f, Utc::now()).await;
+    assert_eq!(
+        r.state(&rollout, finished).await,
+        "applying",
+        "the device that committed meanwhile is not failed for its silence"
+    );
+    assert_eq!(issue_count(&r.f).await, 0);
+    // Its next check-in tells the server what happened.
+    r.new(finished, &r.result("committed", None)).await;
+    assert_eq!(r.state(&rollout, finished).await, "verified");
+    // The silence still ends a device that says nothing after that.
+    step(&r.f, Utc::now() + Duration::minutes(31)).await;
+    assert_eq!(r.state(&rollout, quiet).await, "failed");
+    assert_eq!(r.code(&rollout, quiet).await.as_deref(), Some("NO_REPORT"));
 }

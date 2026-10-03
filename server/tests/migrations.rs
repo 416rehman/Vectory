@@ -471,3 +471,55 @@ async fn update_rollouts_keep_what_they_recorded_and_take_the_new_endings() {
     assert!(insert("failed", Some("expired"), None).await.is_err());
     assert!(insert("cancelled", None, Some("stalled")).await.is_err());
 }
+
+/// What hosts reported about updates while updates were off is removed by the
+/// upgrade, so a counter one of them sent then moves no release's; what they
+/// reported while updates are on stays.
+#[tokio::test]
+async fn reports_kept_while_updates_were_off_are_removed_by_the_upgrade() {
+    for (on, kept) in [(false, 0), (true, 1)] {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = settings(temp.path());
+        let shipped = sqlx::migrate!("./migrations");
+        let behind = Migrator {
+            migrations: Cow::Owned(
+                shipped
+                    .migrations
+                    .iter()
+                    .filter(|migration| migration.version < 139)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        };
+        let pool = open(&settings).await;
+        behind.run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO devices(id,name,data) VALUES('d1','edge-01','{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_update_reports(device_id,report,reported_at) VALUES('d1',?,?)",
+        )
+        .bind(json!({"highest_counter":4242}).to_string())
+        .bind(db::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE agent_update_settings SET enabled=? WHERE id=1")
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let s = initialize(settings).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_update_reports")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, kept, "updates on: {on}");
+    }
+}
