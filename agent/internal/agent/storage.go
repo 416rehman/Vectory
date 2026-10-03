@@ -63,6 +63,12 @@ func PrivateDir(path string) error {
 	if e := SafePath(path); e != nil {
 		return e
 	}
+	// On Windows, the directory that holds the agent's own directories under ProgramData
+	// is judged before anything is made in it, whether it is there or not (see
+	// state_root.go).
+	if e := ensureStateRoot(path); e != nil {
+		return e
+	}
 	if e := makeTraversable(filepath.Dir(path)); e != nil {
 		return e
 	}
@@ -78,7 +84,8 @@ func PrivateDir(path string) error {
 // hold nothing private: MkdirAll with 0700 would have made them root's alone.
 // A directory that exists is left as it is. (makeSharedDirectory makes each: on
 // Windows, the directory the agent keeps its own directories in under ProgramData
-// is made closed to every account but root.)
+// is made closed to every account but root, and its callers have judged one that
+// exists before they come here: ensureStateRoot.)
 func makeTraversable(dir string) error {
 	if _, err := os.Lstat(dir); err == nil {
 		return nil

@@ -157,6 +157,11 @@ func (r *setupRun) failErr(id, label string, err error, fix string) (SetupResult
 	if errors.As(err, &setup) {
 		return r.fail(id, label, setup.Step.Detail, setup.Step.Fix)
 	}
+	var root *stateRootError
+	if errors.As(err, &root) {
+		detail, fix := root.words()
+		return r.fail(id, label, detail, fix)
+	}
 	if full, ok := diskFullFrom(err); ok {
 		return r.fail(id, label, sentence(err.Error()), full.Fix("run the command again; setup resumes where it stopped"))
 	}
@@ -203,6 +208,12 @@ type serviceHost struct {
 	eligibility    func(dir string) string
 	installUpdates func(dir, executable string) error
 	removeUpdates  func() error
+	// stateRoot is what setup does about the directory that holds the state directory
+	// under ProgramData on Windows (nil: this host's way, see state_root.go). It looks
+	// before setup changes anything (change false: what it would refuse, and nothing
+	// is changed), and again when setup starts to change the host (change true: the
+	// directory is made closed, or closed, or refused).
+	stateRoot func(dir string, change bool) error
 }
 
 func (h serviceHost) isElevated() bool {
@@ -210,6 +221,18 @@ func (h serviceHost) isElevated() bool {
 		return h.elevated()
 	}
 	return Elevated()
+}
+
+// checkStateRoot is setup's look at, and then its change to, the directory that holds
+// the state directory under ProgramData: see serviceHost.stateRoot.
+func (h serviceHost) checkStateRoot(dir string, change bool) error {
+	switch {
+	case h.stateRoot != nil:
+		return h.stateRoot(dir, change)
+	case change:
+		return ensureStateRoot(dir)
+	}
+	return stateRootProblem(dir, h.isElevated())
 }
 
 func (h serviceHost) updateEligibility(dir string) string {
@@ -517,6 +540,12 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		}
 	}
 	r.result.StateDir = dir
+	// On Windows, the directory that holds the state directory under ProgramData is
+	// looked at before setup reads or changes anything, in a dry run too: another
+	// account's is refused, by name (see state_root.go).
+	if err := r.host.checkStateRoot(dir, false); err != nil {
+		return r.failErr("paths", "Paths", err, "")
+	}
 	installed := Installed(dir)
 	var settings Settings
 	if installed {
@@ -866,6 +895,13 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		r.result.OK = true
 		r.result.Next = "Run the same command without --dry-run to apply."
 		return r.result, nil
+	}
+
+	// The first change: the directory that holds the state directory under ProgramData
+	// on Windows is made closed to every account but root, or closed if it is root's and
+	// open, whether this is a new installation or an upgrade, with updates or without.
+	if err := r.host.checkStateRoot(dir, true); err != nil {
+		return r.failErr("paths", "Paths", err, "")
 	}
 
 	var token string

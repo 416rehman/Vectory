@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,5 +275,244 @@ func TestTheStateDirectoryMakesTheUpdateRootClosedWhenItIsTheFirstToMakeIt(t *te
 	}
 	if found := readDescriptor(t, other); found.protected {
 		t.Errorf("a directory above a private one that isn't the update root was closed: %+v", found)
+	}
+}
+
+// The directory the agent's state directory is kept in is judged by whatever makes the
+// state directory, for every install (state_root.go). The tests below make it the ways
+// a host can have it: not there, root's and open to others, and another account's. A
+// test can't make SYSTEM or the Administrators own a tree it builds, and it can't make a
+// second user, so "another account" is the account that runs the test, which these
+// tests tell the check not to trust: it is another account as far as the check goes.
+// What a real second account sees is the Windows job's to show.
+
+// waysToMakeTheStateDirectory is each entry point that makes something the agent keeps
+// in the update root, for a root as the test names it.
+var waysToMakeTheStateDirectory = map[string]func(root string) error{
+	"PrivateDir for the state directory":       func(root string) error { return PrivateDir(filepath.Join(root, "agent")) },
+	"createFreshStateDirectory":                func(root string) error { return createFreshStateDirectory(filepath.Join(root, "agent")) },
+	"PrivateDir for the managed configuration": func(root string) error { return PrivateDir(filepath.Join(root, "managed")) },
+	"PrivateDir below the state directory":     func(root string) error { return PrivateDir(filepath.Join(root, "agent", "updates", "incoming")) },
+}
+
+// programDataWhereNoOneIsRoot gives the test a ProgramData of its own where the account
+// that runs it is not root. The process is elevated, as it has to be for the code to
+// judge a directory at all: a process that isn't leaves it alone.
+func programDataWhereNoOneIsRoot(t *testing.T) string {
+	t.Helper()
+	requireRootOwnedWriter(t)
+	if rootAccount(currentUserSID(t), "") {
+		t.Skip("the account that runs the test is SYSTEM, the Administrators or TrustedInstaller, so no directory it owns is another account's")
+	}
+	programData, err := finalDirectoryPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := rootOwnedTrust
+	rootOwnedTrust = ownerTrust{anchor: programData}
+	t.Cleanup(func() { rootOwnedTrust = old })
+	t.Setenv("ProgramData", programData)
+	return programData
+}
+
+// makeSquattedRoot makes %ProgramData%\Vectory as an account that isn't root would: the
+// account that runs the test owns it, with the entries of SYSTEM and the Administrators
+// and its own.
+func makeSquattedRoot(t *testing.T, programData string) string {
+	t.Helper()
+	root := filepath.Join(programData, "Vectory")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := protect(root, true); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// factsOfDirectory reads a directory the way the code under test does, for an
+// elevated process, so that a test can hold the decision to what is on the disk.
+func factsOfDirectory(t *testing.T, root string) stateRootFacts {
+	t.Helper()
+	found := readDescriptor(t, root)
+	return stateRootFacts{Kept: true, Elevated: true, Exists: true, Owner: found.owner, HasACL: true, Entries: found.entries, Extra: rootOwnedTrust.sid}
+}
+
+// An update root that root owns and that another account can add to (what ProgramData
+// gives a new folder) is closed by whatever makes the state directory, with updates on
+// or not, and the agent's service keeps the right to list it.
+func TestMakingTheStateDirectoryClosesAnUpdateRootThatIsRootsAndOpenToOthers(t *testing.T) {
+	for name, act := range waysToMakeTheStateDirectory {
+		t.Run(name, func(t *testing.T) {
+			programData := programDataOfItsOwn(t)
+			root := filepath.Join(programData, "Vectory")
+			if err := os.Mkdir(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			setDACL(t, root, ownDACL(t, true, "(A;;0x1301bf;;;BU)"))
+			if got := factsOfDirectory(t, root).decide(); got != stateRootClose {
+				t.Fatalf("the directory the test made is judged %d, want it closed (%d)", got, stateRootClose)
+			}
+			if err := act(root); err != nil {
+				t.Fatal(err)
+			}
+			requireClosedRoot(t, root)
+			if got := factsOfDirectory(t, root).decide(); got != stateRootKeep {
+				t.Errorf("what was closed is judged %d, want it kept (%d)", got, stateRootKeep)
+			}
+		})
+	}
+}
+
+// An update root that isn't there is made closed, owned by the Administrators, by each
+// way of making the state directory.
+func TestMakingTheStateDirectoryMakesTheUpdateRootClosedWhateverMakesIt(t *testing.T) {
+	for name, act := range waysToMakeTheStateDirectory {
+		t.Run(name, func(t *testing.T) {
+			programData := programDataOfItsOwn(t)
+			root := filepath.Join(programData, "Vectory")
+			if err := act(root); err != nil {
+				t.Fatal(err)
+			}
+			requireClosedRoot(t, root)
+			if owner := readDescriptor(t, root).owner; owner != sidAdministrators {
+				t.Errorf("the update root belongs to %s, want the Administrators", accountName(owner))
+			}
+		})
+	}
+}
+
+// An update root that another account owns is refused by name, by every way of making
+// the state directory, and nothing is made in it and nothing about it is changed.
+func TestMakingTheStateDirectoryRefusesAnUpdateRootThatAnotherAccountOwns(t *testing.T) {
+	programData := programDataWhereNoOneIsRoot(t)
+	root := makeSquattedRoot(t, programData)
+	if got := factsOfDirectory(t, root).decide(); got != stateRootRefuse {
+		t.Fatalf("the directory the test made is judged %d, want it refused (%d)", got, stateRootRefuse)
+	}
+	before := readDescriptor(t, root)
+	owner := accountName(currentUserSID(t))
+	for name, act := range waysToMakeTheStateDirectory {
+		err := act(root)
+		var refusal *stateRootError
+		if !errors.As(err, &refusal) || refusal.Path != root || refusal.Owner != owner {
+			t.Errorf("%s: %v, want a refusal of %s that names %s", name, err, root, owner)
+			continue
+		}
+		if detail, _ := refusal.words(); !strings.Contains(detail, root+" belongs to "+owner+", not to SYSTEM or the Administrators") {
+			t.Errorf("%s: the refusal says %q", name, detail)
+		}
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Errorf("something was made in the directory another account owns: %v, %v", entries, err)
+	}
+	after := readDescriptor(t, root)
+	if after.owner != before.owner || after.protected != before.protected || len(after.entries) != len(before.entries) {
+		t.Errorf("the directory another account owns was changed: %+v, then %+v", before, after)
+	}
+	for i := range before.entries {
+		if before.entries[i] != after.entries[i] {
+			t.Errorf("entry %d changed from %+v to %+v", i, before.entries[i], after.entries[i])
+		}
+	}
+}
+
+// A state directory that isn't kept in the update root needs none of it: a custom
+// --state-dir is made as it always was, however the update root stands.
+func TestAStateDirectoryOutsideTheUpdateRootNeedsNoneOfIt(t *testing.T) {
+	programData := programDataWhereNoOneIsRoot(t)
+	root := makeSquattedRoot(t, programData)
+	before := readDescriptor(t, root)
+	for _, state := range []string{
+		filepath.Join(programData, "Elsewhere", "agent"),
+		filepath.Join(programData, "VectoryState", "agent"),
+	} {
+		if err := PrivateDir(state); err != nil {
+			t.Errorf("%s: %v", state, err)
+		}
+		if err := createFreshStateDirectory(filepath.Join(filepath.Dir(state), "fresh")); err != nil {
+			t.Errorf("a fresh state directory beside %s: %v", state, err)
+		}
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Errorf("something was made in the update root: %v, %v", entries, err)
+	}
+	if after := readDescriptor(t, root); after.owner != before.owner || len(after.entries) != len(before.entries) {
+		t.Errorf("the update root was changed: %+v, then %+v", before, after)
+	}
+}
+
+// An earlier layout kept the agent's state in %ProgramData%\Vectory itself, which is
+// private to the account that owns it, and is left alone.
+func TestAnUpdateRootThatIsAnInstalledStateDirectoryIsLeftAlone(t *testing.T) {
+	programData := programDataWhereNoOneIsRoot(t)
+	root := makeSquattedRoot(t, programData)
+	writeText(t, filepath.Join(root, "settings.json"), "{}")
+	before := readDescriptor(t, root)
+	if err := PrivateDir(filepath.Join(root, "validation")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateRootProblem(filepath.Join(root, "validation"), true); err != nil {
+		t.Errorf("setup's first look at a state directory that is the update root: %v", err)
+	}
+	if after := readDescriptor(t, root); after.owner != before.owner || after.protected != before.protected || len(after.entries) != len(before.entries) {
+		t.Errorf("an installed state directory was changed: %+v, then %+v", before, after)
+	}
+}
+
+// Setup's first look says what the change would refuse, and changes nothing. A process
+// that can't write what root owns refuses nothing.
+func TestSetupsFirstLookNamesAnUpdateRootThatAnotherAccountOwnsAndChangesNothing(t *testing.T) {
+	programData := programDataWhereNoOneIsRoot(t)
+	state := filepath.Join(programData, "Vectory", "agent")
+	if err := stateRootProblem(state, true); err != nil {
+		t.Errorf("an update root that isn't there: %v", err)
+	}
+	root := makeSquattedRoot(t, programData)
+	before := readDescriptor(t, root)
+	owner := accountName(currentUserSID(t))
+	err := stateRootProblem(state, true)
+	var refusal *stateRootError
+	if !errors.As(err, &refusal) || refusal.Path != root || refusal.Owner != owner {
+		t.Fatalf("%v, want a refusal of %s that names %s", err, root, owner)
+	}
+	if err := stateRootProblem(state, false); err != nil {
+		t.Errorf("a process that can't write what root owns: %v", err)
+	}
+	if err := stateRootProblem(filepath.Join(programData, "Elsewhere", "agent"), true); err != nil {
+		t.Errorf("a custom state directory: %v", err)
+	}
+	// What setup asks of the host, the way the host answers it.
+	host := serviceHost{elevated: func() bool { return true }}
+	for _, change := range []bool{false, true} {
+		if err := host.checkStateRoot(state, change); !errors.As(err, &refusal) || refusal.Owner != owner {
+			t.Errorf("setup's host, change %v: %v", change, err)
+		}
+	}
+	if err := (serviceHost{elevated: func() bool { return false }}).checkStateRoot(state, false); err != nil {
+		t.Errorf("setup's look from a process that isn't elevated: %v", err)
+	}
+	if after := readDescriptor(t, root); after.owner != before.owner || len(after.entries) != len(before.entries) {
+		t.Errorf("the look changed the directory: %+v, then %+v", before, after)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Errorf("something was made in the directory: %v, %v", entries, err)
+	}
+}
+
+// Root's directory that is open to others is no problem for the first look: setup closes it.
+func TestSetupsFirstLookLetsAnUpdateRootThatIsRootsAndOpenPass(t *testing.T) {
+	programData := programDataOfItsOwn(t)
+	root := filepath.Join(programData, "Vectory")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, root, ownDACL(t, true, "(A;;0x1301bf;;;BU)"))
+	before := readDescriptor(t, root)
+	if err := stateRootProblem(filepath.Join(root, "agent"), true); err != nil {
+		t.Errorf("an update root that is root's and open: %v", err)
+	}
+	if after := readDescriptor(t, root); len(after.entries) != len(before.entries) {
+		t.Errorf("the look changed the directory: %+v, then %+v", before, after)
 	}
 }

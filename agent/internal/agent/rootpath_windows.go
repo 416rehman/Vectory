@@ -262,6 +262,10 @@ func securityAttributes(sddl string) (*windows.SecurityAttributes, error) {
 	return &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}, nil
 }
 
+// makeDirectory makes a directory with the security descriptor sddl. One that is
+// already there is not an error and is not changed, which is why nothing may take the
+// directory for the one this call made: whoever calls judges what is there through
+// a handle (closeRoot, walkOwned).
 func makeDirectory(path, sddl string) error {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
