@@ -223,13 +223,20 @@ pub async fn get(
             } else {
                 settings.batch_size
             });
+            // Its devices are not chosen yet: they are the pending targets, or the
+            // cancelled ones once the rollout ended without them.
+            let in_state = if unreleased_state == "stopped" {
+                "cancelled"
+            } else {
+                "pending"
+            };
             listed.push(json!({
                 "kind": if index == 0 { "canary" } else { "batch" },
                 "index": index,
                 "state": unreleased_state,
                 "released_at": Value::Null,
                 "size": size,
-                "counts": {"pending": size},
+                "counts": serde_json::Map::from_iter([(in_state.to_owned(), json!(size))]),
                 "devices": [],
                 "more": size,
             }));

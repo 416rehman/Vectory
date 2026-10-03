@@ -12,5 +12,6 @@ mod notify;
 mod releases;
 mod report;
 mod review;
+mod rollouts;
 mod settings;
 mod support;
