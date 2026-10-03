@@ -2767,6 +2767,7 @@ pub async fn prune(s: &State) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     crate::device_validations::prune(&mut tx).await?;
+    crate::agent_releases::prune(s, &mut tx).await?;
     tx.commit().await?;
     Ok(())
 }

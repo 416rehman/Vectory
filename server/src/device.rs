@@ -34,6 +34,14 @@ pub fn router(s: State) -> Router {
         .route("/agent/v1/heartbeat", post(heartbeat))
         .route("/agent/v1/wait", get(crate::wake::wait))
         .route("/agent/v1/artifacts/{sha256}", get(artifact))
+        .route(
+            "/agent/v1/agent-releases/{sha256}",
+            get(crate::agent_releases::download),
+        )
+        .route(
+            "/agent/v1/release-keys",
+            get(crate::agent_release_keys::bundle),
+        )
         .route("/agent/v1/renew", post(renew))
         .route("/agent/v1/identity", get(crate::install::identity))
         .route("/agent/v1/install.sh", get(crate::install::install_sh))

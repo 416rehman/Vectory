@@ -109,6 +109,9 @@ pub struct Settings {
     pub outbound: outbound::Options,
     /// Agent wake-ups: how many waits may be parked and how long each is held.
     pub wake: wake::Options,
+    /// The most the agent release store may hold
+    /// (`VECTORY_AGENT_RELEASE_STORAGE_BYTES`); None uses the 2 GiB default.
+    pub agent_release_storage_bytes: Option<u64>,
 }
 pub struct App {
     pub pool: SqlitePool,

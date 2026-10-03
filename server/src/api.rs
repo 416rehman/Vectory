@@ -325,6 +325,10 @@ pub fn router(s: State) -> Router {
         )
         .route("/api/v1/agent-updates", get(crate::agent_updates::get))
         .route(
+            "/api/v1/agent-updates/settings",
+            put(crate::agent_updates::put),
+        )
+        .route(
             "/api/v1/agent-updates/stop",
             post(crate::agent_updates::stop),
         )
@@ -336,7 +340,30 @@ pub fn router(s: State) -> Router {
             "/api/v1/agent-release-keys",
             get(crate::agent_release_keys::get),
         )
-        .route("/api/v1/agent-releases", get(crate::agent_releases::list))
+        .route(
+            "/api/v1/agent-release-keys/rotate",
+            post(crate::agent_release_keys::rotate),
+        )
+        .route(
+            "/api/v1/agent-release-keys/rollover",
+            post(crate::agent_release_keys::rollover),
+        )
+        .route(
+            "/api/v1/agent-release-keys/{fingerprint}/revoke",
+            post(crate::agent_release_keys::revoke),
+        )
+        .route(
+            "/api/v1/agent-releases",
+            get(crate::agent_releases::list).post(crate::agent_releases::prepare),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}/signature",
+            put(crate::agent_releases::signature),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}/withdraw",
+            post(crate::agent_releases::withdraw),
+        )
         .route(
             "/api/v1/agent-releases/{id}",
             get(crate::agent_releases::get),
