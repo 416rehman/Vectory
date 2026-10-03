@@ -251,12 +251,14 @@ func untrustedDetail(err error) string {
 
 // preflightWithdraw checks that turning updates off can go through: a host with
 // something to withdraw needs an administrator, and not while an update is
-// being tried.
+// being tried. A dry run changes nothing and waits for nothing: it reads what the update
+// step's files say without taking the step's lock, which a real run takes (and waits for
+// the run that is trying to start a rollback's previous build).
 func (r *setupRun) preflightWithdraw(dir string) error {
 	if !updatesInstalled(dir) {
 		return nil
 	}
-	if _, err := updateInProgress(); err != nil {
+	if err := updateInProgress(!r.options.DryRun); err != nil {
 		return r.refuseUpdates(sentence(err.Error()), "Run the command again after that.")
 	}
 	if !r.options.DryRun && !r.host.isElevated() {
@@ -682,7 +684,7 @@ func fingerprintsWords(fingerprints []string) string {
 
 // withdrawUpdates is --updates off.
 func (r *setupRun) withdrawUpdates(dir string) error {
-	done, err := withdrawUpdates(dir, r.host.removeUpdateStep)
+	done, err := withdrawUpdatesReporting(dir, r.host.removeUpdateStep)
 	if err != nil {
 		return r.refuseUpdates("The agent is installed and enrolled, but turning updates off didn't finish: "+strings.TrimSuffix(sentence(err.Error()), ".")+". "+done.saved(), "Fix the cause, then run the same command again; setup resumes where it stopped.")
 	}

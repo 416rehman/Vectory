@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,8 +37,10 @@ type UpdateWithdrawal struct {
 	// StepRemoved: the privileged step was removed.
 	StepRemoved bool
 	// RollbackEnded: the step was taking an update back and had put the previous build
-	// in place, and was trying to start the agent's service. Removing the step ended that
-	// rollback, and nothing tries to start the service now.
+	// in place, and was trying to start the agent's service, and the removal ended that
+	// rollback: nothing tries to start the service now. It is what the removal did, never
+	// what was expected of it when it was asked: a run of the step that ended the rollback
+	// itself in between leaves it false.
 	RollbackEnded bool
 	// KeysKept is how many pinned keys the policy keeps.
 	KeysKept int
@@ -117,46 +120,86 @@ func (w UpdateWithdrawal) saved() string {
 	return "Done so far: " + strings.Join(parts, ", ") + "."
 }
 
+// DoneSoFar says what a withdrawal that stopped halfway had already done, for the command that
+// reports why it stopped, or "" when it had changed nothing: a command that is refused for what
+// it finds before it changes anything has done nothing, and says no more than the refusal.
+func (w UpdateWithdrawal) DoneSoFar() string {
+	if len(w.Parts()) == 0 {
+		return ""
+	}
+	return w.saved()
+}
+
 // updateInProgress refuses while the privileged step applies, tries or takes back a
 // build, naming when a trial ends. A step that never ran, or whose status can't be read,
 // has nothing in progress that anyone can know of. A rollback that has put the previous
 // build back and only waits for the agent's service to start isn't one that refuses: the
-// removal ends it (endRollbackWaitingForAStart), and endsARollback says that it will.
-func updateInProgress() (endsARollback bool, err error) {
+// removal ends it (endRollbackWaitingForAStart). One whose start can't be made because the
+// agent's service isn't registered refuses with the words that say so and what to run
+// (rollbackWithoutRegistration). It is advice, given before anything is changed, and the
+// removal decides again under the lock: what it refuses after the policy was turned off says
+// what was done (the command that reports it uses DoneSoFar).
+//
+// A rollback is looked at through the step's lock (lockStepForRemoval, which waits for the run
+// that is trying to start the previous build), because a rollback whose run is under way isn't
+// waiting for a start: the step is putting the previous build back or watching it. wait says
+// that it may: a dry run takes no lock and waits for nothing, and reads the journal as it is.
+func updateInProgress(wait bool) error {
 	status, err := ReadUpdateStatus()
 	if err != nil {
-		return false, nil
+		return nil
 	}
-	if status.Stage == UpdateStageRollingBack && removalEndsTheRollback() {
-		return true, nil
+	busy := updateStageBusy(status)
+	if busy == nil || status.Stage != UpdateStageRollingBack {
+		return busy
 	}
-	return false, updateStageBusy(status)
+	ends, refusal := removalOfARollback(wait)
+	switch {
+	case ends:
+		return nil
+	case refusal != nil:
+		return refusal
+	}
+	return busy
 }
 
-// removalEndsTheRollback says whether a removal of the step now would end the rollback
-// the step's journal holds, because the previous build is already in place and only its
-// start is missing. It is advice, given before anything is changed: the removal decides
-// again under the lock. It takes the step's lock (lockStepForRemoval, which waits for the
-// run that is trying to start the previous build), because a rollback whose run is under
-// way isn't waiting for a start: the step is putting the previous build back or watching it,
-// and removing the step then is refused, with nothing changed.
-func removalEndsTheRollback() bool {
+// removalOfARollback says what a removal of the step would find in the rollback the step's
+// journal holds: that it ends it, because the previous build is already in place and only its
+// start is missing, or the refusal that says the agent's service isn't registered. Neither is
+// the answer for a rollback that is mid-way or being watched. A run of the step that holds the lock
+// for the whole wait is at work, and what it is doing decides nothing here: only a lock that was
+// taken says that no run is, and so that the rollback only waits for a start. The registration
+// doesn't need it: a service that isn't registered is as it is whatever the step does.
+func removalOfARollback(wait bool) (ends bool, refusal error) {
 	host := removalUpdateHost()
 	if host == nil {
-		return false
+		return false, nil
 	}
 	private, err := openRootOwned(UpdateLocations().Private, rootOwnedDirectory)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	defer private.Close()
-	release, err := lockStepForRemoval(host, private)
-	if err != nil {
-		return false
+	idle := false
+	if wait {
+		if release, err := lockStepForRemoval(host, private); err == nil {
+			defer release()
+			idle = true
+		}
+	} else {
+		// Without the lock, the service says what a run is doing, as lockStepForRemoval reads it: a
+		// previous build that runs is being watched, and one that doesn't is waiting for its start.
+		state, stateErr := host.ServiceState(context.Background())
+		idle = stateErr != nil || !state.running()
 	}
-	defer release()
 	journal, found, err := readUpdateJournal(private)
-	return err == nil && found && journal.active() && rollbackWaitsForAStart(host, journal)
+	if err != nil || !found || !journal.active() {
+		return false, nil
+	}
+	if idle && rollbackWaitsForAStart(host, journal) {
+		return true, nil
+	}
+	return false, rollbackWithoutRegistration(host, journal)
 }
 
 // UpdateBusyError says that an update is being applied, tried or taken back, so
@@ -201,14 +244,14 @@ func updateStageBusy(status UpdateStatus) error {
 // WithdrawUpdates turns agent updates off on this host. dir is the agent's state
 // directory. It needs root, and it never starts while an update is in progress.
 func WithdrawUpdates(dir string) (UpdateWithdrawal, error) {
-	return withdrawUpdates(dir, RemoveUpdateHelper)
+	return withdrawUpdatesReporting(dir, func() (bool, error) { return removeStepReporting(removalUpdateHost()) })
 }
 
-// withdrawUpdates is WithdrawUpdates with the step's removal passed in.
-func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, error) {
+// withdrawUpdatesReporting is WithdrawUpdates with the step's removal passed in, which says
+// whether it ended a rollback that waited for the agent's service to start.
+func withdrawUpdatesReporting(dir string, removeStep func() (endedARollback bool, err error)) (UpdateWithdrawal, error) {
 	var done UpdateWithdrawal
-	endsARollback, err := updateInProgress()
-	if err != nil {
+	if err := updateInProgress(true); err != nil {
 		return done, err
 	}
 	paths := UpdateLocations()
@@ -238,7 +281,9 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 		done.Discarded, done.StagedLeft = discarded, left
 	}
 	if _, err := os.Lstat(paths.StepDir); err == nil {
-		if err := removeStep(); err != nil {
+		ended, err := removeStep()
+		done.RollbackEnded = ended
+		if err != nil {
 			return done, err
 		}
 		// The step is reported removed only when it is gone: a removal that returned
@@ -247,7 +292,6 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 			return done, fmt.Errorf("the update step's directory %s is still there, so the step is not removed", paths.StepDir)
 		}
 		done.StepRemoved = true
-		done.RollbackEnded = endsARollback
 	}
 	return done, nil
 }

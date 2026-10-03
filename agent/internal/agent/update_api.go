@@ -227,64 +227,84 @@ func RemoveUpdateHelper() error { return removeStepWith(removalUpdateHost()) }
 // removeStepWith is RemoveUpdateHelper for the host given: nil where no step is written
 // for the operating system.
 func removeStepWith(host updateHost) error {
+	_, err := removeStepReporting(host)
+	return err
+}
+
+// removeStepReporting is removeStepWith, and says whether the removal ended a rollback that
+// waited for the agent's service to start, also where it stopped after that: what a person is
+// told about the rollback is what the removal did, and not what it was expected to do when
+// it was asked.
+func removeStepReporting(host updateHost) (endedARollback bool, err error) {
 	paths := UpdateLocations()
 	_, statErr := os.Lstat(paths.StepDir)
 	if host == nil {
 		if notExist(statErr) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("this build has no update step for this operating system, so it can't take away %s: delete it yourself", paths.StepDir)
+		return false, fmt.Errorf("this build has no update step for this operating system, so it can't take away %s: delete it yourself", paths.StepDir)
 	}
 	if notExist(statErr) {
-		return removeUnits(host, nil)
+		return false, removeUnits(host, nil)
 	}
 	if !canWriteRootOwned() {
-		return errors.New("removing the update step needs root (an Administrator on Windows): run the command with sudo")
+		return false, errors.New("removing the update step needs root (an Administrator on Windows): run the command with sudo")
 	}
-	if err := removeStepUnits(host, paths); err != nil {
-		return err
+	ended, err := removeStepUnits(host, paths)
+	if err != nil {
+		return ended, err
 	}
-	return removeTree(paths.StepDir)
+	return ended, removeTree(paths.StepDir)
 }
 
 // removeStepUnits takes the step's units away while it holds the step's lock, so
 // that no run is under way, and lets go of the lock and of the directories it
 // opened before it returns: the directory is removed next, and a file that is open
-// can't be deleted on Windows.
-func removeStepUnits(host updateHost, paths UpdatePaths) error {
+// can't be deleted on Windows. It says whether it ended a rollback that waited for a start.
+func removeStepUnits(host updateHost, paths UpdatePaths) (endedARollback bool, err error) {
 	private, err := openRootOwned(paths.Private, rootOwnedDirectory)
 	if err != nil && !notExist(err) {
-		return err
+		return false, err
 	}
 	var journal *updateJournal
 	if private != nil {
 		defer private.Close()
 		release, err := lockStepForRemoval(host, private)
 		if errors.Is(err, errUpdateStepBusy) {
-			return errors.New("the update step is working now; try again in a minute")
+			return false, errors.New("the update step is working now; try again in a minute")
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		defer release()
 		found, ok, err := readUpdateJournal(private)
 		if err != nil {
-			return fmt.Errorf("%s can't be read; leave it for a person to mend: %w", paths.Journal, err)
+			return false, fmt.Errorf("%s can't be read; leave it for a person to mend: %w", paths.Journal, err)
 		}
 		if ok {
 			if found.active() && found.Stage != UpdateStagePreparing {
-				ended, err := endRollbackWaitingForAStart(host, paths, &found)
+				endedARollback, err = endRollbackWaitingForAStart(host, paths, &found)
 				if err != nil {
-					return err
+					return false, err
 				}
-				if !ended {
-					return errUpdateInProgress(found)
+				if !endedARollback {
+					return false, removalRefusal(host, found)
 				}
 			}
 			journal = &found
 		}
 	}
-	return removeUnits(host, journal)
+	return endedARollback, removeUnits(host, journal)
+}
+
+// removalRefusal is why the removal of the step refuses an update that has swapped: the words
+// for the step's own work, and for a rollback whose start can't be made because the agent's
+// service isn't registered, the words that say so (rollbackWithoutRegistration).
+func removalRefusal(host updateHost, journal updateJournal) error {
+	if err := rollbackWithoutRegistration(host, journal); err != nil {
+		return err
+	}
+	return errUpdateInProgress(journal)
 }
 
 const (
@@ -292,7 +312,10 @@ const (
 	// when the step is trying to start the previous build of a rollback. On a Mac such a run
 	// lasts most of a minute (a start that launchd refuses is tried again for
 	// launchdStartBound) and the timer starts the next one on its own 30-second beat, so a
-	// removal that tried the step's lock once would find it held most of the time.
+	// removal that tried the step's lock once would find it held most of the time. It is not a
+	// bound on the run: launchctl calls that hang at their limits (5 seconds to print, 30 to
+	// bootstrap) stretch a run past it, and the removal then says that the step is working, which
+	// is true, and that a later try is the way: the words and the documents say so.
 	removalLockWait = 90 * time.Second
 	removalLockPoll = 250 * time.Millisecond
 )
@@ -303,8 +326,11 @@ const (
 // only its start is missing, the run is the step's try at that start, and the next one comes
 // soon after: the removal waits for the lock, up to removalLockWait, instead of leaving it to
 // chance whether the person's next try finds it free. A run of any other kind isn't waited
-// for: a trial's watch, a swap, and the watch of a previous build that did start (its
-// service runs) last minutes, and the removal says at once that the step is working.
+// for: a trial's watch, a swap, and the watch of a previous build that runs last minutes, and
+// the removal says at once that the step is working. A previous build that starts and ends
+// again (launchd shows its job as waiting for its next start, which reads "activating", and the
+// watch of such a build is the run that holds the lock) doesn't run when the removal looks, so
+// the removal waits for that run too, up to removalLockWait, before it says the same.
 func lockStepForRemoval(host updateHost, private *rootOwned) (func(), error) {
 	release, err := host.Lock(private)
 	if !errors.Is(err, errUpdateStepBusy) {
@@ -333,7 +359,8 @@ func lockStepForRemoval(host updateHost, private *rootOwned) (func(), error) {
 // rollbackWaitsForAStart says whether the step's journal is a rollback that has put the
 // previous build back and has only its start to make: the executable the agent's service
 // runs is the build the journal says the update came from. A rollback whose executable is
-// anything else is mid-way, and so is one whose executable can't be read.
+// anything else is mid-way, and so is one whose executable can't be read: that is the one
+// that rollbackWithoutRegistration says what to do about.
 func rollbackWaitsForAStart(host updateHost, journal updateJournal) bool {
 	if journal.Stage != UpdateStageRollingBack || journal.From == nil {
 		return false
@@ -355,16 +382,54 @@ func rollbackWaitsForAStart(host updateHost, journal updateJournal) bool {
 	return err == nil && present && digest == journal.From.SHA256
 }
 
+// rollbackWithoutRegistration is the refusal for a rollback whose start the step can't make
+// because the agent's service isn't registered: its definition, unit or service was removed by
+// hand, so the step can't find the executable the service runs and can't start anything. The
+// removal doesn't end such a rollback, because it can't say whether the previous build is in
+// place; the one thing that ends it is the command that registers the service again, after which
+// the step's next run finishes the rollback itself. It is nil for any other journal, and for one
+// whose registration can be read.
+func rollbackWithoutRegistration(host updateHost, journal updateJournal) error {
+	if journal.Stage != UpdateStageRollingBack {
+		return nil
+	}
+	locator, ok := host.(agentLocator)
+	if !ok {
+		return nil
+	}
+	if _, err := locator.AgentExecutable(); err != nil {
+		return &UpdateBusyError{Message: unregisteredRollbackWords(err)}
+	}
+	return nil
+}
+
+// unregisteredRollbackWords says that a rollback can't be ended or helped by the removal of the
+// step because the agent's service has no registration the step can use, and what gives it one.
+// Where the registration is there and can't be read as the one setup writes, nothing says that
+// registering it again puts it right, so the words name no command.
+func unregisteredRollbackWords(cause error) string {
+	if !errors.Is(cause, errAgentNotRegistered) {
+		return "an update is being rolled back on this host, and the update step can't read the registration of the agent's service (" + safeText(cause.Error(), 200) + "), so it can't start the previous build. Put the registration right; the update step then finishes the rollback by itself, usually within a minute or two"
+	}
+	command := "`" + AdminCommandFor("", "vectory service-install") + "`"
+	if runtime.GOOS == "windows" {
+		command += " in an elevated PowerShell"
+	}
+	return "an update is being rolled back on this host, and " + cause.Error() + ", so the update step can't start the previous build. Register the service again with " + command + "; the update step then finishes the rollback by itself, usually within a minute or two"
+}
+
 // endRollbackWaitingForAStart ends a rollback that has put the previous build back and
 // waits for its start, for the removal of the step, which holds the step's lock. The step
 // tries the start again every 30 seconds for as long as it takes, and a service that can
-// never start (its job disabled, its definition removed, its unit masked) would keep
-// whoever removes the step, or turns updates off, waiting for ever. The request ends as the
-// step ends an update that was interrupted after the swap, and as only the step's own
-// journal and status say it: rolled back, INTERRUPTED, and the floors stay raised, so the
-// release is never tried again here. It reports whether it ended it: a rollback that hasn't
-// put the previous build back isn't ended, because the step's next run still has the
-// previous build to put in place, and the host would be left on one that was never proven.
+// never start (its job disabled, its unit masked) would keep whoever removes the step, or
+// turns updates off, waiting for ever. The request ends as the step ends an update that was
+// interrupted after the swap, and as only the step's own journal and status say it: rolled
+// back, INTERRUPTED, and the floors stay raised until the step's directory goes, which the
+// removal does next. That record is the only one there is: nothing reports it, because the
+// directory that holds it is removed by the same command. It reports whether it ended the
+// rollback: one that hasn't put the previous build back isn't ended, because the step's next
+// run still has the previous build to put in place, and the host would be left on one that was
+// never proven.
 func endRollbackWaitingForAStart(host updateHost, paths UpdatePaths, journal *updateJournal) (bool, error) {
 	if !rollbackWaitsForAStart(host, *journal) {
 		return false, nil
