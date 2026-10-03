@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -340,4 +341,54 @@ func (b *lockedBuffer) String() string {
 	b.lock()
 	defer func() { <-b.mu }()
 	return b.buf.String()
+}
+
+// A host whose first version was refused has no Vector log, and a change the
+// operator makes there is noted all the same.
+func TestNoteLocallyCreatesThePrivateLogWhenVectorHasNotRun(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, vectorLogName)
+	NoteLocally(dir, "Host operator allowed destination 127.0.0.1:8688 (vectory allow)")
+	NoteLocally(dir, "Host operator replaced the allowances: none (vectory install --capability-policy)")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the note was dropped: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "[vectory ") || !strings.HasSuffix(lines[0], "] Host operator allowed destination 127.0.0.1:8688 (vectory allow)") || !strings.Contains(lines[1], "replaced the allowances") {
+		t.Fatalf("log = %q", data)
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("the created log isn't private: %v %v", info, err)
+		}
+	}
+	// The log the agent writes next is the same file, and keeps the notes.
+	l := newVectorLog(dir)
+	fmt.Fprintln(l, logLine("ERROR", "Request failed.", "web", ""))
+	l.close()
+	if again, _ := os.ReadFile(path); !strings.HasPrefix(string(again), string(data)) || !strings.Contains(string(again), "Request failed.") {
+		t.Fatalf("the agent's own lines replaced or skipped the notes: %q", again)
+	}
+}
+
+func TestNoteLocallyAppendsToTheExistingLogAndNeverFollowsALink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, vectorLogName)
+	if err := os.WriteFile(path, []byte("Vector's own line\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	NoteLocally(dir, "a change")
+	data, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(data), "Vector's own line\n[vectory ") || !strings.HasSuffix(string(data), "] a change\n") {
+		t.Fatalf("log = %q", data)
+	}
+	linked, target := t.TempDir(), filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Symlink(target, filepath.Join(linked, vectorLogName)); err != nil {
+		t.Skip("links aren't available here:", err)
+	}
+	NoteLocally(linked, "a change")
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatal("the note was written through a link")
+	}
 }
