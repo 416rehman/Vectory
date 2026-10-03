@@ -66,6 +66,7 @@ export const auditActions: Record<string, string> = {
   "configuration.tests": "Pipeline tests run",
   "vrl.synthetic_test": "VRL tested",
   "device.enroll": "Device enrolled",
+  "device.enroll_refusals_summarized": "Enrollment refusals summarized",
   "device.renew": "Device credentials renewed",
   "device.revoke": "Device access revoked",
   "device.retry": "Device retry requested",
