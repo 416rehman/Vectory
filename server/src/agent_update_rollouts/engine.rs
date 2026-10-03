@@ -149,6 +149,7 @@ async fn move_target(
             "version": target.release_version,
             "manifest_sha256": target.manifest_sha256,
             "to_version": target.release_version,
+            "state": state,
         });
         if let Some(from) = &target.from_version {
             details["from_version"] = json!(from);

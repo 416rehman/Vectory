@@ -3,6 +3,7 @@
 //! check-ins feed every assertion; the release module's own tests decide what
 //! is a valid release, and these tests decide only that the server's offers pass
 //! the check a host makes.
+mod audit;
 mod download;
 mod engine;
 mod keys;
