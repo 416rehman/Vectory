@@ -181,9 +181,9 @@ Devices receive JSON. Comments and formatting from an imported file aren't kept.
 | **Not checked** | You changed the pipeline since the last check. |
 | **Couldn't check** | The checker didn't answer. Publishing waits until a check succeeds. |
 
-Some checks can only run on the device, such as reading local files, resolving environment variables, talking to providers, running Lua or reading enrichment tables. The device runs them before it applies the version, and keeps its current configuration if they fail.
+Some checks can only run on the device, such as reading local files, resolving environment variables, talking to providers, running Lua, reading enrichment tables or asking the AWS instance metadata service. The device runs them before it applies the version, and keeps its current configuration if they fail.
 
-The server never runs Lua, because Lua can run any program, and it never opens the file of an enrichment table (`file`, `geoip` or `mmdb`), because that file lives on the device. Its check covers the rest of the pipeline and leaves those steps to the devices, so it still reads **Checked** with a note that each device checks them. A restricted device refuses a Lua step; only a full-mode device runs it. A `memory` table reads no file, so it is checked here as before.
+The server never runs Lua, because Lua can run any program. It never opens the file of an enrichment table (`file`, `geoip` or `mmdb`), because that file lives on the device, and it never builds an AWS instance metadata step (`aws_ec2_metadata`), because that step asks the host's own metadata service. Its check covers the rest of the pipeline and leaves those steps to the devices, so it still reads **Checked** with a note that each device checks them. A restricted device refuses a Lua step; only a full-mode device runs it. A `memory` table reads no file, so it is checked here as before.
 
 Results point at the component and setting to fix, with Vector's message, and are bounded in size. For Vector's complete output, run `vector validate` on a host with the same configuration.
 

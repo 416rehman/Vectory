@@ -1,3 +1,5 @@
+import { fileArgumentCalls } from "./vrlFileArguments";
+
 /** The component catalog, read on demand: it is large and only this check needs it. */
 export type AgentCatalog = typeof import("./generated/vector-catalog.json");
 
@@ -7,6 +9,8 @@ export type AgentCatalog = typeof import("./generated/vector-catalog.json");
  * descriptor). A restricted device refuses them. The same names are in the
  * server (`DEVICE_VRL_FUNCTIONS`) and the agent (`externalVRL`);
  * `tests/security/test_vrl_function_lists.py` fails when the lists drift.
+ * `parse_etld` and `parse_groks` reach a file only when a call passes one, so
+ * they are not listed here: see `fileArgumentFunctions`.
  */
 export const deviceVrlFunctions = [
   "get_env_var",
@@ -190,7 +194,7 @@ export function fullModeRequirements(
     if (typeof value === "string") {
       if (!testsOnly && /\$[A-Za-z_{]|SECRET\[|\{\{|%\{/.test(value))
         required.add("Native secrets, environment values or dynamic templates");
-      if (callsDeviceFunction(value))
+      if (callsDeviceFunction(value) || fileArgumentCalls(value).length > 0)
         required.add("VRL access to device resources");
     } else if (Array.isArray(value))
       value.forEach((item) => inspect(item, testsOnly));

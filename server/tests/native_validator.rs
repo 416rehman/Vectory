@@ -1877,6 +1877,250 @@ async fn a_vrl_call_that_passes_a_file_never_opens_it_in_the_worker() {
     child.kill().await.ok();
 }
 
+/// A local TCP listener standing in for an instance metadata service. A
+/// connection is recorded when it is made, then replaced by the first line of
+/// its request; every connection is answered with a 404 and closed.
+#[cfg(target_os = "linux")]
+struct MetadataEndpoint {
+    address: std::net::SocketAddr,
+    connections: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl MetadataEndpoint {
+    fn start() -> Self {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let connections = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = connections.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let index = {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push("(connected)".to_owned());
+                    seen.len() - 1
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .ok();
+                let mut buffer = [0u8; 2048];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let text = String::from_utf8_lossy(&buffer[..read]);
+                seen.lock().unwrap()[index] = text.lines().next().unwrap_or("").to_owned();
+                stream
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .ok();
+            }
+        });
+        MetadataEndpoint {
+            address,
+            connections,
+        }
+    }
+
+    /// What the endpoint has been asked, after giving a request that is on its
+    /// way a moment to arrive.
+    async fn asked(&self) -> Vec<String> {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        self.connections.lock().unwrap().clone()
+    }
+
+    fn forget(&self) {
+        self.connections.lock().unwrap().clear();
+    }
+}
+
+/// `aws_ec2_metadata` asks the `endpoint` an author names for a token and for
+/// the instance identity document when Vector builds it, which `vector test`
+/// does, and quotes what came back in its errors. The server never sends a
+/// request an author wrote: no connection is made through the worker, the test
+/// route, the validate route or the publish gate, and the step is checked on
+/// devices.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_instance_metadata_step_never_sends_a_request_from_the_validator() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; instance metadata guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = MetadataEndpoint::start();
+    let config = json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"meta": {"type": "aws_ec2_metadata", "inputs": ["in"],
+            "endpoint": format!("http://{}", endpoint.address), "refresh_interval_secs": 3600}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["meta"]}},
+        "tests": [{"name": "adds the instance fields",
+            "inputs": [{"insert_at": "meta", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "meta", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+    });
+
+    // Control: Vector asks for a token, and its test fails when the answer is
+    // not one, so a listener that stays unasked below means the step was kept
+    // away from Vector.
+    let control = dir.path().join("control.json");
+    std::fs::write(&control, config.to_string()).unwrap();
+    let (_, text) = vector_ends(&vector, &["test", "--config-json"], &control, None).await;
+    assert_eq!(
+        endpoint.asked().await.first().map(String::as_str),
+        Some("PUT /latest/api/token HTTP/1.1"),
+        "Vector did not ask its endpoint under a normal test, so this test proves nothing: {text}"
+    );
+    endpoint.forget();
+
+    // The worker's own routes.
+    let (mut child, url, client) = start_worker(&vector).await;
+    let tests = post(&client, &url, "tests", json!({"config": config})).await;
+    assert_eq!(tests["tests_run"], false, "{tests}");
+    assert_eq!(
+        tests["diagnostics"][0]["code"], "tests_on_devices",
+        "{tests}"
+    );
+    assert_eq!(
+        endpoint.asked().await,
+        Vec::<String>::new(),
+        "the worker's /tests asked"
+    );
+    let checked = post(&client, &url, "validate", json!({"config": config})).await;
+    assert_eq!(checked["valid"], true, "{checked}");
+    assert_eq!(checked["stubbed"], json!(["meta"]), "{checked}");
+    assert_eq!(
+        endpoint.asked().await,
+        Vec::<String>::new(),
+        "the worker's /validate asked"
+    );
+
+    // The API: the test route, the validate route and the publish gate.
+    let (_state_dir, state) = public_state(&url).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let operator = session(&state, "operator").await;
+    let (status, run) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config": config}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{run}");
+    assert_eq!(run["tests_run"], false, "{run}");
+    assert_eq!(run["deferred"], true, "{run}");
+    assert_eq!(run["tests"], json!([]), "{run}");
+    assert_eq!(
+        run["deferred_reasons"],
+        json!(["The AWS instance metadata step is checked on devices"]),
+        "{run}"
+    );
+    assert_eq!(
+        run["errors"],
+        json!([
+            "The AWS instance metadata step asks the host's own metadata service, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests."
+        ]),
+        "{run}"
+    );
+    assert_eq!(
+        endpoint.asked().await,
+        Vec::<String>::new(),
+        "POST /configurations/test asked"
+    );
+
+    let (status, created) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Instance metadata","description":"","config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}},"graph":{"nodes":[],"edges":[]}}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let (status, saved) = api(
+        &app,
+        "PUT",
+        &format!("/api/v1/configurations/{id}/draft"),
+        json!({"revision":created["revision"],"config":config,"graph":created["graph"],"name":"Instance metadata","description":""}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{saved}");
+    let (status, validated) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/validate"),
+        json!({"config": config}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{validated}");
+    assert_eq!(validated["valid"], true, "{validated}");
+    assert_eq!(validated["deferred"], true, "{validated}");
+    assert_eq!(validated["vector_validated"], false, "{validated}");
+    // Only its own reason: no local path is involved.
+    assert_eq!(
+        validated["deferred_reasons"],
+        json!(["The AWS instance metadata step is checked on devices"]),
+        "{validated}"
+    );
+    assert!(
+        validated["warnings"].as_array().unwrap().contains(&json!(
+            "Each device checks the AWS instance metadata step before applying this version."
+        )),
+        "{validated}"
+    );
+    assert!(
+        validated["diagnostics"].as_array().unwrap().iter().any(|d| {
+            d["code"] == "device_check"
+                && d["severity"] == "warning"
+                && d["component"] == "meta"
+                && d["message"]
+                    == "This step asks an AWS instance metadata service, so only a device checks it."
+        }),
+        "{validated}"
+    );
+    assert_eq!(
+        endpoint.asked().await,
+        Vec::<String>::new(),
+        "POST /configurations/{{id}}/validate asked"
+    );
+
+    // Publishing: the draft is valid, its tests did not run, and the existing
+    // acknowledgement is what lets it through.
+    let publish = json!({"revision":saved["revision"],"message":""});
+    let (status, refusal) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/publish"),
+        publish.clone(),
+        &operator,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["error"]["code"], "TESTS_FAILED", "{refusal}");
+    assert_eq!(refusal["tests_run"], false, "{refusal}");
+    let mut acknowledged = publish;
+    acknowledged["acknowledge_test_failures"] = json!(true);
+    let (status, version) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/publish"),
+        acknowledged,
+        &operator,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{version}");
+    assert_eq!(
+        endpoint.asked().await,
+        Vec::<String>::new(),
+        "publishing asked"
+    );
+    child.kill().await.ok();
+}
+
 /// The two commands the worker uses open only the paths the worker keeps out of
 /// them (an enrichment table's file, a `remap` file, a `file` secret backend, the
 /// files a VRL call passes). A TLS file, a codec descriptor, a credentials file,
