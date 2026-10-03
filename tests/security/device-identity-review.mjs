@@ -13,6 +13,7 @@ const {chromium,expect:strictExpect}=require('@playwright/test');const AxeBuilde
 const expect=strictExpect.configure({timeout:15000});
 // The deploy dialog reads devices a page at a time: its synthetic replies are the shared ones.
 const {fleetReplies,nothingOffered}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
+const {updatesOff}=await import(pathToFileURL(resolve(dashboard,'tests/agent-update-replies.mjs')));
 const output=resolve(root,process.env.VECTORY_DEVICE_IDENTITY_OUTPUT||'.local/device-identity-after');
 await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-identity-review';
@@ -66,6 +67,8 @@ async function fixture({route=`devices/${A.id}`,initial=A,modes={},width=899,the
   if(/^\/configurations\/[^/]+$/.test(path)&&path!=='/configurations/library'&&method==='GET')return execute(path.endsWith(config.id)?config:wrongConfig);
   if(path==='/devices')return reply([state.initial,B,C]);if(path==='/groups'||path==='/policies')return reply([]);if(path==='/configurations/library')return reply({items:[],total:0,page:1,page_size:12});
   if((path==='/issues/history'||path==='/audit/history')&&method==='GET')return reply({items:[],total:0,page:1,page_size:Number(url.searchParams.get('page_size')||5)});
+  // The device page reads whether agent updates are on; a server nobody turned them on for says off.
+  if(path==='/agent-updates'&&method==='GET')return reply(updatesOff());
   report.unexpected.push({path,method});return reply({error:{code:'UNEXPECTED',message:'Unexpected synthetic request'}},500);
  });
  await page.goto(`${origin}/__device-identity-review#/${route}`);

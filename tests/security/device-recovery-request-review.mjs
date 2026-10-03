@@ -11,6 +11,7 @@ const {createServer}=await import(pathToFileURL(require.resolve('vite'))),{chrom
 const expect=strictExpect.configure({timeout:15000});
 // Devices are read a page at a time: the synthetic replies to those reads are the shared ones.
 const {fleetReplies,nothingOffered}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
+const {updatesOff}=await import(pathToFileURL(resolve(dashboard,'tests/agent-update-replies.mjs')));
 const output=resolve(root,process.env.VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT||'.local/device-recovery-request-after');await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-recovery-request-review';
 const server=await createServer({root:dashboard,configFile:resolve(dashboard,'vite.config.ts'),server:{host:'127.0.0.1',port:0,strictPort:false,proxy:{},hmr:false},plugins:[{
@@ -61,6 +62,8 @@ async function fixture(options={}){
   if((path==='/issues/history'||path==='/audit/history')&&method==='GET')return reply({items:[],total:0,page:1,page_size:Number(url.searchParams.get('page_size')||5)});
   if(path===`/devices/${device.id}/configuration`&&method==='GET')return reply(nothingOffered(device.id));
   if(path===`/devices/${device.id}/telemetry`&&method==='GET')return reply({device_id:device.id,samples:[]});
+  // The device page reads whether agent updates are on; a server nobody turned them on for says off.
+  if(path==='/agent-updates'&&method==='GET')return reply(updatesOff());
   report.unexpected.push({path,method});return error('UNEXPECTED',500);
  });
  await page.goto(`${origin}/__device-recovery-request-review#/devices/${device.id}`);
