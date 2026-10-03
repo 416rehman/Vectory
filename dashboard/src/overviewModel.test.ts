@@ -7,13 +7,17 @@ import {
   healthLabels,
   healthOrder,
   healthStates,
-  monitoringTarget,
+  loopbackAddress,
+  metricsAdvice,
   quietSummary,
   runningGroups,
   runningNotes,
   runningRate,
+  settingsOffPhrase,
   telemetryFromCounts,
   unmanagedDetail,
+  versionsToRead,
+  type SilentDevice,
 } from "./overviewModel";
 import { deviceDisplayStatus, deviceStatuses } from "./status";
 import type { OverviewCounts, OverviewRunning } from "./api";
@@ -211,31 +215,222 @@ describe("delivery Vectory can and can't measure", () => {
     expect(quietSummary(2)).toBe("Nothing is failing that Vectory can measure");
     expect(quietSummary(0)).toBe("Nothing is failing");
   });
-  const row = (
-    id: string,
-    name: string | null,
-    devices: number,
-    reporting: number,
-  ) => ({
-    configuration_id: id,
-    configuration_name: name,
-    device_count: devices,
-    devices_reporting: reporting,
+  const silent = (
+    name: string,
+    over: Partial<SilentDevice> = {},
+  ): SilentDevice => ({
+    id: `id-${name}`,
+    name,
+    effective_policy: { telemetry_enabled: true },
+    running_version: null,
+    ...over,
   });
-  it("offers monitoring for the pipeline most running devices have no metrics from", () => {
+  const runs = (
+    pipeline: string,
+    number: number,
+    versionId = `${pipeline}-${number}`,
+  ) => ({
+    running_version: {
+      id: versionId,
+      number,
+      configuration_id: `cfg-${pipeline}`,
+      configuration_name: pipeline,
+    },
+  });
+  /** What each version's config says about its exporter, as read so far. */
+  const exporters =
+    (known: Record<string, string | null>) => (versionId: string) =>
+      known[versionId];
+  it("leads with metrics being off in a device's agent settings, naming the settings", () => {
+    const advice = metricsAdvice(
+      [
+        silent("qa-linux-1", {
+          effective_policy: { telemetry_enabled: false },
+          policy_assignment: { policy_name: "No metrics" },
+          ...runs("First pipeline", 2),
+        }),
+        silent("qa-linux-2"),
+      ],
+      exporters({ "First pipeline-2": "127.0.0.1:8655" }),
+    );
+    expect(advice.settingsOff).toEqual([
+      { id: "id-qa-linux-1", name: "qa-linux-1", settings: "No metrics" },
+    ]);
+    expect(settingsOffPhrase(advice.settingsOff)).toEqual({
+      names: "qa-linux-1",
+      owner: "its",
+      settings: " (“No metrics”)",
+    });
+    // The pipeline it runs has an exporter, so there is nothing to add; the
+    // address printed is the one it has.
+    expect(advice.monitoring).toBeNull();
+    expect(advice.noExporter).toBe(0);
+    expect(advice.exporters).toEqual([
+      {
+        pipeline: "First pipeline v2",
+        address: "127.0.0.1:8655",
+        loopback: true,
+      },
+    ]);
+    // A device that runs nothing has no exporter to lack.
+    expect(advice.noPipeline).toBe(1);
+  });
+  it("says when an exporter is somewhere an agent doesn't read", () => {
+    const advice = metricsAdvice(
+      [silent("a", runs("Orders", 3))],
+      exporters({ "Orders-3": "0.0.0.0:9598" }),
+    );
+    // It has an exporter, so Add monitoring has nothing to add either.
+    expect(advice.monitoring).toBeNull();
+    expect(advice.exporters).toEqual([
+      { pipeline: "Orders v3", address: "0.0.0.0:9598", loopback: false },
+    ]);
+    for (const address of ["127.0.0.1:9598", "127.0.1.1:8655", "[::1]:9598"])
+      expect(loopbackAddress(address)).toBe(true);
+    for (const address of [
+      "0.0.0.0:9598",
+      "localhost:9598",
+      "10.0.0.5:9598",
+      "127.0.0.1",
+      "[::]:9598",
+    ])
+      expect(loopbackAddress(address)).toBe(false);
+  });
+  it("offers monitoring only for a running version that has no exporter", () => {
+    const advice = metricsAdvice(
+      [
+        silent("a", runs("Orders", 3)),
+        silent("b", runs("Web", 1)),
+        silent("c", runs("Web", 2)),
+        silent("d", runs("Audit", 1)),
+        // Settings that turn metrics off don't hide a missing exporter.
+        silent("e", {
+          effective_policy: { telemetry_enabled: false },
+          ...runs("Web", 2),
+        }),
+      ],
+      exporters({
+        "Orders-3": "127.0.0.1:9598",
+        "Web-1": null,
+        "Web-2": null,
+        "Audit-1": null,
+      }),
+    );
+    // Two versions of one pipeline: their devices add up.
+    expect(advice.monitoring).toEqual({
+      id: "cfg-Web",
+      name: "Web",
+      devices: 3,
+    });
+    expect(advice.noExporter).toBe(4);
+    expect(advice.exporters).toEqual([
+      { pipeline: "Orders v3", address: "127.0.0.1:9598", loopback: true },
+    ]);
+    expect(advice.settingsOff.map((device) => device.name)).toEqual(["e"]);
+  });
+  it("never calls a version exporter-less before its config was read", () => {
+    const advice = metricsAdvice(
+      [silent("a", runs("Orders", 3)), silent("b", runs("Web", 1))],
+      exporters({ "Web-1": null }),
+    );
+    expect(advice.noExporter).toBe(1);
+    expect(advice.monitoring?.name).toBe("Web");
+    const unknown = metricsAdvice(
+      [silent("a", runs("Orders", 3))],
+      () => undefined,
+    );
+    expect(unknown.monitoring).toBeNull();
+    expect(unknown.noExporter).toBe(0);
+    expect(unknown.noPipeline).toBe(0);
+  });
+  it("counts devices that run no pipeline apart from those without an exporter", () => {
+    const advice = metricsAdvice(
+      [silent("a"), silent("b", { running_version: null }), silent("c")],
+      () => null,
+    );
+    expect(advice).toEqual({
+      settingsOff: [],
+      noPipeline: 3,
+      noExporter: 0,
+      monitoring: null,
+      exporters: [],
+    });
+    // A pipeline without a name can't be linked to.
     expect(
-      monitoringTarget([
-        row("p1", "Orders", 4, 4),
-        // Two versions of one pipeline: their silent devices add up.
-        row("p2", "Web", 3, 1),
-        row("p2", "Web", 2, 1),
-        row("p3", "Audit", 2, 1),
+      metricsAdvice(
+        [
+          silent("a", {
+            running_version: {
+              id: "v",
+              number: 1,
+              configuration_id: null,
+              configuration_name: null,
+            },
+          }),
+        ],
+        () => null,
+      ),
+    ).toMatchObject({ noExporter: 1, monitoring: null });
+  });
+  it("says which devices and which settings to turn metrics on in", () => {
+    const device = (name: string, settings: string | null) => ({
+      id: name,
+      name,
+      settings,
+    });
+    expect(settingsOffPhrase([device("edge-01", null)])).toEqual({
+      names: "edge-01",
+      owner: "its",
+      settings: "",
+    });
+    expect(
+      settingsOffPhrase([
+        device("edge-01", "No metrics"),
+        device("edge-02", "No metrics"),
       ]),
-    ).toEqual({ id: "p2", name: "Web", count: 3 });
-    // Every running device reports, or the silent ones run no named pipeline.
-    expect(monitoringTarget([row("p1", "Orders", 2, 2)])).toBeNull();
-    expect(monitoringTarget([row("p1", null, 2, 0)])).toBeNull();
-    expect(monitoringTarget([])).toBeNull();
+    ).toEqual({
+      names: "edge-01 and edge-02",
+      owner: "their",
+      settings: " (“No metrics”)",
+    });
+    expect(
+      settingsOffPhrase(
+        [device("edge-01", "No metrics"), device("edge-02", "Quiet")],
+        5,
+      ),
+    ).toEqual({
+      names: "edge-01, edge-02 and 3 more",
+      owner: "their",
+      settings: " (“No metrics” and “Quiet”)",
+    });
+    expect(
+      settingsOffPhrase(
+        ["A", "B", "C"].map((settings) => device(`edge-${settings}`, settings)),
+      ).settings,
+    ).toBe(" (“A” and “B” and 1 more)");
+  });
+  it("reads the versions silent devices run, most devices first", () => {
+    const device = (name: string, version: string | null) =>
+      silent(
+        name,
+        version ? runs("Orders", Number(version.slice(1)), version) : {},
+      );
+    expect(
+      versionsToRead([
+        device("a", "v3"),
+        device("b", "v1"),
+        device("c", "v1"),
+        device("d", null),
+        device("e", "v2"),
+      ]),
+    ).toEqual(["v1", "v2", "v3"]);
+    expect(
+      versionsToRead(
+        ["v1", "v2", "v3"].map((version) => device(version, version)),
+        2,
+      ),
+    ).toEqual(["v1", "v2"]);
+    expect(versionsToRead([])).toEqual([]);
   });
   it("says what runs on devices without a pipeline", () => {
     expect(unmanagedDetail(1, 0)).toBe(
