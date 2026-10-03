@@ -1095,9 +1095,12 @@ func TestWithdrawingUpdatesFromAnInvalidPolicyWritesOne(t *testing.T) {
 
 func TestWithdrawingUpdatesNamesWhenATrialEndsAndWhatItIs(t *testing.T) {
 	for stage, want := range map[string]string{
-		UpdateStageSwapping:    "an update is being applied on this host; it takes a few minutes",
+		// A step that has swapped, or is taking a build back, can be held open by a service
+		// manager that won't start the agent, so no time is named for either: the words say
+		// what it does, and that the step tries every 30 seconds.
+		UpdateStageSwapping:    "an update is being applied on this host; the update step stops the agent's service, replaces the executable and starts the service again, and tries every 30 seconds if it can't",
 		UpdateStagePreparing:   "an update is being applied on this host; it takes a few minutes",
-		UpdateStageRollingBack: "an update is being rolled back on this host; it takes a few minutes",
+		UpdateStageRollingBack: "an update is being rolled back on this host; the update step puts the previous build back and starts it, tries every 30 seconds until it can, and then watches it for up to 5 minutes",
 		UpdateStageTrial:       "an update is being tried on this host; it ends within 5 minutes",
 		UpdateStageIdle:        "",
 	} {

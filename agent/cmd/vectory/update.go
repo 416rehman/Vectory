@@ -337,7 +337,10 @@ func (e updateEnv) defineOff(c *cli) func() int {
 		if *c.json {
 			// staged_left says the agent's staged files were not deleted, and why: root
 			// won't delete through a directory that an account other than root can change.
-			c.output(map[string]any{"status": "ok", "command": "update off", "changed": !done.Nothing(), "policy_off": done.PolicyOff, "discarded": done.Discarded, "step_removed": done.StepRemoved, "keys_kept": done.KeysKept, "staged_left": done.StagedLeft})
+			// rollback_ended says the step was taking an update back, had put the previous
+			// build in place and was trying to start the agent's service: removing the step
+			// ended the rollback, and nothing tries to start the service now.
+			c.output(map[string]any{"status": "ok", "command": "update off", "changed": !done.Nothing(), "policy_off": done.PolicyOff, "discarded": done.Discarded, "step_removed": done.StepRemoved, "rollback_ended": done.RollbackEnded, "keys_kept": done.KeysKept, "staged_left": done.StagedLeft})
 			return exitOK
 		}
 		if done.Nothing() {
@@ -347,6 +350,9 @@ func (e updateEnv) defineOff(c *cli) func() int {
 			if done.KeysKept > 0 {
 				fmt.Fprintf(c.stdout, "The pinned %s kept. To turn updates on again, run the Upgrade agent command with --updates.\n", map[bool]string{true: "key is", false: "keys are"}[done.KeysKept == 1])
 			}
+		}
+		if done.RollbackEnded {
+			fmt.Fprintln(c.stdout, "The rollback was waiting for the agent's service to start, and nothing will try again now. If the service isn't running, start it: "+agent.AdminCommandFor("", "vectory service-start")+". "+agent.AdminCommandFor(*c.state, "vectory doctor")+" says why it won't start.")
 		}
 		if done.StagedLeft != nil {
 			fmt.Fprintln(c.stdout, done.StagedLeft.Message())

@@ -368,6 +368,40 @@ func undoUnitArg(quoted string) (string, bool) {
 	return strings.ReplaceAll(strings.ReplaceAll(value, "%%", "%"), "$$", "$"), true
 }
 
+// readAgentUnit reads the agent's unit through the path check. The refusals are
+// NO_SERVICE for a unit that isn't there or isn't the one setup writes.
+func (h *linuxUpdateHost) readAgentUnit() (agentUnit, error) {
+	path := filepath.Join(h.unitDir, ServiceName)
+	held, err := openRootOwned(path, rootOwnedFile)
+	if notExist(err) {
+		return agentUnit{}, newUpdateRefusal("NO_SERVICE", "no agent service is registered (%s doesn't exist)", path)
+	}
+	if err != nil {
+		return agentUnit{}, err
+	}
+	defer held.Close()
+	data, err := held.ReadFile(maxUnitFile)
+	if err != nil {
+		return agentUnit{}, err
+	}
+	unit, err := parseAgentUnit(string(data))
+	if err != nil {
+		return agentUnit{}, newUpdateRefusal("NO_SERVICE", "%s isn't an agent service this step can update: %v", path, err)
+	}
+	return unit, nil
+}
+
+// AgentExecutable is the executable the agent's unit runs.
+func (h *linuxUpdateHost) AgentExecutable() (string, error) {
+	unit, err := h.readAgentUnit()
+	if err != nil {
+		return "", err
+	}
+	return unit.Executable, nil
+}
+
+var _ agentLocator = (*linuxUpdateHost)(nil)
+
 // Registered reads the agent's unit through the path check and says what it runs
 // and as whom. The unit must be root's alone, name an account that exists and
 // isn't root, and run this state directory.
@@ -375,22 +409,9 @@ func (h *linuxUpdateHost) Registered(stateDir string) (registeredService, error)
 	if !h.systemdRunning() {
 		return registeredService{}, newUpdateRefusal("NO_SERVICE", "systemd isn't the running service manager here, so there is no service to update")
 	}
-	path := filepath.Join(h.unitDir, ServiceName)
-	held, err := openRootOwned(path, rootOwnedFile)
-	if notExist(err) {
-		return registeredService{}, newUpdateRefusal("NO_SERVICE", "no agent service is registered (%s doesn't exist)", path)
-	}
+	unit, err := h.readAgentUnit()
 	if err != nil {
 		return registeredService{}, err
-	}
-	defer held.Close()
-	data, err := held.ReadFile(maxUnitFile)
-	if err != nil {
-		return registeredService{}, err
-	}
-	unit, err := parseAgentUnit(string(data))
-	if err != nil {
-		return registeredService{}, newUpdateRefusal("NO_SERVICE", "%s isn't an agent service this step can update: %v", path, err)
 	}
 	if filepath.Clean(unit.StateDir) != filepath.Clean(stateDir) {
 		return registeredService{}, newUpdateRefusal("NO_SERVICE", "the registered service runs the state directory %s, not %s", unit.StateDir, stateDir)
@@ -417,7 +438,7 @@ func (h *linuxUpdateHost) Registered(stateDir string) (registeredService, error)
 // of files holds it.
 func (h *linuxUpdateHost) PackageManaged(executable string) (string, bool) {
 	candidates := packageCandidates(executable)
-	if directory, managed := underPackageDirectory(candidates); managed {
+	if directory, managed := underPackageDirectory(candidates, packageDirectories); managed {
 		return "it is under " + directory, true
 	}
 	file, err := os.Open(h.dpkgList)

@@ -309,7 +309,7 @@ func TestRemovingTheStepIsRefusedWhileABuildIsUnderTrialAndSaysWhenItEnds(t *tes
 		t.Fatal(err)
 	}
 	units := len(f.host.unitsCalls)
-	for _, stage := range []string{UpdateStageSwapping, UpdateStageTrial, UpdateStageRollingBack} {
+	for _, stage := range []string{UpdateStageSwapping, UpdateStageTrial} {
 		f.writeJournal(stage, nil)
 		err := RemoveUpdateHelper()
 		if err == nil || !strings.Contains(err.Error(), "an update is being") {
@@ -321,6 +321,20 @@ func TestRemovingTheStepIsRefusedWhileABuildIsUnderTrialAndSaysWhenItEnds(t *tes
 		if len(f.host.unitsCalls) != units {
 			t.Errorf("a journal in %s: the units were touched: %v", stage, f.host.unitsCalls)
 		}
+	}
+	// A rollback that hasn't put the previous build back is mid-way, and is refused with
+	// the words for a rollback, which name no time: the executable here isn't the build the
+	// journal says the update came from.
+	f.writeJournal(UpdateStageRollingBack, func(j *updateJournal) { j.From.SHA256 = strings.Repeat("c", 64) })
+	err := RemoveUpdateHelper()
+	if err == nil || err.Error() != rollbackBusyWords {
+		t.Errorf("a rollback that is mid-way: %v", err)
+	}
+	if _, statErr := os.Lstat(f.paths.Private); statErr != nil {
+		t.Error("a rollback that is mid-way: the step's directory was removed")
+	}
+	if len(f.host.unitsCalls) != units {
+		t.Errorf("a rollback that is mid-way: the units were touched: %v", f.host.unitsCalls)
 	}
 	// A trial that should have ended says that nobody has settled it.
 	f.writeJournal(UpdateStageTrial, func(j *updateJournal) { j.Deadline = f.clock.Now().Add(-time.Hour) })

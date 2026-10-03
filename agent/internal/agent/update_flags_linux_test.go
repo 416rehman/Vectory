@@ -5,6 +5,7 @@ package agent
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,10 @@ func flagInode(t *testing.T, path string, flag uint32) {
 func unflagInode(t *testing.T, path string, flag uint32) {
 	t.Helper()
 	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// The step renamed or removed it, which a file with a flag can't be.
+		return
+	}
 	if err != nil {
 		t.Errorf("the flag on %s couldn't be cleared: %v", path, err)
 		return
@@ -112,9 +117,90 @@ func TestAnExecutableAndADirectoryThatAreBothFlaggedAreBothNamed(t *testing.T) {
 	}
 }
 
+// keepBesideTheExecutable makes a file in the install directory the way an earlier update
+// left it, and returns its path.
+func (f *stepFixture) keepBesideTheExecutable(name string) string {
+	f.t.Helper()
+	path := filepath.Join(f.installDir, name)
+	if err := os.WriteFile(path, []byte("a build an earlier update kept"), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	return path
+}
+
+// The swap renames over the build an earlier update kept and over the link it makes first,
+// and a flag on either stops it as it stops the replacing of the executable: the words name
+// the file, and no other.
+func TestTheStepSeesAFlagOnTheBuildsTheSwapRenamesOverAndNamesThatFile(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		flag uint32
+		word string
+	}{
+		{updatePreviousName, linuxImmutableFlag, "the immutable attribute (chattr +i)"},
+		{updatePreviousName, linuxAppendFlag, "the append-only attribute (chattr +a)"},
+		{updatePreviousName + ".new", linuxImmutableFlag, "the immutable attribute (chattr +i)"},
+		{updatePreviousName + ".new", linuxAppendFlag, "the append-only attribute (chattr +a)"},
+	} {
+		t.Run(c.name+" with "+c.word, func(t *testing.T) {
+			r := newSwapRig(t)
+			kept, other := filepath.Join(r.dir, updatePreviousName), filepath.Join(r.dir, updatePreviousName+".new")
+			for _, path := range []string{kept, other} {
+				if err := os.WriteFile(path, []byte("kept"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := r.install.Immutable(); got != "" {
+				t.Fatalf("builds with no flag: %q", got)
+			}
+			path := filepath.Join(r.dir, c.name)
+			flagInode(t, path, c.flag)
+
+			got := r.install.Immutable()
+
+			for _, want := range []string{path + " has " + c.word, "so the update step can't replace it", "sudo chattr -"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("the words don't say %q:\n%s", want, got)
+				}
+			}
+			notFlagged := kept
+			if path == kept {
+				notFlagged = other
+			}
+			if strings.Contains(got, notFlagged+" has") {
+				t.Errorf("the words name %s, which has no flag:\n%s", notFlagged, got)
+			}
+		})
+	}
+}
+
+// A build kept from an earlier update that can't be opened as a file the path check trusts,
+// or isn't there, says nothing: the check is for what it can see.
+func TestABuildKeptBesideTheExecutableThatIsNotThereOrNotTrustedHasNoFlagToFind(t *testing.T) {
+	r := newSwapRig(t)
+	if got := r.install.Immutable(); got != "" {
+		t.Fatalf("with nothing kept: %q", got)
+	}
+	untrusted := filepath.Join(r.dir, updatePreviousName)
+	if err := os.WriteFile(untrusted, []byte("kept"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(untrusted, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	flagInode(t, untrusted, linuxImmutableFlag)
+	if got := r.install.Immutable(); got != "" {
+		t.Errorf("a file everyone can write was read for its flags: %q", got)
+	}
+}
+
 // An executable or a directory with a flag stops the swap after the service has stopped
-// and the release's counter is spent. The step finds it first: the host is READ_ONLY, the
-// words name the flag and the command that clears it, nothing is raised, stopped or
+// and the release's counter is spent, and so does a flag on the build an earlier update
+// kept or on the link the swap makes first. The step finds it first: the host is READ_ONLY,
+// the words name the flag and the command that clears it, nothing is raised, stopped or
 // replaced, the request waits, and when the flag is cleared the next run applies it.
 func TestAnImmutableExecutableOrDirectoryIsRefusedBeforeAnythingIsRaisedOrStopped(t *testing.T) {
 	for name, c := range map[string]struct {
@@ -125,6 +211,15 @@ func TestAnImmutableExecutableOrDirectoryIsRefusedBeforeAnythingIsRaisedOrStoppe
 		"an append-only executable": {linuxAppendFlag, func(f *stepFixture) string { return f.exe }},
 		"an immutable directory":    {linuxImmutableFlag, func(f *stepFixture) string { return f.installDir }},
 		"an append-only directory":  {linuxAppendFlag, func(f *stepFixture) string { return f.installDir }},
+		"an immutable build an earlier update kept": {linuxImmutableFlag, func(f *stepFixture) string {
+			return f.keepBesideTheExecutable(updatePreviousName)
+		}},
+		"an append-only build an earlier update kept": {linuxAppendFlag, func(f *stepFixture) string {
+			return f.keepBesideTheExecutable(updatePreviousName)
+		}},
+		"an immutable link a swap left half made": {linuxImmutableFlag, func(f *stepFixture) string {
+			return f.keepBesideTheExecutable(updatePreviousName + ".new")
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newStepFixture(t)
