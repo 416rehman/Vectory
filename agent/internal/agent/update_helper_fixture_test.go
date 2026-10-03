@@ -455,9 +455,13 @@ func newStepFixture(t *testing.T) *stepFixture {
 	f.installDir = filepath.Join(root, "usr", "local", "bin")
 	f.exe = filepath.Join(f.installDir, "vectory")
 	f.machine = filepath.Join(root, "machine")
-	for _, dir := range []string{f.installDir, filepath.Join(f.stateDir, "updates"), f.machine} {
+	for _, dir := range []string{f.installDir, f.machine} {
 		mkdirMode(t, dir, 0o755)
 	}
+	// The service account's state directory and the directory the agent keeps its
+	// offer in are private to it.
+	mkdirMode(t, filepath.Join(f.stateDir, "updates"), 0o700)
+	mkdirMode(t, f.stateDir, 0o700)
 	f.clock = &fakeClock{path: filepath.Join(f.machine, "clock.json")}
 	f.clock.set(fixtureStart)
 
@@ -627,6 +631,10 @@ func (f *stepFixture) stage(r *fakeRelease) string {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	// The service account's directories are private to it, as the agent's umask makes
+	// them: what the step reads there it reads as root, through the capability that
+	// ignores a directory's permissions.
+	mkdirMode(f.t, exchange.Incoming, 0o700)
 	mkdirMode(f.t, dir, 0o700)
 	if os.Geteuid() == 0 {
 		for _, d := range []string{exchange.Incoming, dir} {

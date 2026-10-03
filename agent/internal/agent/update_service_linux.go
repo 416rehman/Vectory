@@ -264,7 +264,13 @@ func (h *linuxUpdateHost) ServiceState(ctx context.Context) (updateServiceState,
 	if state.State == "" {
 		return updateServiceState{}, errors.New("systemctl show didn't say whether the agent service is active")
 	}
-	state.Restarts, _ = strconv.Atoi(values["NRestarts"])
+	// A manager that doesn't count restarts (systemd before 235) can't show that a
+	// build stayed up, and a build is never taken as healthy on a guess.
+	restarts, err := strconv.Atoi(values["NRestarts"])
+	if err != nil || restarts < 0 {
+		return updateServiceState{}, errors.New("systemctl show didn't say how often the agent service was restarted")
+	}
+	state.Restarts = restarts
 	state.PID, _ = strconv.Atoi(values["MainPID"])
 	return state, nil
 }
