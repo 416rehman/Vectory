@@ -72,24 +72,79 @@ export function CanaryPicker({
   /** Reviews again with these canary devices; empty lets Vectory choose. */
   onChoose(ids: string[]): void;
 }) {
+  return (
+    <CanaryChoice
+      candidates={devices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        note: readiness(device),
+      }))}
+      size={plan.size}
+      current={plan.devices.map((device) => ({
+        id: device.device_id,
+        name: device.device_name || "an unnamed device",
+      }))}
+      currentTotal={plan.device_ids.length}
+      chosen={chosen}
+      why={canaryExplanation(plan, scheduled)}
+      busy={busy}
+      onChoose={onChoose}
+    />
+  );
+}
+
+/** A device a canary can be chosen from. */
+export type CanaryCandidate = { id: string; name: string; note: string };
+
+/**
+ * The canary choice itself, for any list of reviewed devices: deployments pass
+ * theirs through CanaryPicker, update rollouts pass the devices that will
+ * update. The words around it come from the caller.
+ */
+export function CanaryChoice({
+  candidates,
+  size,
+  current: currentDevices,
+  currentTotal = currentDevices.length,
+  chosen,
+  why,
+  noun = "change",
+  busy,
+  onChoose,
+}: {
+  candidates: CanaryCandidate[];
+  /** How many devices go first. */
+  size: number;
+  /** Who goes first now, in release order. */
+  current: { id: string; name: string }[];
+  /** How many there are, when the names listed are fewer. */
+  currentTotal?: number;
+  /** Devices the person named for this review; empty when Vectory chooses. */
+  chosen: string[];
+  /** Why these devices, in a sentence. */
+  why: string;
+  /** What the first devices get, for the picker's hint. */
+  noun?: string;
+  busy: boolean;
+  /** Reviews again with these canary devices; empty lets Vectory choose. */
+  onChoose(ids: string[]): void;
+}) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const content = useRef<HTMLDivElement>(null);
   const heading = useId();
-  const capacity = Math.max(1, Math.min(plan.size, devices.length));
+  const capacity = Math.max(1, Math.min(size, candidates.length));
   const single = capacity === 1;
-  const names = plan.devices.map(
-    (device) => device.device_name || "an unnamed device",
-  );
-  const shown = nameList(names, plan.device_ids.length) || "None";
-  const visible = devices.filter((device) =>
+  const names = currentDevices.map((device) => device.name);
+  const shown = nameList(names, currentTotal) || "None";
+  const visible = candidates.filter((device) =>
     device.name.toLowerCase().includes(search.trim().toLowerCase()),
   );
   // Only devices the person names are a choice; the rest is Vectory's.
   const same =
     draft.length === chosen.length && draft.every((id) => chosen.includes(id));
-  const current = new Set(plan.device_ids);
+  const current = new Set(currentDevices.map((device) => device.id));
   function toggle(id: string) {
     setDraft((old) =>
       single
@@ -157,7 +212,7 @@ export function CanaryPicker({
                 ? "Choose the device that gets this change first."
                 : `Choose up to ${capacity} devices to get this change first. Vectory adds the most ready devices to make ${capacity}.`}
             </p>
-            {devices.length > 8 && (
+            {candidates.length > 8 && (
               <label className="canary-picker-search">
                 <Search size={15} aria-hidden="true" />
                 <input
@@ -194,7 +249,7 @@ export function CanaryPicker({
                     <span>
                       <strong>{device.name}</strong>
                       <small>
-                        {readiness(device)}
+                        {device.note}
                         {current.has(device.id) && !on ? " · canary now" : ""}
                       </small>
                     </span>
@@ -242,7 +297,7 @@ export function CanaryPicker({
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-      <p className="canary-picker-why">{canaryExplanation(plan, scheduled)}</p>
+      <p className="canary-picker-why">{why}</p>
     </div>
   );
 }

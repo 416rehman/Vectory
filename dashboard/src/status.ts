@@ -47,6 +47,7 @@ export type StatusDomain =
   | "updateStage"
   | "updateRollout"
   | "updateRelease"
+  | "updateSetting"
   | "releaseKey";
 
 const entry = (
@@ -670,6 +671,28 @@ export const updateReleaseStates = {
   ),
 } satisfies Record<string, StatusEntry>;
 
+/** Whether the team has turned agent updates on, and whether they are stopped. */
+export const updateSettingStates = {
+  on: entry(
+    "On",
+    "success",
+    "check",
+    "Hosts that agreed can take signed agent builds.",
+  ),
+  off: entry(
+    "Off",
+    "neutral",
+    "minus",
+    "Devices run the agent they have until someone upgrades it on the host.",
+  ),
+  stopped: entry(
+    "Stopped",
+    "danger",
+    "ban",
+    "No update rollout can start until an administrator clears the stop.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
 export const releaseKeyStates = {
   current: entry(
     "Current",
@@ -710,6 +733,7 @@ export const statusDomains: Record<
   updateStage: updateStageStates,
   updateRollout: updateRolloutStatuses,
   updateRelease: updateReleaseStates,
+  updateSetting: updateSettingStates,
   releaseKey: releaseKeyStates,
 };
 

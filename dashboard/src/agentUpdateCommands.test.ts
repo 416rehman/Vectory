@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { AgentInstallSchema, type AgentInstall } from "./api";
 import { upgradeCommand } from "./agentUpgradeModel";
 import {
   consentChoices,
@@ -17,48 +16,12 @@ import {
   type UpdateConsent,
 } from "./enrollmentCommands";
 import { powerShellWords } from "./powershellText.test-support";
-import { report, teamFingerprint } from "./agentUpdateFixtures.test-support";
+import {
+  install,
+  report,
+  teamFingerprint,
+} from "./agentUpdateFixtures.test-support";
 
-const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
-const caPem = [
-  "-----BEGIN CERTIFICATE-----",
-  "MIIBszCCAVmgAwIBAgIUU3ludGhldGljIGFnZW50IENBIGZvciB0ZXN0cy4wCgYI",
-  "-----END CERTIFICATE-----",
-  "",
-].join("\n");
-const install: AgentInstall = AgentInstallSchema.parse({
-  agent_url: "https://vectory.example.test:8443",
-  agent_url_configured: false,
-  listener_enabled: true,
-  dashboard_url: "https://vectory.example.test",
-  certificate: {
-    available: true,
-    publicly_trusted: false,
-    ca_sha256: "1f3c" + "0".repeat(56) + "9ab0",
-    ca_pem: caPem,
-    problem: null,
-  },
-  downloads_enabled: true,
-  installer: {
-    url: "https://vectory.example.test:8443/agent/v1/install.sh",
-    sha256: installerSha,
-    platforms: ["linux/amd64"],
-  },
-  default_install_dir: "/usr/local/bin",
-  releases: [
-    {
-      name: "vectory-0.1.0-windows-amd64.exe",
-      os: "windows",
-      arch: "amd64",
-      version: "0.1.0",
-      sha256: "e".repeat(64),
-      size: 7_000_000,
-      url: "/api/v1/releases/vectory-0.1.0-windows-amd64.exe",
-      signed: false,
-    },
-  ],
-  catalog_problems: [],
-});
 const choices = (over: Partial<SetupChoices> = {}): SetupChoices => ({
   os: "linux",
   mode: "restricted",

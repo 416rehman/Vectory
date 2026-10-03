@@ -1,0 +1,326 @@
+/* Agent updates: the Settings page, the Devices tab, the review dialog, the
+   rollout page and the Add device and Upgrade agent steps. They reuse the
+   deployments pages' cards, tables, bar and lanes; this file adds only what
+   those don't have. */
+
+/* Choices as cards: the Add device mode cards, in two or three columns. */
+.choice-cards .enroll-mode-options[data-columns="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.choice-cards .choice-note {
+  display: block;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.choice-cards .choice-note code {
+  color: var(--ink);
+}
+.choice-hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+@media (max-width: 860px) {
+  .choice-cards .enroll-mode-options[data-columns="3"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Cards of the settings page. */
+.update-settings,
+.update-page {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+.update-settings > *,
+.update-page > * {
+  min-width: 0;
+}
+.update-card.control-card + .update-card.control-card {
+  margin-top: 0;
+}
+.update-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.update-card-head h2 {
+  margin: 0 0 6px;
+}
+.update-card-head p {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-top: 18px;
+}
+.update-actions:empty {
+  display: none;
+}
+.update-actions > p {
+  margin: 0;
+}
+.update-actions a.button {
+  text-decoration: none;
+}
+.update-section {
+  display: grid;
+  gap: 0;
+}
+.update-section .control-section-head {
+  margin-bottom: 12px;
+}
+.update-foot {
+  margin: 0;
+}
+
+/* The stop: red-tinted, with the one action that undoes it. */
+.update-stop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--danger-border);
+  border-left: 3px solid var(--mark-danger);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--ink);
+}
+.update-stop strong {
+  display: block;
+  color: var(--danger-text);
+  font-size: 14px;
+}
+.update-stop p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 639px) {
+  .update-stop {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* A key, as facts. */
+.update-facts > div {
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+.update-facts dd small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 639px) {
+  .update-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+.update-custody {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.update-custody svg {
+  color: var(--muted);
+}
+.update-fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.update-fingerprint code {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
+.update-fingerprint code span[data-short] {
+  color: var(--ink);
+  font-weight: 650;
+}
+.update-short-id {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* The public key field of the turn-on dialog and what it shows. */
+.update-key-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+.update-key-field > label {
+  font-size: 13px;
+  font-weight: 550;
+}
+.update-key-field textarea {
+  width: 100%;
+  min-height: 74px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  resize: vertical;
+}
+.update-key-field textarea[aria-invalid="true"] {
+  border-color: var(--mark-danger);
+}
+.update-key-field > p {
+  margin: 0;
+}
+.update-key-preview {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--success-border);
+  border-radius: 8px;
+  background: var(--success-bg);
+}
+.update-key-preview > span {
+  color: var(--success-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.update-key-preview small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.update-field-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.update-warning {
+  margin: 16px 0 0;
+}
+.request-fields {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.request-fields > * {
+  min-width: 0;
+  margin-block: 0;
+}
+.request-dialog .modal-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.request-dialog .modal-copy code {
+  color: var(--ink);
+}
+
+/* Hosts that trust an older key, or sit on a fork. */
+.update-host-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.update-host-list li {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mark-warning);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.update-host-list li[data-state="revoked"],
+.update-host-list li[data-state="fork"] {
+  border-left-color: var(--mark-danger);
+}
+.update-host-list strong {
+  font-size: 13.5px;
+}
+.update-host-list p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.update-host-list small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.update-host-list code {
+  font-size: 12px;
+}
+.update-key-table td small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Update rollouts, in the deployments pages' bar and lanes. Updated is green,
+   what is under way shares the blue ramp, what hasn't started or won't is
+   grey, and what went wrong sits at the far end in amber, orange and red.
+   The legend names every segment with its count, so colour is never alone. */
+[data-segment="update-updated"] {
+  --rollout-mark: var(--rollout-verified);
+}
+[data-segment="update-trying"],
+[data-segment="update-applying"] {
+  --rollout-mark: var(--rollout-applying);
+}
+[data-segment="update-host"],
+[data-segment="update-window"],
+[data-segment="update-staged"],
+[data-segment="update-downloading"],
+[data-segment="update-offered"] {
+  --rollout-mark: var(--rollout-waiting);
+}
+[data-segment="update-pending"] {
+  --rollout-mark: var(--rollout-queued);
+}
+[data-segment="update-skipped"],
+[data-segment="update-cancelled"] {
+  --rollout-mark: var(--mark-paused);
+}
+[data-segment="update-refused"],
+[data-segment="update-degraded"] {
+  --rollout-mark: var(--rollout-attention);
+}
+[data-segment="update-rolled-back"] {
+  --rollout-mark: var(--mark-serious);
+}
+[data-segment="update-failed"] {
+  --rollout-mark: var(--rollout-failed);
+}
