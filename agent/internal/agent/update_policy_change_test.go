@@ -171,6 +171,62 @@ func TestAPolicyIsWrittenOverOnlyTheFileItWasReadFrom(t *testing.T) {
 	}
 }
 
+// The privileged step writes the pins that follow a rollover through this edit,
+// and writes nothing else of the policy.
+func TestSetPinnedKeysKeepsWhenAKeyWasPinnedAndPinsTheNewOnesWhenTheyAreWritten(t *testing.T) {
+	requireRootOwnedWriter(t)
+	paths := useUpdateRoots(t)
+	pinned := time.Date(2026, 10, 3, 12, 30, 0, 0, time.UTC)
+	if err := writeUpdatePolicy(paths, samplePolicy(t), pinned, nil); err != nil {
+		t.Fatal(err)
+	}
+	team, next := testKey(t, teamKeyLine), testKey(t, nextKeyLine)
+
+	policy := samplePolicy(t)
+	policy.SetPinnedKeys([]ReleaseKey{next, team})
+	if len(policy.Keys) != 2 || policy.Keys[0].Key != next || !policy.Keys[0].PinnedAt.IsZero() || policy.Keys[1].Key != team || !policy.Keys[1].PinnedAt.Equal(pinned) {
+		t.Fatalf("%+v", policy.Keys)
+	}
+	policy.SetPinnedKeys(nil)
+	if len(policy.Keys) != 0 {
+		t.Errorf("no keys: %+v", policy.Keys)
+	}
+
+	rollover := time.Date(2026, 10, 9, 1, 2, 3, 0, time.UTC)
+	before, basis, err := readUpdatePolicy(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.Paused = true
+	before.SetPinnedKeys([]ReleaseKey{team, next})
+	if err := writeUpdatePolicy(paths, before, rollover, &basis); err != nil {
+		t.Fatal(err)
+	}
+	after, err := ReadUpdatePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Keys) != 2 || after.Keys[0].Key != team || !after.Keys[0].PinnedAt.Equal(pinned) || after.Keys[1].Key != next || !after.Keys[1].PinnedAt.Equal(rollover) ||
+		!after.Paused || after.Consent != UpdateConsentAuto || len(after.Windows) != 1 {
+		t.Errorf("%+v", after)
+	}
+
+	// A key twice is refused when the policy is written, and so is a fifth key.
+	again := after
+	again.SetPinnedKeys([]ReleaseKey{team, team})
+	if err := writeUpdatePolicy(paths, again, rollover, nil); !errors.Is(err, ErrUpdatePolicyInvalid) {
+		t.Errorf("a key pinned twice: %v", err)
+	}
+	var five []ReleaseKey
+	for i := 1; i <= 5; i++ {
+		five = append(five, testKey(t, generatedKeyLine(i)))
+	}
+	again.SetPinnedKeys(five)
+	if err := writeUpdatePolicy(paths, again, rollover, nil); !errors.Is(err, ErrUpdatePolicyInvalid) {
+		t.Errorf("five keys: %v", err)
+	}
+}
+
 func TestOnlyRootChangesThePolicy(t *testing.T) {
 	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
 		t.Skip("this test runs as an account that isn't root")
