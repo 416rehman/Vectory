@@ -84,7 +84,7 @@ sudo sh "$dir/vectory-install.sh" \
   --update-window 'Mon-Fri 02:00-04:00'
 ```
 
-The host's choices live in a file only root can write, `/etc/vectory/updates/policy.json` on Linux. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again.
+The host's choices live in a file only root can write, `/etc/vectory/updates/policy.json` on Linux. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again. That command keeps what the host chose: with no update flag it changes nothing about updates, and to change one thing it carries only that thing, such as the key to pin or the releases to take. The host applies it to what it already agreed to, so a command never has to state the host's choices again. See [Change what a host agreed to](cli.md#change-what-a-host-agreed-to).
 
 ### A host that was installed without consent
 
@@ -94,20 +94,21 @@ A host you added before you turned updates on has agreed to nothing, and so has 
 1. On the device's page, choose **Upgrade agent**. Under **Agent updates**, choose **Automatic (recommended)**, **Ask on the host** or **Off**.
 2. Run the command it shows on the host. Without a choice the command only upgrades the agent and changes nothing about updates.
 
-A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**.
+A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**. Its **Upgrade agent** command carries no update choice: running it upgrades the agent and leaves what the host agreed to as it is. When something about updates needs fixing on that host, such as the key it pins or the releases it takes, the command carries only that fix.
 
 ### What a host needs to take an update
 
+<!-- verify-after-merge: that a Mac takes updates in this release (the macos job of platforms.yml is green and macosUpdatesInRelease is true), and that setup's refusal for a Mac names the access list entry -->
 Even with consent, a host takes an update only where it is safe to replace the agent. The dashboard shows what a host can't do, in words, on its page and in the review:
 
 | The host says | What to do |
 | --- | --- |
 | **Installed by a package manager** (`PACKAGE_MANAGED`) | Update it with the package manager. |
 | **No service keeps the agent running** (`NO_SERVICE`) | Run it under a service, then upgrade it with its **Upgrade agent** command. |
-| **Install path others can write** (`UNTRUSTED_LOCATION`), **Install directory is read-only** (`READ_ONLY`) | Change who owns them or their permissions: only root may own and write the agent's directories and every directory above them. |
+| **Install path others can write** (`UNTRUSTED_LOCATION`), **Install directory is read-only** (`READ_ONLY`) | Change who owns them or their permissions: only root may own and write the agent's directories and every directory above them. On a Mac, an access list entry that lets another account write, delete or add files counts too: `ls -led /usr/local/bin` shows the entries and `sudo chmod -N /usr/local/bin` removes them. Homebrew on an Intel Mac owns `/usr/local/bin`, so install the agent in another directory only root can write, with the installer's `--install-dir`. |
 | **Update step isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. |
 | **Service definition is older than this release needs** (`SERVICE_DEFINITION_OUTDATED`) | Run the **Upgrade agent** command once. |
-| **Not in this release** (`PLATFORM_NOT_IN_RELEASE`) | Update this host by hand. A release carries only the platforms in this server's catalog. |
+| **Not in this release** (`PLATFORM_NOT_IN_RELEASE`) | Update this host by hand. A release carries only the platforms in this server's catalog. An agent built without updates for its operating system says the same and refuses `setup --updates`. |
 
 ## Prepare a release
 
@@ -168,7 +169,7 @@ Nothing starts until you choose **Start update rollout**, and the server checks 
 The review lists every device you chose exactly once:
 
 - **Will update · N:** the devices that will take the build, with how each takes it (**Automatic** or **Ask on the host**) and when it can start. The canary is chosen for you, among devices that take updates by themselves, or by you with **Canary devices**. The canary's result is what its devices report, so name canary devices your team trusts.
-- **Won't update · N:** each device that won't, grouped by the first reason that applies, with the fix. For a reason a command fixes, **Commands for the host** gives the **Upgrade agent** command for that host, with only the change the fix needs, such as the key to pin. The host keeps what it already allows. For a host that has no consent to keep, you choose how it should take updates first.
+- **Won't update · N:** each device that won't, grouped by the first reason that applies, with the fix. For a reason a command fixes, **Commands for the host** gives the **Upgrade agent** command for that host, with only the flag that fixes it: `--update-key-sha256` with this server's current key to re-pin, `--update-track minor` for the track. The host applies it to what it already agreed to and keeps the level, the windows and any pause as they are. For a host that has no consent to keep, you choose how it should take updates first.
 - **Worth knowing:** devices that will update but may be slow: offline now, waiting for someone on the host, waiting for a window or paused on the host.
 
 | Group | Means |
@@ -178,7 +179,7 @@ The review lists every device you chose exactly once:
 | **Doesn't pin this release's key** (`KEY_NOT_PINNED`) | No key it pins reaches the release's signer. Run **Upgrade agent** with the current key. If a key that is no longer current signed the release, the review says so: a host follows keys forward only, so withdraw the release and prepare it again, and the current key signs it. |
 | **Tried this release and rolled back** (`RELEASE_ALREADY_TRIED`) | It takes the next release, never this one again. |
 | **Already tried a newer release** (`COUNTER_REPLAYED`) | This release's counter is at or below one the host tried. Prepare a new release. |
-| **Outside the host's track** (`VERSION_NOT_ON_TRACK`) | It takes patch releases only. Run **Upgrade agent** with **Minor releases too**. |
+| **Outside the host's track** (`VERSION_NOT_ON_TRACK`) | It takes patch releases only. Run **Upgrade agent** with **Minor releases too**: the command carries only the track, and the host keeps its level and its windows. |
 | **Already on this version** (`ALREADY_RUNNING`), **Runs a newer version** (`DOWNGRADE_REFUSED`) | Nothing to do. An update never goes backward. |
 | **Frozen on a key fork** (`KEY_ROLLOVER_CONFLICT`) | It saw two successors of its key and accepts no update. Run **Upgrade agent** with the right key. See [If a key is stolen](#if-a-key-is-stolen). |
 | **Installed by a package manager**, **No service keeps the agent running**, **Install path others can write**, **Install directory is read-only**, **Update step isn't running**, **Service definition is older than this release needs**, **Not in this release** | The host can't take an update. See [What a host needs to take an update](#what-a-host-needs-to-take-an-update). |
@@ -201,13 +202,18 @@ Open a rollout from **Devices → Agent updates**. The page shows how many devic
 | **Updated** | The new build checked in after the restart and is healthy. |
 | **Rolled back** | The host took the build back. It won't try this release again. |
 | **Refused**, **Failed** | The host's own rules refused it, or the update failed. The page shows the agent's reason. |
-| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, or its access was revoked. |
+| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, its access was revoked, its host dropped the offer (paused, turned updates off or took another release), or it stayed at **Offered**, **Downloading** or **Staged** for an hour. The page shows the host's reason when it gave one. |
 
-Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. The canary also needs at least one **Updated** device. A device silent for 30 minutes after it started applying becomes **Failed**.
+Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. A device whose access was revoked, or that has been silent for longer than the watch lasts and three check-in intervals, is no longer watched: it doesn't hold the rollout back and doesn't count as failing. The canary also needs at least one **Updated** device that is still watched. A device silent for 30 minutes after it started applying becomes **Failed**.
 
 When more devices roll back or fail than **Stop if more than** allows, the rollout stops. Devices already applying finish their trial. The rollout is **Completed** when no device is pending or waiting and every released one is done.
 
 A device that waits for its host or its window keeps its offer, and offers come only from a rollout that is running, so the rollout stays **Active** until that device installs or you cancel the rollout. Later stages don't wait for it. You can't turn updates off while a rollout is active or paused, so cancel it first if nobody will approve the waiting hosts.
+
+A rollout doesn't stay open for ever when nothing can move it:
+
+- **A release expires.** Its rollouts end as **Cancelled**, as a withdrawal ends them. Devices already applying finish.
+- **No progress for 24 hours.** A rollout that has devices it can't move on (none that can be released, a build that never changes state, an observation held by a device that stays on the old build) and made no progress for 24 hours ends as **Failed**, and says so. Unstarted offers are withdrawn and devices already applying finish. A change of any device, a stage released, a watch that starts or ends, or a resume counts as progress. Waiting for a person or a window is not stalled: that is by design, and you cancel the rollout when nobody will act.
 
 ### Pause, resume or cancel
 
@@ -223,9 +229,11 @@ On the rollout page, an Operator or Administrator can:
 
 It cancels every update rollout, withdraws every offer and refuses new rollouts until an administrator chooses **Clear the stop** in **Settings → Agent updates**. Devices already trying a build finish. A device that already downloaded one may still start until its next check-in tells it of the stop, usually within a minute, and the update step looks for work every 30 seconds. A host that checks in less often takes longer. Clearing the stop resumes nothing: the rollouts it cancelled stay cancelled.
 
+A server restored from a backup stops all updates too, as a local administrator, until an administrator has reviewed what the backup brought back. See [Restore a backup](administer.md#restore-a-backup).
+
 ## When a host rolls back
 
-The host takes a build back when the new agent doesn't start, doesn't check in within five minutes, isn't healthy or is interrupted twice. It restores the previous build from a copy it kept, and reports the reason. The device shows **Rolled back** with that reason, and the dashboard opens an issue (**AGENT_UPDATE_ROLLED_BACK**) that appears in **Needs you** on the Overview.
+The host takes a build back when the new agent doesn't start, doesn't check in within five minutes, isn't healthy or is interrupted twice. It restores the previous build from a copy it kept, and reports the reason. The device shows **Rolled back** with that reason, and the dashboard opens an issue (**AGENT_UPDATE_ROLLED_BACK**) that appears in **Needs you** on the Overview. A host that had already started when you paused, cancelled or stopped the rollout, and then rolled back, is recorded the same way, once: the issue and the audit entry appear, and a paused rollout counts it toward its failure threshold.
 
 **A rolled-back release is never tried again on that host.** The host remembers the release counter and the release, so even a new rollout can't make it try the same build twice. It takes the next release, which carries a higher counter. To retry, fix the cause, prepare a new release and roll it out.
 
@@ -274,7 +282,7 @@ Revoking a key stops this server from offering anything it signed. It doesn't un
 <!-- steps -->
 1. **Stop all updates**, so nothing signed by the stolen key goes out meanwhile.
 2. Revoke the stolen key, then set a new one with **Set a release key…**.
-3. Run each affected host's **Upgrade agent** command, which now pins the new key. **Settings → Agent updates** lists the hosts that pin the revoked key, and the review gives each one's command. This step stays manual, host by host.
+3. Run each affected host's **Upgrade agent** command, which now pins the new key. It re-pins and changes nothing else: the host keeps its level, its track, its windows and any pause. **Settings → Agent updates** lists the hosts that pin the revoked key, and the review gives each one's command. This step stays manual, host by host.
 
 A thief who holds the key before you roll it over can sign a statement of their own from it. A host that sees two successors of one key stops accepting updates and reports `KEY_ROLLOVER_CONFLICT`. **Settings → Agent updates** lists them as hosts frozen on a fork, and each one needs its **Upgrade agent** command with the key you trust.
 
@@ -293,13 +301,15 @@ sudo vectory update off
 - `status` shows the policy, the keys the host pins, what it is doing and the result of its last update.
 - `apply` installs a build a host set to **Ask on the host** has staged. Before it does, it reads what the agent last reported and stops if the offer was withdrawn or the agent hasn't checked in for five minutes. That check is advice: the file it reads is written by the agent, so it can warn you but can't prove an offer is still good. `--force` applies anyway, after you confirm on a terminal.
 - `pause` keeps the host's choices and stops every download and install until `resume`.
-- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried.
+- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried. Where the directory above the agent's state directory could be changed by another account, it deletes nothing and tells you the staged files are yours to delete; see [Agent CLI](cli.md#update-off).
 
 Every verb but `status` needs root. See [Agent CLI](cli.md#update) for what each prints.
 
+To change one thing a host agreed to, run `setup` on it with only that flag and no `--updates`: `--update-key-sha256` re-pins, `--update-track` changes the releases it takes, and `--update-window` replaces its windows. It keeps the rest, including a pause, and refuses a host that agreed to nothing. See [Change what a host agreed to](cli.md#change-what-a-host-agreed-to).
+
 ## Turn off agent updates
 
-In **Settings → Agent updates**, choose **Turn off…** and enter your password. It's refused while an update rollout is running: cancel it, or choose **Stop all updates**, first. Hosts keep the consent they gave and the build they run. The key, who holds it and a stop are kept, so turning updates on again with the same key needs no re-pinning.
+In **Settings → Agent updates**, choose **Turn off…** and enter your password. It's refused while an update rollout is running: cancel it, or choose **Stop all updates**, first. Hosts keep the consent they gave and the build they run. The key, who holds it and a stop are kept, so turning updates on again with the same key needs no re-pinning. While updates are off, Vectory doesn't read or keep what hosts report about updates, and it deletes what it had: each host reports again at its next check-in once you turn updates on. A device that was still finishing an update gets its waiting time again from the moment you turn them on, so it isn't failed for the time they were off.
 
 ## Limits
 
@@ -308,6 +318,7 @@ In **Settings → Agent updates**, choose **Turn off…** and enter your passwor
 - **A release names only the platforms in this server's catalog.** A host whose platform isn't in it is listed as **Not in this release**: update it by hand. That is what macOS and Windows hosts do when their builds aren't in the release.
 - **Updates only move forward.** A host never takes an older build. Going back is its own automatic rollback, or an upgrade by hand.
 - **A rollout targets the devices the review found.** A device that joins a group afterwards isn't added, and a device is in at most one unfinished update rollout.
+- **At most 200 update rollouts are active or paused at once.** The server reads every active one every two seconds, so the 201st is refused (`UPDATE_ROLLOUT_LIMIT`) until you cancel one or one finishes. A rollout takes up to 10,000 devices, so this is no limit on the fleet.
 - **Expiry uses each host's clock.** A host whose clock is far behind accepts a release that has expired, and one far ahead refuses valid ones.
 - **Vector isn't updated.** Agent updates replace the agent only. Replacing Vector stays a local act: [Replace the Vector binary](agents.md#replace-the-vector-binary).
 

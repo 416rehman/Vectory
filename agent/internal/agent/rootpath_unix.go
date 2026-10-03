@@ -111,7 +111,10 @@ func (t ownerTrust) ownerProblem(f pathFacts) string {
 }
 
 // judge reads a handle and refuses it, with UNTRUSTED_LOCATION, unless it is the
-// kind of file the path needs there and root's alone. path is for the message.
+// kind of file the path needs there and root's alone. path is for the message. On
+// macOS root's alone also means that no access list entry lets another account
+// change it (accessListProblem); where a file system's lists show in the
+// permission bits, the mode already says it.
 func judge(fd int, path string, want rootOwnedKind, trust ownerTrust) error {
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
@@ -123,6 +126,13 @@ func judge(fd int, path string, want rootOwnedKind, trust ownerTrust) error {
 	}
 	if trust.judged(path) {
 		if problem := trust.ownerProblem(facts); problem != "" {
+			return untrustedLocation(path + " " + problem)
+		}
+		problem, err := accessListProblem(fd, facts.mode&unix.S_IFMT == unix.S_IFDIR)
+		if err != nil {
+			return &fs.PathError{Op: "read the access list of", Path: path, Err: err}
+		}
+		if problem != "" {
 			return untrustedLocation(path + " " + problem)
 		}
 	}

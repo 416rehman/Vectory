@@ -160,6 +160,7 @@ describe("agent update events", () => {
     "agent_release.sign",
     "agent_release.signature_upload",
     "agent_release.withdraw",
+    "agent_release.expire",
     "agent_update_rollout.create",
     "agent_update_rollout.pause",
     "agent_update_rollout.resume",

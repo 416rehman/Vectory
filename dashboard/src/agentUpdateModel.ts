@@ -196,9 +196,15 @@ export const UpdateRolloutSchema = z.object({
   selector: SelectorSchema,
   rollout: UpdateRolloutSettingsSchema,
   status: rolloutStatus,
-  failure_reason: z.enum(["threshold", "data_plane"]).nullable(),
+  failure_reason: z.enum(["threshold", "data_plane", "stalled"]).nullable(),
   cancel_reason: z
-    .enum(["operator", "stop", "key_revoked", "release_withdrawn"])
+    .enum([
+      "operator",
+      "stop",
+      "key_revoked",
+      "release_withdrawn",
+      "release_expired",
+    ])
     .nullable(),
   revision: count,
   created_at: instant,
@@ -707,10 +713,13 @@ export function strategyText(
 export function rolloutEnding(
   rollout: Pick<UpdateRollout, "status" | "failure_reason" | "cancel_reason">,
 ): string | null {
-  if (rollout.status === "failed")
-    return rollout.failure_reason === "data_plane"
-      ? "Stopped: an updated device isn't delivering"
-      : "Stopped after device failures";
+  if (rollout.status === "failed") {
+    if (rollout.failure_reason === "data_plane")
+      return "Stopped: an updated device isn't delivering";
+    if (rollout.failure_reason === "stalled")
+      return "Stopped: it made no progress for 24 hours";
+    return "Stopped after device failures";
+  }
   if (rollout.status !== "cancelled") return null;
   switch (rollout.cancel_reason) {
     case "stop":
@@ -719,6 +728,8 @@ export function rolloutEnding(
       return "Cancelled: its key was revoked";
     case "release_withdrawn":
       return "Cancelled: its release was withdrawn";
+    case "release_expired":
+      return "Cancelled: its release expired";
     default:
       return "Cancelled by a person";
   }

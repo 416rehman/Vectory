@@ -212,9 +212,9 @@ func (v UpdateView) PolicyLine() string {
 	line := strings.Join([]string{UpdateConsentWords(p.Consent), UpdateTrackWords(p.Track), windows, UpdateKeysWords(p.PinnedKeys())}, " · ")
 	switch {
 	case p.Paused:
-		line += " · paused: " + CommandFor(v.StateDir, "sudo vectory update resume")
+		line += " · paused: " + AdminCommandFor(v.StateDir, "vectory update resume")
 	case v.LocalPaused:
-		line += " · paused with vectory pause: " + CommandFor(v.StateDir, "sudo vectory resume")
+		line += " · paused with vectory pause: " + AdminCommandFor(v.StateDir, "vectory resume")
 	}
 	return line
 }
@@ -228,9 +228,9 @@ func (v UpdateView) stagedWords() string {
 	}
 	switch {
 	case v.Policy.Consent == UpdateConsentAsk:
-		return "staged " + what + ", waiting for you: " + CommandFor(v.StateDir, "sudo vectory update apply")
+		return "staged " + what + ", waiting for you: " + AdminCommandFor(v.StateDir, "vectory update apply")
 	case !v.StepRunning:
-		return "staged " + what + ", but the update step isn't running: " + CommandFor(v.StateDir, "sudo vectory doctor") + " says why"
+		return "staged " + what + ", but the update step isn't running: " + AdminCommandFor(v.StateDir, "vectory doctor") + " says why"
 	}
 	if open, next, hasNext := v.windowState(); !open {
 		words := "staged " + what + ", waiting for its window"

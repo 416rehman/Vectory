@@ -60,10 +60,12 @@ type SetupOptions struct {
 	// NoWake turns wake-ups off (true) or back on (false); nil keeps them.
 	NoWake *bool
 	// Updates is the level this host takes agent updates at (auto, ask or off);
-	// empty leaves updates as they are. UpdateKeys are the fingerprints of the
+	// empty leaves the level as it is. UpdateKeys are the fingerprints of the
 	// release keys to pin (required with auto or ask), UpdateTrack is patch or
 	// minor (default patch) and UpdateWindows are the windows an update may start
-	// in (none means any time).
+	// in (none means any time). Given with no level, they change only the parts
+	// they name of what a host that agreed to updates already has, and a host that
+	// agreed to nothing is refused.
 	Updates       string
 	UpdateKeys    []string
 	UpdateTrack   string
@@ -124,6 +126,10 @@ type setupRun struct {
 	stopped string
 	// replaced: the new agent binary is in place.
 	replaced bool
+	// updateStep is what an Updates step that turned updates on or amended them
+	// leaves for the service path: installing the privileged step once the service
+	// is registered (see finishUpdates).
+	updateStep *pendingUpdateStep
 }
 
 // vectorBinaryInDashboard ends the advice to pass --vector-binary. Someone who
@@ -477,6 +483,14 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if err != nil {
 		return r.fail("updates", "Updates", sentence(err.Error()), "")
 	}
+	if updates != nil && updates.amend {
+		// Update flags without --updates change what the host agreed to, so there has
+		// to be something it agreed to: a host that agreed to nothing is refused before
+		// anything else is looked at.
+		if err := updates.readBase(); err != nil {
+			return r.fail("updates", "Updates", sentence(err.Error()), "")
+		}
+	}
 	defaults := DefaultPaths()
 
 	platform := DetectPlatform(ctx)
@@ -595,7 +609,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if enrolled {
 		trust.caFile = settings.CAFile
 	}
-	if updates != nil && updates.consent != UpdateConsentOff && !options.DryRun {
+	if updates != nil && updates.consent != UpdateConsentOff && len(updates.wanted) > 0 && !options.DryRun {
 		if err := r.resolveUpdateKeys(ctx, updates, origin, trust); err != nil {
 			return r.result, err
 		}
@@ -943,8 +957,10 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		r.result.DeviceURL = strings.TrimRight(options.DashboardURL, "/") + "/#/devices/" + credentials.DeviceID
 	}
 	if updates != nil {
-		// After the agent is installed and enrolled, before the service starts it.
-		if err := r.applyUpdates(updates, agentPath, dir); err != nil {
+		// After the agent is installed and enrolled, before the service is registered
+		// or started: the policy is in place before the first check-in. The privileged
+		// step follows the service (startService), which it needs.
+		if err := r.applyUpdates(updates, dir); err != nil {
 			return r.result, err
 		}
 	}
@@ -1116,10 +1132,19 @@ func (r *setupRun) startService(ctx context.Context, ops serviceOps, service, ag
 	serviceName := ServiceInfoName(service)
 	registration, err := ops.install(agentPath, dir, account)
 	if err != nil {
+		r.updatesWaitForTheService()
 		return r.failErr("service", "Service", err, "")
 	}
 	if registration == ServiceUpdated {
 		r.add("service", "info", "Service", serviceName+" definition updated.", "")
+	}
+	// The privileged update step checks the service that is registered now (that it
+	// runs this executable for this state directory, as an account that isn't root),
+	// and a fresh install has none before this point. So it is installed here: the
+	// definition is in its final form, and the service isn't started or restarted
+	// yet, so its first run already has its step and no restart can race it.
+	if err := r.finishUpdates(agentPath, dir); err != nil {
+		return r.result, err
 	}
 	digest := fileDigestOrEmpty(agentPath)
 	running := runningBuild(dir)

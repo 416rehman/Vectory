@@ -13,8 +13,10 @@
 //   node tests/platform/agent-update.mjs install       0.1.0 installed with the consent flags of
 //                                                      the Add device command, and a pipeline
 //                                                      applied so that Vector runs
-//   node tests/platform/agent-update.mjs sandbox       the step's units, systemd's reading of
-//                                                      them, and one run under them
+//   node tests/platform/agent-update.mjs sandbox       the step's units, the service manager's
+//                                                      reading of them, and one run under them
+//                                                      (on a Mac: its launch daemon, and how
+//                                                      often launchd starts it)
 //   node tests/platform/agent-update.mjs update        0.1.0 to 0.1.1, seen by the server and by
 //                                                      the host, while the step runs sandboxed
 //   node tests/platform/agent-update.mjs start-failure 0.1.2 never starts: rolled back, tried once
@@ -33,7 +35,7 @@
 // passwordless sudo, and what service.mjs leaves behind (the enrolled instance and
 // its first administrator). Phases share what they learn through
 // .local/platform/update-context.json. Everything that depends on the operating
-// system is in update-hosts.mjs.
+// system is in update-hosts.mjs: Linux (systemd) and macOS (launchd).
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -105,12 +107,27 @@ const saveContext = (patch) => {
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+// A bit mask is a BigInt, which JSON can't write: it is written as hexadecimal.
+const written = (value) =>
+  JSON.stringify(value, (_, member) =>
+    typeof member === "bigint" ? `0x${member.toString(16)}` : member,
+  );
 function assertEqual(actual, expected, what) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected))
+  if (written(actual) !== written(expected))
     throw new Error(
-      `${what}: expected ${JSON.stringify(expected)}, found ${JSON.stringify(actual)}.`,
+      `${what}: expected ${written(expected)}, found ${written(actual)}.`,
     );
 }
+
+/** A file the product pins, from the agent's test data. */
+const golden = (name) =>
+  fs.readFileSync(
+    path.join(root, "agent", "internal", "agent", "testdata", "update", name),
+    "utf8",
+  );
+
+/** What a host's own checks (checkUnits, whileTrying, ...) are given to check with. */
+const kit = { assert, assertEqual, golden, minutes };
 
 async function signedIn() {
   const connection = await connect();
@@ -300,6 +317,7 @@ const VECTOR = "/usr/local/bin/vector";
 function installVector() {
   const source = process.env.VECTORY_VECTOR_BIN;
   assert(source, "Set VECTORY_VECTOR_BIN to the pinned Vector 0.58.0.");
+  run("mkdir", ["-p", path.dirname(VECTOR)], { elevated: true });
   run("install", ["-m", "0755", source, VECTOR], { elevated: true });
   const version = run(VECTOR, ["--version"]).stdout.trim();
   assert(
@@ -314,7 +332,7 @@ async function setupDevice(
   agent,
   name,
   flags,
-  { allowFailure = false } = {},
+  { allowFailure = false, agentPath = null } = {},
 ) {
   const ca = instanceFiles().ca;
   const fingerprint = new crypto.X509Certificate(fs.readFileSync(ca))
@@ -339,6 +357,7 @@ async function setupDevice(
       "--token-stdin",
       "--json",
       "--create-user",
+      ...(agentPath ? ["--agent-path", agentPath] : []),
       ...flags,
     ],
     {
@@ -361,6 +380,36 @@ async function setupDevice(
   if (!allowFailure && (outcome.code !== 0 || !parsed?.ok))
     throw new Error(`vectory setup exited ${outcome.code}:\n${outcome.text}`);
   return { outcome, parsed };
+}
+
+/**
+ * `vectory setup --dry-run` with the flags given, for a host that isn't enrolled: it
+ * makes nothing and asks for no token. It is how a refusal that setup makes before it
+ * changes anything is seen without changing anything.
+ */
+function dryRunSetup(agent, name, flags) {
+  const ca = instanceFiles().ca;
+  const fingerprint = new crypto.X509Certificate(fs.readFileSync(ca))
+    .fingerprint256;
+  return run(
+    agent,
+    [
+      "setup",
+      "--server",
+      `https://localhost:${agentPort}`,
+      "--ca-sha256",
+      fingerprint,
+      "--name",
+      name,
+      "--vector-binary",
+      VECTOR,
+      "--json",
+      "--create-user",
+      "--dry-run",
+      ...flags,
+    ],
+    { elevated: true, allowFailure: true, timeoutMs: 120000 },
+  );
 }
 
 async function applyPipeline(evidence, context, label) {
@@ -445,6 +494,15 @@ async function install(evidence) {
     "--update-track",
     "patch",
   ];
+  // A host with its own ways of making an install path untrustworthy shows them on the
+  // real directories, as a dry run of the command a person would run.
+  if (host.checkRefusedLocations)
+    await host.checkRefusedLocations(evidence, {
+      ...kit,
+      dryRun: (extra) =>
+        dryRunSetup(builds["0.1.0"].file, `${deviceName}-dry`, extra),
+      consentFlags: flags,
+    });
   const setup = await evidence.step(
     `vectory setup 0.1.0 with the consent flags of Add device (${flags.join(" ")}) registers the service and enrolls ${deviceName}`,
     async () => {
@@ -453,8 +511,9 @@ async function install(evidence) {
         builds["0.1.0"].file,
         deviceName,
         flags,
+        { agentPath: host.paths.agent },
       );
-      assertEqual(parsed.service, "systemd", "the service setup registered");
+      assertEqual(parsed.service, adapter.kind, "the service setup registered");
       assert(
         (parsed.steps ?? []).some((step) => /update/i.test(step.label)),
         `Setup printed no step about updates: ${JSON.stringify(parsed.steps)}`,
@@ -532,10 +591,9 @@ async function install(evidence) {
     },
   );
   await evidence.step(
-    "The step's timer runs it, and its status says the host is eligible",
+    "The step is on its schedule, and its status says the host is eligible",
     async () => {
-      const properties = host.unitProperties();
-      assertEqual(properties.timer.ActiveState, "active", "the timer");
+      assertEqual(host.scheduleState(), "active", "the step's schedule");
       const status = await until(
         "status.json is fresh",
         () => {
@@ -590,11 +648,13 @@ async function install(evidence) {
 
 async function sandbox(evidence) {
   const host = updateHostFor();
+  // A service manager with no sandbox to read has its own checks of its definitions.
+  if (host.checkUnits) return host.checkUnits(evidence, kit);
+  // The pinned text is for an agent in /usr/local/bin; this host's is elsewhere.
   const golden = (name) =>
-    fs.readFileSync(
-      path.join(root, "agent", "internal", "agent", "testdata", "update", name),
-      "utf8",
-    );
+    kit
+      .golden(name)
+      .replaceAll('"/usr/local/bin"', `"${host.paths.installDir}"`);
   await evidence.step(
     "The step's service and timer are the text the product pins, word for word",
     () => {
@@ -721,7 +781,7 @@ function snapshot(host) {
     staging: host.list(host.paths.staging),
     probe: host.list(host.paths.probe),
     vectors: agentProcesses().vectors.map((v) => v.pid),
-    invocation: host.agentService().InvocationID,
+    invocation: host.agentInvocation(),
     stage: status?.stage ?? null,
   };
 }
@@ -948,20 +1008,14 @@ async function lastResult(s, deviceId) {
 
 // ---------------------------------------------------------------- update
 
-async function update(evidence) {
-  const { builds, keys, device } = loadContext();
-  const host = updateHostFor();
-  const s = await signedIn();
-  const release = await prepareRelease(evidence, s, "0.1.1");
-  const before = snapshot(host);
-  assertEqual(
-    before.executable,
-    builds["0.1.0"].sha256,
-    "the executable before the update",
-  );
-  const rollout = await startRollout(evidence, s, release, device.deviceId);
-
-  await evidence.softStep(
+/**
+ * What to read from the step while it tries a build, on a host whose service manager
+ * sandboxes it (systemd): the capabilities it has, that it can't gain more, the
+ * system call filter and what it can write. A host with a way of its own to read the
+ * running step has whileTrying instead.
+ */
+function sandboxWhileTrying(evidence, host) {
+  return evidence.softStep(
     "While it tries the new build, the step runs under its sandbox: six capabilities, no new ones, a system call filter, a read-only system",
     async () => {
       await host.waitForStage("trial", { timeoutMs: minutes(6) });
@@ -1001,6 +1055,52 @@ async function update(evidence) {
       );
     },
   );
+}
+
+async function update(evidence) {
+  const { builds, keys, device } = loadContext();
+  const host = updateHostFor();
+  const s = await signedIn();
+  const release = await prepareRelease(evidence, s, "0.1.1");
+  const before = snapshot(host);
+  assertEqual(
+    before.executable,
+    builds["0.1.0"].sha256,
+    "the executable before the update",
+  );
+  // How long launchd takes to unload the agent while Vector drains, and to load it
+  // again, if the host has a way to measure it: before the rollout, so the update
+  // starts from an agent that has checked in since.
+  if (host.measureAgentRestart) {
+    await evidence.softStep(
+      "The agent is stopped and started through the service manager with Vector draining, and the times are recorded",
+      async () => {
+        await host.measureAgentRestart(evidence);
+        await until(
+          "one Vector runs again",
+          () => agentProcesses().vectors.length === 1,
+          {
+            timeoutMs: minutes(3),
+            describe: describeProcesses,
+          },
+        );
+        await until(
+          "the device checks in again",
+          async () =>
+            checkedIn(
+              await s.api(`/devices/${device.deviceId}`),
+              Date.now() - 60000,
+            ),
+          { timeoutMs: minutes(3), intervalMs: 3000 },
+        );
+      },
+    );
+  }
+  const rollout = await startRollout(evidence, s, release, device.deviceId);
+
+  await (host.whileTrying
+    ? host.whileTrying(evidence, kit)
+    : sandboxWhileTrying(evidence, host));
 
   const done = await waitForTarget(
     s,
@@ -1816,6 +1916,8 @@ async function noConsent(evidence) {
               "--token-stdin",
               "--json",
               "--create-user",
+              "--agent-path",
+              host.paths.agent,
               "--updates",
               "auto",
               "--update-key-sha256",
@@ -1870,7 +1972,11 @@ async function noConsent(evidence) {
   const setup = await evidence.step(
     `A host installed without the consent flags: vectory setup 0.1.0 enrolls ${deviceName}`,
     async () =>
-      (await setupDevice(s, builds["0.1.0"].file, deviceName, [])).parsed,
+      (
+        await setupDevice(s, builds["0.1.0"].file, deviceName, [], {
+          agentPath: host.paths.agent,
+        })
+      ).parsed,
   );
   const deviceId = setup.device.id;
   await evidence.step(

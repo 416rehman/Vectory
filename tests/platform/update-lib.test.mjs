@@ -108,16 +108,26 @@ test("the crash is where the service runs and not where the probe does", () => {
 });
 
 test("the Windows step's release gate is opened in a copy, and only there", () => {
-  const host = read("agent/internal/agent/update_host_windows.go");
-  assert.equal(host.split("const windowsUpdatesInRelease = ").length - 1, 1);
-  const opened = openWindowsGate(host);
-  assert.ok(opened.includes("const windowsUpdatesInRelease = true\n"));
-  assert.equal(opened.includes("const windowsUpdatesInRelease = false"), false);
-  assert.equal(
-    opened.split("\n").filter((line, i) => line !== host.split("\n")[i]).length,
-    host.includes("const windowsUpdatesInRelease = true\n") ? 0 : 1,
-    "one line changed",
+  const gate = read("agent/internal/agent/update_gate.go");
+  // The table has one line for Windows, and it is the one the proof changes.
+  assert.equal(gate.split("windowsUpdatesInRelease = ").length - 1, 1);
+  const opened = openWindowsGate(gate);
+  assert.ok(opened.includes("\twindowsUpdatesInRelease = true\n"));
+  assert.equal(opened.includes("windowsUpdatesInRelease = false"), false);
+  const original = gate.split("\n");
+  const changed = opened.split("\n").filter((line, i) => line !== original[i]);
+  assert.deepEqual(
+    changed,
+    gate.includes("\twindowsUpdatesInRelease = true\n")
+      ? []
+      : ["\twindowsUpdatesInRelease = true"],
+    "one line changed, and it is the Windows line",
   );
+  // The other systems' lines are as they were.
+  for (const line of original.filter((l) =>
+    /^\t(linux|macos)UpdatesInRelease/.test(l),
+  ))
+    assert.ok(opened.includes(`${line}\n`), `${line} is as it was`);
   // Opened already, it is left as it is; the proof still builds after the product opens it.
   assert.equal(openWindowsGate(opened), opened);
   assert.throws(() => openWindowsGate("package agent\n"), /found none/);
@@ -125,16 +135,16 @@ test("the Windows step's release gate is opened in a copy, and only there", () =
   for (const build of BUILDS) {
     const onWindows = editsFor(build, read, "windows");
     assert.ok(
-      onWindows["agent/internal/agent/update_host_windows.go"].includes(
-        "const windowsUpdatesInRelease = true\n",
+      onWindows["agent/internal/agent/update_gate.go"].includes(
+        "\twindowsUpdatesInRelease = true\n",
       ),
       `${build.version} is built with the gate open on Windows`,
     );
     for (const goos of ["linux", "darwin"])
       assert.equal(
-        editsFor(build, read, goos)["agent/internal/agent/update_host_windows.go"],
+        editsFor(build, read, goos)["agent/internal/agent/update_gate.go"],
         undefined,
-        `${build.version} on ${goos} doesn't touch the Windows host`,
+        `${build.version} on ${goos} doesn't touch the gate`,
       );
   }
 });

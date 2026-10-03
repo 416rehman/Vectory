@@ -67,7 +67,7 @@ jobs:
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
       - name: Check the platform helpers against the text the tools print
         timeout-minutes: 10
-        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs tests/platform/update-hosts.test.mjs
       - name: Build the dashboard the instance serves
         timeout-minutes: 20
         run: |
@@ -470,9 +470,18 @@ jobs:
   # macOS 15 on Apple silicon: scripts/preview.sh under the system bash (3.2
   # and BSD tools), the agent in the foreground, then as the io.vectory.agent
   # launch daemon under the _vectory account.
+  #
+  # After those phases, the privileged update step on the same instance
+  # (tests/platform/agent-update.mjs), the same phases as on Linux with the host
+  # object of a Mac: the step is the io.vectory.update launch daemon, the install
+  # path is checked for the access lists a Mac has, the step's directory goes on a
+  # size-capped disk image, and launchd's timings are recorded. These phases are
+  # the proof that gates agent updates on macOS: when one fails and is not fixed by
+  # the cut, macosUpdatesInRelease in agent/internal/agent/update_gate.go is set to
+  # false, and macOS hosts update by hand in that release.
   macos:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 240
     env:
       VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
       VECTORY_PREVIEW_AGENT_TARGETS: darwin/arm64
@@ -493,7 +502,7 @@ jobs:
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
       - name: Check the platform helpers against the text the tools print
         timeout-minutes: 10
-        run: node --test tests/platform/lib.test.mjs
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs tests/platform/update-hosts.test.mjs
       - name: Build the dashboard the instance serves
         timeout-minutes: 20
         run: |
@@ -570,13 +579,88 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs uninstall
+      # Agent updates, the phases of the Linux job with a Mac's host object. The builds
+      # are darwin/arm64 from copies of the source. The host is returned to a clean state
+      # first, so these phases depend on the instance and its administrator, not on what
+      # the phases above left. The install phase also puts the access lists a Mac has on
+      # the install path, one by one, and checks that setup refuses --updates for each.
+      - name: Build the agents the update checks roll out, from copies of the source
+        id: update-build
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs build
+      - name: Make a release key and turn agent updates on with offline custody
+        id: update-enable
+        if: ${{ !cancelled() && steps.update-build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs enable
+      - name: Check who owns the install path and which access lists it has, install agent 0.1.0 with the consent flags of Add device and apply a pipeline
+        id: update-install
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs install
+      # Includes the 200 seconds in which launchd's StartInterval is measured.
+      - name: Read the update step's launch daemon, run it once under it and measure how often launchd starts it
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/agent-update.mjs sandbox
+      - name: Time the agent's stop and start with Vector draining, then update the agent from 0.1.0 to 0.1.1 through a rollout
+        id: update-update
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs update
+      - name: Roll out a build that never starts, and offer it again
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs start-failure
+      - name: Roll out a build that never checks in
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-check-in
+      - name: Roll out a build whose store file is cut short
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs truncated
+      - name: Kill the update step while it swaps and while it tries a build
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs interrupt
+      # The step's directory is mounted from a size-capped disk image for this one.
+      - name: Roll out a build to a host whose update step has no room
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs disk-full
+      # The listener is taken over: the instance is stopped and a small program answers
+      # the real agent with the instance's own TLS chain and manifest signing key.
+      - name: Offer the host what it must refuse, from a stand-in for the agent listener
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 60
+        run: node tests/platform/agent-update.mjs hostile
+      - name: Install a host without the consent flags, and offer it a good release
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-consent
       - name: Collect the daemon's logs and the instance's logs
         if: always()
         timeout-minutes: 10
         run: |
           set +e
           node tests/platform/service.mjs collect
+          node tests/platform/agent-update.mjs collect
           mkdir -p "$VECTORY_PLATFORM_OUTPUT/logs"
+          # What a failed run needs, in the log itself (the artifact holds the rest).
+          echo "::group::The update step's launchd job"
+          sudo launchctl print system/io.vectory.update
+          echo "::endgroup::"
+          echo "::group::What the update step wrote to standard error"
+          sudo tail -n 150 "/Library/Application Support/Vectory/update-state/private/step.log"
+          echo "::endgroup::"
+          echo "::group::What the update step keeps, with owners, flags and access lists"
+          sudo ls -laOeR "/Library/Application Support/Vectory/update-state" "/Library/Application Support/Vectory/updates"
+          echo "::endgroup::"
+          echo "::group::The install path, with owners, flags and access lists"
+          sudo ls -ledO /usr /usr/local /usr/local/bin /usr/local/bin/vectory
+          echo "::endgroup::"
           /bin/bash scripts/preview.sh stop
           cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log "$VECTORY_PLATFORM_OUTPUT/logs/"
           # The foreground agent's logs only: its state folder holds its private key.

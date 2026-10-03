@@ -97,19 +97,22 @@ python3 deploy/backup.py restore \
 
 The tool checks the manifest, hashes and database integrity. Give the restored folder to the server's account (UID/GID 10001 in Compose) with private permissions, including the whole `keys/` folder and `mfa-sealing.key`.
 
-An old backup also restores old decisions: accounts that were disabled, old roles and passwords, revoked devices, used codes and tokens. Before anyone reconnects:
+An old backup also restores old decisions: accounts that were disabled, old roles and passwords, revoked devices, used codes and tokens. For [agent updates](agent-updates.md) that means a release key you revoked since is back in use, releases you withdrew are ready again, rollouts that ended are running again and a stop you set since is gone. Before anyone reconnects:
 
 <!-- steps -->
 1. Confirm an administrator can sign in to the restored state, with a working authenticator if they use one.
-2. With the server stopped, end old sessions and revoke old codes and tokens: [`vectory-admin invalidate-restored-access`](vectory-admin.md#invalidate-restored-access), first without and then with `--apply`.
+2. With the server stopped, end old sessions and revoke old codes and tokens: [`vectory-admin invalidate-restored-access`](vectory-admin.md#invalidate-restored-access), first without and then with `--apply`. With agent updates on, `--apply` also stops all updates, so nothing is offered to a host until step 5.
 3. Start the server on an isolated network. Re-apply every access change made since the backup: offboarding, roles, passwords and device revocations.
 4. If devices accepted newer configurations than the backup knows, [raise the generation counters](vectory-admin.md#recover-generations) before resuming rollouts.
-5. Reconnect people and devices, and confirm fresh check-ins.
+5. If agent updates are on, review what the backup brought back: the release keys in **Settings → Agent updates**, the releases and the rollouts in **Devices → Agent updates**. Revoke a key you had revoked, withdraw a release you had withdrawn and cancel a rollout that shouldn't run. Then an administrator chooses **Clear the stop** in **Settings → Agent updates**, which resumes nothing. See [Stop all updates](agent-updates.md#stop-all-updates).
+6. Reconnect people and devices, and confirm fresh check-ins.
 
 > [!CAUTION]
 > Never delete a device's state, lower its counters or re-enroll it to make it accept an older server. Devices refuse older configurations on purpose.
 
 If you rotated or rolled over the release key after the backup was made, hosts can pin a newer key than the restored server knows. The review lists them as **This host doesn't pin the key that signed this release** until you run their **Upgrade agent** command with the key the restored server signs with. See [Agent updates](agent-updates.md#rotate-or-replace-the-release-key).
+
+If the server's log says it holds a release key whose sealed private half can't be read or opened, the `keys/` folder doesn't match the database. Restore the `keys/` folder from a backup that holds both the sealed key and the sealing key. Until then no release can be signed, and the server deletes none of the sealed key files in that folder.
 
 ## Upgrade the server
 
