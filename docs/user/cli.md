@@ -464,10 +464,11 @@ Hand a release key over to a new one without anyone logging in to the hosts that
 
 ```text
 Wrote rollover.json: key 05cc6c02351af0cb hands over to key 5f0681261c9f25fa (team-next).
+New key fingerprint, to compare with the key you made: 5f068126 1c9f25fa e4e8a4e2 e6701582 cf20e228 f711848b b8bc9db7 190acadb
 Upload it in Settings → Agent updates. Hosts that pin the old key follow it when they are offered a release the new key signed.
 ```
 
-The file holds the statement and its signature, both in base64: `{"statement":"…","signature":"…"}`. A key can't replace itself, and the new key must be a valid key line.
+The file holds the statement and its signature, both in base64: `{"statement":"…","signature":"…"}`. A key can't replace itself, and the new key must be a valid key line. Compare the fingerprint it prints with the one `keygen` printed for the new key before you upload.
 
 ### release verify
 
