@@ -670,7 +670,7 @@ describe("stored requests resolved against the token list", () => {
   const plain = (text: string | null | undefined) => text?.replace(/ /g, " ");
   const listed = (patch: Partial<ListedToken> = {}): ListedToken => ({
     id: other,
-    name: "r16-full install command",
+    name: "lab-full install command",
     expires_at: at(18, 14),
     uses: 0,
     max_uses: 1,
@@ -683,7 +683,7 @@ describe("stored requests resolved against the token list", () => {
     uses: 1,
     last_used_at: at(17, 15),
     device_count: 1,
-    devices: [{ name: "r16-full", enrolled_at: at(17, 15) }],
+    devices: [{ name: "lab-full", enrolled_at: at(17, 15) }],
   });
   function confirmedRequest() {
     const op = beginTokenRequest(actor, input);
@@ -749,7 +749,7 @@ describe("stored requests resolved against the token list", () => {
     const [resolution] = resolveTokenRequests([op], [enrolled], now);
     expect(resolution.kind).toBe("finished");
     expect(resolution.kind === "finished" && plain(resolution.note)).toBe(
-      "r16-full install command enrolled r16-full at 5:15 PM.",
+      "lab-full install command enrolled lab-full at 5:15 PM.",
     );
   });
 
@@ -769,7 +769,7 @@ describe("stored requests resolved against the token list", () => {
     );
     expect(
       revokedAfterUse.kind === "finished" && plain(revokedAfterUse.note),
-    ).toBe("r16-full install command enrolled r16-full at 5:15 PM.");
+    ).toBe("lab-full install command enrolled lab-full at 5:15 PM.");
   });
 
   it("counts a partly used token as done with and names what it enrolled", () => {
@@ -853,7 +853,7 @@ describe("stored requests resolved against the token list", () => {
           now,
         ),
       ),
-    ).toBe("r16-full install command enrolled 2 devices.");
+    ).toBe("lab-full install command enrolled 2 devices.");
     expect(
       plain(
         enrollmentNote(
@@ -861,7 +861,7 @@ describe("stored requests resolved against the token list", () => {
           now,
         ),
       ),
-    ).toBe("r16-full install command enrolled a device at 5:15 PM.");
+    ).toBe("lab-full install command enrolled a device at 5:15 PM.");
     expect(enrollmentNote(listed(), now)).toBeNull();
   });
 });

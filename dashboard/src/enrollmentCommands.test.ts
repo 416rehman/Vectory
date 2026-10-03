@@ -786,13 +786,13 @@ describe("enrollment activity", () => {
       ),
     ).toBe("running");
     const line = unsupervisedLine(
-      "r16-auto",
+      "lab-auto",
       "sudo /opt/x/vectory run --state-dir /var/lib/vectory-agent",
       "linux",
       false,
     );
     expect(`${line.title} ${line.before}${line.command}${line.after}`).toBe(
-      "r16-auto checked in once, but nothing keeps its agent running. Start it with sudo /opt/x/vectory run --state-dir /var/lib/vectory-agent, or use a host with systemd.",
+      "lab-auto checked in once, but nothing keeps its agent running. Start it with sudo /opt/x/vectory run --state-dir /var/lib/vectory-agent, or use a host with systemd.",
     );
     const chosen = unsupervisedLine("lab-1", "sudo vectory run", "linux", true);
     expect(chosen.after).toBe(

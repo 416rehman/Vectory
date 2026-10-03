@@ -965,7 +965,7 @@ async fn get_deployment(app: &Router, cookie: &str, d: &Value) -> Value {
     .1
 }
 /// Three devices run "Edge syslog processing" v1 at priority 100; a canary of
-/// "r15-demo" v1 released its first device, which verified, and the gate
+/// "web-demo" v1 released its first device, which verified, and the gate
 /// observes. `replaces` makes it replace the running assignment at the same
 /// priority (what the dashboard does by default); without it the canary is
 /// layered above at `priority`.
@@ -984,7 +984,7 @@ async fn live_canary(priority: i64, replaces: bool) -> LiveCanary {
     let (temp, s, app, mut ids, cookie, csrf) = fixture().await;
     ids.sort();
     let edge = seed_pipeline(&s, "Edge syslog processing", &[1]).await;
-    let demo = seed_pipeline(&s, "r15-demo", &[1]).await;
+    let demo = seed_pipeline(&s, "web-demo", &[1]).await;
     let base = create_binding(
         &app,
         &cookie,
@@ -1064,10 +1064,10 @@ async fn live_canary(priority: i64, replaces: bool) -> LiveCanary {
     }
 }
 
-/// Round-2 operator review P0-1: Roll back is the safety valve while a canary
-/// is watched. Devices it never released keep exactly what they run, so the
-/// review includes them as unchanged and one confirmation stops the rollout
-/// and returns the released device to its previous version.
+/// Roll back is the safety valve while a canary is watched. Devices it never
+/// released keep exactly what they run, so the review includes them as
+/// unchanged and one confirmation stops the rollout and returns the released
+/// device to its previous version.
 #[tokio::test]
 async fn a_live_or_paused_canary_rolls_back_in_one_reviewed_step() {
     for (case, priority, replaces) in [
@@ -1230,7 +1230,7 @@ async fn a_completed_rollout_rolls_back_every_released_device() {
     let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
     ids.sort();
     let edge = seed_pipeline(&s, "Edge syslog processing", &[1]).await;
-    let demo = seed_pipeline(&s, "r15-demo", &[1]).await;
+    let demo = seed_pipeline(&s, "web-demo", &[1]).await;
     let base = create_binding(
         &app,
         &cookie,
@@ -1308,7 +1308,7 @@ async fn an_excluded_device_that_would_switch_artifacts_blocks_and_is_named() {
         let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
         ids.sort();
         let edge = seed_pipeline(&s, "Edge syslog processing", &[1]).await;
-        let demo = seed_pipeline(&s, "r15-demo", &[1]).await;
+        let demo = seed_pipeline(&s, "web-demo", &[1]).await;
         let web = seed_pipeline(&s, "Web access logs", &[1, 2]).await;
         create_binding(
             &app,
@@ -1490,10 +1490,10 @@ fn ids_of(entries: &Value) -> Vec<String> {
     ids
 }
 
-/// Round-2 operator review P1-3: after rolling a canary back and publishing a
-/// fix, redeploying takes one review round and changes every device. The
-/// preview suggests replacing the pipeline's own rolled-back rollout and its
-/// rollback, at the rollback's priority, as the deploy dialog adopts it.
+/// After rolling a canary back and publishing a fix, redeploying takes one
+/// review and changes every device. The preview suggests replacing the
+/// pipeline's own rolled-back rollout and its rollback, at the rollback's
+/// priority, as the deploy dialog adopts it.
 #[tokio::test]
 async fn redeploying_a_fix_after_a_rollback_takes_one_round_and_reaches_every_device() {
     let c = live_canary(100, true).await;
@@ -1617,7 +1617,7 @@ async fn redeploying_a_fix_after_a_rollback_takes_one_round_and_reaches_every_de
         (
             c.canary["id"].as_str().unwrap().to_owned(),
             false,
-            "r15-demo".to_owned(),
+            "web-demo".to_owned(),
         ),
         (
             rollback["id"].as_str().unwrap().to_owned(),
