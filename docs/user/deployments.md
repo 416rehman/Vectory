@@ -25,7 +25,7 @@ Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md
 
 The device list in the dialog shows a page at a time and searches on the server, so it opens as quickly with thousands of devices as with ten. Search by name, platform, pipeline, version or group, tick devices, and move on to other pages or searches: your choices stay. **Select all 84 matching** adds every device the search finds in one step, up to 10,000, and says so if more match. A pipeline that runs on more than a hundred devices starts with all of them chosen the same way, up to the same limit, and the dialog says how many it took when more run it. Groups are listed by name with their device count; a group's members are counted when you choose it, and the server reads the group again when it reviews and when it sends. **Clear selection** starts over.
 
-Each device you tick one by one can have its own value for a pipeline variable. The default you set applies to devices you add in bulk. A device's page lists the values it was offered: see [Read what a device was offered](#read-what-a-device-was-offered).
+Each device you tick one by one can have its own value for a [pipeline variable](resources.md#values-that-differ-by-device). The default you set applies to devices you add in bulk. A device's page lists the values it was offered: see [Read what a device was offered](#read-what-a-device-was-offered).
 
 ## Review the target set
 

@@ -511,6 +511,9 @@ async function launch(
         ? reply(readable(validation))
         : reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
     }
+    // A version with variables asks what each chosen device runs now.
+    if (method === "POST" && path === "/deployments/binding-suggestions")
+      return reply({ devices: {} });
     if (method === "GET" && path.startsWith("/versions/")) {
       const key = path.split("/").pop();
       f.versionReads?.push(key);
@@ -1632,6 +1635,73 @@ try {
   );
 
   await check(
+    "The values a deployment asks for point credentials to a device secret, not to a provider only full mode runs",
+    async () => {
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({ devices: [device(0, NAMES.pass)] });
+        f.initial = {};
+        const app = await launch(f, { width, theme });
+        const { page } = app;
+        try {
+          await page.goto(origin + "/__device-check");
+          await page.waitForFunction(() => window.ready);
+          await page.evaluate(
+            ({ version, userId }) =>
+              window.mount({
+                open: true,
+                userId,
+                version,
+                pipelineName: "Synthetic logs",
+              }),
+            {
+              version: {
+                ...version,
+                variables: [
+                  {
+                    name: "site_name",
+                    path: "/sinks/discard/id",
+                    type: "string",
+                  },
+                ],
+              },
+              userId,
+            },
+          );
+          const dialog = page.getByRole("dialog");
+          await dialog.getByLabel(`Select ${NAMES.pass}`).check();
+          const values = dialog.getByRole("region", {
+            name: "Values by device",
+          });
+          await expect(values).toContainText(
+            "For credentials, use a device secret instead: vectory-secret:NAME",
+          );
+          await expect(values).not.toContainText("device-local");
+          await expect(
+            values.getByRole("link", { name: /How device secrets work/ }),
+          ).toHaveAttribute(
+            "href",
+            "/help/resources/#keep-credentials-on-the-device",
+          );
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "deployment values hint", width, theme);
+          await values.scrollIntoViewIfNeeded();
+          const file = `deployment-values-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+
+  await check(
     "A host with its own state directory that runs vectory run gets the secret commands and the fix made for it",
     async () => {
       const own = { state_dir: "/srv/vectory state", service_manager: "none" };
@@ -1814,7 +1884,7 @@ try {
     scope:
       "The real deploy review and its Check on devices section, with intercepted synthetic HTTP. The synthetic server answers when the harness says so: no host validated anything.",
     passed:
-      results.length === 19 &&
+      results.length === 20 &&
       results.every((r) => r.passed) &&
       accessibility.every((s) => !s.violations.length),
     results,

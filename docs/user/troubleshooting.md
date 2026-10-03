@@ -215,7 +215,7 @@ ReadWritePaths=/srv/logs
 
 ## A credential is refused when you save or publish
 
-Credentials stay on the devices, so a credential field holds a secret name, never the value. The message names the step and the field:
+Credentials stay on the devices, so a credential field holds a secret name, never the value. The message names the step and the field. When a save is refused, your edits stay and **Go to field** opens the setting:
 
 | Message | Fix |
 | --- | --- |

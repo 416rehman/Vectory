@@ -47,7 +47,7 @@ A **source** receives or generates events, a **transform** changes, filters or r
 | Undo | **Ctrl Z** (**⌘ Z**); add Shift to redo. |
 | Work from the keyboard | Arrow keys move a focused card, **Enter** opens it, **Delete** removes it, **Shift F10** opens its menu. **Canvas shortcuts** lists the rest. |
 
-The status beside **Save draft** always shows where you are: **Saved**, **Saving…**, **Unsaved**, **Unapplied edits** or **Save failed**. Nothing saves in the background. **Discard changes** returns to the last saved draft.
+The status beside **Save draft** always shows where you are: **Saved**, **Saving…**, **Unsaved**, **Unapplied edits** or **Save failed**. Nothing saves in the background. **Discard changes** returns to the last saved draft. When the server refuses a draft, your edits stay and the message says why. If one setting is the cause, such as a plaintext credential, **Go to field** opens it. **Reload server draft** appears only when the draft changed elsewhere, such as in another tab.
 
 The component catalog covers the 128 production component types of Vector 0.58.0. A component in the catalog still needs the device's Vector build and platform to support it, and restricted devices accept [only some components](security.md#restricted-and-full-mode).
 
@@ -138,13 +138,14 @@ Use graph connections when you want a fixed set. Wildcards live in **Code** view
 
 ## Global settings
 
-Open [**Actions → Pipeline settings**](/#/configurations?panel=settings) for settings that apply to the whole pipeline:
+Choose [**Settings**](/#/configurations?panel=settings) in the editor toolbar for settings that apply to the whole pipeline:
 
 | Section | What you configure |
 | --- | --- |
 | [General](/#/configurations?panel=settings&section=general) | Pipeline-wide Vector options, such as the data directory and the internal API. |
 | [Enrichment tables](/#/configurations?panel=settings&section=enrichment_tables) | Lookup data for enriching events. |
 | [Secrets](/#/configurations?panel=settings&section=secret) | Providers that resolve credentials on each device. |
+| [Variables](/#/configurations?panel=settings&section=variables) | Fields whose value differs by device. You enter the values when you deploy: see [Values that differ by device](resources.md#values-that-differ-by-device). |
 | [Tests](/#/configurations?panel=settings&section=tests) | Sample events and assertions for your transforms. |
 | [Configuration provider](/#/configurations?panel=settings&section=provider) | A device-side provider that supplies Vector configuration. |
 
@@ -169,7 +170,7 @@ Devices receive JSON. Comments and formatting from an imported file aren't kept.
 
 <!-- steps -->
 1. Choose the check button in the toolbar. It checks connections, required fields and types, then asks the sandboxed Vector on your server to validate the configuration. The **Problems** panel under the canvas lists every problem by step; choose one to jump to the step, field or line. With **Auto-check** on, the editor checks again shortly after you stop editing.
-2. Run your tests under [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests).
+2. Run your tests under [**Settings → Tests**](/#/configurations?panel=settings&section=tests).
 3. Choose **Review & publish**. The review checks again, runs the pipeline's tests and lists what changes since the last version, with line-by-line differences for VRL programs. Add a note and choose **Publish version**. Unsaved edits are saved first. While a test is failing, the button reads **Publish anyway**: see [Tests gate publishing](resources.md#test-transformations).
 4. Deploy it: choose **Choose devices** when the version is published, or see [Deploy a published version](deployments.md#deploy-a-published-version).
 

@@ -166,6 +166,8 @@ async function load({
     pendingValidations: [],
     holdSave: false,
     failSave: false,
+    // The server refuses to store the draft: { status, code, message }.
+    refuseSave: null,
     readsUnavailable: false,
     holdReads: false,
     pendingReads: [],
@@ -319,6 +321,12 @@ async function load({
         );
       if (saveFailure)
         return reject("SAVE_FAILED", "Synthetic draft save failed", 503);
+      if (current.refuseSave)
+        return reject(
+          current.refuseSave.code,
+          current.refuseSave.message,
+          current.refuseSave.status,
+        );
       if (body.revision !== current.document.revision)
         return reject("STALE_REVISION", "Synthetic draft changed", 409);
       current.mutations.push(structuredClone(body));
@@ -1150,6 +1158,28 @@ try {
       async () => {
         await load();
         await openVariables();
+        // Credentials belong in a device secret, which restricted devices
+        // run too; a provider only full mode runs is never what this offers.
+        await expect(settings()).toContainText(
+          "Do not enter credentials here. Use a device secret, which works in restricted and full mode: vectory-secret:NAME",
+        );
+        await expect(settings()).not.toContainText("device-local");
+        await expect(
+          settings().getByRole("link", { name: /How device secrets work/ }),
+        ).toHaveAttribute(
+          "href",
+          /\/help\/resources\/.*#keep-credentials-on-the-device$/,
+        );
+        await expect(
+          settings().getByRole("link", { name: /How this works/ }),
+        ).toHaveAttribute(
+          "href",
+          /\/help\/resources\/.*#values-that-differ-by-device$/,
+        );
+        await page.screenshot({
+          path: resolve(output, "variables-settings-1440-light.png"),
+          animations: "disabled",
+        });
         await settings()
           .getByRole("combobox", { name: "Pipeline field" })
           .selectOption("/sources/seed/format");
@@ -1212,7 +1242,31 @@ try {
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(2);
+    await check(
+      "the credentials hint and its links fit a phone in both themes",
+      async () => {
+        for (const theme of ["light", "dark"]) {
+          await load({ width: 390, height: 900 });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await openVariables();
+          await expect(
+            settings().getByRole("link", { name: /How device secrets work/ }),
+          ).toBeVisible();
+          await noOverflow(`variables settings 390 ${theme}`);
+          await axe(`variables settings 390 ${theme}`);
+          await settings()
+            .getByRole("link", { name: /How device secrets work/ })
+            .scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(output, `variables-settings-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    expect(results).toHaveLength(3);
   } else if (splitSaveOnly) {
     // While saving, the button shows a loading indicator in its name.
     const saveButton = () =>
@@ -1413,11 +1467,176 @@ try {
         );
         await expect(rate()).toHaveValue("20");
         expect(fixture.saveAttempts).toHaveLength(2);
-        await expect(
-          page.getByText("Synthetic draft save failed", { exact: true }),
-        ).toHaveCount(0);
+        await expect(page.getByText(/Synthetic draft save failed/)).toHaveCount(
+          0,
+        );
         expect(fixture.mutations).toHaveLength(1);
         assertSaveOnly();
+      },
+    );
+    await check(
+      "a refused save keeps the edits, names the setting and goes to it; a reload is offered only when the draft changed elsewhere",
+      async () => {
+        const document = baseDocument();
+        document.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer", token: "plain-text-token" },
+        };
+        await load({ document });
+        // The refusal never asks to throw the work away with a native prompt.
+        const prompts = [];
+        page.on("dialog", (dialog) => {
+          prompts.push(dialog.message());
+          void dialog.dismiss();
+        });
+        fixture.refuseSave = {
+          status: 400,
+          code: "INVALID_INPUT",
+          message: "Plaintext credentials cannot be stored in draft history",
+        };
+        await sample();
+        await rate().fill("21");
+        await rate().press("ControlOrMeta+s");
+        await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "Save failed",
+        );
+        await closeInspector();
+        const banner = page.locator(".editor-message");
+        await expect(banner).toContainText(
+          "Not saved. Replace the plaintext credential in auth.token on out_http with a device secret, such as vectory-secret:NAME. A draft never stores one. Your edits are still here.",
+        );
+        await expect(
+          banner.getByRole("button", { name: "Go to field", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", {
+            name: "Reload server draft",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await page.screenshot({
+          path: resolve(output, "refused-save-1440-light.png"),
+          animations: "disabled",
+        });
+        // The way there is the setting itself.
+        await banner
+          .getByRole("button", { name: "Go to field", exact: true })
+          .click();
+        await expect(page.locator(".editor-inspector")).toContainText(
+          "out_http",
+        );
+        // The form nests the token one level deeper than the config writes it
+        // (auth.auth.token for auth.token): focus is on that control.
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.activeElement?.closest("[data-field-path]")?.dataset
+                  .fieldPath,
+            ),
+          )
+          .toBe("auth.auth.token");
+        // The edit that was being saved is still there.
+        await sample();
+        await expect(rate()).toHaveValue("21");
+        await closeInspector();
+        // Saving again after the fix clears it, with no prompt in between.
+        fixture.refuseSave = null;
+        await saveButton().click();
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "All changes saved",
+        );
+        await expect(banner).toHaveCount(0);
+        // A draft that changed elsewhere is the one case that offers a reload.
+        await sample();
+        await rate().fill("22");
+        fixture.document = {
+          ...fixture.document,
+          revision: fixture.document.revision + 1,
+        };
+        await rate().press("ControlOrMeta+s");
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "Save conflict",
+        );
+        await closeInspector();
+        await expect(banner).toContainText(
+          "The server draft changed. Reload it before continuing.",
+        );
+        await expect(
+          banner.getByRole("button", { name: "Reload server draft" }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", { name: "Go to field" }),
+        ).toHaveCount(0);
+        expect(prompts).toEqual([]);
+        assertSaveOnly();
+      },
+    );
+    await check(
+      "a refused save fits a phone in both themes, with its action reachable",
+      async () => {
+        const document = baseDocument();
+        document.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer", token: "plain-text-token" },
+        };
+        for (const theme of ["light", "dark"]) {
+          await load({ document, width: 390, height: 900 });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          fixture.refuseSave = {
+            status: 400,
+            code: "INVALID_INPUT",
+            message: "Plaintext credentials cannot be stored in draft history",
+          };
+          await sample();
+          await rate().fill("24");
+          await rate().press("ControlOrMeta+s");
+          await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+          await closeInspector();
+          const goTo = page
+            .locator(".editor-message")
+            .getByRole("button", { name: "Go to field", exact: true });
+          await expect(goTo).toBeVisible();
+          await noOverflow(`refused save 390 ${theme}`);
+          await axe(`refused save 390 ${theme}`);
+          await page.screenshot({
+            path: resolve(output, `refused-save-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    await check(
+      "a refusal of the whole draft shows the server's reason, keeps the edits and offers no reload",
+      async () => {
+        await load();
+        fixture.refuseSave = {
+          status: 400,
+          code: "INVALID_INPUT",
+          message: "Graph exceeds 1000 nodes or 5000 edges",
+        };
+        await sample();
+        await rate().fill("23");
+        await rate().press("ControlOrMeta+s");
+        await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+        await closeInspector();
+        const banner = page.locator(".editor-message");
+        await expect(banner).toContainText(
+          "Not saved. Graph exceeds 1000 nodes or 5000 edges. Your edits are still here.",
+        );
+        await expect(banner.getByRole("button")).toHaveCount(0);
+        await sample();
+        await expect(rate()).toHaveValue("23");
       },
     );
     await check(
@@ -1551,7 +1770,7 @@ try {
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(splitSaveFollowup ? 2 : 7);
+    expect(results).toHaveLength(splitSaveFollowup ? 2 : 10);
   } else if (checkStateOnly) {
     const control = () => checkButton();
     const verdict = () => problemsPanel().locator(".problems-verdict");

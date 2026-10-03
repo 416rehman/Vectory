@@ -266,22 +266,21 @@ export default function PipelineGlobals({
           <h3>{details.title}</h3>
           <p>
             {details.description}{" "}
-            {section !== "variables" && (
-              <DocLink
-                topic={section === "general" ? "pipelines" : "resources"}
-                section={
-                  {
-                    general: "global-settings",
-                    enrichment_tables: "enrich-events-with-local-data",
-                    secret: "use-native-vector-secret-providers",
-                    tests: "test-transformations",
-                    provider: "configuration-providers",
-                  }[section]
-                }
-              >
-                How this works
-              </DocLink>
-            )}
+            <DocLink
+              topic={section === "general" ? "pipelines" : "resources"}
+              section={
+                {
+                  general: "global-settings",
+                  enrichment_tables: "enrich-events-with-local-data",
+                  secret: "use-native-vector-secret-providers",
+                  variables: "values-that-differ-by-device",
+                  tests: "test-transformations",
+                  provider: "configuration-providers",
+                }[section]
+              }
+            >
+              How this works
+            </DocLink>
           </p>
           {section === "tests" && (
             <div className="pipeline-test-run">
