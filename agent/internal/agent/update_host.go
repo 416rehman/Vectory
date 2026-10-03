@@ -62,6 +62,9 @@ type updateServiceState struct {
 	Restarts int
 	// PID is the main process, 0 when there is none.
 	PID int
+	// Detail is what the manager said, in words for the step's log when a build
+	// doesn't stay up. Nothing reads it to decide anything.
+	Detail string
 }
 
 func (s updateServiceState) running() bool { return s.State == "active" }

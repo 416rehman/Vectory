@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,6 +189,54 @@ func TestABuildThatCannotStartIsTakenBackAsLaunchdShowsItAndNotAtTheDeadline(t *
 			}
 		})
 	}
+}
+
+// What the step writes to its log says what launchd showed when it ended the trial of a
+// build that couldn't start: a job that keeps being started and ending, or a job that
+// launchd doesn't know. The agent's own standard error goes nowhere, so this is what a
+// person reading the step's log has.
+func TestTheStepsLogSaysWhatLaunchdShowedWhenABuildCouldNotStart(t *testing.T) {
+	for behavior, want := range map[string]string{
+		"crash": `the service manager shows the agent's service activating after 3 restart(s) since the watch began: launchd says the job is "spawn scheduled"`,
+		"exit":  `the service manager shows the agent's service inactive after 0 restart(s) since the watch began: launchd doesn't know the job (launchctl print exited 113`,
+	} {
+		t.Run(behavior, func(t *testing.T) {
+			f := newStepFixture(t)
+			f.useLaunchd()
+			oldDigest := f.executableDigest()
+			release := f.newRelease("0.1.2", behavior, releaseOptions{})
+			f.stage(release)
+			log := captureStepLog(t, f.mustRun)
+			f.requireTakenBack(oldDigest, release, "START_FAILED")
+			if !strings.Contains(log, want) {
+				t.Errorf("the step's log:\n%s\nwant it to say %q", log, want)
+			}
+		})
+	}
+}
+
+// captureStepLog runs run and returns what the step wrote to standard error meanwhile.
+func captureStepLog(t *testing.T, run func()) string {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stderr
+	os.Stderr = write
+	text := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(read)
+		text <- string(data)
+	}()
+	func() {
+		defer func() {
+			os.Stderr = saved
+			write.Close()
+		}()
+		run()
+	}()
+	return <-text
 }
 
 // A build that runs and never checks in is the deadline's, not the run counter's: its

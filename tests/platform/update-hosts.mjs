@@ -1183,6 +1183,27 @@ export function macosHost() {
       read("step.log", paths.stepLog);
       save("launchctl-print-step.txt", { text: print(labels.step).text });
       save("launchctl-print-agent.txt", { text: print(labels.agent).text });
+      // What launchd and the kernel said about the agent's job while the step tried a
+      // build. The agent's own standard error goes to /dev/null, so this is where a
+      // start that ended at once is explained: an exit code, a signal, a refusal to
+      // run the file.
+      const logged = sudo(
+        "log",
+        [
+          "show",
+          "--last",
+          "15m",
+          "--style",
+          "compact",
+          "--info",
+          "--predicate",
+          '(process == "launchd" OR process == "xpcproxy" OR process == "amfid" OR process == "kernel" OR process == "syspolicyd") AND eventMessage CONTAINS[c] "vectory"',
+        ],
+        { allowFailure: true, quiet: true, timeoutMs: 180000 },
+      );
+      save("launchd-log.txt", {
+        text: logged.text.split("\n").slice(-100).join("\n"),
+      });
       for (const [name, args] of Object.entries({
         "install-dir.txt": ["-laO", paths.installDir],
         "step-dir.txt": ["-laOeR", paths.stepDir],
