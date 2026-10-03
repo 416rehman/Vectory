@@ -8,15 +8,140 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/sys/windows"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"unsafe"
 )
 
 // openNoFollow is not available on Windows; SafePath refuses a link before the open.
 const openNoFollow = 0
+
+// The places the agent makes directories and its executable. A folder made inside
+// C:\ProgramData without an access list of its own inherits what ProgramData passes
+// on: full control for CREATOR OWNER (whichever account made what is inside), and
+// the Users' right to create files and folders in it and in every folder below it,
+// and an object made by an account takes that account's default owner. So each place
+// the agent makes a directory under ProgramData, and the install directory and
+// the executable, is made with a protected list and an owner of its own, written when
+// it is created (SECURITY_ATTRIBUTES). A process that can't make such a list (it is
+// not elevated, so it can't make the Administrators the owner of what it makes)
+// makes the directory with what its parent passes on, and the path check judges it
+// when the update step looks.
+
+// processUserSID is the account this process runs as.
+func processUserSID() (string, error) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return "", err
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
+}
+
+// makeSharedDirectory makes one directory above a private one. The directory the
+// agent keeps its own directories in under ProgramData (the update root: the state
+// directory and the managed configuration are made in it, and the policy and the step
+// after them) is made closed to every account but root, before anything is made in
+// it, so that no local account can make the update directories first. Any other
+// directory is made with what its parent passes on.
+func makeSharedDirectory(dir string) error {
+	if root, ok := updateRootFor(dir); ok && strings.EqualFold(root, dir) {
+		if makeDirectory(dir, updateRootSDDL(ServiceName)) == nil {
+			return nil
+		}
+	}
+	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(dir, 0755)
+}
+
+// makePrivateDirectory makes a private directory with the list that keeps it private
+// (privateDirectorySDDL) at once, where MkdirAll makes it with what its parent gives
+// and protect closes it a moment later. What is missing above it is made by
+// makeTraversable first.
+func makePrivateDirectory(path string) error {
+	if info, err := os.Lstat(path); err == nil {
+		if !info.IsDir() {
+			return &fs.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+		}
+		return nil
+	}
+	if user, err := processUserSID(); err == nil && makeDirectory(path, privateDirectorySDDL(user)) == nil {
+		return nil
+	}
+	return os.MkdirAll(path, 0700)
+}
+
+// makeInstallDirectory makes the directory the agent is installed in, and what is
+// missing above it as MkdirAll does. The directory itself has the list of a directory
+// root keeps programs in (rootExecutable), owned by the Administrators: what the
+// update step trusts doesn't depend on what the parent passes on. Under Program Files
+// it gives the same accounts the same access as the parent would have passed on.
+func makeInstallDirectory(dir string) error {
+	if info, err := os.Lstat(dir); err == nil {
+		if !info.IsDir() {
+			return &fs.PathError{Op: "mkdir", Path: dir, Err: syscall.ENOTDIR}
+		}
+		return nil
+	}
+	if parent := filepath.Dir(dir); parent != dir {
+		if err := os.MkdirAll(parent, 0755); err != nil {
+			return err
+		}
+	}
+	if makeDirectory(dir, windowsSDDL(rootExecutable, true, ServiceName)) == nil {
+		return nil
+	}
+	return os.MkdirAll(dir, 0755)
+}
+
+// createInstallTemp makes the file the new agent is written to before it takes the
+// place of the installed one by a rename: it has the list of an executable root keeps
+// (rootExecutable) and the Administrators as owner, which is what the update step
+// trusts the installed file to have.
+func createInstallTemp(dir string) (*os.File, error) {
+	if file := createInstallTempWithList(dir); file != nil {
+		return file, nil
+	}
+	return os.CreateTemp(dir, ".vectory-install-*")
+}
+
+// createInstallTempWithList is createInstallTemp with the list, or nil when the file
+// can't be made with it.
+func createInstallTempWithList(dir string) *os.File {
+	sa, err := securityAttributes(windowsSDDL(rootExecutable, false, ServiceName))
+	if err != nil {
+		return nil
+	}
+	for attempt := 0; attempt < 8; attempt++ {
+		suffix, err := randomSuffix(8)
+		if err != nil {
+			return nil
+		}
+		path := filepath.Join(dir, ".vectory-install-"+suffix)
+		name, err := windows.UTF16PtrFromString(path)
+		if err != nil {
+			return nil
+		}
+		handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		if err == nil {
+			return os.NewFile(uintptr(handle), path)
+		}
+		if !errors.Is(err, windows.ERROR_FILE_EXISTS) {
+			return nil
+		}
+	}
+	return nil
+}
 
 func protect(path string, dir bool) error {
 	t, e := windows.OpenCurrentProcessToken()

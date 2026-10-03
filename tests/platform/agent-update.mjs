@@ -129,8 +129,10 @@ function assertEqual(actual, expected, what) {
 
 /**
  * What a failed phase prints about the host: the step's status, journal and counters,
- * its log, and the service manager's view, each cut to its last 6 KB. The evidence
- * artifact holds the same files, but the run's page is where a failure is read.
+ * its log, and the service manager's view, each cut to its last 6 KB. On Windows the
+ * view includes the manager's events for the services and the owner and access list
+ * of the directories the path check judges. The evidence artifact holds the same
+ * files, but the run's page is where a failure is read.
  */
 function hostDiagnostics(host) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vectory-diagnostics-"));
@@ -140,7 +142,7 @@ function hostDiagnostics(host) {
       .readdirSync(dir)
       .sort()
       .filter((name) =>
-        /^(journal-|step-(status|journal|counters)|step\.log|launchctl-print|launchd-log|sc-(queryex|qfailure)-)/.test(
+        /^(journal-|step-(status|journal|counters)|step\.log|launchctl-print|launchd-log|sc-(queryex|qfailure)-|scm-events|acl-(locations|update-root|step|install-dir))/.test(
           name,
         ),
       )
@@ -153,6 +155,19 @@ function hostDiagnostics(host) {
     return `(the host's diagnostics couldn't be read: ${error.message})`;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The state and the code an update's target ended with. A target that ended some other
+ * way is shown with what the host says, because why an update ended as it did is in the
+ * step's status, journal and log.
+ */
+function assertEndedAs(host, target, state, code) {
+  try {
+    assertEqual([target.state, target.code], [state, code], "the target");
+  } catch (error) {
+    throw new Error(`${error.message}\n${hostDiagnostics(host)}`);
   }
 }
 
@@ -475,8 +490,17 @@ async function setupDevice(
     console.log(
       `  [${step.status}] ${step.label}: ${step.detail}${step.fix ? `\n        ${step.fix}` : ""}`,
     );
-  if (!allowFailure && (outcome.code !== 0 || !parsed?.ok))
-    throw new Error(`vectory setup exited ${outcome.code}:\n${outcome.text}`);
+  if (!allowFailure && (outcome.code !== 0 || !parsed?.ok)) {
+    // A refusal of a location is read against the owner and the access list of the
+    // directories on its path, which a host that has them prints.
+    const host = updateHostFor();
+    const locations = host.describeLocations
+      ? `\n${host.describeLocations()}`
+      : "";
+    throw new Error(
+      `vectory setup exited ${outcome.code}:\n${outcome.text}${locations}`,
+    );
+  }
   return { outcome, parsed };
 }
 
@@ -576,6 +600,10 @@ async function install(evidence) {
         `An agent's processes still run:\n${describeProcesses()}`,
       );
       assertEqual(host.consentTraces(), [], "what updates left on the machine");
+      // What the machine has on the directories the path check judges before the
+      // agent makes anything, kept in the evidence (a host that has it).
+      if (host.describeLocations)
+        evidence.observe("locations_before_setup", host.describeLocations());
     },
   );
   await evidence.step(
@@ -616,6 +644,8 @@ async function install(evidence) {
         (parsed.steps ?? []).some((step) => /update/i.test(step.label)),
         `Setup printed no step about updates: ${JSON.stringify(parsed.steps)}`,
       );
+      if (host.describeLocations)
+        evidence.observe("locations_after_setup", host.describeLocations());
       return parsed;
     },
   );
@@ -1348,11 +1378,7 @@ async function startFailure(evidence) {
     ended,
     minutes(10),
   );
-  assertEqual(
-    [done.state, done.code],
-    ["rolled_back", "START_FAILED"],
-    "the target",
-  );
+  assertEndedAs(host, done, "rolled_back", "START_FAILED");
   await evidence.step(
     "The host is on the build it had, with the new build's counter as its floor",
     () => {
@@ -1523,11 +1549,7 @@ async function noCheckIn(evidence) {
     ended,
     minutes(15),
   );
-  assertEqual(
-    [done.state, done.code],
-    ["rolled_back", "NO_CHECK_IN"],
-    "the target",
-  );
+  assertEndedAs(host, done, "rolled_back", "NO_CHECK_IN");
   await evidence.step(
     "The host is back on the build it had, and the floor stays at the new build's counter",
     () => {
@@ -1587,11 +1609,7 @@ async function truncated(evidence) {
     ended,
     minutes(15),
   );
-  assertEqual(
-    [done.state, done.code],
-    ["failed", "DOWNLOAD_FAILED"],
-    "the target",
-  );
+  assertEndedAs(host, done, "failed", "DOWNLOAD_FAILED");
   await evidence.step(
     "Nothing was installed, staged or left under a final name, and the service was never stopped",
     () => {
@@ -1993,7 +2011,7 @@ async function diskFull(evidence) {
       ended,
       minutes(12),
     );
-    assertEqual([done.state, done.code], ["failed", "DISK_FULL"], "the target");
+    assertEndedAs(host, done, "failed", "DISK_FULL");
     await evidence.step(
       "The step stopped before it changed anything: the executable, the files beside it, the service",
       () => {

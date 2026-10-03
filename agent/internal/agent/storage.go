@@ -66,7 +66,7 @@ func PrivateDir(path string) error {
 	if e := makeTraversable(filepath.Dir(path)); e != nil {
 		return e
 	}
-	if e := os.MkdirAll(path, 0700); e != nil {
+	if e := makePrivateDirectory(path); e != nil {
 		return e
 	}
 	return protect(path, true)
@@ -76,7 +76,9 @@ func PrivateDir(path string) error {
 // yet, each readable and searchable by everyone whatever the umask. The service
 // account that owns the private directory has to reach it through them, and they
 // hold nothing private: MkdirAll with 0700 would have made them root's alone.
-// A directory that exists is left as it is.
+// A directory that exists is left as it is. (makeSharedDirectory makes each: on
+// Windows, the directory the agent keeps its own directories in under ProgramData
+// is made closed to every account but root.)
 func makeTraversable(dir string) error {
 	if _, err := os.Lstat(dir); err == nil {
 		return nil
@@ -88,10 +90,7 @@ func makeTraversable(dir string) error {
 			return err
 		}
 	}
-	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
-		return err
-	}
-	return os.Chmod(dir, 0755)
+	return makeSharedDirectory(dir)
 }
 
 // atomicTempPrefix names AtomicWrite's temporary files, so a leftover from a

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"unsafe"
 
@@ -438,4 +439,256 @@ func TestTheDirectoriesAWindowsInstallStartsWithPassTheCheck(t *testing.T) {
 		}
 		r.Close()
 	}
+}
+
+// The rights the path check names are the values the system defines for a file or a
+// directory, so that what refuses a path is what Windows lets an account do.
+func TestTheRightsThePathCheckNamesAreTheValuesTheSystemDefines(t *testing.T) {
+	for name, pair := range map[string][2]uint32{
+		"FILE_WRITE_DATA":       {rightWriteData, windows.FILE_WRITE_DATA},
+		"FILE_APPEND_DATA":      {rightAppendData, windows.FILE_APPEND_DATA},
+		"FILE_WRITE_EA":         {rightWriteEA, windows.FILE_WRITE_EA},
+		"FILE_WRITE_ATTRIBUTES": {rightWriteAttributes, windows.FILE_WRITE_ATTRIBUTES},
+		"DELETE":                {rightDelete, windows.DELETE},
+		"WRITE_DAC":             {rightWriteDAC, windows.WRITE_DAC},
+		"WRITE_OWNER":           {rightWriteOwner, windows.WRITE_OWNER},
+		"GENERIC_ALL":           {rightGenericAll, windows.GENERIC_ALL},
+		"GENERIC_WRITE":         {rightGenericWrite, windows.GENERIC_WRITE},
+		// The package that carries the other values has no name for this one.
+		"FILE_DELETE_CHILD": {rightDeleteChild, 0x40},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s is %#x here and %#x in the system's header", name, pair[0], pair[1])
+		}
+	}
+}
+
+// entriesOf reads the owner and the access entries of a descriptor the way readSecurity
+// reads them from a handle.
+func entriesOf(t *testing.T, sd *windows.SECURITY_DESCRIPTOR) (owner string, hasACL bool, entries []aclEntry) {
+	t.Helper()
+	if account, _, err := sd.Owner(); err == nil && account != nil {
+		owner = account.String()
+	}
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
+		return owner, false, nil
+	}
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, aclEntry{SID: (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String(), Type: ace.Header.AceType, Flags: ace.Header.AceFlags, Mask: uint32(ace.Mask)})
+	}
+	return owner, true, entries
+}
+
+// The lists the tests of the decision judge are written as descriptor text and read by
+// a reader of their own on every platform; here Windows reads the same text, and must
+// find the same owner and the same entries, or those tests judged something else.
+func TestTheDescriptorTextOfTheListsIsReadByWindowsAsThePathCheckTestsReadIt(t *testing.T) {
+	lists := map[string]string{
+		"the update root":       updateRootSDDL(ServiceName),
+		"a private directory":   privateDirectorySDDL(sidSomeUser),
+		"the install directory": windowsSDDL(rootExecutable, true, ServiceName),
+		"the install file":      windowsSDDL(rootExecutable, false, ServiceName),
+		"a private file":        windowsSDDL(rootPrivate, false, ServiceName),
+	}
+	for name, sddl := range stockLists {
+		lists[name] = sddl
+	}
+	for name, sddl := range lists {
+		sd, err := windows.SecurityDescriptorFromString(sddl)
+		if err != nil {
+			t.Errorf("%s: Windows doesn't read %q: %v", name, sddl, err)
+			continue
+		}
+		gotOwner, gotHas, got := entriesOf(t, sd)
+		wantOwner, wantHas, want := parseSDDL(t, sddl)
+		if gotOwner != wantOwner || gotHas != wantHas || len(got) != len(want) {
+			t.Errorf("%s: Windows reads owner %q, access list %v, %d entries; the test reader reads %q, %v, %d", name, gotOwner, gotHas, len(got), wantOwner, wantHas, len(want))
+			continue
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("%s: entry %d is %+v for Windows and %+v for the test reader", name, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// Setup's first look judges the part of a path that exists as the walk of the whole
+// path will. On a machine that has no %ProgramData%\Vectory yet the nearest directory
+// that exists is C:\ProgramData, which lets the Users create entries: it is above the
+// directories that are made in it, and refused only when it is the one that holds
+// what is made.
+func TestTheFirstLookJudgesTheDirectoryThatExistsAsWhatIsAboveThePathThatDoesNot(t *testing.T) {
+	tree := ownTree(t)
+	above := filepath.Join(tree, "a")
+	mkdirAll(t, above)
+	setDACL(t, above, ownDACL(t, true, "(A;;FW;;;BU)"))
+	target := filepath.Join(above, "b")
+	if err := untrustedPrefix(target); err != nil {
+		t.Errorf("a directory that lets the Users create entries, above a path that doesn't exist yet: %v", err)
+	}
+	if err := untrustedPrefix(filepath.Join(target, "c", "d")); err != nil {
+		t.Errorf("the same, with two directories missing: %v", err)
+	}
+	users := accountName(sidUsers)
+	if refusal := refusedAs(t, untrustedPrefix(above)); refusal.Detail != above+" can be changed by "+users+" (write)" {
+		t.Errorf("that directory as the one that holds what is made: %q", refusal.Detail)
+	}
+	// Once the directory below it exists it is judged for every right to change it.
+	mkdirAll(t, target)
+	if err := untrustedPrefix(target); err != nil {
+		t.Errorf("a directory made inside one that lets the Users create entries: %v", err)
+	}
+	setDACL(t, target, ownDACL(t, true, "(A;;FW;;;BU)"))
+	if refusal := refusedAs(t, untrustedPrefix(target)); refusal.Detail != target+" can be changed by "+users+" (write)" {
+		t.Errorf("the directory the path ends in, open to the Users: %q", refusal.Detail)
+	}
+	// What lets an account delete or take over what is in a directory above is refused.
+	setDACL(t, target, ownDACL(t, true))
+	setDACL(t, above, ownDACL(t, true, "(A;;0x40;;;BU)"))
+	if refusal := refusedAs(t, untrustedPrefix(filepath.Join(target, "c"))); refusal.Detail != above+" can be changed by "+users+" (delete)" {
+		t.Errorf("a directory above that lets the Users delete a child: %q", refusal.Detail)
+	}
+	// A file where a directory should be, and a path that isn't one, are refused as the walk refuses them.
+	file := filepath.Join(tree, "file")
+	writeText(t, file, "x")
+	if refusal := refusedAs(t, untrustedPrefix(filepath.Join(file, "below"))); refusal.Detail != file+" isn't a directory (it is a file)" {
+		t.Errorf("a file on the way: %q", refusal.Detail)
+	}
+	if err := untrustedPrefix(`relative\path`); err == nil {
+		t.Error("a relative path was looked at")
+	}
+}
+
+// Every directory the walk makes has a list of its own: the last the one its caller
+// names, the ones above it the one the agent's service can read, and none takes what
+// the directory that holds it passes on.
+func TestEveryDirectoryTheWalkMakesHasAListOfItsOwn(t *testing.T) {
+	requireRootOwnedWriter(t)
+	tree := ownTree(t)
+	dir, err := ensureRootOwnedDir(filepath.Join(tree, "x", "y", "z"), rootPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir.Close()
+	requireOnlyRootAndThese(t, filepath.Join(tree, "x"), readableAccess())
+	requireOnlyRootAndThese(t, filepath.Join(tree, "x", "y"), readableAccess())
+	requireOnlyRootAndThese(t, filepath.Join(tree, "x", "y", "z"), privateAccess())
+}
+
+// The agent's state directory is made with the list that keeps it private at once,
+// not with what its parent gives and then closed a moment later.
+func TestAPrivateDirectoryIsMadeWithItsOwnersListAtOnce(t *testing.T) {
+	tree := ownTree(t)
+	user := currentUserSID(t)
+	state := filepath.Join(tree, "state")
+	if err := makePrivateDirectory(state); err != nil {
+		t.Fatal(err)
+	}
+	requirePrivateToItsOwner(t, state, user)
+	// One that is there is left as it is, and a file in its place is refused.
+	if err := makePrivateDirectory(state); err != nil {
+		t.Errorf("a second call: %v", err)
+	}
+	writeText(t, filepath.Join(tree, "file"), "x")
+	if err := makePrivateDirectory(filepath.Join(tree, "file")); !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("a file where the directory should be: %v", err)
+	}
+	// PrivateDir makes what is above it with what its parent passes on, and the
+	// directory as above; protect, which it runs afterwards, changes nothing.
+	nested := filepath.Join(tree, "above", "private")
+	if err := PrivateDir(nested); err != nil {
+		t.Fatal(err)
+	}
+	requirePrivateToItsOwner(t, nested, user)
+	if found := readDescriptor(t, filepath.Join(tree, "above")); found.protected {
+		t.Errorf("a directory above a private one was closed: %+v", found)
+	}
+}
+
+// requirePrivateToItsOwner checks the list of a directory made private to the account
+// that made it: that account owns it, and it, SYSTEM and the Administrators are the
+// only accounts with entries, each full control that passes to what is made in it,
+// with nothing inherited.
+func requirePrivateToItsOwner(t *testing.T, path, user string) {
+	t.Helper()
+	found := readDescriptor(t, path)
+	if found.owner != user || !found.protected {
+		t.Errorf("%s belongs to %s (protected: %v), want %s and a protected list", path, accountName(found.owner), found.protected, accountName(user))
+	}
+	got := map[string]aclEntry{}
+	for _, entry := range found.entries {
+		got[entry.SID] = entry
+	}
+	if len(got) != 3 {
+		t.Errorf("%s: access entries %+v, want SYSTEM, the Administrators and its owner", path, found.entries)
+	}
+	for _, sid := range []string{sidSystem, sidAdministrators, user} {
+		if e := got[sid]; e.Mask != fullControl || e.Flags&windows.INHERITED_ACE != 0 || e.Flags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) != windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE {
+			t.Errorf("%s: the entry of %s is %+v, want full control that passes on to what is made in it", path, accountName(sid), e)
+		}
+	}
+}
+
+// The directory the agent is installed in, and the file that becomes the installed
+// agent by a rename, are made with the lists of what root keeps programs in and the
+// Administrators as owner, and what was made passes the path check as it ships.
+func TestTheInstallDirectoryAndTheExecutableAreMadeWithTheListsOfWhatRootKeeps(t *testing.T) {
+	requireRootOwnedWriter(t)
+	base, err := finalDirectoryPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := rootOwnedTrust
+	rootOwnedTrust = ownerTrust{anchor: base}
+	t.Cleanup(func() { rootOwnedTrust = old })
+
+	dir := filepath.Join(base, "Vectory")
+	if err := makeInstallDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	requireOnlyRootAndThese(t, dir, executableAccess())
+	temp, err := createInstallTemp(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := temp.WriteString("the agent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := temp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(filepath.Base(temp.Name()), ".vectory-install-") {
+		t.Errorf("the temporary file is called %s", temp.Name())
+	}
+	requireOnlyRootAndThese(t, temp.Name(), executableAccess())
+	target := filepath.Join(dir, "vectory.exe")
+	if err := replaceFile(temp.Name(), target); err != nil {
+		t.Fatal(err)
+	}
+	requireOnlyRootAndThese(t, target, executableAccess())
+	// The step trusts it: every component below the directory the test made passes with
+	// nobody trusted but root.
+	held := mustOpen(t, target, rootOwnedFile)
+	if data, err := held.ReadFile(64); err != nil || string(data) != "the agent" {
+		t.Errorf("read %q, %v", data, err)
+	}
+	// A directory that is there is left as it is, a file in its place is refused, and
+	// what is missing above a new one is made.
+	if err := makeInstallDirectory(dir); err != nil {
+		t.Errorf("a directory that is there: %v", err)
+	}
+	if err := makeInstallDirectory(target); !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("a file where the directory should be: %v", err)
+	}
+	deeper := filepath.Join(base, "Acme", "Tools", "Vectory")
+	if err := makeInstallDirectory(deeper); err != nil {
+		t.Fatal(err)
+	}
+	requireOnlyRootAndThese(t, deeper, executableAccess())
 }

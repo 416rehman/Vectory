@@ -29,16 +29,19 @@ import (
 // each component).
 //
 // What keeps a component from changing between the check and the use is that
-// rule, which refuses every directory above the one that holds the object if
-// another account may delete, rename or take over what it holds, and the holder
-// and the object if another account may change them at all. Every handle stays
-// open besides, a directory with the right to list it and without delete sharing,
-// so that nothing that respects sharing, root included, can rename or remove one
-// of the directories while the value is in use. (A directory opened for its
-// attributes and its access list alone is not subject to sharing at all, which is
-// why the handles ask for the right to list.) Windows has no open-relative-to-a-
-// handle call that Go exposes, so the *At methods name the entry inside the held
-// directory by path, which nothing but root can change.
+// rule, which refuses a directory above the step's and the install directory if
+// another account may delete, rename or take over what it holds (and lets such an
+// account create new entries there, as Windows does in a drive root and in
+// ProgramData), and refuses the update root, everything below it, the install
+// directory and the executable if another account may change them at all. Every
+// handle stays open besides, a directory with the right to list it and without
+// delete sharing, so that nothing that respects sharing, root included, can rename
+// or remove one of the directories, an ancestor of the path among them, while the
+// value is in use. (A directory opened for its attributes and its access list alone
+// is not subject to sharing at all, which is why the handles ask for the right to
+// list.) Windows has no open-relative-to-a-handle call that Go exposes, so the *At
+// methods name the entry inside the held directory by path, which nothing but root
+// can change.
 
 // ownerTrust says whose ownership and access entries pass the path check. The
 // zero value is what ships: SYSTEM, the Administrators and TrustedInstaller.
@@ -82,23 +85,6 @@ func checkLocalPath(path string) error {
 		return fmt.Errorf("%q isn't an absolute path with no . or .. or doubled separators", path)
 	}
 	return nil
-}
-
-// windowsPrefixes lists the root of a drive and every directory down to path:
-// C:\, C:\ProgramData, C:\ProgramData\Vectory.
-func windowsPrefixes(path string) []string {
-	volume := filepath.VolumeName(path)
-	prefixes := []string{volume + `\`}
-	rest := strings.TrimPrefix(path[len(volume):], `\`)
-	if rest == "" {
-		return prefixes
-	}
-	current := volume
-	for _, part := range strings.Split(rest, `\`) {
-		current += `\` + part
-		prefixes = append(prefixes, current)
-	}
-	return prefixes
 }
 
 // openComponent opens one directory or file for the check. A directory is opened
@@ -254,10 +240,13 @@ func judgeHandle(h windows.Handle, path string, role windowsRole, trust ownerTru
 }
 
 // sddl is the security descriptor a made directory gets: the access leaf names
-// for the last, and what the parent gives for the ones above.
+// for the last, and the one the agent's service can read for the ones above it,
+// which it must be able to enter to reach the last. A directory made inside
+// ProgramData without a list of its own inherits what ProgramData passes on (see
+// updateRootSDDL), so every directory the walk makes has one.
 func (c createSpec) sddl(last bool) string {
 	if !last {
-		return ""
+		return windowsSDDL(rootReadable, true, ServiceName)
 	}
 	return windowsSDDL(c.leaf, true, ServiceName)
 }
@@ -299,6 +288,8 @@ func walkOwned(path string, kind rootOwnedKind, trust ownerTrust, create *create
 	if kind == rootOwnedFile && n < 2 {
 		return nil, fmt.Errorf("%q isn't a file", path)
 	}
+	root, _ := updateRootFor(path)
+	roles := windowsPathRoles(prefixes, kind, root, false)
 	held := &rootOwned{path: path, trust: trust}
 	fail := func(err error) (*rootOwned, error) {
 		_ = held.Close()
@@ -306,12 +297,9 @@ func walkOwned(path string, kind rootOwnedKind, trust ownerTrust, create *create
 	}
 	for i, prefix := range prefixes {
 		last := i == n-1
-		want, role := rootOwnedDirectory, windowsAbove
-		switch {
-		case last && kind == rootOwnedFile:
-			want, role = rootOwnedFile, windowsObject
-		case last, kind == rootOwnedFile && i == n-2:
-			role = windowsHolds
+		want, role := rootOwnedDirectory, roles[i]
+		if last && kind == rootOwnedFile {
+			want = rootOwnedFile
 		}
 		h, err := openComponent(prefix, want)
 		if err != nil && notExist(err) && create != nil && want == rootOwnedDirectory {
@@ -367,14 +355,52 @@ func openRootOwned(path string, kind rootOwnedKind) (*rootOwned, error) {
 
 // ensureRootOwnedDir is openRootOwned for a directory, which it makes with any
 // missing directory above it: the last with the access leaf names, the others
-// with what their parent gives. A directory that exists is judged, never changed,
-// with one exception: the directory the update directories are made in is closed
-// to other accounts first (ensureUpdateRoot).
+// with the list the agent's service can read (createSpec.sddl). A directory that
+// exists is judged, never changed, with one exception: the directory the update
+// directories are made in is closed to other accounts first (ensureUpdateRoot).
 func ensureRootOwnedDir(path string, leaf rootFilePerm) (*rootOwned, error) {
 	if err := ensureUpdateRoot(path); err != nil {
 		return nil, err
 	}
 	return walkOwned(path, rootOwnedDirectory, rootOwnedTrust, &createSpec{leaf: leaf})
+}
+
+// untrustedPrefix is setup's first look at where a directory will be: it says why
+// the part of path that exists can't be trusted with what decides an install, or
+// returns nil when it can, and stops where the path stops existing, because what is
+// missing is made by the step that needs it. Each component that exists is judged
+// as the walk of the whole path judges it (windowsPathRoles), so that the directory
+// the path ends below is a directory above it and not the one that holds it: the
+// nearest directory that exists on a machine that has no %ProgramData%\Vectory yet
+// is C:\ProgramData, which lets Users create entries and is refused only when it is
+// the holder. Nothing is held: the walk that follows judges again, through handles.
+// The update root, which setup closes itself when it belongs to root and is open to
+// others, is judged by who owns it alone.
+func untrustedPrefix(path string) error {
+	if err := checkLocalPath(path); err != nil {
+		return err
+	}
+	prefixes := windowsPrefixes(path)
+	root, _ := updateRootFor(path)
+	roles := windowsPathRoles(prefixes, rootOwnedDirectory, root, true)
+	for i, prefix := range prefixes {
+		h, err := openComponent(prefix, rootOwnedDirectory)
+		if err != nil {
+			if notExist(err) {
+				return nil
+			}
+			return err
+		}
+		err = checkHandle(h, prefix, rootOwnedDirectory)
+		if err == nil && rootOwnedTrust.judged(prefix) {
+			err = judgeHandle(h, prefix, roles[i], rootOwnedTrust)
+		}
+		_ = windows.CloseHandle(h)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // openPlainFile opens a regular file that has no link or alias in its path. It

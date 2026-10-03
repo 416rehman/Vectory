@@ -398,7 +398,7 @@ func installAgentBinary(source, target string) error {
 	if err := SafePath(target); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+	if err := makeInstallDirectory(filepath.Dir(target)); err != nil {
 		return err
 	}
 	in, err := os.Open(source)
@@ -406,7 +406,7 @@ func installAgentBinary(source, target string) error {
 		return err
 	}
 	defer in.Close()
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".vectory-install-*")
+	tmp, err := createInstallTemp(filepath.Dir(target))
 	if err != nil {
 		return err
 	}

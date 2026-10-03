@@ -64,7 +64,7 @@ func createFreshStateDirectory(dir string) error {
 	if err := checkNoPendingPurge(dir); err != nil {
 		return err
 	}
-	return os.MkdirAll(dir, 0700)
+	return makePrivateDirectory(dir)
 }
 
 // Lock keeps the existing state-file lock for the duration of an operation.
