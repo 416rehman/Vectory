@@ -16521,7 +16521,7 @@
         ]
       },
       "post": {
-        "summary": "Operator or Administrator, CSRF: start an update rollout from a review. The review token is rechecked in the writer transaction (409 UPDATE_REVIEW_CHANGED). 409 AGENT_UPDATES_STOPPED, RELEASE_NOT_READY, NOTHING_TO_UPDATE, UPDATE_ROLLOUT_OVERLAP, IDEMPOTENCY_CONFLICT. An optional request_id makes an identical retry return the original rollout. Audited as agent_update_rollout.create. 404 AGENT_UPDATES_OFF while updates are off.",
+        "summary": "Operator or Administrator, CSRF: start an update rollout from a review. The review token is rechecked in the writer transaction (409 UPDATE_REVIEW_CHANGED). 409 AGENT_UPDATES_STOPPED, RELEASE_NOT_READY, NOTHING_TO_UPDATE, UPDATE_ROLLOUT_OVERLAP, UPDATE_ROLLOUT_LIMIT (200 rollouts are active or paused), IDEMPOTENCY_CONFLICT. An optional request_id makes an identical retry return the original rollout. Audited as agent_update_rollout.create. 404 AGENT_UPDATES_OFF while updates are off.",
         "operationId": "post__api_v1_agent_update_rollouts",
         "security": [
           {

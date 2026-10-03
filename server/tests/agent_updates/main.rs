@@ -4,6 +4,7 @@
 //! is a valid release, and these tests decide only that the server's offers pass
 //! the check a host makes.
 mod audit;
+mod capacity;
 mod download;
 mod engine;
 mod fleet;
