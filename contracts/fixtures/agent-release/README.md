@@ -2,7 +2,7 @@
 
 Shared test data for agent updates. The Rust server and the Go agent each implement the rules of the [Agent updates](../../CONTRACT.md#agent-updates) section of the contract, and both run every case in this directory, so a byte string that one accepts and the other refuses fails a test instead of reaching a host. The files are written by a third implementation, `rules.mjs`, with nothing but Node's own crypto, and checked in.
 
-Every key here is a published test key: its seed is in `vectors.json`. Never pin one on a real host.
+Every key here is a published test key: its seed is in `vectors.json`. Never pin one on a real host. `examples/team-private-key.txt` is the private key file of the test key `team` in the format `vectory release keygen` writes: a fixed test seed that `vectors.json` publishes, never a real key. It is named `.txt` because the repository ignores `*.key`.
 
 | File | What it holds |
 | --- | --- |

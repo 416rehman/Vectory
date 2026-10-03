@@ -721,7 +721,7 @@ vectory-release-key ed25519 3n1kX5uZnEN2wf+ZrjTlfd3sqUPQff1ANP0I/elZz7o= team
 vectory-release-private-key ed25519 m/S3niTMlf9AEtH9rnFvuoW2tEC7eSBdR91Jr/S+hRg=
 ```
 
-`vectory-release-private-key ed25519 <base64 of the 32-byte seed>`.
+`vectory-release-private-key ed25519 <base64 of the 32-byte seed>`. The file above is the fixed seed of the published test key `team`, never a real key; a real one is written by `vectory release keygen` under the name the operator gives it.
 
 **Rollover statement**, which replaces one key with another (at most 1 KiB):
 
