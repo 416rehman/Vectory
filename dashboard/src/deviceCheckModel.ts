@@ -6,6 +6,8 @@ import {
   type DeviceValidationDevice,
 } from "./api";
 import { defaultRelease, rolloutFor } from "./deploymentReviewModel";
+import { CommandValueError } from "./enrollmentCommands";
+import { bindingCommands, stateDirArguments } from "./hostApprovalCommands";
 import { bindingInstructions, type BindingPlatform } from "./secretFields";
 import type { StatusIcon, StatusTone } from "./status";
 
@@ -73,18 +75,61 @@ export function platformOf(device?: Pick<Device, "os">): BindingPlatform {
   return device?.os === "windows" ? "windows" : "unix";
 }
 
+/** What a device reports about how its host runs the agent. */
+export type CheckedHost = Pick<
+  Device,
+  "os" | "secret_names" | "state_dir" | "service_manager"
+> &
+  Partial<Pick<Device, "name">>;
+
 /**
  * The commands that bind the missing names on a host. The bindings file
- * replaces every binding, so it lists the names the host already has too.
+ * replaces every binding, so it lists the names the host already has too. The
+ * commands are made for the host: its state directory when that isn't the
+ * default, and the way it stops and starts its agent, as the host commands for
+ * an allowance are. Without a device they are the generic ones.
  */
-export function bindCommands(
-  missing: readonly string[],
-  device?: Pick<Device, "os" | "secret_names">,
-) {
-  return bindingInstructions(
+export function bindCommands(missing: readonly string[], device?: CheckedHost) {
+  const steps = bindingInstructions(
     [...(device?.secret_names ?? []), ...missing],
     platformOf(device),
   );
+  return device
+    ? {
+        ...steps,
+        commands: bindingCommands(steps.bindingsFile, {
+          name: device.name ?? "",
+          os: device.os,
+          state_dir: device.state_dir,
+          service_manager: device.service_manager,
+        }),
+      }
+    : steps;
+}
+
+/**
+ * A fix that names `vectory allow` runs on a host whose agent may keep its
+ * state elsewhere. Say so with `--state-dir`, as the commands for the host do,
+ * so the command the person pastes reaches the agent that refused.
+ */
+export function hostHint(
+  hint: string | undefined,
+  device?: Pick<Device, "os" | "state_dir">,
+) {
+  if (!hint || !device?.state_dir) return hint;
+  let stateDir: string[];
+  try {
+    stateDir = stateDirArguments(device);
+  } catch (error) {
+    if (error instanceof CommandValueError) return hint;
+    throw error;
+  }
+  return stateDir.length
+    ? hint.replace(
+        /\bvectory allow (?!--state-dir\b)/g,
+        `vectory allow ${stateDir.join(" ")} `,
+      )
+    : hint;
 }
 
 /* ---------- What the review was, when the check was asked for ---------- */

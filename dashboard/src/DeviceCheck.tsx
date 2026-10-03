@@ -28,6 +28,7 @@ import {
   checkLook,
   explainCheckError,
   hasMore,
+  hostHint,
   isRunning,
   isUnanswered,
   leadFinding,
@@ -50,7 +51,13 @@ import "./device-check.css";
 
 type ReviewedDevice = Pick<
   Device,
-  "id" | "name" | "os" | "last_seen" | "secret_names"
+  | "id"
+  | "name"
+  | "os"
+  | "last_seen"
+  | "secret_names"
+  | "state_dir"
+  | "service_manager"
 >;
 
 /** What is said under a device's result, and the one thing it can do next. */
@@ -118,10 +125,20 @@ function RowDetail({
   if (kind === "needs_secret") return <SecretFix row={row} device={device} />;
   const lead = leadFinding(row);
   const rest = row.diagnostics.filter((finding) => finding !== lead);
+  // A fix that names a command names it for this host's state directory.
+  const forHost = (findings: typeof row.diagnostics) =>
+    findings.map((finding) =>
+      finding.hint
+        ? { ...finding, hint: hostHint(finding.hint, device) }
+        : finding,
+    );
   return (
     <>
       {lead ? (
-        <DiagnosticList diagnostics={[lead]} label={`Finding on ${row.name}`} />
+        <DiagnosticList
+          diagnostics={forHost([lead])}
+          label={`Finding on ${row.name}`}
+        />
       ) : (
         <p>The device reported no reason.</p>
       )}
@@ -138,7 +155,7 @@ function RowDetail({
               .join(" · ")}
           </summary>
           <DiagnosticList
-            diagnostics={rest}
+            diagnostics={forHost(rest)}
             label={`More findings on ${row.name}`}
           />
           {row.tests.length > 0 && (

@@ -62,8 +62,8 @@ You should see a summary that is always true, for example **Checked 3 of 4 devic
 | Result | What it means | What to do |
 | --- | --- | --- |
 | **Passes here** | Vector on that host found no error, and the tests passed when you asked for them. | Nothing. It isn't evidence that the version is applied or healthy. |
-| **Needs a fix** | Vector or the host's allowances refused something. The row leads with the first finding: its step, its field, what's wrong and the fix. It opens to the other findings and the tests. | Fix the pipeline or the host, then check again. |
-| **Needs a secret** | The version uses a device secret the host hasn't bound: **Secret API_KEY isn't bound on this device**. | Run the commands on the row on that host (**Copy** takes them), then check again. The value stays on the device. |
+| **Needs a fix** | Vector or the host's allowances refused something. The row leads with the first finding: its step, its field, what's wrong and the fix. It opens to the other findings and the tests. A restricted host reports the first refusal it finds, so a second can appear once you fix the first. | Fix the pipeline or the host, then check again. A fix that names `vectory allow` includes `--state-dir` when the host keeps its state anywhere but the default. |
+| **Needs a secret** | The version uses a device secret the host hasn't bound: **Secret API_KEY isn't bound on this device**. | Run the commands on the row on that host (**Copy** takes them), then check again. They name the host's state directory when it isn't the default, and stop and start its agent the way it runs: the service, or Ctrl-C for `vectory run`. The value stays on the device. |
 | **Offline: not checked** | The device hasn't checked in for three of its own intervals, so it wasn't asked. | Bring it online, then **Retry**. |
 | **No answer in time** | It didn't answer within 10 minutes, or a newer check for the same device replaced this one. | Check that its agent runs, then **Retry**. |
 | **Older agent: can't check** | Its agent doesn't know checks. | Choose **Upgrade agent** on its device page, then **Retry**. |
