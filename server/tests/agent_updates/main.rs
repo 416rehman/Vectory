@@ -7,6 +7,7 @@ mod audit;
 mod download;
 mod engine;
 mod keys;
+mod notify;
 mod releases;
 mod report;
 mod review;
