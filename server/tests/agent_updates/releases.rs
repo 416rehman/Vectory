@@ -436,6 +436,116 @@ async fn a_build_in_the_catalog_that_no_longer_matches_is_not_a_release() {
 }
 
 #[tokio::test]
+async fn a_build_in_the_mirror_replaces_the_bundled_build_of_its_platform() {
+    let f = fixture_with(|s| {
+        s.bundled_releases_dir = s.releases_dir.parent().map(|dir| dir.join("bundled"));
+    })
+    .await;
+    enable_server(&f).await;
+    let bundled = f.temp.path().join("bundled");
+    // The image brings 0.1.1 for three platforms.
+    let image = catalog_in(
+        &bundled,
+        &[
+            ("0.1.1", "linux", "amd64", vec![1u8; 5000]),
+            ("0.1.1", "linux", "arm64", vec![2u8; 6000]),
+            ("0.1.1", "darwin", "arm64", vec![3u8; 7000]),
+        ],
+    );
+    // The operator's mirror has another build of 0.1.1 for linux/amd64, and a
+    // newer version, 0.1.4, for linux/arm64.
+    let mirrored = mirror(
+        &f,
+        &[
+            ("0.1.1", "linux", "amd64", vec![9u8; 5500]),
+            ("0.1.4", "linux", "arm64", vec![8u8; 6500]),
+        ],
+    );
+    let digest_of = |entries: &[Value], version: &str, os: &str, arch: &str| -> String {
+        entries
+            .iter()
+            .find(|entry| entry["version"] == version && entry["os"] == os && entry["arch"] == arch)
+            .unwrap()["sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let platforms = |release: &Value| -> Vec<(String, String, String)> {
+        release["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|artifact| {
+                (
+                    artifact["os"].as_str().unwrap().to_owned(),
+                    artifact["arch"].as_str().unwrap().to_owned(),
+                    artifact["sha256"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    // The catalog holds, for each platform, the mirror's build when there is one
+    // and the image's when there is not. 0.1.1 is therefore the mirror's
+    // linux/amd64 and the image's darwin/arm64: the image's linux/amd64 is not
+    // in it though the version is the same, and its linux/arm64 is gone because
+    // the mirror's build of that platform is another version.
+    let release = prepare(&f, "0.1.1").await;
+    assert_eq!(
+        platforms(&release),
+        [
+            (
+                "linux".to_owned(),
+                "amd64".to_owned(),
+                digest_of(&mirrored, "0.1.1", "linux", "amd64")
+            ),
+            (
+                "darwin".to_owned(),
+                "arm64".to_owned(),
+                digest_of(&image, "0.1.1", "darwin", "arm64")
+            ),
+        ]
+    );
+    let mut stored = stored_files(&f).await;
+    stored.sort();
+    let mut expected = vec![
+        digest_of(&mirrored, "0.1.1", "linux", "amd64"),
+        digest_of(&image, "0.1.1", "darwin", "arm64"),
+    ];
+    expected.sort();
+    assert_eq!(stored, expected, "a replaced build is never copied");
+    assert_eq!(
+        std::fs::read(stored_path(
+            &f,
+            &digest_of(&mirrored, "0.1.1", "linux", "amd64")
+        ))
+        .unwrap(),
+        vec![9u8; 5500]
+    );
+    // 0.1.4 is the mirror's alone.
+    let newer = prepare(&f, "0.1.4").await;
+    assert_eq!(
+        platforms(&newer),
+        [(
+            "linux".to_owned(),
+            "arm64".to_owned(),
+            digest_of(&mirrored, "0.1.4", "linux", "arm64")
+        )]
+    );
+    // A version that only a replaced build had is not in the catalog at all.
+    catalog_in(&bundled, &[("0.1.9", "linux", "amd64", vec![5u8; 100])]);
+    refused(
+        &f,
+        "POST",
+        RELEASES,
+        json!({"version":"0.1.9"}),
+        &f.admin,
+        StatusCode::CONFLICT,
+        "RELEASE_NOT_IN_CATALOG",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn the_counter_follows_the_sequence_and_what_devices_report_they_attempted() {
     let f = fixture().await;
     enable_server(&f).await;
