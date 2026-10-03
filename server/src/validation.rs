@@ -2916,6 +2916,28 @@ fn names_a_path(id: &str) -> bool {
             .chars()
             .any(|c| matches!(c, '/' | '\\') || c.is_control())
 }
+
+/// The longest component ID, in bytes: what a pipeline may name a component and
+/// what a device may report as the ID of one.
+pub const MAX_COMPONENT_ID_BYTES: usize = 128;
+
+/// Whether a device may report `id` as a component ID, or as the name of a
+/// route's output, in a heartbeat's log groups and diagnostics. It is the text
+/// rule of `validate`, so whatever a pipeline may name a component, a device may
+/// report: not empty, at most `MAX_COMPONENT_ID_BYTES` bytes and nothing
+/// `names_a_path` refuses (a `/` or `\`, a control character, a drive letter and
+/// a colon at the start). A report adds the characters that can't be shown
+/// safely in one line of text and the byte order mark (`db::refused_in_name`),
+/// which `validate` leaves to the editor. A dot is allowed: an output's name may
+/// hold one, and earlier agents reported them. The agent judges the same IDs
+/// with `reportableID`, and `vector-catalog/fixtures/component-ids.json` pins
+/// the two to each other.
+pub fn reported_component_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_COMPONENT_ID_BYTES
+        && !names_a_path(id)
+        && !id.chars().any(crate::db::refused_in_name)
+}
 /// The refusal for such an ID: it names the component and the rule, and shows
 /// a control character as an escape instead of carrying it into a message.
 fn path_like_id(id: &str) -> String {
@@ -2952,7 +2974,8 @@ pub fn validate(config: &Value) -> Value {
                     continue;
                 }
                 for (name, item) in items {
-                    if name.is_empty() || name.len() > 128 || name.contains('.') {
+                    if name.is_empty() || name.len() > MAX_COMPONENT_ID_BYTES || name.contains('.')
+                    {
                         errors.push(format!("Invalid component ID in {section}"))
                     }
                     if names_a_path(name) {
@@ -3025,7 +3048,10 @@ pub fn validate(config: &Value) -> Value {
                 }
             }
             if let Some(source_key) = table["source_config"]["source_key"].as_str() {
-                if source_key.is_empty() || source_key.len() > 128 || source_key.contains('.') {
+                if source_key.is_empty()
+                    || source_key.len() > MAX_COMPONENT_ID_BYTES
+                    || source_key.contains('.')
+                {
                     errors.push(format!("{table_name}: invalid memory source ID"));
                 }
                 if names_a_path(source_key) {
@@ -5034,6 +5060,51 @@ mod tests {
         // A dot, an empty ID and a long one stay refused, as they were.
         for id in ["a.b", "", &"x".repeat(129)] {
             assert_eq!(validate(&pipeline_with_source(id))["valid"], false);
+        }
+    }
+
+    /// The IDs every reader of `component-ids.json` judges alike: the agent's
+    /// `reportableID` reads this file too (`component_ids_test.go`).
+    fn component_id_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/component-ids.json"
+        ))
+        .expect("the fixture is JSON")
+    }
+
+    #[test]
+    fn a_reported_component_id_is_judged_as_the_shared_fixture_says() {
+        let fixture = component_id_fixture();
+        assert_eq!(fixture["max_bytes"], json!(MAX_COMPONENT_ID_BYTES));
+        let cases = fixture["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 40, "{} cases", cases.len());
+        for case in cases {
+            let id = fixture_program(&case["id"]);
+            let valid = case["valid"].as_bool().expect("valid");
+            assert_eq!(reported_component_id(&id), valid, "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn a_device_reports_no_id_the_validator_would_refuse_for_its_text() {
+        // The report is never more permissive than the pipeline: an ID the
+        // validator refuses for being empty, too long or a path is not
+        // reportable, and a reportable one without a dot is a valid component ID.
+        // What a report refuses on top (characters that can't be shown safely) is
+        // the one difference.
+        for case in component_id_fixture()["cases"].as_array().expect("cases") {
+            let id = fixture_program(&case["id"]);
+            let name = &case["name"];
+            let validator_accepts = validate(&pipeline_with_source(&id))["valid"] == true;
+            let text_refused =
+                id.is_empty() || id.len() > MAX_COMPONENT_ID_BYTES || names_a_path(&id);
+            if reported_component_id(&id) && !id.contains('.') {
+                assert!(validator_accepts, "{name}");
+            }
+            if text_refused {
+                assert!(!validator_accepts, "{name}");
+                assert!(!reported_component_id(&id), "{name}");
+            }
         }
     }
 

@@ -236,12 +236,12 @@ async fn enroll_inner(
         // A truncated or mistyped paste can't match any token.
         return Err(refused("TOKEN_UNKNOWN", None));
     }
-    let request = db::string(v, "request_id", 128).map_err(|_| malformed())?;
+    let request = db::name_string(v, "request_id", 128).map_err(|_| malformed())?;
     let name =
         crate::enrollment_scope::device_name(db::string(v, "name", 100).map_err(|_| malformed())?)
             .ok_or_else(malformed)?;
     for field in ["os", "arch", "agent_version", "vector_version"] {
-        db::string(v, field, 64).map_err(|_| malformed())?;
+        db::name_string(v, field, 64).map_err(|_| malformed())?;
     }
     let csr = db::string(v, "csr_pem", 16384).map_err(|_| malformed())?;
     let key_hash = crate::crypto::Keys::csr_key_hash(csr).map_err(|_| malformed())?;
@@ -448,8 +448,9 @@ fn features(s: &State) -> Vec<&'static str> {
 }
 
 /// A reported agent state directory: an absolute local path (POSIX or a
-/// Windows drive path), bounded and printable. It is not a secret; the
-/// dashboard writes host commands for it.
+/// Windows drive path), bounded and printable (no character
+/// `db::refused_in_name`). It is not a secret; the dashboard writes host
+/// commands for it.
 fn state_dir_path(dir: &str) -> bool {
     let bytes = dir.as_bytes();
     let absolute = dir.starts_with('/')
@@ -457,7 +458,7 @@ fn state_dir_path(dir: &str) -> bool {
             && bytes[0].is_ascii_alphabetic()
             && bytes[1] == b':'
             && (bytes[2] == b'\\' || bytes[2] == b'/');
-    absolute && dir.len() <= 4096 && !dir.chars().any(char::is_control)
+    absolute && dir.len() <= 4096 && !dir.chars().any(db::refused_in_name)
 }
 
 /// What keeps an agent running, as the agent reports it.
@@ -480,9 +481,11 @@ fn token(value: &Value, max: usize, extra: &[u8]) -> bool {
                 .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
     })
 }
+/// A reported directory: not empty, at most `max` characters and nothing
+/// `db::refused_in_name`.
 fn plain(value: &Value, max: usize) -> bool {
     value.as_str().is_some_and(|s| {
-        !s.is_empty() && s.chars().count() <= max && !s.chars().any(char::is_control)
+        !s.is_empty() && s.chars().count() <= max && !s.chars().any(db::refused_in_name)
     })
 }
 
@@ -545,7 +548,9 @@ fn log_summary(v: &Value) -> Result<Value> {
                             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
                 }),
                 "level" => matches!(value.as_str(), Some("error" | "warn")),
-                "component_id" => token(value, 100, b"_.-"),
+                "component_id" => value
+                    .as_str()
+                    .is_some_and(crate::validation::reported_component_id),
                 "component_kind" => matches!(value.as_str(), Some("source" | "transform" | "sink")),
                 "component_type" | "error_type" | "stage" => token(value, 64, b"_"),
                 "reason" => token(value, 32, b"_"),
@@ -642,7 +647,7 @@ pub async fn heartbeat(
         return Err(ApiError::invalid("Nonce must be 32 random bytes in base64"));
     }
     for field in ["request_id", "boot_id", "agent_version", "vector_version"] {
-        db::string(&v, field, 128)?;
+        db::name_string(&v, field, 128)?;
     }
     let reported = v["reported_generation"]
         .as_i64()
@@ -1652,6 +1657,80 @@ mod tests {
                     "VECTORY_MAX_AGENT_CONNECTIONS must be a whole number from 64 to 65536, not {given:?}"
                 )
             );
+        }
+    }
+
+    fn group(extra: Value) -> Value {
+        let mut group = json!({
+            "fingerprint": "0123456789abcdef",
+            "level": "error",
+            "message": "Mapping failed with event.",
+            "count": 1,
+            "first_seen": "2026-10-03T00:00:00Z",
+            "last_seen": "2026-10-03T00:00:01Z"
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            group[key] = value.clone();
+        }
+        group
+    }
+
+    /// An id as the shared fixtures write it: a string, a list of ids joined
+    /// together, or an id repeated.
+    fn built(id: &Value) -> String {
+        match id {
+            Value::String(text) => text.clone(),
+            Value::Array(parts) => parts.iter().map(built).collect(),
+            Value::Object(_) => built(&id["repeat"]).repeat(id["times"].as_u64().unwrap() as usize),
+            other => panic!("not an id: {other}"),
+        }
+    }
+
+    #[test]
+    fn a_log_group_names_its_component_by_the_one_rule_for_ids_a_device_reports() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/component-ids.json"
+        ))
+        .expect("the fixture is JSON");
+        for case in fixture["cases"].as_array().expect("cases") {
+            let id = built(&case["id"]);
+            let valid = case["valid"].as_bool().expect("valid");
+            let list = json!([group(json!({"component_id": id}))]);
+            let kept = log_summary(&list);
+            assert_eq!(kept.is_ok(), valid, "{}", case["name"]);
+            if let Ok(kept) = kept {
+                assert_eq!(kept[0]["component_id"], json!(id), "{}", case["name"]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_log_summary_bounds_are_the_shared_fixtures() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/report-bounds.json"
+        ))
+        .expect("the fixture is JSON");
+        let groups = fixture["bounds"]["log_groups"].as_u64().unwrap() as usize;
+        let list = |count: usize| Value::Array((0..count).map(|_| group(json!({}))).collect());
+        assert!(log_summary(&list(groups)).is_ok());
+        assert!(log_summary(&list(groups + 1)).is_err());
+        let chars = fixture["bounds"]["log_message_chars"].as_u64().unwrap() as usize;
+        // Two-byte characters: the bound counts characters, not bytes.
+        let long = |count: usize| json!([group(json!({"message": "\u{e9}".repeat(count)}))]);
+        assert!(log_summary(&long(chars)).is_ok());
+        assert!(log_summary(&long(chars + 1)).is_err());
+    }
+
+    #[test]
+    fn the_other_members_of_a_log_group_keep_their_ascii_tokens() {
+        for (key, value) in [
+            ("component_type", "caf\u{e9}"),
+            ("error_type", "caf\u{e9}"),
+            ("stage", "a b"),
+            ("reason", "t\u{e9}st"),
+        ] {
+            let list = json!([group(json!({key: value}))]);
+            assert!(log_summary(&list).is_err(), "{key}");
         }
     }
 }
