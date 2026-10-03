@@ -51,9 +51,10 @@ const (
 	// reports it failed and stops trying it.
 	updateAttempts = 3
 	// updateGoneWait is how long the agent waits after the server stopped serving a
-	// build (403 or 404) before it asks for the same one again: the server allows
-	// six requests an hour to a device.
-	updateGoneWait = 10 * time.Minute
+	// build (403 or 404) before it asks for the same one again. The server doesn't
+	// charge such a request to the device's six transfers an hour, so the wait only
+	// keeps a server that goes on refusing from being asked at every check-in.
+	updateGoneWait = time.Minute
 	// updateBusyWait is how long it waits when a server that is busy gave no
 	// Retry-After.
 	updateBusyWait = time.Minute
