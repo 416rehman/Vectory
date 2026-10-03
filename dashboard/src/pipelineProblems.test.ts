@@ -299,6 +299,35 @@ describe("pipeline problems", () => {
     );
   });
 
+  it("says an instance metadata step is checked on devices in a sentence, never as the raw reason", () => {
+    const metadata: PipelineCheck = {
+      ...check,
+      valid: true,
+      diagnostics: [],
+      deferred_reasons: [
+        "The AWS instance metadata step is checked on devices",
+      ],
+    };
+    expect(checkVerdict(metadata, 0)).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks the AWS instance metadata step before applying it.",
+    );
+    expect(
+      checkVerdict(
+        {
+          ...metadata,
+          deferred_reasons: [
+            "Lua runs on devices",
+            "The AWS instance metadata step is checked on devices",
+            "Enrichment tables are read on devices",
+          ],
+        },
+        0,
+      ),
+    ).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks Lua code, the AWS instance metadata step and enrichment data files before applying it.",
+    );
+  });
+
   it("applies span and line fixes and refuses stale positions", () => {
     const program = '. = parse_nginx_log(.message, "combined")\n.ok = true';
     expect(applyFix(program, check.diagnostics![0] as any)).toBe(

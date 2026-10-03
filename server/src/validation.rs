@@ -156,6 +156,9 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     if !file_enrichment_tables(config).is_empty() {
         reasons.insert(ENRICHMENT_ON_DEVICES.into());
     }
+    if !instance_metadata_transforms(config).is_empty() {
+        reasons.insert(INSTANCE_METADATA_ON_DEVICES.into());
+    }
     if let Some(sources) = config["sources"].as_object() {
         for source in sources.values() {
             let component = source["type"].as_str().unwrap_or("");
@@ -650,6 +653,21 @@ pub const ENRICHMENT_ON_DEVICES: &str = "Enrichment tables are read on devices";
 /// Why a step that looks up an enrichment table is replaced by a stand-in.
 const ENRICHMENT_STAND_IN: &str = "looks up an enrichment table, which each device reads";
 
+/// The `deferred_reasons` value for a draft with an `aws_ec2_metadata`
+/// transform. When Vector builds the transform, which `vector test` does, it
+/// sends a token request (`PUT /latest/api/token`) and a request for the
+/// instance identity document (`GET /latest/dynamic/instance-identity/document`)
+/// to the `endpoint` the author wrote, and reports what came back. The server
+/// never sends a request an author wrote: a device, which is the host the step
+/// asks about, checks it.
+pub const INSTANCE_METADATA_ON_DEVICES: &str =
+    "The AWS instance metadata step is checked on devices";
+
+/// Why an `aws_ec2_metadata` step is replaced by a stand-in; the note reads
+/// "This step ...".
+const INSTANCE_METADATA_STAND_IN: &str =
+    "asks an AWS instance metadata service, so only a device checks it";
+
 /// A component's `type` as the checked copy reads it, once references are
 /// replaced the way `static_candidate` replaces them: `${KIND:-lua}` is `lua`.
 fn resolved_type(kind: &Value) -> Option<String> {
@@ -660,15 +678,26 @@ fn resolved_type(kind: &Value) -> Option<String> {
     )
 }
 
-/// The IDs of the transforms that are Lua in the copy Vector would read.
-pub fn lua_transforms(config: &Value) -> Vec<String> {
+/// The IDs of the transforms of one type in the copy Vector would read.
+fn transforms_of_type(config: &Value, kind: &str) -> Vec<String> {
     config["transforms"]
         .as_object()
         .into_iter()
         .flatten()
-        .filter(|(_, transform)| resolved_type(&transform["type"]).as_deref() == Some("lua"))
+        .filter(|(_, transform)| resolved_type(&transform["type"]).as_deref() == Some(kind))
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+/// The IDs of the transforms that are Lua in the copy Vector would read.
+pub fn lua_transforms(config: &Value) -> Vec<String> {
+    transforms_of_type(config, "lua")
+}
+
+/// The IDs of the transforms that ask an AWS instance metadata service in the
+/// copy Vector would read.
+pub fn instance_metadata_transforms(config: &Value) -> Vec<String> {
+    transforms_of_type(config, "aws_ec2_metadata")
 }
 
 /// The IDs of the enrichment tables that read a file: every type but `memory`,
@@ -684,27 +713,54 @@ pub fn file_enrichment_tables(config: &Value) -> Vec<String> {
 }
 
 /// The finding for tests the server does not run because the draft has a Lua
-/// step or an enrichment table that reads a file: a device runs them, and the
-/// check on devices can include them. `None` for any other draft.
+/// step, an enrichment table that reads a file or an AWS instance metadata
+/// step: a device runs them, and the check on devices can include them. It names
+/// every cause the draft has. `None` for any other draft.
 pub fn tests_on_devices_diagnostic(config: &Value) -> Option<Diagnostic> {
-    let why = match (
-        !lua_transforms(config).is_empty(),
-        !file_enrichment_tables(config).is_empty(),
-    ) {
-        (false, false) => return None,
-        (true, false) => "Lua can run any program, so tests that include it run only on devices.",
-        (false, true) => {
-            "Enrichment tables are read on devices, so tests that use them run only on devices."
-        }
-        (true, true) => {
-            "Lua can run any program and enrichment tables are read on devices, so tests that include them run only on devices."
-        }
+    // The causes in the order they are named: whether the draft has one, what
+    // the sentence says of it, and how the sentence ends when it is the only one.
+    let causes: Vec<(&str, &str)> = [
+        (
+            !lua_transforms(config).is_empty(),
+            "Lua can run any program",
+            "include it",
+        ),
+        (
+            !file_enrichment_tables(config).is_empty(),
+            "enrichment tables are read on devices",
+            "use them",
+        ),
+        (
+            !instance_metadata_transforms(config).is_empty(),
+            "the AWS instance metadata step asks the host's own metadata service",
+            "include it",
+        ),
+    ]
+    .into_iter()
+    .filter(|(present, ..)| *present)
+    .map(|(_, cause, ending)| (cause, ending))
+    .collect();
+    let (mut clause, ending) = match causes.as_slice() {
+        [] => return None,
+        [(cause, ending)] => ((*cause).to_owned(), *ending),
+        [first @ .., (last, _)] => (
+            format!(
+                "{} and {last}",
+                first
+                    .iter()
+                    .map(|(cause, _)| *cause)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            "include them",
+        ),
     };
+    clause[..1].make_ascii_uppercase();
     Some(Diagnostic {
         section: Some("tests".into()),
         code: Some("tests_on_devices".into()),
         ..Diagnostic::error(format!(
-            "{why} Use Check on devices with Also run the pipeline's tests."
+            "{clause}, so tests that {ending} run only on devices. Use Check on devices with Also run the pipeline's tests."
         ))
     })
 }
@@ -902,6 +958,10 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
             // Vector builds it, which is any program its author wrote.
             let reason = if section == "transforms" && kind == "lua" {
                 Some(LUA_STAND_IN.to_owned())
+            } else if section == "transforms" && kind == "aws_ec2_metadata" {
+                // Vector sends requests to the step's `endpoint` when it builds
+                // it, and quotes the answer in its errors.
+                Some(INSTANCE_METADATA_STAND_IN.to_owned())
             } else if known_component(section, &kind) && !available(section, &kind) {
                 Some(format!(
                     "`{kind}` isn't included in this server's Vector build; each device checks it"
@@ -1210,6 +1270,7 @@ fn reason_phrase(reasons: &[String]) -> String {
             }
             "VRL access to device resources" => "VRL that reads device resources".into(),
             LUA_ON_DEVICES => "Lua code".into(),
+            INSTANCE_METADATA_ON_DEVICES => "the AWS instance metadata step".into(),
             "native configuration provider" => "the configuration provider".into(),
             "device enrichment data" | ENRICHMENT_ON_DEVICES => "enrichment data files".into(),
             "device-local paths or external code files" => "local files and paths".into(),
@@ -1524,10 +1585,10 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
             "Vector rejected the configuration without a specific message.",
         ));
     }
-    // A Lua step's stand-in is explained by its own reason; any other stand-in
-    // is a device-local file or component.
-    let lua = lua_transforms(config);
-    if stubbed.iter().any(|id| !lua.contains(id))
+    // A Lua or instance metadata step's stand-in is explained by its own reason;
+    // any other stand-in is a device-local file or component.
+    let explained = [lua_transforms(config), instance_metadata_transforms(config)].concat();
+    if stubbed.iter().any(|id| !explained.contains(id))
         && !reasons
             .iter()
             .any(|r| r.contains("platform") || r.contains("paths"))
@@ -1618,10 +1679,16 @@ pub fn calls_function(text: &str, name: &str) -> bool {
 /// VRL functions that read a file only when a call passes one: `parse_groks`
 /// takes `alias_sources` (JSON files of grok aliases) and `parse_etld` takes
 /// `psl` (a public suffix list). Pinned Vector 0.58 opens the file when it
-/// compiles the program, so a call that passes one is a file read, however the
-/// argument is written. Each entry is the function, its named file argument,
-/// the argument count at which the file is a positional one, and how a refusal
-/// names the call.
+/// compiles the program, in any command and on a branch that never runs, so a
+/// call that passes one is a file read, however the argument is written. Each
+/// entry is the function, its named file argument, the argument count at which
+/// the file is a positional one, and how a refusal names the call. The agent
+/// (`fileArgumentFunctions` in `agent/internal/agent/vrl_file_arguments.go`) and
+/// the dashboard (`fileArgumentFunctions` in `dashboard/src/vrlFileArguments.ts`)
+/// hold the same table and scan, and `vector-catalog/fixtures/vrl-file-arguments.json`
+/// holds the programs all three judge alike; `tests/security/test_vrl_function_lists.py`
+/// fails when the tables drift. A device in restricted mode refuses such a call,
+/// and a pipeline that makes one needs a full-mode device.
 pub const FILE_ARGUMENT_FUNCTIONS: &[(&str, &str, usize, &str)] = &[
     (
         "parse_groks",
@@ -1632,10 +1699,11 @@ pub const FILE_ARGUMENT_FUNCTIONS: &[(&str, &str, usize, &str)] = &[
     ("parse_etld", "psl", 3, "parse_etld with psl"),
 ];
 
-/// How a scan reads quotes. VRL has strings with escapes (`"..."`, `s'...'`)
-/// and raw strings that end at the next `'` (`r'...'`), and one reading must not
-/// be foolable by the other, so every call is read each way, and once more with
-/// quotes ignored.
+/// How a scan reads quotes. VRL ends a string or literal (`"..."`, `s'...'`,
+/// `r'...'`) at the first quote that no backslash escapes. A second reading ends
+/// a single-quoted one at the next `'` whatever precedes it, and a third ignores
+/// quotes and comments, so a program that one reading misjudges can't hide an
+/// argument from all of them: every call is read each way.
 #[derive(Clone, Copy)]
 enum Quotes {
     Escaped,
@@ -1643,11 +1711,21 @@ enum Quotes {
     Ignored,
 }
 
+/// What one reading of a call finds.
+struct CallArguments {
+    /// The arguments, top-level and trimmed.
+    arguments: Vec<String>,
+    /// Whether the call closed before the text ended.
+    closed: bool,
+    /// How many bytes of the text the reading went through, up to and including
+    /// the closing parenthesis, or all of it when the call never closed.
+    read: usize,
+}
+
 /// The arguments of one call, from the text after its opening parenthesis up to
-/// the matching one: top-level, trimmed, split on commas that are not inside
-/// brackets, braces, parentheses, strings or comments. The flag says whether
-/// the call closed before the text ended.
-fn call_arguments(body: &str, quotes: Quotes) -> (Vec<String>, bool) {
+/// the matching one: split on commas that are not inside brackets, braces,
+/// parentheses, strings or comments.
+fn call_arguments(body: &str, quotes: Quotes) -> CallArguments {
     let mut arguments = Vec::new();
     let mut current = String::new();
     let mut depth = 0usize;
@@ -1681,7 +1759,11 @@ fn call_arguments(body: &str, quotes: Quotes) -> (Vec<String>, bool) {
                 if !current.trim().is_empty() {
                     arguments.push(current.trim().to_owned());
                 }
-                return (arguments, true);
+                return CallArguments {
+                    arguments,
+                    closed: true,
+                    read: body.len() - chars.as_str().len(),
+                };
             }
             (')' | ']' | '}', _) => {
                 depth -= 1;
@@ -1697,23 +1779,36 @@ fn call_arguments(body: &str, quotes: Quotes) -> (Vec<String>, bool) {
     if !current.trim().is_empty() {
         arguments.push(current.trim().to_owned());
     }
-    (arguments, false)
+    CallArguments {
+        arguments,
+        closed: false,
+        read: body.len(),
+    }
 }
 
-/// The most calls to one function, and the most text of one call, that are
-/// read. A program past either is taken to pass a file: no real one is.
+/// The most calls to one function, the most text of one call, and the most text
+/// in all that are read. A program past any of them is taken to pass a file: no
+/// real one is. The text in all is `MAX_SCAN_FACTOR` times the program's length
+/// and `MAX_CALL_BYTES` more, counting every reading of every call: ordinary
+/// calls read each byte of the program three times at most, so only calls nested
+/// in each other, or left open so that each reads the rest again, reach it. It
+/// keeps the work of a scan in step with the size of what it scans, however the
+/// calls are arranged.
 const MAX_FILE_ARGUMENT_CALLS: usize = 256;
 const MAX_CALL_BYTES: usize = 32 * 1024;
+const MAX_SCAN_FACTOR: usize = 4;
 
 /// How `text` names each call it makes to a function with a file argument
 /// (`FILE_ARGUMENT_FUNCTIONS`) that passes one, by name or by position. A call
 /// that is read ambiguously counts as passing one: a stand-in only defers the
 /// check to a device.
 pub fn file_argument_calls(text: &str) -> Vec<&'static str> {
+    let budget = MAX_SCAN_FACTOR * text.len() + MAX_CALL_BYTES;
     FILE_ARGUMENT_FUNCTIONS
         .iter()
         .filter(|(name, argument, positional, _)| {
             let mut read = 0;
+            let mut scanned = 0;
             text.match_indices(name).any(|(start, _)| {
                 let before = text[..start].chars().next_back();
                 if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
@@ -1736,10 +1831,12 @@ pub fn file_argument_calls(text: &str) -> Vec<&'static str> {
                 [Quotes::Escaped, Quotes::Raw, Quotes::Ignored]
                     .into_iter()
                     .any(|quotes| {
-                        let (arguments, closed) = call_arguments(window, quotes);
-                        (!closed && end < body.len())
-                            || arguments.len() >= *positional
-                            || arguments.iter().any(|argument_text| {
+                        let call = call_arguments(window, quotes);
+                        scanned += call.read;
+                        (!call.closed && end < body.len())
+                            || scanned > budget
+                            || call.arguments.len() >= *positional
+                            || call.arguments.iter().any(|argument_text| {
                                 argument_text
                                     .strip_prefix(argument)
                                     .is_some_and(|after| after.trim_start().starts_with(':'))
@@ -4021,76 +4118,59 @@ mod tests {
         assert_eq!(clean.unwrap()[0]["code"], "tests_on_devices");
     }
 
+    /// The file every scanner of a VRL call that passes a file reads: this one,
+    /// the agent's (`vrl_file_arguments_test.go`) and the dashboard's
+    /// (`vrlFileArguments.test.ts`), so the three cannot drift.
+    fn file_argument_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/vrl-file-arguments.json"
+        ))
+        .expect("the fixture is JSON")
+    }
+
+    /// A fixture program: a string, a list of programs joined together, or a
+    /// program repeated.
+    fn fixture_program(program: &Value) -> String {
+        match program {
+            Value::String(text) => text.clone(),
+            Value::Array(parts) => parts.iter().map(fixture_program).collect(),
+            Value::Object(_) => fixture_program(&program["repeat"])
+                .repeat(program["times"].as_u64().expect("a count") as usize),
+            other => panic!("not a program: {other}"),
+        }
+    }
+
     #[test]
     fn a_file_argument_is_found_however_it_is_written() {
-        // Named, positional, in any order, with the spacing and bang VRL allows.
-        for text in [
-            r#"parse_groks!(.m, ["%{A:a}"], alias_sources: ["/a.json"])"#,
-            r#"parse_groks!(.m, ["%{A:a}"], aliases: {"A": "x"}, alias_sources: ["/a.json"])"#,
-            r#"parse_groks!(.m, ["%{A:a}"], {"A": "x"}, ["/a.json"])"#,
-            r#"parse_groks ! ( alias_sources : ["/a.json"], value: .m, patterns: ["%{A:a}"] )"#,
-            "parse_groks(.m, [\n\"x\"\n],\n# a comment, with a comma\n{}, [\"/a.json\"])",
-        ] {
-            assert_eq!(
-                file_argument_calls(text),
-                vec!["parse_groks with alias_sources"],
-                "{text}"
-            );
-        }
-        for text in [
-            r#"parse_etld!(.d, psl: "/list.dat")"#,
-            r#"parse_etld!(.d, 1, "/list.dat")"#,
-            r#"parse_etld!(psl : "/list.dat", value: .d)"#,
-            r#"parse_etld(.d, plus_parts: 2, psl: "/p" + "/q")"#,
-        ] {
-            assert_eq!(
-                file_argument_calls(text),
-                vec!["parse_etld with psl"],
-                "{text}"
-            );
-        }
-        // Without a file argument they are ordinary functions, and stay checked.
-        for text in [
-            r#"parse_groks!(.m, ["%{COMMONAPACHELOG}"])"#,
-            r#"parse_groks!(.m, patterns: ["%{A:a}"], aliases: {"A": "[a-z]+"})"#,
-            r#"parse_groks!(.m, ["%{A:a}"], {"A": "x, y, z"})"#,
-            r#"parse_etld!(.domain)"#,
-            r#"parse_etld!(.domain, plus_parts: 1)"#,
-            r#"parse_etld!(.domain, 1)"#,
-            // A word that only looks like the argument, a longer name, a field, prose.
-            r#"parse_etld!(.d, plus_parts: 1) # psl: is not passed"#,
-            r#"my_parse_etld(.d, 1, "x")"#,
-            r#".parse_etld(.d, 1, "x")"#,
-            r#"parse_etld_x(.d, 1, "x")"#,
-            r#".psl = "psl: x""#,
-            // A call that never closes is a syntax error and compiles nothing.
-            "parse_etld!(.d,",
-        ] {
-            assert!(
-                file_argument_calls(text).is_empty(),
-                "{text}: {:?}",
-                file_argument_calls(text)
-            );
-        }
-        // An unfinished call that already passes a file gets no benefit of the doubt.
+        let fixture = file_argument_fixture();
+        // The table and the bounds are the fixture's.
+        let table: Vec<Value> = FILE_ARGUMENT_FUNCTIONS
+            .iter()
+            .map(|(function, argument, position, label)| {
+                json!({"function": function, "argument": argument, "position": position, "label": label})
+            })
+            .collect();
+        assert_eq!(json!(table), fixture["functions"]);
         assert_eq!(
-            file_argument_calls(r#"parse_etld!(.d, psl: "/list.dat""#),
-            vec!["parse_etld with psl"]
+            json!({"calls": MAX_FILE_ARGUMENT_CALLS, "call_bytes": MAX_CALL_BYTES, "scan_factor": MAX_SCAN_FACTOR}),
+            fixture["bounds"]
         );
-        // One reading of the quotes cannot fool another: a raw string that ends in
-        // a backslash, or a string that holds a parenthesis, before the file.
-        for text in [
-            r#"parse_etld!(.d, r'\', psl: "/p")"#,
-            r#"parse_etld!(.d, ")", psl: "/p")"#,
-            r#"parse_groks!(.m, [r'\'], {}, ["/f"])"#,
-        ] {
-            assert!(!file_argument_calls(text).is_empty(), "{text}");
+        let cases = fixture["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 60, "{} cases", cases.len());
+        for case in cases {
+            let found: Vec<&str> = case["found"]
+                .as_array()
+                .expect("found")
+                .iter()
+                .map(|label| label.as_str().expect("a label"))
+                .collect();
+            assert_eq!(
+                file_argument_calls(&fixture_program(&case["program"])),
+                found,
+                "{}",
+                case["name"]
+            );
         }
-        // The work is bounded, and a program past the bound is taken to pass a file.
-        let many = "parse_etld(".repeat(300);
-        assert_eq!(file_argument_calls(&many), vec!["parse_etld with psl"]);
-        let long = format!("parse_etld!(.d, 1{}", " ".repeat(40_000));
-        assert_eq!(file_argument_calls(&long), vec!["parse_etld with psl"]);
     }
 
     #[test]
@@ -4262,6 +4342,166 @@ mod tests {
             ]),
             "enrichment data files"
         );
+    }
+
+    fn instance_metadata_pipeline(kind: &str) -> Value {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"meta": {"type": kind, "inputs": ["in"],
+                "endpoint": "http://127.0.0.1:9", "refresh_interval_secs": 3600}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["meta"]}},
+        })
+    }
+
+    #[test]
+    fn an_instance_metadata_step_is_replaced_and_deferred_to_devices() {
+        for kind in ["aws_ec2_metadata", "${KIND:-aws_ec2_metadata}"] {
+            let config = instance_metadata_pipeline(kind);
+            assert_eq!(
+                instance_metadata_transforms(&config),
+                vec!["meta"],
+                "{kind}"
+            );
+            let candidate = static_candidate(&config, |_, _| true);
+            assert_eq!(
+                candidate.stubbed.get("meta").map(String::as_str),
+                Some(INSTANCE_METADATA_STAND_IN),
+                "{kind}"
+            );
+            // The step Vector would build, and the address it would ask, are gone.
+            let text = candidate.config.to_string();
+            assert!(
+                !text.contains("aws_ec2_metadata") && !text.contains("127.0.0.1:9"),
+                "{text}"
+            );
+            assert_eq!(
+                candidate.config["transforms"]["meta"],
+                json!({"type": "remap", "inputs": ["in"], "source": "."})
+            );
+            // Its own reason, and no local path: a type that a default reference
+            // supplies is also an environment variable, and nothing else.
+            let mut expected = vec![INSTANCE_METADATA_ON_DEVICES.to_owned()];
+            if kind.starts_with('$') {
+                expected.push("environment variables".to_owned());
+            }
+            assert_eq!(device_context_reasons(&config), expected, "{kind}");
+            let result = check_result(vec![], true, true, device_context_reasons(&config), vec![]);
+            assert_eq!(result["deferred"], true);
+            assert_eq!(result["vector_validated"], false);
+            assert_eq!(result["deferred_reasons"], json!(expected));
+        }
+        let result = check_result(
+            vec![],
+            true,
+            true,
+            device_context_reasons(&instance_metadata_pipeline("aws_ec2_metadata")),
+            vec![],
+        );
+        assert_eq!(
+            result["warnings"],
+            json!([
+                "Each device checks the AWS instance metadata step before applying this version."
+            ])
+        );
+        assert_eq!(
+            INSTANCE_METADATA_ON_DEVICES,
+            "The AWS instance metadata step is checked on devices"
+        );
+        // Other steps, even ones that carry the name, are checked here as before.
+        for config in [
+            instance_metadata_pipeline("remap"),
+            json!({"transforms": {"aws_ec2_metadata": {"type": "remap", "inputs": ["in"], "source": ".x = \"aws_ec2_metadata\""}}}),
+            json!({"sources": {"aws_ec2_metadata": {"type": "demo_logs"}}, "sinks": {"aws_ec2_metadata": {"type": "blackhole"}}}),
+            json!({}),
+        ] {
+            assert!(instance_metadata_transforms(&config).is_empty(), "{config}");
+            assert!(
+                !device_context_reasons(&config).contains(&INSTANCE_METADATA_ON_DEVICES.to_owned()),
+                "{config}"
+            );
+            assert!(static_candidate(&config, |_, _| true).stubbed.is_empty());
+        }
+    }
+
+    #[test]
+    fn tests_wait_for_devices_and_name_every_cause_the_draft_has() {
+        let causes = [
+            (
+                "transforms",
+                "lua",
+                json!({"type": "lua", "version": "2", "inputs": ["in"]}),
+            ),
+            (
+                "enrichment_tables",
+                "t",
+                json!({"type": "geoip", "path": "/x.mmdb"}),
+            ),
+            (
+                "transforms",
+                "meta",
+                json!({"type": "aws_ec2_metadata", "inputs": ["in"]}),
+            ),
+        ];
+        let lua = "Lua can run any program";
+        let tables = "enrichment tables are read on devices";
+        let metadata = "the AWS instance metadata step asks the host's own metadata service";
+        let ending = "Use Check on devices with Also run the pipeline's tests.";
+        // Every subset of the causes, named in one order, with the sentence's
+        // ending that fits how many there are.
+        for (mask, expected) in [
+            (
+                0b001,
+                format!("{lua}, so tests that include it run only on devices. {ending}"),
+            ),
+            (
+                0b010,
+                format!(
+                    "Enrichment tables are read on devices, so tests that use them run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b100,
+                format!(
+                    "The AWS instance metadata step asks the host's own metadata service, so tests that include it run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b011,
+                format!(
+                    "{lua} and {tables}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b101,
+                format!(
+                    "{lua} and {metadata}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b110,
+                format!(
+                    "Enrichment tables are read on devices and {metadata}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b111,
+                format!(
+                    "{lua}, {tables} and {metadata}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
+        ] {
+            let mut config = json!({"transforms": {}, "enrichment_tables": {}});
+            for (index, (section, id, component)) in causes.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    config[*section][*id] = component.clone();
+                }
+            }
+            let diagnostic = tests_on_devices_diagnostic(&config).unwrap();
+            assert_eq!(diagnostic.message, expected, "{mask:03b}");
+            assert_eq!(diagnostic.severity, "error");
+            assert_eq!(diagnostic.section.as_deref(), Some("tests"));
+            assert_eq!(diagnostic.code.as_deref(), Some("tests_on_devices"));
+        }
     }
 
     #[test]

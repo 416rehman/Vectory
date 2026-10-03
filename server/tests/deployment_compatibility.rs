@@ -977,3 +977,176 @@ async fn a_credentials_file_or_the_hosts_own_aws_identity_needs_full_mode() {
         }
     }
 }
+
+/// A pipeline whose one remap step runs `program`, with `tests` when it has any.
+fn vrl_pipeline(program: &str, tests: Value) -> Value {
+    let mut config = json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"t": {"type": "remap", "inputs": ["in"], "source": program}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["t"]}},
+    });
+    if !tests.is_null() {
+        config["tests"] = tests;
+    }
+    config
+}
+
+/// A unit test of the step whose condition is `condition`.
+fn vrl_test(condition: &str) -> Value {
+    json!([{"name": "t",
+        "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x.example.com"}}],
+        "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": condition}]}]}])
+}
+
+/// Pipelines that call `parse_groks` or `parse_etld`, each with whether a
+/// restricted device can run it. Vector opens the file a call passes when it
+/// compiles the program, so a call that passes one needs a full-mode device:
+/// the file is any the service account can read, and no file root covers it.
+/// Without a file, both functions are ordinary. The grok patterns hold no `%{`,
+/// which restricted mode refuses anywhere, so the file is what is judged.
+fn vrl_file_cases() -> Vec<(&'static str, Value, bool)> {
+    let groks = |arguments: &str| {
+        vrl_pipeline(
+            &format!(".x = parse_groks!(.message, [\"[a-z]+\"]{arguments})"),
+            Value::Null,
+        )
+    };
+    let etld = |arguments: &str| {
+        vrl_pipeline(
+            &format!(".x = parse_etld!(.message{arguments})"),
+            Value::Null,
+        )
+    };
+    vec![
+        (
+            "parse_groks, alias_sources by name",
+            groks(r#", alias_sources: ["/etc/vector/aliases.json"]"#),
+            true,
+        ),
+        (
+            "parse_groks, alias_sources as the fourth argument",
+            groks(r#", {}, ["/etc/vector/aliases.json"]"#),
+            true,
+        ),
+        (
+            "parse_groks, alias_sources beside aliases",
+            groks(r#", aliases: {"A": "[a-z]+"}, alias_sources: ["/etc/vector/aliases.json"]"#),
+            true,
+        ),
+        (
+            "parse_etld, psl by name",
+            etld(r#", psl: "/etc/vector/list.dat""#),
+            true,
+        ),
+        (
+            "parse_etld, psl as the third argument",
+            etld(r#", 1, "/etc/vector/list.dat""#),
+            true,
+        ),
+        (
+            "parse_etld, a file after a quote that one reading of the text could not end",
+            etld(r#", r'\', psl: "/etc/vector/list.dat""#),
+            true,
+        ),
+        (
+            "a call after a clean one",
+            vrl_pipeline(
+                ".a = parse_etld!(.message)\n.b = parse_etld!(.message, psl: \"/etc/vector/list.dat\")",
+                Value::Null,
+            ),
+            true,
+        ),
+        (
+            "a call in the condition of a unit test",
+            vrl_pipeline(
+                ".x = 1",
+                vrl_test(r#"parse_etld!(.message, psl: "/etc/vector/list.dat").etld == "x""#),
+            ),
+            true,
+        ),
+        (
+            "parse_groks without a file",
+            groks(r#", aliases: {"A": "[a-z]+"}"#),
+            false,
+        ),
+        ("parse_groks with the patterns only", groks(""), false),
+        ("parse_etld with the value only", etld(""), false),
+        ("parse_etld with plus_parts", etld(", plus_parts: 1"), false),
+        (
+            "parse_etld with plus_parts as the second argument",
+            etld(", 1"),
+            false,
+        ),
+        (
+            "names that only look alike",
+            vrl_pipeline(
+                ".parse_etld = 1\n.note = \"parse_groks and psl: are words\"\n.y = my_parse_etld(.message, 1, \"x\")",
+                Value::Null,
+            ),
+            false,
+        ),
+        (
+            "a unit test of a call without a file",
+            vrl_pipeline(
+                ".x = parse_etld!(.message)",
+                vrl_test(r#"parse_etld!(.message, plus_parts: 1).etld == "x""#),
+            ),
+            false,
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn a_vrl_call_that_passes_a_file_needs_full_mode() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    let (full, restricted) = (&ids[0], &ids[1]);
+    let mut priority = 100;
+    let mut created = 0;
+    for (name, config, needs_full) in vrl_file_cases() {
+        let version = add_version(&state, &config).await;
+        priority += 1;
+        // The preview blocks a restricted device for such a call, and never a
+        // device in full mode.
+        let mut both = request(&version, &[restricted.clone(), full.clone()], "snapshot");
+        both["priority"] = json!(priority);
+        let (status, preview) =
+            call(&app, "/api/v1/deployments/preview", both, &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {preview}");
+        let blockers = &preview["blockers"];
+        if needs_full {
+            assert_eq!(
+                blockers.as_array().map(Vec::len),
+                Some(1),
+                "{name}: {blockers}"
+            );
+            assert_eq!(blockers[0]["code"], "FULL_VECTOR_MODE_REQUIRED", "{name}");
+            assert_eq!(blockers[0]["device_ids"], json!([restricted]), "{name}");
+        } else {
+            assert_eq!(*blockers, json!([]), "{name}");
+        }
+        // Starting it for the restricted device is refused with nothing
+        // written, or accepted, as the preview showed.
+        let mut body = request(&version, &[restricted.clone()], "snapshot");
+        body["priority"] = json!(priority);
+        let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+        if needs_full {
+            assert_eq!(status, StatusCode::CONFLICT, "{name}: {reply}");
+            assert!(
+                reply["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("requires full Vector mode")),
+                "{name}: {reply}"
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{name}: {reply}");
+            created += 1;
+        }
+        assert_eq!(deployment_count(&state).await, created, "{name}");
+        // A device in full mode runs it either way.
+        let mut body = request(&version, &[full.clone()], "snapshot");
+        body["priority"] = json!(priority);
+        let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {reply}");
+        created += 1;
+    }
+}
