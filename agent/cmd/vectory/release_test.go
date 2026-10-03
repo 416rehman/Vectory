@@ -645,6 +645,10 @@ func TestReleaseRolloverLetsAHostFollowToTheNewKey(t *testing.T) {
 	if !strings.Contains(stdout, want) || !strings.Contains(stdout, "Upload it in Settings → Agent updates.") {
 		t.Errorf("the output lacks %q:\n%s", want, stdout)
 	}
+	// The successor's whole fingerprint is printed for the signer to compare.
+	if line := "New key fingerprint, to compare with the key you made: " + agent.GroupFingerprint(next.Fingerprint()) + "\n"; !strings.Contains(stdout, line) {
+		t.Errorf("the output lacks %q:\n%s", line, stdout)
+	}
 	contents := f.read(t, "rollover.json")
 	if !strings.HasSuffix(contents, "\n") || strings.Count(contents, "\n") != 1 || !strings.HasPrefix(contents, `{"statement":"`) {
 		t.Errorf("the file is the envelope on one line: %q", contents)

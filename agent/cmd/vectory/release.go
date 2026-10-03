@@ -278,6 +278,7 @@ func defineReleaseRollover(c *cli) func() int {
 			return c.fail(fmt.Errorf("couldn't write %s: %w", shownOut, err))
 		}
 		fmt.Fprintf(c.stdout, "Wrote %s: key %s hands over to key %s (%s).\n", shownOut, old.Fingerprint()[:16], successor.ShortID(), successor.Name())
+		fmt.Fprintf(c.stdout, "New key fingerprint, to compare with the key you made: %s\n", agent.GroupFingerprint(successor.Fingerprint()))
 		fmt.Fprintln(c.stdout, "Upload it in Settings → Agent updates. Hosts that pin the old key follow it when they are offered a release the new key signed.")
 		return exitOK
 	}
