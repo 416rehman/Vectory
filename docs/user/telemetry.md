@@ -179,7 +179,7 @@ The [audit log](administer.md#review-and-export-audit-events) is separate from m
 
 A device writes an event about itself when what it reports changes: one when a version reaches it and one when it applies the version, so about two for each deployment. Identical check-ins add none.
 
-A device also adds at most 4 events a minute of each of three kinds (apply state, configuration mode and secret reconciliation), however often it checks in. A change past that is not recorded: the device page always shows the current state, and the audit log holds what fitted. A device that changed state at that rate all day would add at most 17,280 events, about 14 MB.
+A device also adds at most 4 events a minute of each of three kinds (apply state, configuration mode and secret reconciliation), however often it checks in. The first event for a version reaching it, for its result (applied or failed), counts toward nothing, so deployments that follow one another within a minute each keep their start and result. A change past the limit is not recorded: the device page always shows the current state, and the audit log holds what fitted. A device that changed state at that rate all day would add at most 17,712 events, about 14 MB.
 
 These are estimates from those rules for device events alone, not measurements of a running fleet:
 

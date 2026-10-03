@@ -594,7 +594,7 @@ fn log_summary(v: &Value) -> Result<Value> {
 /// carries a change: `device.apply_state`, `device.configuration_mode_reported`
 /// and `device.secret_reconciliation`. The log is append-only and never pruned,
 /// so what a device writes stays, and a device that flaps (or lies) must not
-/// decide how fast it grows. Two rules bound it:
+/// decide how fast it grows. Three rules bound it:
 ///
 /// - A row is written only when the reported value differs from the one the
 ///   device record held before this check-in. Identical check-ins add nothing,
@@ -604,15 +604,37 @@ fn log_summary(v: &Value) -> Result<Value> {
 ///   window, counted per device and kind), so one that flips between two values
 ///   on every check-in adds a few rows a minute, not one per check-in. A busy
 ///   device never spends another's rows.
+/// - The first apply-state row of each state that starts or ends an attempt
+///   (`desired`, `verified_applied` and `failed`) for a generation is written
+///   whatever the limit says, and does not count toward it. Only a deployment or
+///   a retry makes a generation, so a device released to three versions in a
+///   minute still shows each one's start and result, while one that repeats a
+///   generation gets that exemption once per state every ten minutes.
 ///
 /// A change that the limit skips is not written later: the device record holds
-/// the current value, the audit log holds what fitted. The count lives in memory
-/// and starts again with the server, like the other request limits.
+/// the current value, the audit log holds what fitted. The counts live in memory
+/// and start again with the server, like the other request limits.
 pub const DEVICE_AUDIT_ROWS_PER_MINUTE: u32 = 4;
+/// How long a state's first row for one generation stays the only exempt one.
+const FIRST_ROW_WINDOW: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Whether `device` may add a row of `action` to the audit log now, counting it
-/// when it may. Call it only when the value changed.
-fn audit_row_allowed(s: &State, device: &str, action: &str) -> bool {
+/// when it may. Call it only when the value changed. `reached` is the
+/// generation and apply state a `device.apply_state` row records; the first such
+/// row of a state that starts or ends an attempt is always allowed and is not
+/// counted.
+fn audit_row_allowed(s: &State, device: &str, action: &str, reached: Option<(i64, &str)>) -> bool {
+    if let Some((generation, state)) = reached
+        && matches!(state, "desired" | "verified_applied" | "failed")
+        && s.limit(
+            format!("device-audit:{device}:{action}:{generation}:{state}"),
+            1,
+            FIRST_ROW_WINDOW,
+        )
+        .is_ok()
+    {
+        return true;
+    }
     s.limit(
         format!("device-audit:{device}:{action}"),
         DEVICE_AUDIT_ROWS_PER_MINUTE,
@@ -821,7 +843,7 @@ pub async fn heartbeat(
     let old_mode = device["configuration_mode"]
         .as_str()
         .unwrap_or("restricted");
-    if old_mode != mode && audit_row_allowed(&s, &id, "device.configuration_mode_reported") {
+    if old_mode != mode && audit_row_allowed(&s, &id, "device.configuration_mode_reported", None) {
         db::audit(
             &mut tx,
             &id,
@@ -1087,7 +1109,14 @@ pub async fn heartbeat(
         }
     }
     crate::canary_gate::invalidate_unproven_device(&mut tx, &id).await?;
-    if old_state != device["apply_state"] && audit_row_allowed(&s, &id, "device.apply_state") {
+    if old_state != device["apply_state"]
+        && audit_row_allowed(
+            &s,
+            &id,
+            "device.apply_state",
+            Some((generation, text(&device, "apply_state"))),
+        )
+    {
         db::audit(
             &mut tx,
             &id,
@@ -1099,7 +1128,7 @@ pub async fn heartbeat(
     }
     if uses_local_secrets
         && (secret_revision != old_secret_revision || old_actual != device["actual_sha256"])
-        && audit_row_allowed(&s, &id, "device.secret_reconciliation")
+        && audit_row_allowed(&s, &id, "device.secret_reconciliation", None)
     {
         let event = json!({"id":db::id(),"actor":id,"action":"device.secret_reconciliation","target":id,"outcome":device["apply_state"],"created_at":db::now(),"secret_revision":secret_revision,"previous_secret_revision":old_secret_revision,"actual_sha256":device["actual_sha256"],"applied_template_sha256":device["applied_template_sha256"]});
         db::insert(&mut tx, "audit", &event).await?;
