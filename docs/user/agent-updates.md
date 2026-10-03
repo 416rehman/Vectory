@@ -236,7 +236,7 @@ A server restored from a backup stops all updates too, as a local administrator,
 
 The host takes a build back when the new agent doesn't start, doesn't check in within five minutes, isn't healthy or is interrupted twice. It restores the previous build from a copy it kept, and reports the reason. The device shows **Rolled back** with that reason, and the dashboard opens an issue (**AGENT_UPDATE_ROLLED_BACK**) that appears in **Needs you** on the Overview. A host that had already started when you paused, cancelled or stopped the rollout, and then rolled back, is recorded the same way, once: the issue and the audit entry appear, and a paused rollout counts it toward its failure threshold.
 
-**A rolled-back release is never tried again on that host.** The host remembers the release counter and the release, so even a new rollout can't make it try the same build twice. It takes the next release, which carries a higher counter. To retry, fix the cause, prepare a new release and roll it out.
+**A rolled-back release is never tried again on that host.** The host remembers the release counter and the release, so even a new rollout can't make it try the same build twice. It takes the next release, which carries a higher counter. To retry, fix the cause, prepare a new release and roll it out. That record is in the update step's directory, which `vectory update off` and `service-uninstall` delete: a host that turns updates off and on again starts it afresh, and can try a release it took back before if it is offered again.
 
 Most rollbacks have one of these reasons:
 
@@ -340,6 +340,7 @@ In **Settings → Agent updates**, choose **Turn off…** and enter your passwor
 - **Custody is fixed while updates are on.** To change who holds the key, turn updates off and on again. Hosts pinned to the old key then need their **Upgrade agent** command.
 - **A release names only the platforms in this server's catalog.** A host whose platform isn't in it is listed as **Not in this release**: update it by hand.
 - **Updates only move forward.** A host never takes an older build. Going back is its own automatic rollback, or an upgrade by hand.
+- **Turning updates off forgets which releases a host tried.** The record of the highest counter a host tried for each key it pins is kept in the update step's directory, which `vectory update off` and `service-uninstall` remove. Turned on again, the host takes a release it took back before if a server offers it, and the trial and the rollback guard it as they do any build. A release older than the build the host runs is still refused.
 - **A rollout targets the devices the review found.** A device that joins a group afterwards isn't added, and a device is in at most one unfinished update rollout.
 - **At most 200 update rollouts are active or paused at once.** The server reads every active one every two seconds, so the 201st is refused (`UPDATE_ROLLOUT_LIMIT`) until you cancel one or one finishes. A rollout takes up to 10,000 devices, so this is no limit on the fleet.
 - **Expiry uses each host's clock.** A host whose clock is far behind accepts a release that has expired, and one far ahead refuses valid ones.
