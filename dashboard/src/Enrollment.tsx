@@ -1193,7 +1193,11 @@ export function Enrollment({
               disabled={busy}
               name="enroll-update-level"
             />
-            <DocLink topic="agent-updates" section="what-a-host-agrees-to">
+            <DocLink
+              topic="agent-updates"
+              section="what-a-host-agrees-to"
+              className="doc-term-link update-doc"
+            >
               What a host agrees to
             </DocLink>
           </section>

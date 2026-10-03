@@ -260,6 +260,34 @@ export function filtersSummary(rules: Rules) {
     );
   return parts.join(" · ");
 }
+/**
+ * What a pipeline or group filter does to the events of agent updates, said
+ * where the filters are set: none of those events is about a pipeline, and the
+ * two that are about the whole server belong to no group. Empty when the
+ * filters leave every chosen event of agent updates alone.
+ */
+export function updateFilterNotes(
+  events: readonly string[],
+  filters: { pipelines: number; groups: number },
+): string[] {
+  const chosen = events.filter((event) => event.startsWith("agent_update."));
+  if (!chosen.length) return [];
+  if (filters.pipelines > 0)
+    return [
+      chosen.length === 1
+        ? "A pipeline filter matches no agent update event, so this channel won't send it."
+        : "A pipeline filter matches no agent update event, so this channel won't send them.",
+    ];
+  const wholeServer = chosen.filter(
+    (event) =>
+      event === "agent_update.stopped" || event === "agent_update.key_changed",
+  );
+  if (filters.groups > 0 && wholeServer.length)
+    return [
+      `A group filter keeps out ${wholeServer.map((event) => `"${eventLabel(event)}"`).join(" and ")}: an event about the whole server reaches only a channel with no pipeline or group filter.`,
+    ];
+  return [];
+}
 export type StatusView = { tone: StatusTone; label: string; detail: string };
 /** What the list says about a channel's recent deliveries. */
 export function channelStatus(channel: Channel, now = Date.now()): StatusView {

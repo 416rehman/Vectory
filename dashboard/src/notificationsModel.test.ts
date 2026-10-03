@@ -19,6 +19,7 @@ import {
   thresholdHint,
   thresholdUnit,
   thresholdValues,
+  updateFilterNotes,
   validateDraft,
   webhookUrlError,
   type Attempt,
@@ -591,5 +592,63 @@ describe("detection thresholds", () => {
     expect(thresholdHint(buffer, " 95 ", detection)).toBe(
       "The default · allowed 55 to 100",
     );
+  });
+});
+
+describe("filters and the events of agent updates", () => {
+  const none = { pipelines: 0, groups: 0 };
+  it("says nothing when no filter is set, or no such event is chosen", () => {
+    expect(updateFilterNotes(["agent_update.stopped"], none)).toEqual([]);
+    expect(
+      updateFilterNotes(["issue.opened", "rollout.failed"], {
+        pipelines: 2,
+        groups: 1,
+      }),
+    ).toEqual([]);
+    expect(updateFilterNotes([], { pipelines: 1, groups: 1 })).toEqual([]);
+  });
+
+  it("says a pipeline filter matches none of them", () => {
+    expect(
+      updateFilterNotes(["agent_update.rolled_back"], {
+        pipelines: 1,
+        groups: 0,
+      }),
+    ).toEqual([
+      "A pipeline filter matches no agent update event, so this channel won't send it.",
+    ]);
+    expect(
+      updateFilterNotes(
+        ["agent_update.rolled_back", "agent_update.failed", "issue.opened"],
+        { pipelines: 3, groups: 2 },
+      ),
+    ).toEqual([
+      "A pipeline filter matches no agent update event, so this channel won't send them.",
+    ]);
+  });
+
+  it("says a group filter keeps out the two events about the whole server only", () => {
+    expect(
+      updateFilterNotes(["agent_update.rolled_back", "agent_update.failed"], {
+        pipelines: 0,
+        groups: 2,
+      }),
+    ).toEqual([]);
+    expect(
+      updateFilterNotes(["agent_update.stopped", "agent_update.failed"], {
+        pipelines: 0,
+        groups: 1,
+      }),
+    ).toEqual([
+      'A group filter keeps out "All agent updates were stopped": an event about the whole server reaches only a channel with no pipeline or group filter.',
+    ]);
+    expect(
+      updateFilterNotes(["agent_update.stopped", "agent_update.key_changed"], {
+        pipelines: 0,
+        groups: 1,
+      }),
+    ).toEqual([
+      'A group filter keeps out "All agent updates were stopped" and "The release key changed": an event about the whole server reaches only a channel with no pipeline or group filter.',
+    ]);
   });
 });

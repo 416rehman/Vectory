@@ -7,6 +7,9 @@
 .choice-cards .enroll-mode-options[data-columns="3"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.choice-cards .enroll-mode-options[data-columns="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
 .choice-cards .choice-note {
   display: block;
   margin-top: 8px;
@@ -851,6 +854,12 @@
   color: var(--muted);
 }
 
+.update-doc {
+  display: inline-block;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
 /* ---------- The device page, and the Upgrade agent dialog ---------- */
 
 .update-fact-note {
@@ -917,6 +926,22 @@
 }
 
 /* ---------- The rollout page ---------- */
+
+/* The devices table: the state and its reason share the width the
+   deployments page gives its progress column and its last one. */
+.control-table .deployment-targets.update-targets td:nth-child(2) {
+  min-width: 0;
+  width: 190px;
+  white-space: nowrap;
+}
+.control-table .deployment-targets.update-targets td:nth-child(3) {
+  min-width: 260px;
+  white-space: normal;
+}
+.control-table .deployment-targets.update-targets td:last-child {
+  width: auto;
+  white-space: nowrap;
+}
 
 .update-timing {
   margin: 12px 0 0;

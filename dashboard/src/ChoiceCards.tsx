@@ -33,7 +33,7 @@ export function ChoiceCards<T extends string>({
   value: T | "";
   onChange: (value: T) => void;
   disabled?: boolean;
-  columns?: 2 | 3;
+  columns?: 1 | 2 | 3;
   hint?: ReactNode;
 }) {
   return (
