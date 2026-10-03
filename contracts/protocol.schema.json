@@ -6655,7 +6655,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional; at most 120 characters. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
         },
         "version_id": {
           "type": "string",
@@ -9762,7 +9763,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 120,
-          "description": "Optional, for vectory status: the pipeline's name as the server shows it now (cut to 120 characters, omitted when it is empty or has control characters). It can change at an unchanged generation when the pipeline is renamed, so an agent must keep it out of the identity it compares for a repeated generation. An older agent ignores it."
+          "description": "Optional, for vectory status: the pipeline's name as the server shows it now (cut to 120 characters, omitted when it is empty or has a control character, a line or paragraph separator or a text-direction control). It can change at an unchanged generation when the pipeline is renamed, so an agent must keep it out of the identity it compares for a repeated generation. An older agent ignores it."
         }
       },
       "required": [
@@ -14091,7 +14092,8 @@
         "name": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 120
+          "maxLength": 120,
+          "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
         },
         "policy": {
           "$ref": "#/$defs/AgentPolicy"
@@ -15564,7 +15566,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional; at most 120 characters. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
         },
         "version_id": {
           "type": "string",

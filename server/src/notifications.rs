@@ -492,11 +492,7 @@ fn text_field<'a>(v: &'a Value, key: &str, max: usize, label: &str) -> Result<&'
         .as_str()
         .map(str::trim)
         .ok_or_else(|| ApiError::invalid(format!("Enter {label}")))?;
-    if text.chars().any(db::hostile_display_char) {
-        return Err(ApiError::invalid(format!(
-            "Enter {label} without line breaks, control characters or text-direction overrides"
-        )));
-    }
+    db::refuse_hostile(text, label)?;
     if text.is_empty() || text.chars().count() > max {
         return Err(ApiError::invalid(format!(
             "Enter {label} of at most {max} characters"

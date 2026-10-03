@@ -70,6 +70,7 @@ pub async fn create(db: &mut SqliteConnection, request: &Value, actor: &str) -> 
             return result(db, &id, key).await;
         }
     }
+    db::name(&payload, "name", 120, "a group name")?;
     let mut group = api::group(db, &payload, None).await?;
     db::insert(db, "group", &group).await?;
     rollout::reconcile_membership(db).await?;

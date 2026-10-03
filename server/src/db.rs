@@ -307,6 +307,48 @@ pub fn hostile_display_char(c: char) -> bool {
     c.is_control() || matches!(u32::from(c), 0x2028 | 0x2029 | 0x202a..=0x202e | 0x2066..=0x2069)
 }
 
+/// The sentence for a name that holds a character `hostile_display_char`
+/// names. `label` is the field as a person says it, such as "a pipeline name".
+pub fn hostile_name_sentence(label: &str) -> String {
+    format!("Enter {label} without line breaks, control characters or text-direction overrides")
+}
+
+/// Refuses `text` when it holds a character that can't be shown on one line.
+/// A name appears in notifications, the audit log, exports and headings, where
+/// a line break starts a line of its own and a direction override reorders what
+/// follows, so every name someone writes is held to this rule.
+pub fn refuse_hostile(text: &str, label: &str) -> Result<()> {
+    if text.chars().any(hostile_display_char) {
+        return Err(ApiError::invalid(hostile_name_sentence(label)));
+    }
+    Ok(())
+}
+
+/// A name someone writes: `string`, and no character that can't be shown on
+/// one line, at the ends too. The text is kept as sent and the other limits
+/// keep their message.
+pub fn name<'a>(v: &'a Value, key: &str, max: usize, label: &str) -> Result<&'a str> {
+    let text = string(v, key, max)?;
+    refuse_hostile(text, label)?;
+    Ok(text)
+}
+
+/// `text` as one line: each character that can't be shown safely becomes a
+/// space, runs of white space collapse and the ends are trimmed. Text without
+/// such a character is returned as it is. Names saved before the write rules
+/// refused these characters can still hold them, so every stored name that
+/// reaches a message passes through here.
+pub fn one_line(text: &str) -> String {
+    if !text.chars().any(hostile_display_char) {
+        return text.to_owned();
+    }
+    let spaced: String = text
+        .chars()
+        .map(|c| if hostile_display_char(c) { ' ' } else { c })
+        .collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Text a device reports for people to read: a log message, or a diagnostic's
 /// message, hint or field. It is best effort, so a character that can't be
 /// shown safely is replaced and never a reason to refuse the check-in: each one
@@ -319,14 +361,7 @@ pub fn display_text(value: &Value, max: usize) -> Option<String> {
     if !(1..=max).contains(&text.chars().count()) {
         return None;
     }
-    if !text.chars().any(hostile_display_char) {
-        return Some(text.to_owned());
-    }
-    let spaced: String = text
-        .chars()
-        .map(|c| if hostile_display_char(c) { ' ' } else { c })
-        .collect();
-    Some(spaced.split_whitespace().collect::<Vec<_>>().join(" "))
+    Some(one_line(text))
 }
 pub fn default_policy() -> Value {
     json!({"heartbeat_seconds":60,"sync_paused":false,"telemetry_enabled":true})
@@ -464,5 +499,65 @@ mod display_text_tests {
             char::from_u32(0x200f).unwrap()
         );
         assert_eq!(shown(&marks).as_deref(), Some(marks.as_str()));
+    }
+
+    #[test]
+    fn a_stored_name_becomes_one_line_by_the_same_map() {
+        assert_eq!(one_line("Edge intake"), "Edge intake");
+        assert_eq!(one_line("  spaced   out  "), "  spaced   out  ");
+        assert_eq!(one_line("émoji 🙂 and 日本語"), "émoji 🙂 and 日本語");
+        let hostile = "Edge\nintake\r\u{85}two\u{2028}three\u{202e}four\u{2066}five";
+        assert_eq!(one_line(hostile), "Edge intake two three four five");
+        assert_eq!(one_line("\u{202e}\n"), "");
+        assert_eq!(
+            display_text(&json!(hostile), 300).as_deref(),
+            Some("Edge intake two three four five")
+        );
+    }
+
+    fn named(text: &str) -> std::result::Result<String, String> {
+        name(&json!({ "name": text }), "name", 120, "a pipeline name")
+            .map(str::to_owned)
+            .map_err(|e| e.message)
+    }
+
+    #[test]
+    fn a_written_name_is_one_line_and_keeps_its_other_limits() {
+        for text in [
+            "Edge intake",
+            "Équipe d'astreinte 🙂 運用",
+            "a: b, (c) & d / e",
+            "  padded  ",
+            "zero\u{200b}width",
+        ] {
+            assert_eq!(named(text).as_deref(), Ok(text));
+        }
+        for code in [
+            0x00u32, 0x07, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0x2028, 0x2029, 0x202a,
+            0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+        ] {
+            let c = char::from_u32(code).unwrap();
+            // Inside the name, and at either end: nothing is trimmed away first.
+            for text in [
+                format!("Edge{c}intake"),
+                format!("{c}Edge"),
+                format!("Edge{c}"),
+            ] {
+                let refused = named(&text).unwrap_err();
+                assert!(
+                    refused
+                        == "Enter a pipeline name without line breaks, control characters or text-direction overrides"
+                        || (code == 0 && refused.contains("invalid length or characters")),
+                    "U+{code:04X}: {refused}"
+                );
+            }
+        }
+        assert!(named("").unwrap_err().contains("invalid length"));
+        assert!(
+            named(&"x".repeat(121))
+                .unwrap_err()
+                .contains("invalid length")
+        );
+        assert!(named(&"x".repeat(120)).is_ok());
     }
 }

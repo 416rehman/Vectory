@@ -177,7 +177,7 @@ pub async fn edit(
         .as_u64()
         .filter(|n| *n <= 9_007_199_254_740_991)
         .ok_or_else(|| ApiError::invalid("revision must be a nonnegative safe integer"))?;
-    let name = db::string(&request, "name", 120)?.to_owned();
+    let name = db::name(&request, "name", 120, "a settings name")?.to_owned();
     db::validate_policy(&request["policy"])?;
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
@@ -275,7 +275,7 @@ pub async fn create(db: &mut SqliteConnection, request: &Value, actor: &str) -> 
         }
     }
     db::validate_policy(&payload["policy"])?;
-    let record = json!({"id":db::id(),"name":db::string(&payload,"name",120)?,"policy":payload["policy"],"created_at":db::now()});
+    let record = json!({"id":db::id(),"name":db::name(&payload,"name",120,"a settings name")?,"policy":payload["policy"],"created_at":db::now()});
     db::insert(db, "policy", &record).await?;
     db::audit(
         db,

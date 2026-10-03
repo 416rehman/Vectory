@@ -1931,6 +1931,294 @@ async fn previews_are_marked_as_examples() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+/* ---------- Names stored before the write rules ---------- */
+
+/// A name as an older version stored it: line breaks, a carriage return, NEL,
+/// a line separator and direction controls, around a forged line of its own.
+const FORGED: &str = "Edge intake\n\nResolved on every device: delivery is healthy again.\u{2028}Nothing to do.\u{202e} reversed\u{85}NEL\r\u{2066} hidden";
+const FORGED_LINE: &str = "Edge intake Resolved on every device: delivery is healthy again. Nothing to do. reversed NEL hidden";
+
+fn decode_quoted_printable(text: &str) -> String {
+    let bytes = text.replace("=\r\n", "").into_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'=' && at + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).unwrap();
+            out.push(u8::from_str_radix(hex, 16).unwrap());
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).unwrap()
+}
+/// The subject (unfolded) and the text body, with line ends as `\n`, of each
+/// message the SMTP server received.
+fn mails(transcript: &Arc<Mutex<Vec<String>>>) -> Vec<(String, String)> {
+    transcript
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|part| part.contains("\r\nSubject: ") || part.starts_with("Subject: "))
+        .map(|raw| {
+            // The server keeps SMTP's dot-stuffing: a line that starts with a
+            // dot arrives with one more.
+            let raw: String = raw
+                .split_inclusive("\r\n")
+                .map(|line| {
+                    line.strip_prefix('.')
+                        .filter(|rest| rest.starts_with('.'))
+                        .unwrap_or(line)
+                })
+                .collect();
+            let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+            let head = head.replace("\r\n ", " ").replace("\r\n\t", " ");
+            let header = |name: &str| {
+                head.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .map(|value| value.trim().to_owned())
+            };
+            let body = match header("Content-Transfer-Encoding: ").as_deref() {
+                Some("quoted-printable") => decode_quoted_printable(body),
+                Some("base64") => {
+                    use base64::Engine;
+                    let joined: String = body.split_whitespace().collect();
+                    String::from_utf8(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(joined)
+                            .unwrap(),
+                    )
+                    .unwrap()
+                }
+                _ => body.to_owned(),
+            };
+            (header("Subject: ").unwrap(), body.replace("\r\n", "\n"))
+        })
+        .collect()
+}
+/// Every string inside `value`, so a check covers each member of the event.
+fn strings_of(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => out.push(text.clone()),
+        Value::Array(items) => items.iter().for_each(|item| strings_of(item, out)),
+        Value::Object(members) => members.values().for_each(|item| strings_of(item, out)),
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn names_stored_with_line_breaks_and_overrides_reach_every_message_as_one_line() {
+    let hook = receiver(Reply::Status(200, "ok".into())).await;
+    let (smtp, transcript) = smtp_server().await;
+    let f = fixture().await;
+    let events = [
+        "rollout.failed",
+        "rollout.rolled_back",
+        "issue.opened",
+        "device.offline",
+    ];
+    channel(&f, webhook(&hook.url("/names"), true, &events)).await;
+    let mail = channel(
+        &f,
+        json!({
+            "name": format!("Mail {}", db::id()),
+            "kind": "email",
+            "allow_private": true,
+            "email": {"host":"127.0.0.1","port":smtp.port(),"security":"none","username":"alerts","password":"smtp-password","from":"Vectory <alerts@example.test>","to":["oncall@example.test"]},
+            "rules": {"events": events},
+        }),
+    )
+    .await;
+    // Pipelines, a deployment, a device and a person, as an older version
+    // could have stored them: nothing refused these names then.
+    let (_, forged_version) = version(&f, FORGED).await;
+    let (_, restored_version) = version(&f, "Second\npipeline\u{202e}").await;
+    let admin: String = sqlx::query_scalar("SELECT id FROM users WHERE role='admin'")
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET name=? WHERE id=?")
+        .bind("Ada\nAdmin\u{202e}Forged")
+        .bind(&admin)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let now = Utc::now() + Duration::seconds(5);
+    // Still checking in when the quiet device is reported.
+    let edge = device(&f, "edge\n01\u{2028}x", now + Duration::minutes(19)).await;
+    let selector = json!({"device_ids":[],"group_ids":[],"exclude_ids":[]});
+    let (named, unnamed, rolled, replacement) = (db::id(), db::id(), db::id(), db::id());
+    let mut conn = f.s.pool.acquire().await.unwrap();
+    for (id, name, status, extra) in [
+        (&named, Some(FORGED), "failed", json!({})),
+        (&unnamed, None, "failed", json!({})),
+        (
+            &rolled,
+            Some("Rolled\u{2028}back"),
+            "cancelled",
+            json!({"rolled_back_by":replacement}),
+        ),
+    ] {
+        let mut record = json!({"id":id,"version_id":forged_version,"status":status,"failure_reason":"threshold","selector":selector,"created_at":db::now()});
+        record["name"] = json!(name);
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        db::insert(&mut conn, "deployment", &record).await.unwrap();
+    }
+    db::insert(&mut conn, "deployment", &json!({"id":replacement,"version_id":restored_version,"status":"active","selector":selector,"created_at":db::now()})).await.unwrap();
+    for deployment in [&named, &unnamed] {
+        db::audit(
+            &mut conn,
+            "scheduler",
+            "deployment.gate",
+            deployment,
+            "failed",
+        )
+        .await
+        .unwrap();
+    }
+    db::audit(&mut conn, &admin, "deployment.rollback", &rolled, "success")
+        .await
+        .unwrap();
+    drop(conn);
+    // An issue as the hooks stored it, with a title and a message of its own.
+    sqlx::query("INSERT INTO notification_events(identity,kind,data,created_at) VALUES(?,?,?,?)")
+        .bind("names:issue")
+        .bind("issue.opened")
+        .bind(json!({"issue_id":db::id(),"revision":1,"device_id":edge,"code":"DATA_PLANE_SINK_ERRORS","version_id":forged_version,"title":"Sink\ncan't\u{202e} deliver","message":"It is failing.\n\nResolved: all clear.\u{2028}Nothing to do.","severity":"error"}).to_string())
+        .bind(stamp(now))
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    // A device that went quiet while running the pipeline.
+    let quiet = device(&f, "edge\r\n02", now).await;
+    sqlx::query("UPDATE devices SET desired_version_id=? WHERE id=?")
+        .bind(&forged_version)
+        .bind(&quiet)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    drain(&f, now).await;
+    drain(&f, now + Duration::minutes(20)).await;
+
+    let bodies: Vec<Value> = hook.requests().iter().map(Captured::json).collect();
+    let mut texts: Vec<String> = bodies
+        .iter()
+        .map(|body| body["text"].as_str().unwrap().to_owned())
+        .collect();
+    texts.sort();
+    let mut expected = vec![
+        format!("Rollout failed: {FORGED_LINE}"),
+        format!("Rollout failed: {FORGED_LINE} v4"),
+        "Rolled back: Rolled back".to_owned(),
+        "Issue on edge 01 x: Sink can't deliver".to_owned(),
+        "edge 02 is offline".to_owned(),
+    ];
+    expected.sort();
+    assert_eq!(texts, expected);
+    for body in &bodies {
+        let event = &body["event"];
+        // Each member of the event, and the line of text, is one line.
+        let mut members = Vec::new();
+        strings_of(event, &mut members);
+        strings_of(&body["text"], &mut members);
+        for text in &members {
+            assert!(
+                !text.chars().any(db::hostile_display_char),
+                "{text:?} in {body}"
+            );
+        }
+        // The message block has the template's one line break, between the
+        // headline and the message, and the context block has none.
+        let section = body["blocks"][0]["text"]["text"].as_str().unwrap();
+        assert_eq!(section.matches('\n').count(), 1, "{section:?}");
+        assert!(
+            !section
+                .replacen('\n', " ", 1)
+                .chars()
+                .any(db::hostile_display_char)
+        );
+        assert!(
+            !body["blocks"][1]["elements"][0]["text"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .any(db::hostile_display_char)
+        );
+    }
+    let by = |kind: &str| {
+        bodies
+            .iter()
+            .find(|body| body["event"]["type"] == kind)
+            .unwrap()["event"]
+            .clone()
+    };
+    assert_eq!(
+        by("issue.opened")["message"],
+        "It is failing. Resolved: all clear. Nothing to do."
+    );
+    assert_eq!(by("issue.opened")["device"]["name"], "edge 01 x");
+    assert_eq!(by("issue.opened")["pipeline"]["name"], FORGED_LINE);
+    assert_eq!(
+        by("rollout.rolled_back")["message"],
+        "Ada Admin Forged rolled it back to Second pipeline v4."
+    );
+    assert_eq!(
+        by("rollout.rolled_back")["restored"]["name"],
+        "Second pipeline"
+    );
+    assert_eq!(by("device.offline")["pipeline"]["name"], FORGED_LINE);
+
+    // The same events by email: the subject is one line and the body holds
+    // only the template's own lines.
+    let received = mails(&transcript);
+    let mut subjects: Vec<String> = received
+        .iter()
+        .map(|(subject, _)| subject.clone())
+        .collect();
+    subjects.sort();
+    let mut wanted: Vec<String> = expected
+        .iter()
+        .map(|text| format!("[Notification tests] {text}"))
+        .collect();
+    wanted.sort();
+    assert_eq!(subjects, wanted);
+    let failed = received
+        .iter()
+        .find(|(subject, _)| subject.ends_with(&format!("failed: {FORGED_LINE}")))
+        .unwrap();
+    let channel_name = mail["name"].as_str().unwrap();
+    assert_eq!(
+        failed.1.trim_end(),
+        format!(
+            "Rollout failed: {FORGED_LINE}\n\nMore devices failed to apply it than its failure threshold allows, so it stopped.\n\nDeployment: {FORGED_LINE}\n\nOpen in Vectory: https://vectory.example.test/#/deployments/{named}\n\n—\nSent by the “{channel_name}” channel in Notification tests. Change what it sends in Settings → Notifications."
+        )
+    );
+    for (subject, body) in &received {
+        assert!(
+            !subject.chars().any(db::hostile_display_char),
+            "{subject:?}"
+        );
+        assert!(
+            !body
+                .replace('\n', " ")
+                .chars()
+                .any(db::hostile_display_char),
+            "{body:?}"
+        );
+        assert!(
+            !body
+                .lines()
+                .any(|line| line.starts_with("Resolved on every device")),
+            "{body}"
+        );
+    }
+}
+
 /* ---------- Issues end to end, and detection thresholds ---------- */
 
 struct Fleet {
