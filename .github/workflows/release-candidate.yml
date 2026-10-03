@@ -3,7 +3,8 @@ name: release candidate (no publication)
 # for every target with their archives and catalog, .deb and .rpm packages
 # (installed and removed in containers), an MSI (installed and removed on
 # Windows), the server and validator images, CycloneDX SBOMs for the Rust, Go
-# and npm dependencies, a license inventory, and SHA256SUMS over everything.
+# and npm dependencies, the npm advisory audit, a license inventory, and
+# SHA256SUMS over everything.
 # Nothing is signed, pushed or published; every catalog entry says signed:false.
 #   gh workflow run release-candidate.yml --ref <branch>
 # packaging/README.md describes the outputs.
@@ -277,6 +278,9 @@ jobs:
       - name: Unit-test the license inventory
         timeout-minutes: 10
         run: python3 packaging/test_license_inventory.py
+      - name: Unit-test the npm advisory gate
+        timeout-minutes: 10
+        run: python3 packaging/test_audit_npm.py
       - name: CycloneDX SBOM of the server's Rust dependencies
         timeout-minutes: 10
         env:
@@ -307,12 +311,9 @@ jobs:
           mkdir -p artifacts/sbom
           (cd dashboard && npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application --omit dev) > artifacts/sbom/vectory-dashboard.cdx.json
           (cd help-center && npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application --omit dev) > artifacts/sbom/vectory-help-center.cdx.json
-      - name: No high or critical advisory in the npm dependencies that ship
+      - name: No unacknowledged high or critical advisory in the npm dependencies that ship
         timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          (cd dashboard && npm audit --omit=dev --audit-level=high)
-          (cd help-center && npm audit --omit=dev --audit-level=high)
+        run: python3 packaging/audit-npm.py --out artifacts/sbom/npm-dependency-audit.json
       - name: License inventory, source lockfile inventory and source bytes
         timeout-minutes: 10
         run: |
