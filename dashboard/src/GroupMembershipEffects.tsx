@@ -9,11 +9,14 @@ import { Button, Spinner } from "./ui";
 import { setDifference } from "./deviceInventory";
 import {
   AUTO_PREVIEW,
+  conflictSentences,
   membershipEffects,
   membershipSentence,
+  parseMembershipConflicts,
   previewBusy,
   previewWithRetries,
   previewWanted,
+  savingBlocked,
 } from "./groupMembership";
 
 /** Devices described one by one before the rest are summed up. */
@@ -22,13 +25,16 @@ const LISTED = 50;
 /**
  * What saving this membership edit would change on each added or removed
  * device, from the server's dry run of the real resolver. Nothing is written.
+ * `onBlocked` hears why saving has to wait, or "" when nothing blocks it.
  */
 export default function GroupMembershipEffects({
   group,
   ids,
+  onBlocked,
 }: {
   group: Group;
   ids: ReadonlySet<string>;
+  onBlocked?: (reason: string) => void;
 }) {
   const [preview, setPreview] = useState<GroupMembershipPreview | null>(null),
     [loading, setLoading] = useState(false),
@@ -94,11 +100,25 @@ export default function GroupMembershipEffects({
     // The selection key captures every membership change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, wanted, group.id, group.revision]);
+  // What stops the save, said once the preview knows; nothing blocks an edit
+  // that is gone or not yet previewed.
+  const blockedReason = changed ? savingBlocked(preview) : "";
+  useEffect(() => {
+    onBlocked?.(blockedReason);
+    return () => onBlocked?.("");
+    // The parent's setter is stable; only the reason matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockedReason]);
   if (!changed) return null;
   const name = (id: string, fallback: string | null) => fallback || id;
   // A few devices read one by one; a large edit says what matters (the
   // devices that change something) and counts the ones that change nothing.
-  const summary = preview ? membershipEffects(preview.devices, LISTED) : null;
+  // A blocked edit stopped the simulation, so what it would change is not
+  // known: the blockers are all the preview says.
+  const summary =
+    preview && !preview.blockers.length
+      ? membershipEffects(preview.devices, LISTED)
+      : null;
   return (
     <section
       className="group-effects"
@@ -134,14 +154,25 @@ export default function GroupMembershipEffects({
           the latest version.
         </p>
       )}
-      {preview?.blockers.map((blocker) => (
-        <p
-          key={blocker.code + blocker.reason}
-          className="group-effects-blocker"
-        >
-          {blocker.reason}
-        </p>
-      ))}
+      {preview?.blockers.flatMap((blocker) => {
+        // A collision names the device and both assignments; any other
+        // blocker says what the server said.
+        const named = parseMembershipConflicts(
+          blocker.details,
+          blocker.details_total,
+        );
+        return (
+          named ? conflictSentences(named, group.id) : [blocker.reason]
+        ).map((line) => (
+          <p
+            key={blocker.code + line}
+            className="group-effects-blocker"
+            data-blocker={blocker.code}
+          >
+            {line}
+          </p>
+        ));
+      })}
       {summary && (
         <>
           <ul>

@@ -263,7 +263,7 @@ A check passing is the device's own report that validation found no error. It is
 | Held on previous version | The newest version failed on this device, but it still runs its previous version and delivers on it. Fix the pipeline and deploy again, or roll the rollout back. The device page has the failure. |
 | Sync paused | Whether the pause was set on the rollout, in agent settings or on the host (`vectory resume` clears only a host pause). |
 | Not sure what the device runs | The device page's **Effective configuration** says whether the file its agent reports is what Vectory offered and, when it isn't, which earlier offer it is. See [Read what a device was offered](deployments.md#read-what-a-device-was-offered). |
-| Priority conflict | Two different pipelines at the same priority. Choose a higher priority, or remove the deployment you don't need. |
+| Priority conflict | Two different pipelines, or two different agent settings, at the same priority. Choose a higher priority, or remove the deployment you don't need. A group edit that would cause one names the device and both assignments. |
 | Target set changed | Group membership changed since you reviewed. Review again and confirm. |
 
 Removing or cancelling a deployment never stops Vector. See [Deploy and roll back](deployments.md).
