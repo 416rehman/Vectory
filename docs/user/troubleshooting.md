@@ -33,7 +33,7 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 | `Vector 0.58.x isn't installed here` | Setup looked on `PATH` and in the usual places and found no Vector 0.58. Install it, or pass `--vector-binary PATH`; **Add device → Advanced → Vector binary** puts the path into the command you copy. |
 | The service account can't run Vector or the agent | Setup names the folder or file that blocks it, such as a private `/root`. Install Vector system-wide (https://vector.dev/download/) or pass `--vector-binary` with a path the account can read. Keep the agent at mode `0755`. |
 
-For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log:
+For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log. A refusal is recorded once for each token or address and reason a minute, and at most 60 a minute in all. When more arrive, the audit log adds one **Device enroll refusals summarized** event that says how many were left out.
 
 | Reason | **Add device** says | Fix |
 | --- | --- | --- |

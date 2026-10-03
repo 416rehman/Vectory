@@ -635,6 +635,8 @@ fn details(v: &Value, extra: &Value) -> Value {
             "tests_passed_count",
             "summary",
         ],
+        // The one row a minute says how many refusals the shared budget left out.
+        "device.enroll_refusals_summarized" => &["summary"],
         // Written by the enrollment endpoint from bounded, secret-free fields.
         "device.enroll" => &[
             "reason_code",

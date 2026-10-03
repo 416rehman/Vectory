@@ -163,7 +163,8 @@ pub async fn enroll(
     // without bound: record the first of each kind each minute. Junk and typos
     // carry no real token, so they count per client and reason; a refusal for
     // a real token (revoked, used up, expired, a name it doesn't allow) counts
-    // per token and reason, whichever hosts keep trying.
+    // per token and reason, whichever hosts keep trying. All kinds together
+    // write at most `enrollment_audit::REFUSAL_ROWS_PER_MINUTE` rows a minute.
     let audit_budget = match token_id.as_deref() {
         Some(token) => Some(format!("enrollment-audit:token:{token}:{reason}")),
         None if matches!(reason, "TOKEN_UNKNOWN" | "MALFORMED") => {
@@ -178,14 +179,7 @@ pub async fn enroll(
     }
     details["reason_code"] = json!(reason);
     details["token_id"] = json!(token_id);
-    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
-    db::insert(
-        &mut tx,
-        "audit",
-        &json!({"id":db::id(),"actor":"anonymous","action":"device.enroll","target":"unregistered","outcome":"failure","created_at":db::now(),"details":details}),
-    )
-    .await?;
-    tx.commit().await?;
+    crate::enrollment_audit::record(&s, details).await?;
     Err(error)
 }
 /// Returns the stored response when `request` already enrolled this key with
