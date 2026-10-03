@@ -981,7 +981,7 @@ async fn issue_events_recoveries_and_devices_are_named_at_read_time() {
     insert(
         &s,
         "issue",
-        &json!({"id":issue,"device_id":device,"code":"DATA_PLANE_SINK_ERRORS","title":"http_out can't deliver events","resolved":false,"revision":1}),
+        &json!({"id":issue,"device_id":device,"code":"DATA_PLANE_SINK_ERRORS","resolved":false,"revision":1}),
     )
     .await;
     let token = db::id();
@@ -1014,9 +1014,10 @@ async fn issue_events_recoveries_and_devices_are_named_at_read_time() {
     };
     let issue_row = row("issue.acknowledge");
     assert_eq!(issue_row["target"], issue.as_str());
+    // An issue record keeps a code and no title: the name is built from the code.
     assert_eq!(
         issue_row["target_name"],
-        "http_out can't deliver events on edge-nyc-02"
+        "A sink can't deliver events on edge-nyc-02"
     );
     assert_eq!(issue_row["target_kind"], "issue");
     assert_eq!(issue_row["device_id"], device.as_str());
@@ -1049,7 +1050,7 @@ async fn issue_events_recoveries_and_devices_are_named_at_read_time() {
     assert_eq!(detail["device_name"], "edge-nyc-02");
     assert_eq!(
         detail["target_name"],
-        "http_out can't deliver events on edge-nyc-02"
+        "A sink can't deliver events on edge-nyc-02"
     );
 }
 

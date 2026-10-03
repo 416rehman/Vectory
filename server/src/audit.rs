@@ -292,6 +292,9 @@ fn base(details: bool) -> String {
     };
     let compound = compound_sql("target");
     let a_compound = compound_sql("a.target");
+    // An issue record keeps no title: it is built from the issue's code, as the
+    // issue list builds it, so an event names the issue as people read it.
+    let issue_title = crate::issues::title_sql("other");
     // Version/revision references resolve through their immutable parent ID. A
     // missing parent retains that historical identity, but is not linkable.
     let parent = "CASE WHEN json_type(v.data,'$.configuration_id')='text' THEN substr(json_extract(v.data,'$.configuration_id'),1,128) WHEN json_type(rv.data,'$.configuration_id')='text' THEN substr(json_extract(rv.data,'$.configuration_id'),1,128) ELSE NULL END";
@@ -336,7 +339,7 @@ fn base(details: bool) -> String {
                 COALESCE(substr(tu.name,1,120),substr(td.name,1,256),
                     CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END,
                     CASE WHEN json_type(other.data,'$.name')='text' THEN substr(json_extract(other.data,'$.name'),1,120) END,
-                    CASE WHEN a.target_kind='issue' AND json_type(other.data,'$.title')='text' THEN substr(json_extract(other.data,'$.title'),1,120)||CASE WHEN idv.id IS NOT NULL THEN ' on '||substr(idv.name,1,100) ELSE '' END END,
+                    CASE WHEN a.target_kind='issue' AND other.id IS NOT NULL THEN substr({issue_title},1,120)||CASE WHEN idv.id IS NOT NULL THEN ' on '||substr(idv.name,1,100) ELSE '' END END,
                     CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END,
                     CASE WHEN json_type(dc.data,'$.name')='text' THEN substr(json_extract(dc.data,'$.name'),1,120)||CASE WHEN json_type(dv.data,'$.number')='integer' THEN ' v'||json_extract(dv.data,'$.number') ELSE '' END END,
                     CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
