@@ -35,6 +35,10 @@ func TestSecretBindingsInputRejectsAmbiguousObjects(t *testing.T) {
 		"bom":          append([]byte{0xef, 0xbb, 0xbf}, []byte(valid)...), "over-count": overCount,
 		"over-size": append([]byte("{}"), bytes.Repeat([]byte(" "), 2*MaxArtifact)...),
 	}
+	// A name or a path that can't be right is named, so the operator can find
+	// the entry. The other cases are about the shape of the file, and nothing
+	// the file holds is echoed for them. No case echoes a secret's path or value.
+	namesTheEntry := map[string]string{"relative": "relative-private", "empty-path": "TOKEN", "nul-path": "TOKEN", "bad-name": "9TOKEN"}
 	for label, data := range cases {
 		t.Run(label, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "bindings.json")
@@ -45,8 +49,12 @@ func TestSecretBindingsInputRejectsAmbiguousObjects(t *testing.T) {
 			if err == nil {
 				t.Fatal("ambiguous operator input accepted")
 			}
-			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "synthetic-value-never-echo") || strings.Contains(err.Error(), "TOKEN") {
+			named, naming := namesTheEntry[label]
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "synthetic-value-never-echo") || (!naming && strings.Contains(err.Error(), "TOKEN")) {
 				t.Fatal("binding input diagnostic disclosed private input")
+			}
+			if naming && !strings.Contains(err.Error(), named) {
+				t.Fatalf("the diagnostic doesn't name the entry %q: %v", named, err)
 			}
 		})
 	}
