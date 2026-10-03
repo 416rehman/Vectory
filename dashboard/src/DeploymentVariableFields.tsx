@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Device, VariableDeclaration } from "./api";
+import DocLink from "./DocLink";
 import { pastedValues, type BindingInputs } from "./deploymentVariables";
 import "./deployment-variable-fields.css";
 
@@ -304,8 +305,11 @@ export default function DeploymentVariableFields({
       )}
       <p className="deployment-variable-warning">
         Values entered here are stored with the deployment and visible to
-        authorized users. For credentials, use a device-local Vector secret
-        provider instead.
+        authorized users. For credentials, use a device secret instead:{" "}
+        <code>vectory-secret:NAME</code>{" "}
+        <DocLink topic="resources" section="keep-credentials-on-the-device">
+          How device secrets work
+        </DocLink>
       </p>
     </section>
   );

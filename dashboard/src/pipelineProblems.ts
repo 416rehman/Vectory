@@ -545,6 +545,7 @@ const deferralPhrases: Record<string, string> = {
   "native configuration provider": "the configuration provider",
   "device enrichment data": "enrichment data files",
   "Enrichment tables are read on devices": "enrichment data files",
+  "A VRL program in a file is read on devices": "local files and paths",
   "device-local paths or external code files": "local files and paths",
 };
 

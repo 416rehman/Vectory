@@ -168,6 +168,7 @@ import {
   diagnoseConfigurationSource,
   assertValidPipelineSource,
   detectConfigurationFormat,
+  diagnosticCounts,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
   sourceErrorMessage,
@@ -223,6 +224,7 @@ import { connectionRoutes } from "./canvasLayout";
 const LIVE_REFRESH_MS = 15000;
 import { coalesces, editedField } from "./editHistory";
 import { draftSummary } from "./draftSummary";
+import { refusedSave, type SaveRefusal } from "./saveRefusal";
 import {
   pipelineTemplates,
   withMonitoring,
@@ -517,6 +519,8 @@ export default function Editor({
     } | null>(null),
     [dirty, setDirty] = useState(false),
     [saveStatus, setSaveStatus] = useState("All changes saved"),
+    // The server refused to store this draft. The edits stay; this says where.
+    [saveRefusal, setSaveRefusal] = useState<SaveRefusal | null>(null),
     [loadAttempt, setLoadAttempt] = useState(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -600,6 +604,13 @@ export default function Editor({
     future = useRef<EditorSnapshot[]>([]),
     lastEdit = useRef<{ key: string; at: number } | null>(null),
     latest = useRef({ doc, config, variables, nodes, edges, dirty }),
+    // The draft as it was last loaded or saved, by reference: undoing back to
+    // it leaves nothing unsaved.
+    savedState = useRef<{
+      config: Config;
+      variables: VariableDeclaration[];
+      nodes: any[];
+    } | null>(null),
     pendingSave = useRef<Promise<Configuration | null> | null>(null),
     saveUncertain = useRef(false),
     uncertainSaveRevision = useRef<number | null>(null),
@@ -828,6 +839,7 @@ export default function Editor({
     [],
   );
   latest.current = { doc, config, variables, nodes, edges, dirty };
+  if (!dirty) savedState.current = { config, variables, nodes };
   const editable = can(user, "edit") && !!doc && !doc.archived;
   const checkable =
     (editable || can(user, "operate")) && !!doc && !doc.archived;
@@ -1479,6 +1491,7 @@ export default function Editor({
           saveUncertain.current = false;
           uncertainSaveRevision.current = null;
           saveNeedsReload.current = false;
+          setSaveRefusal(null);
           setDoc(updated);
           latest.current.doc = updated;
           // Measurements and selection change node and edge objects without
@@ -1509,12 +1522,19 @@ export default function Editor({
             saveUncertain.current = true;
             uncertainSaveRevision.current ??= revision;
           }
+          // A refusal other than a changed draft leaves nothing to reload:
+          // the edits stay and the fix is in them.
+          const refusal =
+            rejected && !saveNeedsReload.current && !saveUncertain.current
+              ? refusedSave(e as APIError, current.config)
+              : null;
+          setSaveRefusal(refusal);
           setError(
             saveNeedsReload.current
               ? "The server draft changed. Reload it before discarding or saving these local edits."
               : saveUncertain.current
                 ? "The draft save was not confirmed. Your edits are still here. Retry Save draft or reload the server draft."
-                : (e as Error).message,
+                : (refusal?.message ?? (e as Error).message),
           );
           setSaveStatus(
             saveNeedsReload.current
@@ -1598,6 +1618,20 @@ export default function Editor({
       to.push({ config, graph: { nodes, edges }, variables });
       lastEdit.current = null;
       replace(item.config, item.graph, false, item.variables);
+      // Back to the draft as saved: nothing is unsaved. A save that failed or
+      // was not confirmed leaves it unknown what the server holds.
+      const saved = savedState.current;
+      if (
+        saved &&
+        item.config === saved.config &&
+        item.variables === saved.variables &&
+        samePositions(item.graph.nodes, saved.nodes) &&
+        !saveUncertain.current &&
+        !saveNeedsReload.current
+      ) {
+        setDirty(false);
+        setSaveStatus("All changes saved");
+      }
     }
   }
 
@@ -2752,6 +2786,7 @@ export default function Editor({
     explicitSaveInFlight.current = true;
     setSavingDraft(true);
     setError("");
+    setSaveRefusal(null);
     try {
       return await persist(true, undefined, undefined, note);
     } finally {
@@ -3081,6 +3116,7 @@ export default function Editor({
     stack.current = [];
     future.current = [];
     setSaveStatus("All changes saved");
+    setSaveRefusal(null);
   }
   function requestDiscard() {
     if (!editable || busy) return;
@@ -3204,6 +3240,7 @@ export default function Editor({
       setDirty(false);
       importedCodeDirty.current = false;
       setSaveStatus("All changes saved");
+      setSaveRefusal(null);
       notify(
         `Restored as draft revision ${restored.revision}. Published versions and devices are unchanged.`,
         { tone: "success" },
@@ -3472,6 +3509,20 @@ export default function Editor({
             })
         : undefined,
     });
+  }
+  // The server refused the draft over one setting: go where it is written, in
+  // Code, or to the field in the step's settings.
+  function goToRefusedField() {
+    const target = saveRefusal;
+    if (!target?.component) return;
+    if (view === "code") {
+      setCodeReveal({
+        offset: sourceOffset(code, target.component),
+        nonce: Date.now(),
+      });
+      return;
+    }
+    openStep({ panel: "step", select: target.component, field: target.field });
   }
   // Open the step a problem belongs to and reveal the field and position.
   // Pipeline-wide problems open the matching pipeline settings section.
@@ -4240,14 +4291,18 @@ export default function Editor({
                   ? "The server draft changed. Reload it before continuing."
                   : saveUncertain.current
                     ? "The draft save was not confirmed. Reload the server draft or retry Save draft."
-                    : "The draft save failed. Your edits are still here.")
+                    : saveRefusal?.message ||
+                      "The draft save failed. Your edits are still here.")
               }
             />
-            {(saveStatus.startsWith("Save failed") ||
-              saveUncertain.current ||
-              saveNeedsReload.current) && (
+            {(saveUncertain.current || saveNeedsReload.current) && (
               <Button variant="secondary" onClick={reloadLatest}>
                 Reload server draft
+              </Button>
+            )}
+            {saveRefusal?.component && saveRefusal.field && (
+              <Button variant="secondary" onClick={goToRefusedField}>
+                Go to field
               </Button>
             )}
             {saveUncertain.current && dirty && (
@@ -5537,18 +5592,7 @@ export default function Editor({
               {currentAnalysis?.diagnostics.length ? (
                 <details>
                   <summary>
-                    {
-                      currentAnalysis.diagnostics.filter(
-                        (item) => item.severity === "error",
-                      ).length
-                    }{" "}
-                    errors ·{" "}
-                    {
-                      currentAnalysis.diagnostics.filter(
-                        (item) => item.severity === "warning",
-                      ).length
-                    }{" "}
-                    warnings
+                    {diagnosticCounts(currentAnalysis.diagnostics)}
                   </summary>
                   <ul>
                     {currentAnalysis.diagnostics.map((item, index) => (
@@ -5922,6 +5966,7 @@ export default function Editor({
           )}
           <PublishReview
             config={config}
+            variables={variables}
             published={publishedVersion}
             reach={publishReach}
             status={status}

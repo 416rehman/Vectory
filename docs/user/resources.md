@@ -1,6 +1,6 @@
 # Secrets, enrichment & tests
 
-Give pipelines credentials, lookup data and tests, from [**Actions → Pipeline settings**](/#/configurations?panel=settings). Credentials and files live on each device, never in the pipeline, so provision them before you deploy.
+Give pipelines credentials, lookup data and tests, from [**Settings**](/#/configurations?panel=settings) in the editor toolbar. Credentials and files live on each device, never in the pipeline, so provision them before you deploy.
 
 ## Choose the right reference
 
@@ -10,6 +10,7 @@ Give pipelines credentials, lookup data and tests, from [**Actions → Pipeline 
 | Environment variable | `${API_TOKEN}` | Vector, from its service environment | Full-mode devices whose service environment you manage. |
 | Native secret | `SECRET[local_credentials.api_token]` | A Vector secret backend on the device | Credential fields on full-mode devices. |
 | Device secret | `vectory-secret:API_TOKEN` | The agent, from a local file you bind | Every credential field, in restricted and full mode. |
+| Deployment value | `site_name`, from **Settings → Variables** | Vectory, in each device's own copy | A setting that differs by device, such as a site name or a port. Never a credential. |
 
 These aren't interchangeable. A path in the dashboard doesn't upload a file, and a variable in your shell isn't in a service's environment. The Vectory server never reads your devices' secret files.
 
@@ -110,9 +111,46 @@ Replace the secret file, keeping its owner and permissions. At its next check-in
 
 The device's technical details then show a new effective digest and local secret revision, while the version's template digest stays the same. These identify the change without revealing the value.
 
+## Values that differ by device
+
+A variable makes one field of a pipeline take a different value on each device, such as a site name, a listen port or a log path. The pipeline keeps the field and the variable's name. You enter the values when you deploy, and each device receives its own copy of the configuration with its value in place.
+
+Variables are Vectory deployment values. They are separate from Vector's environment variables and secret providers, and they're stored with the deployment where authorized users can read them. Never put a credential in one: use a [device secret](#keep-credentials-on-the-device), which works in restricted and full mode.
+
+### Add a variable
+
+<!-- steps -->
+1. In the editor, choose [**Settings → Variables**](/#/configurations?panel=settings&section=variables).
+2. Under **Add a device-specific field**, choose the **Pipeline field**. The list holds the text, whole-number and true-or-false fields the draft has now. It leaves out inputs, VRL programs, commands, headers, TLS settings, the `api` block and anything that looks like a credential.
+3. Type a **Variable name**: a letter first, then letters, digits or underscores, up to 64 characters.
+4. Choose **Add variable**, then save the draft.
+
+A pipeline can have up to 64 variables, and **Remove** takes one away. A version records the variables the draft had when you published it.
+
+### Enter the values when you deploy
+
+<!-- steps -->
+1. Publish a version and choose **Choose devices**.
+2. Under **Values by device**, tick **Set default for selected devices** and enter the value the devices share. A deployment that also includes future group members asks for **Set required default** instead, because new members take it.
+3. In the **Each device** table, give a device its own value. A cell left empty uses the default, and reads **Needs a value** when there is none.
+4. To fill many devices at once, open **Paste values for many devices** and paste one device per line: its name, then its values in the order of the variables, separated by commas or tabs. A spreadsheet copy works. Choose **Fill these values**.
+5. Choose **Review deployment**.
+
+You should see **Device-specific values** in the summary, and for each device its value, marked **Default** or **Override**, beside the SHA-256 of the exact text it would receive.
+
+When the devices already run an earlier version of the pipeline, the dialog fills in the values they have and says so: **Filled 3 values from Edge syslog processing v2, what these devices run now.** Change any of them before you review. A device you tick by itself gets its own cell; devices you add in bulk take the default.
+
+A whole-number field takes a whole number and a true-or-false field takes **True** or **False**. A text value is a plain literal of up to 4,096 bytes: Vectory refuses `$`, `{{`, `%{`, secret references and text that looks like a credential in it.
+
+On a restricted device, each value must still meet the host's allowances, such as a destination or a listen address. **Check on devices** in the review tries each device's own values.
+
+### See what a device was offered
+
+Open the device's page and choose **Effective configuration → Variables**. It lists each variable with the field it sets and the value this device was offered, and says where the value came from: **Set for this device** or **Deployment default**. A version without variables reads "This version has no device-specific values: every device gets the same text."
+
 ## Use native Vector secret providers
 
-On full-mode devices, Vector can resolve secrets itself. In [**Pipeline settings → Secrets**](/#/configurations?panel=settings&section=secret), add a backend, for example a file backend:
+On full-mode devices, Vector can resolve secrets itself. In [**Settings → Secrets**](/#/configurations?panel=settings&section=secret), add a backend, for example a file backend:
 
 ```json
 {
@@ -141,7 +179,7 @@ edge-01,platform
 edge-02,observability
 ```
 
-Add the table in [**Pipeline settings → Enrichment tables**](/#/configurations?panel=settings&section=enrichment_tables):
+Add the table in [**Settings → Enrichment tables**](/#/configurations?panel=settings&section=enrichment_tables):
 
 ```json
 {
@@ -168,7 +206,7 @@ This sets `.owner = "platform"`. In a real pipeline, look up a field from the ev
 
 ## Test transformations
 
-Tests prove that a transform does what you expect, using events you supply. In [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests), choose **Run pipeline tests**. Each test is listed as passed or failed; a failed test shows Vector's reason and the events the step produced. Vector reads every test before it runs the first, so a test it can't read or build (a misspelled setting, an unknown step name, no expected output) stops them all: that test shows Vector's reason and the others are marked **Not run**. To start a test from a sample, run the sample in the VRL editor and choose **Save as test**.
+Tests prove that a transform does what you expect, using events you supply. In [**Settings → Tests**](/#/configurations?panel=settings&section=tests), choose **Run pipeline tests**. Each test is listed as passed or failed; a failed test shows Vector's reason and the events the step produced. Vector reads every test before it runs the first, so a test it can't read or build (a misspelled setting, an unknown step name, no expected output) stops them all: that test shows Vector's reason and the others are marked **Not run**. To start a test from a sample, run the sample in the VRL editor and choose **Save as test**.
 
 This test belongs to the [complete example](pipelines.md#try-a-complete-example), whose `normalize` transform sets `.service`:
 
@@ -201,7 +239,7 @@ You should see **Pipeline tests passed**. Change `"edge"` to `"wrong"` and run a
 
 The server runs tests in its sandboxed validator when the pipeline needs nothing from the device. **These tests need the device environment** means they couldn't run there; that isn't a pass.
 
-A pipeline with a Lua step, an enrichment table that reads a file (`file`, `geoip` or `mmdb`) or an AWS instance metadata step (`aws_ec2_metadata`) is never tested on the server: Lua can run any program, the file lives on the device, and the metadata step asks the host's own metadata service. **Run pipeline tests** says which, and the review counts those tests as not run, so the primary button reads **Publish anyway**. Run them on a device instead: in the deploy review, choose **Check on devices** and **Also run the pipeline's tests**. A `memory` table reads no file, so its tests run here as before. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Restricted devices run tests too: a test only inserts your sample events into transforms and checks the output, with no file or network access, and any VRL in a test is still held to the device's allowances.
+A pipeline with a Lua step, an enrichment table that reads a file (`file`, `geoip` or `mmdb`), a remap that loads its VRL program from a file (`file` or `files`) or an AWS instance metadata step (`aws_ec2_metadata`) is never tested on the server: Lua can run any program, the files live on the device, and the metadata step asks the host's own metadata service. **Run pipeline tests** says which, and the review counts those tests as not run, so the primary button reads **Publish anyway**. Run them on a device instead: in the deploy review, choose **Check on devices** and **Also run the pipeline's tests**. A `memory` table reads no file, so its tests run here as before. A remap takes exactly one of `source`, `file` and `files`; if it names more than one, the check fails with Vector's own rule, "must provide exactly one of `source` or `file` or `files`", and its tests can't be built on any device. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Restricted devices run tests too: a test only inserts your sample events into transforms and checks the output, with no file or network access, and any VRL in a test is still held to the device's allowances.
 
 The server never sends network requests or reads device files from samples or tests. A program that calls `http_request`, `dns_lookup`, `reverse_dns`, `validate_json_schema`, `parse_proto` or `encode_proto`, or that passes a file to `parse_groks` (`alias_sources`) or `parse_etld` (`psl`), isn't run there, and the tester says so. Without a file, `parse_groks` and `parse_etld` run as usual. A device in full mode runs it for real.
 
@@ -215,6 +253,6 @@ Local output can include your sample events; treat it as sensitive.
 
 ## Configuration providers
 
-[**Pipeline settings → Configuration provider**](/#/configurations?panel=settings&section=provider) sets up Vector's native mechanism for loading configuration from a provider on the device. It needs full mode and whatever the provider depends on.
+[**Settings → Configuration provider**](/#/configurations?panel=settings&section=provider) sets up Vector's native mechanism for loading configuration from a provider on the device. It needs full mode and whatever the provider depends on.
 
 A provider supplies configuration, not a single value, and Vectory can't version what it fetches. Prefer explicit pipeline content when you want every change in your version history.

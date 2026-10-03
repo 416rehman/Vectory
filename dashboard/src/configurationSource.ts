@@ -620,3 +620,14 @@ export function isEmptyPipeline(config: Config): boolean {
     )
   );
 }
+
+/** How many errors and warnings a source has: "1 error · 0 warnings". */
+export function diagnosticCounts(
+  diagnostics: readonly Pick<ConfigurationDiagnostic, "severity">[],
+): string {
+  const count = (severity: ConfigurationDiagnostic["severity"]) =>
+    diagnostics.filter((item) => item.severity === severity).length;
+  const errors = count("error"),
+    warnings = count("warning");
+  return `${errors} ${errors === 1 ? "error" : "errors"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`;
+}

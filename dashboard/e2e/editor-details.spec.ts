@@ -252,7 +252,7 @@ test("curated forms expose source authentication and accept file-based remap pro
         receiver: {
           type: "http_server",
           address: "127.0.0.1:8088",
-          encoding: "json",
+          decoding: { codec: "json" },
           auth: {
             strategy: "basic",
             username: "${HTTP_USER}",

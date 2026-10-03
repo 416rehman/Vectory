@@ -1,10 +1,12 @@
 import type { Config } from "./api";
+import { sameValue } from "./publishReviewModel";
 
 const SECTIONS = ["sources", "transforms", "sinks", "enrichment_tables"];
 const record = (value: unknown): value is Config =>
   !!value && typeof value === "object" && !Array.isArray(value);
-const same = (a: unknown, b: unknown) =>
-  a === b || JSON.stringify(a) === JSON.stringify(b);
+// The review's equality: the order of keys never makes a change, and the
+// order of a step's inputs doesn't either.
+const same = (a: unknown, b: unknown, key?: string) => sameValue(a, b, key);
 // Options whose text is a VRL program or condition, by what they are called.
 const programs: Record<string, string> = {
   source: "VRL",
@@ -19,7 +21,7 @@ function componentChange(before: Config, after: Config): string | null {
     return `now ${typeof after?.type === "string" ? after.type : "untyped"}`;
   const keys = [
     ...new Set([...Object.keys(before || {}), ...Object.keys(after || {})]),
-  ].filter((key) => key !== "type" && !same(before?.[key], after?.[key]));
+  ].filter((key) => key !== "type" && !same(before?.[key], after?.[key], key));
   const words: string[] = [];
   for (const key of keys)
     if (programs[key] && !words.includes(programs[key]))

@@ -82,7 +82,7 @@ const curatedCatalog: Component[] = [
     label: "Log files",
     kind: "sources",
     description: "Read log files from approved paths on your device.",
-    defaults: { include: [] },
+    defaults: {},
     fields: [
       {
         key: "include",
@@ -90,6 +90,12 @@ const curatedCatalog: Component[] = [
         type: "array",
         required: true,
         hint: "One path per line, such as /var/log/app/*.log. Paths must be allowed on the device.",
+      },
+      {
+        key: "exclude",
+        label: "Excluded paths",
+        type: "array",
+        hint: "Files to skip among the included paths, such as /var/log/app/debug.log.",
       },
     ],
   },
@@ -109,10 +115,12 @@ const curatedCatalog: Component[] = [
     label: "HTTP endpoint",
     kind: "sources",
     description: "Accept events through a local HTTP endpoint.",
-    defaults: { address: "127.0.0.1:8088", encoding: "json" },
+    // A source reads `decoding`. Vector has no `encoding` here, and ignores
+    // one without a word, so JSON would arrive as undecoded text.
+    defaults: { address: "127.0.0.1:8088", decoding: { codec: "json" } },
     fields: [
       { key: "address", label: "Listen address", required: true },
-      { key: "encoding", label: "Encoding", required: true },
+      { key: "decoding.codec", label: "Decoding" },
     ],
   },
   {
@@ -195,7 +203,9 @@ const curatedCatalog: Component[] = [
     label: "HTTP destination",
     kind: "sinks",
     description: "Deliver events to an approved HTTPS endpoint.",
-    defaults: { uri: "", encoding: { codec: "json" } },
+    // The URL is left out, never written as "": an empty string passes the
+    // required-option check and is refused later, by Vector.
+    defaults: { encoding: { codec: "json" } },
     fields: [
       { key: "uri", label: "Destination URL", required: true },
       { key: "encoding.codec", label: "Encoding", required: true },
@@ -206,10 +216,7 @@ const curatedCatalog: Component[] = [
     label: "Elasticsearch",
     kind: "sinks",
     description: "Index events in an Elasticsearch cluster.",
-    defaults: {
-      endpoints: [],
-      mode: "bulk",
-    },
+    defaults: { mode: "bulk" },
     fields: [
       { key: "endpoints", label: "Endpoints", type: "array", required: true },
     ],
@@ -220,7 +227,6 @@ const curatedCatalog: Component[] = [
     kind: "sinks",
     description: "Ship labeled logs to a Loki endpoint.",
     defaults: {
-      endpoint: "",
       encoding: { codec: "json" },
       labels: { job: "vector" },
     },
@@ -1181,11 +1187,20 @@ export function pipelineIssues(
               : [];
         for (const key of keys) {
           const reference = component.auth?.[key];
-          if (typeof reference !== "string" || !reference.trim())
+          if (typeof reference !== "string" || !reference.trim()) {
+            // Say it once: this names what to enter, which the schema's bare
+            // "Enter auth.token." for the same setting does not, and the
+            // setting's path keeps the jump to it.
+            const bare = `${id}: Enter auth.${key}.`;
+            const repeated = issues.findIndex(
+              (issue) => issue.id === id && issue.message === bare,
+            );
+            if (repeated >= 0) issues.splice(repeated, 1);
             issues.push({
               id,
-              message: `${id}: enter a valid ${key === "user" ? "username" : key} secret reference in Authentication.`,
+              message: `${id}.auth.${key}: enter a valid ${key === "user" ? "username" : key} secret reference in Authentication.`,
             });
+          }
         }
       }
     }

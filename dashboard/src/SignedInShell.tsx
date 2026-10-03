@@ -398,6 +398,10 @@ export default function SignedInShell({
     // Pages name themselves through PageHeader; this covers the first paint.
     document.title = routeTitle(page);
   }, [page, user.id]);
+  // An error about an action on the page the person left goes with the page.
+  useEffect(() => {
+    toast.leavePage(routePath);
+  }, [routePath]);
   const shell = useMemo(() => shellInfo(page, id), [page, id]);
   const section = sectionOf(page);
   // The page element: a rollout and its list share one, as do audit views.

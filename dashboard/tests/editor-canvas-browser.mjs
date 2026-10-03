@@ -158,12 +158,16 @@ async function load({
     mutations: [],
     validations: [],
     validationValid: true,
+    // Findings the synthetic checker answers with, as the server words them.
+    validationDiagnostics: null,
     validationNative: false,
     validationError: false,
     holdValidation: false,
     pendingValidations: [],
     holdSave: false,
     failSave: false,
+    // The server refuses to store the draft: { status, code, message }.
+    refuseSave: null,
     readsUnavailable: false,
     holdReads: false,
     pendingReads: [],
@@ -327,6 +331,12 @@ async function load({
         );
       if (saveFailure)
         return reject("SAVE_FAILED", "Synthetic draft save failed", 503);
+      if (current.refuseSave)
+        return reject(
+          current.refuseSave.code,
+          current.refuseSave.message,
+          current.refuseSave.status,
+        );
       if (body.revision !== current.document.revision)
         return reject("STALE_REVISION", "Synthetic draft changed", 409);
       current.mutations.push(structuredClone(body));
@@ -347,7 +357,8 @@ async function load({
       path === `/configurations/${pipelineId}/validate`
     ) {
       current.validations.push(request.postDataJSON());
-      const valid = current.validationValid;
+      const given = current.validationDiagnostics;
+      const valid = given ? false : current.validationValid;
       const native = current.validationNative;
       const failed = current.validationError;
       if (current.holdValidation)
@@ -367,19 +378,25 @@ async function load({
         deferred: !native,
         deferred_reasons: native ? [] : ["environment variables"],
         placeholders: [],
-        diagnostics: valid
-          ? []
-          : [
-              {
-                severity: "error",
-                section: "transforms",
-                component: "sample",
-                field: "rate",
-                code: "invalid_value",
-                message: "Synthetic configuration rejected",
-              },
-            ],
-        errors: valid ? [] : ["sample: Synthetic configuration rejected"],
+        diagnostics:
+          given ??
+          (valid
+            ? []
+            : [
+                {
+                  severity: "error",
+                  section: "transforms",
+                  component: "sample",
+                  field: "rate",
+                  code: "invalid_value",
+                  message: "Synthetic configuration rejected",
+                },
+              ]),
+        errors: given
+          ? given.map((item) => `${item.component}: ${item.message}`)
+          : valid
+            ? []
+            : ["sample: Synthetic configuration rejected"],
         warnings: [],
         vector_version: "0.58.0",
       });
@@ -1155,6 +1172,28 @@ try {
       async () => {
         await load();
         await openVariables();
+        // Credentials belong in a device secret, which restricted devices
+        // run too; a provider only full mode runs is never what this offers.
+        await expect(settings()).toContainText(
+          "Do not enter credentials here. Use a device secret, which works in restricted and full mode: vectory-secret:NAME",
+        );
+        await expect(settings()).not.toContainText("device-local");
+        await expect(
+          settings().getByRole("link", { name: /How device secrets work/ }),
+        ).toHaveAttribute(
+          "href",
+          /\/help\/resources\/.*#keep-credentials-on-the-device$/,
+        );
+        await expect(
+          settings().getByRole("link", { name: /How this works/ }),
+        ).toHaveAttribute(
+          "href",
+          /\/help\/resources\/.*#values-that-differ-by-device$/,
+        );
+        await page.screenshot({
+          path: resolve(output, "variables-settings-1440-light.png"),
+          animations: "disabled",
+        });
         await settings()
           .getByRole("combobox", { name: "Pipeline field" })
           .selectOption("/sources/seed/format");
@@ -1217,7 +1256,31 @@ try {
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(2);
+    await check(
+      "the credentials hint and its links fit a phone in both themes",
+      async () => {
+        for (const theme of ["light", "dark"]) {
+          await load({ width: 390, height: 900 });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await openVariables();
+          await expect(
+            settings().getByRole("link", { name: /How device secrets work/ }),
+          ).toBeVisible();
+          await noOverflow(`variables settings 390 ${theme}`);
+          await axe(`variables settings 390 ${theme}`);
+          await settings()
+            .getByRole("link", { name: /How device secrets work/ })
+            .scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(output, `variables-settings-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    expect(results).toHaveLength(3);
   } else if (splitSaveOnly) {
     // While saving, the button shows a loading indicator in its name.
     const saveButton = () =>
@@ -1328,6 +1391,38 @@ try {
       },
     );
     await check(
+      "undoing back to the saved draft leaves nothing unsaved; redo brings the change back, and undoing a save stays unsaved",
+      async () => {
+        await load();
+        const status = page.locator(".pipeline-save-status");
+        await sample();
+        await rate().fill("13");
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await closeInspector();
+        await button("Undo").click();
+        await expect(status).toContainText("All changes saved");
+        await expect(button("Discard changes")).toHaveCount(0);
+        await expect(saveButton()).toBeDisabled();
+        await button("Redo").click();
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await expect(saveButton()).toBeEnabled();
+        // After a save the draft is what was saved: undoing it is a change.
+        await saveButton().click();
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect(status).toContainText("All changes saved");
+        await button("Undo").click();
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await button("Redo").click();
+        await expect(status).toContainText("All changes saved");
+        await expect(button("Discard changes")).toHaveCount(0);
+        expect(fixture.saveAttempts).toHaveLength(1);
+        assertSaveOnly();
+      },
+    );
+    await check(
       "typed fields and field JSON disable saving, and code that does not parse is refused with its place, without discarding or applying the text",
       async () => {
         for (const kind of ["code", "scalar", "raw"]) {
@@ -1418,11 +1513,176 @@ try {
         );
         await expect(rate()).toHaveValue("20");
         expect(fixture.saveAttempts).toHaveLength(2);
-        await expect(
-          page.getByText("Synthetic draft save failed", { exact: true }),
-        ).toHaveCount(0);
+        await expect(page.getByText(/Synthetic draft save failed/)).toHaveCount(
+          0,
+        );
         expect(fixture.mutations).toHaveLength(1);
         assertSaveOnly();
+      },
+    );
+    await check(
+      "a refused save keeps the edits, names the setting and goes to it; a reload is offered only when the draft changed elsewhere",
+      async () => {
+        const document = baseDocument();
+        document.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer", token: "plain-text-token" },
+        };
+        await load({ document });
+        // The refusal never asks to throw the work away with a native prompt.
+        const prompts = [];
+        page.on("dialog", (dialog) => {
+          prompts.push(dialog.message());
+          void dialog.dismiss();
+        });
+        fixture.refuseSave = {
+          status: 400,
+          code: "INVALID_INPUT",
+          message: "Plaintext credentials cannot be stored in draft history",
+        };
+        await sample();
+        await rate().fill("21");
+        await rate().press("ControlOrMeta+s");
+        await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "Save failed",
+        );
+        await closeInspector();
+        const banner = page.locator(".editor-message");
+        await expect(banner).toContainText(
+          "Not saved. Replace the plaintext credential in auth.token on out_http with a device secret, such as vectory-secret:NAME. A draft never stores one. Your edits are still here.",
+        );
+        await expect(
+          banner.getByRole("button", { name: "Go to field", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", {
+            name: "Reload server draft",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await page.screenshot({
+          path: resolve(output, "refused-save-1440-light.png"),
+          animations: "disabled",
+        });
+        // The way there is the setting itself.
+        await banner
+          .getByRole("button", { name: "Go to field", exact: true })
+          .click();
+        await expect(page.locator(".editor-inspector")).toContainText(
+          "out_http",
+        );
+        // The form nests the token one level deeper than the config writes it
+        // (auth.auth.token for auth.token): focus is on that control.
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.activeElement?.closest("[data-field-path]")?.dataset
+                  .fieldPath,
+            ),
+          )
+          .toBe("auth.auth.token");
+        // The edit that was being saved is still there.
+        await sample();
+        await expect(rate()).toHaveValue("21");
+        await closeInspector();
+        // Saving again after the fix clears it, with no prompt in between.
+        fixture.refuseSave = null;
+        await saveButton().click();
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "All changes saved",
+        );
+        await expect(banner).toHaveCount(0);
+        // A draft that changed elsewhere is the one case that offers a reload.
+        await sample();
+        await rate().fill("22");
+        fixture.document = {
+          ...fixture.document,
+          revision: fixture.document.revision + 1,
+        };
+        await rate().press("ControlOrMeta+s");
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "Save conflict",
+        );
+        await closeInspector();
+        await expect(banner).toContainText(
+          "The server draft changed. Reload it before continuing.",
+        );
+        await expect(
+          banner.getByRole("button", { name: "Reload server draft" }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", { name: "Go to field" }),
+        ).toHaveCount(0);
+        expect(prompts).toEqual([]);
+        assertSaveOnly();
+      },
+    );
+    await check(
+      "a refused save fits a phone in both themes, with its action reachable",
+      async () => {
+        const document = baseDocument();
+        document.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer", token: "plain-text-token" },
+        };
+        for (const theme of ["light", "dark"]) {
+          await load({ document, width: 390, height: 900 });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          fixture.refuseSave = {
+            status: 400,
+            code: "INVALID_INPUT",
+            message: "Plaintext credentials cannot be stored in draft history",
+          };
+          await sample();
+          await rate().fill("24");
+          await rate().press("ControlOrMeta+s");
+          await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+          await closeInspector();
+          const goTo = page
+            .locator(".editor-message")
+            .getByRole("button", { name: "Go to field", exact: true });
+          await expect(goTo).toBeVisible();
+          await noOverflow(`refused save 390 ${theme}`);
+          await axe(`refused save 390 ${theme}`);
+          await page.screenshot({
+            path: resolve(output, `refused-save-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    await check(
+      "a refusal of the whole draft shows the server's reason, keeps the edits and offers no reload",
+      async () => {
+        await load();
+        fixture.refuseSave = {
+          status: 400,
+          code: "INVALID_INPUT",
+          message: "Graph exceeds 1000 nodes or 5000 edges",
+        };
+        await sample();
+        await rate().fill("23");
+        await rate().press("ControlOrMeta+s");
+        await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+        await closeInspector();
+        const banner = page.locator(".editor-message");
+        await expect(banner).toContainText(
+          "Not saved. Graph exceeds 1000 nodes or 5000 edges. Your edits are still here.",
+        );
+        await expect(banner.getByRole("button")).toHaveCount(0);
+        await sample();
+        await expect(rate()).toHaveValue("23");
       },
     );
     await check(
@@ -1556,7 +1816,7 @@ try {
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(splitSaveFollowup ? 2 : 7);
+    expect(results).toHaveLength(splitSaveFollowup ? 2 : 11);
   } else if (checkStateOnly) {
     const control = () => checkButton();
     const verdict = () => problemsPanel().locator(".problems-verdict");
@@ -1915,7 +2175,115 @@ try {
         }
       },
     );
-    expect(results).toHaveLength(8);
+    await check(
+      "starters leave out what must be chosen and write what Vector reads, and Vector's refusal of a value lands on its step and setting",
+      async () => {
+        await load();
+        // An HTTP Server decodes JSON, and its card says what it does.
+        await button("Add component").click();
+        await choose("http_server", "Sources");
+        await saved((doc) => Object.keys(doc.config.sources).length === 2);
+        expect(fixture.document.config.sources.http_in).toEqual({
+          type: "http_server",
+          address: "127.0.0.1:8088",
+          decoding: { codec: "json" },
+        });
+        const card = page.locator('.react-flow__node[data-id="http_in"]');
+        await expect(card).toContainText("JSON decoding");
+        await expect(card).not.toContainText("encoding");
+        // An HTTP destination has no URL until one is entered: the local
+        // check names it, and Vector never sees an empty one.
+        await closeInspector();
+        await button("Add component").click();
+        await menu()
+          .getByRole("button", { name: "Destinations", exact: true })
+          .click();
+        await menu()
+          .getByRole("textbox", { name: "Search components" })
+          .fill("http");
+        await menu()
+          .locator(".canvas-component-result")
+          .filter({ has: page.locator("code", { hasText: /^http$/ }) })
+          .click();
+        await expect(menu()).toHaveCount(0);
+        await saved((doc) => Object.keys(doc.config.sinks).length === 3);
+        expect(fixture.document.config.sinks.http_out).toEqual({
+          type: "http",
+          inputs: [],
+          encoding: { codec: "json" },
+        });
+        await control().click();
+        const missing = problemsPanel()
+          .locator(".problems-group", { hasText: "http_out" })
+          .locator(".problems-item", { hasText: "Enter uri." });
+        await expect(missing).toBeVisible();
+        await missing.click();
+        await expect(
+          page
+            .locator(".editor-inspector")
+            .getByLabel("Destination URL", { exact: true }),
+        ).toBeFocused();
+        await page.screenshot({
+          path: resolve(output, "starter-destination-1440-light.png"),
+          animations: "disabled",
+        });
+
+        // Vector's own refusal of a value, as the server files it: under the
+        // step it belongs to, beside the setting, never under the pipeline.
+        const refused = baseDocument();
+        refused.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          batch: { max_events: 0 },
+        };
+        const refusal = [
+          {
+            severity: "error",
+            section: "sinks",
+            component: "out_http",
+            field: "batch.max_events",
+            code: "invalid_value",
+            message: "`max_events` must be greater than zero.",
+          },
+        ];
+        await load({ document: refused });
+        fixture.validationDiagnostics = refusal;
+        await control().click();
+        await state("problems");
+        await expect(problemsPanel().locator(".problems-group")).toHaveCount(1);
+        const group = problemsPanel().locator(".problems-group");
+        await expect(group.locator("code").first()).toHaveText("out_http");
+        await expect(group.locator(".problems-location")).toHaveText(
+          "batch.max_events",
+        );
+        await expect(problemsPanel()).not.toContainText("Pipeline settings");
+        await group.locator(".problems-item").click();
+        await expect(page.locator(".editor-inspector")).toContainText(
+          "out_http",
+        );
+        for (const [width, theme] of [
+          [1440, "light"],
+          [1440, "dark"],
+          [390, "light"],
+        ]) {
+          await load({ document: refused, width, height: 900 });
+          fixture.validationDiagnostics = refusal;
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await control().click();
+          await state("problems");
+          await noOverflow(`Vector's refusal on its step ${width} ${theme}`);
+          await page.screenshot({
+            path: resolve(output, `problems-refusal-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    expect(results).toHaveLength(9);
   } else if (nodeActionsOnly) {
     const nodeMenu = () =>
       page.getByRole("menu", { name: "Step: sample", exact: true });

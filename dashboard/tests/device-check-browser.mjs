@@ -141,6 +141,45 @@ const version = {
 };
 const idOf = (f, name) => f.devices.find((item) => item.name === name).id;
 
+// Restricted hosts: Vectory never sees what a host allows, so the review says
+// what a version uses as a condition and drops it only for a device a check
+// passed on, or whose verified running version already uses the same.
+const COLLECTOR = "http://127.0.0.1:8678/collect";
+const withSink = (uri, extra = {}) => ({
+  ...version,
+  config: {
+    sources: { seed: { type: "demo_logs", format: "json" } },
+    sinks: {
+      out: {
+        type: "http",
+        inputs: ["seed"],
+        uri,
+        encoding: { codec: "json" },
+      },
+    },
+  },
+  ...extra,
+});
+/** What a device's own record says it verifiably runs. */
+const runs = (candidate) => ({
+  id: candidate.id,
+  number: candidate.number,
+  configuration_id: candidate.configuration_id,
+  configuration_name: "Synthetic logs",
+});
+const restricted = (n, name, extra = {}) =>
+  device(n, name, {
+    configuration_mode: "restricted",
+    state_dir: "/srv/vectory state",
+    service_manager: "none",
+    ...extra,
+  });
+/** The review's rows (not the check's), inside a dialog locator. */
+const reviewedRows = (scope) =>
+  scope
+    .locator("tbody tr")
+    .filter({ has: scope.page().locator(".target-outcome") });
+
 /** What each device answers, as the agent words it. */
 const finding = (message, extra = {}) => ({
   severity: "error",
@@ -472,6 +511,17 @@ async function launch(
         ? reply(readable(validation))
         : reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
     }
+    // A version with variables asks what each chosen device runs now.
+    if (method === "POST" && path === "/deployments/binding-suggestions")
+      return reply({ devices: {} });
+    if (method === "GET" && path.startsWith("/versions/")) {
+      const key = path.split("/").pop();
+      f.versionReads?.push(key);
+      const found = f.versions?.[key];
+      return found
+        ? reply(found)
+        : reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    }
     if (method === "POST") {
       f.errors.push("Unexpected POST " + path);
       return reply({ error: { code: "UNEXPECTED", message: path } }, 500);
@@ -749,7 +799,10 @@ try {
         await expect(secret).toContainText(
           "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
         );
+        // This agent doesn't say how it runs, so the commands say what to do
+        // for each way, as the commands for the host do.
         const commands = [
+          "# Without a service (`vectory run`), stop it with Ctrl-C instead, and start it again yourself.",
           "sudo vectory service-stop",
           "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
           "sudo vectory service-start",
@@ -768,8 +821,9 @@ try {
         await expect(secret).toContainText("API_KEY");
         const windows = rowOf(section, NAMES.winSecret);
         await expect(windows).toContainText(
-          "vectory configure-secrets --secret-files C:\\ProgramData\\Vectory\\secret-bindings.json",
+          "configure-secrets --secret-files 'C:\\ProgramData\\Vectory\\secret-bindings.json'",
         );
+        await expect(windows).toContainText("In an elevated PowerShell");
         await expect(windows).not.toContainText("sudo");
 
         await expect(rowOf(section, NAMES.late)).toContainText(
@@ -1424,6 +1478,460 @@ try {
       }
     },
   );
+
+  await check(
+    "A restricted host nobody has asked about gets a condition, never the claim that it refuses",
+    async () => {
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({
+          devices: [restricted(0, "edge-restr-01")],
+          versionReads: [],
+        });
+        f.initial = {};
+        const app = await openReview(f, {
+          version: withSink(COLLECTOR),
+          width,
+          theme,
+        });
+        const { page, dialog } = app;
+        try {
+          const note = dialog.locator(".target-approval-note");
+          await expect(note.locator("strong")).toHaveText(
+            "edge-restr-01 runs in restricted mode and needs its host to allow what this version uses",
+          );
+          await expect(note.locator("p").nth(0)).toHaveText(
+            "It uses destination 127.0.0.1:8678. It refuses this version unless its host already allows these.",
+          );
+          await expect(note.locator("p").nth(1)).toHaveText(
+            "Vectory can't see a host's allowances; Check on devices in the review shows whether it has them. Only the host operator can allow these; the dashboard can't.",
+          );
+          await expect(reviewedRows(dialog)).toContainText(
+            "No pipeline assigned; refuses it unless its host allows destination 127.0.0.1:8678",
+          );
+          await expect(dialog).not.toContainText(
+            /until its host approves|approves it|refused until/,
+          );
+          // The commands for the host are still handed over, made for that host.
+          await note
+            .getByText("Commands for the host", { exact: true })
+            .click();
+          await expect(
+            dialog.getByLabel("Host approval commands, On edge-restr-01", {
+              exact: true,
+            }),
+          ).toContainText("--state-dir '/srv/vectory state'");
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "restricted host not asked about", width, theme);
+          await note.scrollIntoViewIfNeeded();
+          const file = `approval-condition-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          // No version runs there, so nothing was read to compare.
+          expect(f.versionReads).toEqual([]);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+
+  await check(
+    "A host whose device already runs a version using the same destinations is not told anything; one that cannot be compared still gets the condition",
+    async () => {
+      const covering = withSink(COLLECTOR, { id: id(71), number: 1 });
+      const elsewhere = withSink("http://127.0.0.1:9/elsewhere", {
+        id: id(72),
+        number: 2,
+      });
+      // The same address, but a version whose addresses differ by device.
+      const perDevice = withSink(COLLECTOR, {
+        id: id(73),
+        number: 3,
+        variables: [{ name: "target", path: "/sinks/out/uri", type: "string" }],
+      });
+      const f = scene({
+        devices: [
+          restricted(0, "edge-restr-01", { running_version: runs(covering) }),
+          restricted(1, "edge-restr-02", { running_version: runs(elsewhere) }),
+          restricted(2, "edge-restr-03", { running_version: runs(perDevice) }),
+        ],
+        versions: {
+          [covering.id]: covering,
+          [elsewhere.id]: elsewhere,
+          [perDevice.id]: perDevice,
+        },
+        versionReads: [],
+      });
+      f.initial = {};
+      const app = await openReview(f, {
+        version: withSink(COLLECTOR, { id: id(60), number: 4 }),
+      });
+      const { page, dialog } = app;
+      try {
+        const note = dialog.locator(".target-approval-note");
+        await expect(note.locator("strong")).toHaveText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+        );
+        await expect(note).toContainText(
+          "edge-restr-01 already runs a version that uses these.",
+        );
+        const row = (name) =>
+          reviewedRows(dialog).filter({ hasText: name }).first();
+        await expect(row("edge-restr-01")).not.toContainText("refuses it");
+        await expect(row("edge-restr-01")).toContainText(
+          "No pipeline assigned",
+        );
+        for (const name of ["edge-restr-02", "edge-restr-03"])
+          await expect(row(name)).toContainText(
+            "refuses it unless its host allows destination 127.0.0.1:8678",
+          );
+        // Each running version is read once, however many devices run it.
+        expect([...f.versionReads].sort()).toEqual(
+          [covering.id, elsewhere.id, perDevice.id].sort(),
+        );
+        noErrors(f);
+      } finally {
+        await app.close();
+      }
+      // When every restricted device already runs it, the review says nothing.
+      const quiet = scene({
+        devices: [
+          restricted(0, "edge-restr-01", { running_version: runs(covering) }),
+        ],
+        versions: { [covering.id]: covering },
+        versionReads: [],
+      });
+      quiet.initial = {};
+      const second = await openReview(quiet, {
+        version: withSink(COLLECTOR, { id: id(60), number: 4 }),
+      });
+      try {
+        await expect(second.dialog.locator(".target-outcome")).toHaveCount(1);
+        await expect(second.dialog.locator(".target-outcome")).toContainText(
+          "No pipeline assigned",
+        );
+        await expect(
+          second.dialog.locator(".target-outcome"),
+        ).not.toContainText("refuses it");
+        await expect(
+          second.dialog.locator(".target-approval-note"),
+        ).toHaveCount(0);
+        await shot(
+          second.page,
+          second.check,
+          "approval-already-runs-1280-light",
+        );
+        noErrors(quiet);
+      } finally {
+        await second.close();
+      }
+    },
+  );
+
+  await check(
+    "The values a deployment asks for point credentials to a device secret, not to a provider only full mode runs",
+    async () => {
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({ devices: [device(0, NAMES.pass)] });
+        f.initial = {};
+        const app = await launch(f, { width, theme });
+        const { page } = app;
+        try {
+          await page.goto(origin + "/__device-check");
+          await page.waitForFunction(() => window.ready);
+          await page.evaluate(
+            ({ version, userId }) =>
+              window.mount({
+                open: true,
+                userId,
+                version,
+                pipelineName: "Synthetic logs",
+              }),
+            {
+              version: {
+                ...version,
+                variables: [
+                  {
+                    name: "site_name",
+                    path: "/sinks/discard/id",
+                    type: "string",
+                  },
+                ],
+              },
+              userId,
+            },
+          );
+          const dialog = page.getByRole("dialog");
+          await dialog.getByLabel(`Select ${NAMES.pass}`).check();
+          const values = dialog.getByRole("region", {
+            name: "Values by device",
+          });
+          await expect(values).toContainText(
+            "For credentials, use a device secret instead: vectory-secret:NAME",
+          );
+          await expect(values).not.toContainText("device-local");
+          await expect(
+            values.getByRole("link", { name: /How device secrets work/ }),
+          ).toHaveAttribute(
+            "href",
+            "/help/resources/#keep-credentials-on-the-device",
+          );
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "deployment values hint", width, theme);
+          await values.scrollIntoViewIfNeeded();
+          const file = `deployment-values-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+
+  await check(
+    "A host with its own state directory that runs vectory run gets the secret commands and the fix made for it",
+    async () => {
+      const own = { state_dir: "/srv/vectory state", service_manager: "none" };
+      // A table row at 1280 px and a card at 390 px: both carry the device's id.
+      const resultOf = (section, name) =>
+        section.locator("[data-device-check-row]").filter({ hasText: name });
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({
+          devices: [
+            device(0, NAMES.fix, own),
+            device(1, NAMES.secret, { ...own, secret_names: ["DD_API_KEY"] }),
+            device(2, NAMES.late, {
+              state_dir: "/var/lib/vectory-agent",
+              service_manager: "systemd",
+            }),
+          ],
+        });
+        f.initial = {};
+        const app = await openReview(f, { width, theme });
+        const { page, check: section } = app;
+        try {
+          await askButton(section).click();
+          await expect(summary(section)).toContainText(
+            "3 still checking",
+            WAIT,
+          );
+          answer(f, NAMES.fix, answers.fix);
+          answer(f, NAMES.secret, answers.secret("API_KEY"));
+          answer(f, NAMES.late, answers.secret("API_KEY"));
+          await expect(summary(section)).toContainText(
+            "Checked 3 of 3 devices: 2 need a secret, 1 needs a fix.",
+            WAIT,
+          );
+          // The fix names the host's state directory.
+          await expect(resultOf(section, NAMES.fix)).toContainText(
+            "Run vectory allow --state-dir '/srv/vectory state' --network 10.0.0.9:9 on the host.",
+          );
+          // The secret commands stop the agent the way it runs, and say where it keeps its state.
+          const own_commands = [
+            "# First stop the agent: Ctrl-C where `vectory run` runs (`vectory status` shows its pid).",
+            "sudo vectory configure-secrets \\",
+            "  --state-dir '/srv/vectory state' \\",
+            "  --secret-files /etc/vectory/secret-bindings.json",
+            "# Then start the agent again the way you started it.",
+          ].join("\n");
+          const secret = resultOf(section, NAMES.secret);
+          await expect(secret.locator("pre").first()).toHaveText(own_commands);
+          // A host with the defaults still gets the usual three lines.
+          await expect(
+            resultOf(section, NAMES.late).locator("pre").first(),
+          ).toHaveText(
+            [
+              "sudo vectory service-stop",
+              "sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json",
+              "sudo vectory service-start",
+            ].join("\n"),
+          );
+          await page.evaluate(() =>
+            Object.defineProperty(navigator, "clipboard", {
+              configurable: true,
+              value: {
+                writeText: async (value) => {
+                  window.copiedCommands = value;
+                },
+              },
+            }),
+          );
+          await secret
+            .getByRole("button", {
+              name: `Copy the commands for ${NAMES.secret}`,
+            })
+            .click();
+          expect(await page.evaluate(() => window.copiedCommands)).toBe(
+            own_commands,
+          );
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "secret commands made for the host", width, theme);
+          await secret.scrollIntoViewIfNeeded();
+          const file = `host-commands-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+
+  await check(
+    "Once Check on devices passes on a restricted host the review says that instead, and asks again after the selection changes",
+    async () => {
+      const f = scene({
+        devices: [restricted(0, NAMES.pass), restricted(1, NAMES.fix)],
+        versionReads: [],
+      });
+      f.initial = {};
+      const app = await openReview(f, { version: withSink(COLLECTOR) });
+      const { page, dialog, check: section } = app;
+      try {
+        const note = dialog.locator(".target-approval-note");
+        const headline = note.locator("strong");
+        const condition = "refuses it unless its host allows destination";
+        await expect(headline).toHaveText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+        );
+        await askButton(section).click();
+        await expect(summary(section)).toContainText("2 still checking", WAIT);
+        // Asking is not an answer: nothing changes until a host passes.
+        await expect(reviewedRows(dialog)).toHaveCount(2);
+        for (const row of await reviewedRows(dialog).all())
+          await expect(row).toContainText(condition);
+        answer(f, NAMES.pass, answers.pass);
+        answer(f, NAMES.fix, answers.fix);
+        await expect(summary(section)).toContainText(
+          "Checked 2 of 2 devices: 1 passes, 1 needs a fix.",
+          WAIT,
+        );
+        // The one that passed leaves the condition and is named after it.
+        await expect(headline).toHaveText(
+          `${NAMES.fix} runs in restricted mode and needs its host to allow what this version uses`,
+        );
+        await expect(note).toContainText(
+          `Check on devices passed on ${NAMES.pass}.`,
+        );
+        await expect(
+          reviewedRows(dialog).filter({ hasText: NAMES.pass }).first(),
+        ).not.toContainText(condition);
+        await expect(
+          reviewedRows(dialog).filter({ hasText: NAMES.fix }).first(),
+        ).toContainText(condition);
+        // Fixed on the host and checked again: nothing is left to say but that.
+        await section
+          .getByRole("button", { name: `Check ${NAMES.fix} again` })
+          .click();
+        await expect(summary(section)).toContainText("1 still checking", WAIT);
+        answer(f, NAMES.fix, answers.pass);
+        await expect(summary(section)).toContainText(
+          "Checked 2 of 2 devices: 2 pass.",
+          WAIT,
+        );
+        await expect(headline).toHaveText(
+          `Check on devices passed on ${NAMES.pass} and ${NAMES.fix}`,
+        );
+        await expect(note).toContainText(
+          "They run in restricted mode, and their hosts accepted this version.",
+        );
+        await expect(dialog).not.toContainText(condition);
+        await expect(dialog).not.toContainText(/approves it|refused until/);
+        await expect(
+          note.getByText("Commands for the host", { exact: true }),
+        ).toHaveCount(0);
+        await shot(page, note, "approval-check-passed-1280-light");
+        // A check belongs to the review it was asked on: going back clears it,
+        // and the condition returns until a host passes again.
+        await dialog.getByRole("button", { name: "Back to selection" }).click();
+        await dialog
+          .getByRole("button", { name: "Review deployment", exact: true })
+          .click();
+        await expect(section).toBeVisible();
+        await expect(headline).toHaveText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+        );
+        noErrors(f);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  await check(
+    "With no enrolled devices the deploy dialog says so and links to Add device",
+    async () => {
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "dark"],
+      ]) {
+        const f = scene({ devices: [] });
+        f.initial = {};
+        const app = await launch(f, { width, theme });
+        const { page } = app;
+        try {
+          await page.goto(origin + "/__device-check");
+          await page.waitForFunction(() => window.ready);
+          await page.evaluate(
+            ({ version, userId }) =>
+              window.mount({
+                open: true,
+                userId,
+                version,
+                pipelineName: "Synthetic logs",
+              }),
+            { version, userId },
+          );
+          const dialog = page.getByRole("dialog");
+          await expect(dialog).toBeVisible();
+          const picker = dialog.locator(".device-picker");
+          await expect(picker).toContainText(
+            "No enrolled devices to choose from.",
+          );
+          const link = picker.getByRole("link", {
+            name: "Add device",
+            exact: true,
+          });
+          await expect(link).toBeVisible();
+          await expect(link).toHaveAttribute("href", "#/enrollment");
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          await scan(page, "no devices to choose from", width, theme);
+          await picker.scrollIntoViewIfNeeded();
+          const file = `no-devices-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          // A search that finds nothing is a different state: no link.
+          await dialog.getByLabel("Find targets").fill("nothing like this");
+          await expect(picker).toContainText("No devices match your search.");
+          await expect(link).toHaveCount(0);
+          noErrors(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -1432,7 +1940,7 @@ try {
     scope:
       "The real deploy review and its Check on devices section, with intercepted synthetic HTTP. The synthetic server answers when the harness says so: no host validated anything.",
     passed:
-      results.length === 15 &&
+      results.length === 21 &&
       results.every((r) => r.passed) &&
       accessibility.every((s) => !s.violations.length),
     results,

@@ -191,7 +191,14 @@ export default function PipelineGlobals({
           ...root.properties[name],
           _metadata: {
             ...root.properties[name]?._metadata,
-            "docs::hidden": false,
+            // Show what Vector's reference hides because the section has a
+            // page of its own here. An option Vector replaced (`expire_metrics`,
+            // which reads the same as `expire_metrics_secs`) stays hidden
+            // unless this draft still sets it.
+            "docs::hidden":
+              !!root.properties[name]?.deprecated &&
+              !Object.hasOwn(config, name),
+            "vectory::page": section !== "general",
             "vectory::entry_label":
               name === "secret"
                 ? "Backend"
@@ -266,22 +273,21 @@ export default function PipelineGlobals({
           <h3>{details.title}</h3>
           <p>
             {details.description}{" "}
-            {section !== "variables" && (
-              <DocLink
-                topic={section === "general" ? "pipelines" : "resources"}
-                section={
-                  {
-                    general: "global-settings",
-                    enrichment_tables: "enrich-events-with-local-data",
-                    secret: "use-native-vector-secret-providers",
-                    tests: "test-transformations",
-                    provider: "configuration-providers",
-                  }[section]
-                }
-              >
-                How this works
-              </DocLink>
-            )}
+            <DocLink
+              topic={section === "general" ? "pipelines" : "resources"}
+              section={
+                {
+                  general: "global-settings",
+                  enrichment_tables: "enrich-events-with-local-data",
+                  secret: "use-native-vector-secret-providers",
+                  variables: "values-that-differ-by-device",
+                  tests: "test-transformations",
+                  provider: "configuration-providers",
+                }[section]
+              }
+            >
+              How this works
+            </DocLink>
           </p>
           {section === "tests" && (
             <div className="pipeline-test-run">
