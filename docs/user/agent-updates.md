@@ -201,13 +201,18 @@ Open a rollout from **Devices → Agent updates**. The page shows how many devic
 | **Updated** | The new build checked in after the restart and is healthy. |
 | **Rolled back** | The host took the build back. It won't try this release again. |
 | **Refused**, **Failed** | The host's own rules refused it, or the update failed. The page shows the agent's reason. |
-| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, or its access was revoked. |
+| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, its access was revoked, its host dropped the offer (paused, turned updates off or took another release), or it stayed at **Offered**, **Downloading** or **Staged** for an hour. The page shows the host's reason when it gave one. |
 
-Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. The canary also needs at least one **Updated** device. A device silent for 30 minutes after it started applying becomes **Failed**.
+Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. A device whose access was revoked, or that has been silent for longer than the watch lasts and three check-in intervals, is no longer watched: it doesn't hold the rollout back and doesn't count as failing. The canary also needs at least one **Updated** device that is still watched. A device silent for 30 minutes after it started applying becomes **Failed**.
 
 When more devices roll back or fail than **Stop if more than** allows, the rollout stops. Devices already applying finish their trial. The rollout is **Completed** when no device is pending or waiting and every released one is done.
 
 A device that waits for its host or its window keeps its offer, and offers come only from a rollout that is running, so the rollout stays **Active** until that device installs or you cancel the rollout. Later stages don't wait for it. You can't turn updates off while a rollout is active or paused, so cancel it first if nobody will approve the waiting hosts.
+
+A rollout doesn't stay open for ever when nothing can move it:
+
+- **A release expires.** Its rollouts end as **Cancelled**, as a withdrawal ends them. Devices already applying finish.
+- **No progress for 24 hours.** A rollout that has devices it can't move on (none that can be released, a build that never changes state, an observation held by a device that stays on the old build) and made no progress for 24 hours ends as **Failed**, and says so. Unstarted offers are withdrawn and devices already applying finish. A change of any device, a stage released, a watch that starts or ends, or a resume counts as progress. Waiting for a person or a window is not stalled: that is by design, and you cancel the rollout when nobody will act.
 
 ### Pause, resume or cancel
 

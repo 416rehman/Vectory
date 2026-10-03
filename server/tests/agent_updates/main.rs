@@ -9,6 +9,7 @@ mod engine;
 mod fleet;
 mod issues;
 mod keys;
+mod liveness;
 mod notify;
 mod releases;
 mod report;

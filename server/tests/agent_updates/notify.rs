@@ -1043,3 +1043,41 @@ async fn previews_are_marked_as_examples_and_a_channel_can_ask_for_the_four_even
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
 }
+
+#[tokio::test]
+async fn a_rollout_that_stalled_says_it_made_no_progress_for_a_day() {
+    let r = Rig::build(2).await;
+    let hook = Hook::new().await;
+    channel(
+        &r.f,
+        &hook,
+        "/all",
+        json!({"events":["agent_update.failed"]}),
+    )
+    .await;
+    for id in &r.ids {
+        seen(&r.f, id, "2020-01-01T00:00:00Z").await;
+    }
+    let refs: Vec<&String> = r.ids.iter().collect();
+    let rollout = r
+        .start(&refs, json!({"canary_size":1,"failure_threshold":5}))
+        .await;
+    let at = Utc::now();
+    step(&r.f, at).await;
+    step(&r.f, at + Duration::hours(25)).await;
+    assert_eq!(r.status(&rollout).await, "failed");
+    assert_eq!(r.show(&rollout).await["failure_reason"], "stalled");
+    drain(&r.f, later()).await;
+    let events = hook.events("/all");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "agent_update.failed");
+    assert_eq!(events[0]["severity"], "error");
+    assert_eq!(
+        events[0]["headline"],
+        "Agent update failed: Update to 0.1.1"
+    );
+    assert_eq!(
+        events[0]["message"],
+        "It made no progress for 24 hours, so it stopped."
+    );
+}
