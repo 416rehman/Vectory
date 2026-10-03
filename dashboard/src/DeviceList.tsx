@@ -53,6 +53,7 @@ import {
   type InventoryQuery,
 } from "./deviceInventory";
 import { useInventory } from "./useInventory";
+import { isAgentVersion, isLevelKey, levelLabels } from "./agentUpdateModel";
 import { deviceDisplay, deviceLabel } from "./deviceName";
 import { RetiredBadge, RetiredName } from "./RetiredBadge";
 import "./devices.css";
@@ -68,6 +69,8 @@ const listDefaults = {
   version: "",
   running: "",
   group: "",
+  agent_update: "",
+  agent_version: "",
   page: 1,
   size: 25,
   sort: "name",
@@ -172,6 +175,10 @@ export default function DeviceList({
     version: isUuid(url.version) ? url.version : "",
     running: isUuid(url.running) ? url.running : "",
     group: isUuid(url.group) ? url.group : "",
+    // How hosts take agent updates, and the agent version devices report: the
+    // links of Devices, Agent updates.
+    agent_update: isLevelKey(url.agent_update) ? url.agent_update : "",
+    agent_version: isAgentVersion(url.agent_version) ? url.agent_version : "",
     sort: SORTS.includes(url.sort) ? url.sort : "name",
     dir: url.dir === "desc" ? "desc" : "asc",
   };
@@ -215,7 +222,9 @@ export default function DeviceList({
     !!query.status ||
     !!query.version ||
     !!query.running ||
-    !!query.group;
+    !!query.group ||
+    !!query.agent_update ||
+    !!query.agent_version;
   const firstRun =
     loaded &&
     !inventory.error &&
@@ -274,6 +283,18 @@ export default function DeviceList({
       label: `Group: ${groupName(query.group)}`,
       text: `Group ${groupName(query.group)}`,
       onRemove: () => update({ group: "", page: 1 }),
+    },
+    query.agent_update && {
+      id: "agent_update",
+      label: `Agent updates: ${levelLabels[query.agent_update as keyof typeof levelLabels]}`,
+      text: `Agent updates ${levelLabels[query.agent_update as keyof typeof levelLabels]}`,
+      onRemove: () => update({ agent_update: "", page: 1 }),
+    },
+    query.agent_version && {
+      id: "agent_version",
+      label: `Agent version: ${query.agent_version === "unknown" ? "unknown" : query.agent_version}`,
+      text: `Agent version ${query.agent_version}`,
+      onRemove: () => update({ agent_version: "", page: 1 }),
     },
   ].filter(Boolean) as FilterChip[];
 

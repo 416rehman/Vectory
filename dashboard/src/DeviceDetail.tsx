@@ -28,6 +28,7 @@ import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
 import AgentUpgrade from "./AgentUpgrade";
+import DeviceAgentUpdates from "./DeviceAgentUpdates";
 import TargetDialog from "./LazyTargetDialog";
 import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
@@ -1270,7 +1271,7 @@ export default function DeviceDetail({
               <Fact label="Agent">
                 <span className="device-fact-stack">
                   {device.agent_version || "Not reported"}
-                  <AgentUpgrade key={device.id} device={device} />
+                  <AgentUpgrade key={device.id} device={device} user={user} />
                 </span>
               </Fact>
               <Fact label="Configuration">
@@ -1322,6 +1323,7 @@ export default function DeviceDetail({
               )}
             </dl>
           </section>
+          <DeviceAgentUpdates key={device.id} device={device} />
           <section
             className="device-card"
             aria-labelledby="device-agent-settings-heading"

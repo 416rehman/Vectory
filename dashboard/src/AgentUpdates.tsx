@@ -280,9 +280,9 @@ function AgentUpdatesList({
                   <div>
                     <h3>Agent versions</h3>
                     <ul className="update-versions" aria-label="Agent versions">
-                      {fleet.versions.map((entry) => (
-                        <li key={entry.version}>
-                          <a href={versionHref(entry.version)}>
+                      {fleet.versions.map((entry) => {
+                        const text = (
+                          <>
                             <strong>
                               {entry.known ? entry.version : "Unknown version"}
                             </strong>
@@ -290,9 +290,25 @@ function AgentUpdatesList({
                               {entry.devices.toLocaleString()}{" "}
                               {devices(entry.devices)}
                             </span>
-                          </a>
-                        </li>
-                      ))}
+                          </>
+                        );
+                        return (
+                          <li key={entry.version}>
+                            {entry.known ? (
+                              <a href={versionHref(entry.version)}>{text}</a>
+                            ) : (
+                              // No filter lists these: the server counts every
+                              // version it can't read here, whatever it says.
+                              <div
+                                className="update-version-static"
+                                title="Agents that report a version this server can't read"
+                              >
+                                {text}
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
                       {fleet.versions.length === 0 && (
                         <li className="control-muted">
                           No agent has reported a version yet.

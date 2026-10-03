@@ -15,6 +15,8 @@ import {
   currentUpdate,
   fleetView,
   forkSentence,
+  isAgentVersion,
+  isLevelKey,
   lastResultText,
   levelHref,
   observationText,
@@ -338,6 +340,28 @@ describe("the fleet's counts", () => {
     expect(versionHref("dev build/1 2")).toBe(
       "#/devices?agent_version=dev%20build%2F1%202",
     );
+  });
+
+  it("reads only the levels and versions the list can filter to from an address", () => {
+    for (const key of [
+      "automatic",
+      "ask",
+      "off",
+      "cannot_update",
+      "not_reported",
+    ])
+      expect(isLevelKey(key), key).toBe(true);
+    for (const key of ["", "Automatic", "auto", "cannot-update", "__proto__"])
+      expect(isLevelKey(key), key).toBe(false);
+    expect(isAgentVersion("0.1.0")).toBe(true);
+    // A development build reports what it reports.
+    expect(isAgentVersion("0.1.0-dev+abc")).toBe(true);
+    expect(isAgentVersion("")).toBe(false);
+    expect(isAgentVersion("a\nb")).toBe(false);
+    expect(isAgentVersion("x".repeat(128))).toBe(true);
+    expect(isAgentVersion("x".repeat(129))).toBe(false);
+    // 128 bytes, not 128 characters.
+    expect(isAgentVersion("é".repeat(65))).toBe(false);
   });
 });
 

@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import {
   api,
+  can,
   withRequestDeadline,
   AgentInstallSchema,
   type AgentInstall,
   type Device,
   type Release,
+  type User,
 } from "./api";
 import {
   agentUpgradeRelease,
@@ -16,6 +18,17 @@ import {
 } from "./agentUpgradeModel";
 import { Button, CopyButton, ErrorBox, Modal, Spinner } from "./ui";
 import DocLink from "./DocLink";
+import { forkSentence, updatesLine } from "./agentUpdateModel";
+import { consentFor } from "./agentUpdateCommands";
+import {
+  emptyConsent,
+  readConsent,
+  type ConsentForm,
+} from "./agentUpdateConsent";
+import { UpdateConsentFields } from "./UpdateConsentFields";
+import { CommandBlock } from "./CommandBlock";
+import DeviceRollout from "./DeviceRollout";
+import { useAgentUpdates } from "./useAgentUpdates";
 import "./agent-upgrade.css";
 
 /** Text with `code` spans, which never break inside (a flag at its hyphen). */
@@ -114,9 +127,32 @@ function ByHand({ device, release }: { device: Device; release: Release }) {
   );
 }
 
-export default function AgentUpgrade({ device }: { device: Device }) {
+export default function AgentUpgrade({
+  device,
+  user,
+}: {
+  device: Device;
+  user?: User;
+}) {
   const [open, setOpen] = useState(false);
+  const [rolling, setRolling] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  // Agent updates: a host that reports them off or not at all is opted in by
+  // one run of this command, with the choice made here; a host that takes them
+  // from the dashboard is rolled out to. While updates are off none of it is
+  // here and the command is what it always was.
+  const settings = useAgentUpdates(0, 60000, open || rolling);
+  const key = settings.updates?.current_key ?? null;
+  const report = device.agent_update ?? null;
+  const optedIn = settings.on && !!report && report.consent !== "off";
+  const canOptIn =
+    settings.on &&
+    !optedIn &&
+    device.status !== "revoked" &&
+    (device.os === "linux" || device.os === "darwin");
+  const noService = device.service_manager === "none";
+  const [consent, setConsent] = useState<ConsentForm>(emptyConsent);
+  const consentRead = readConsent(consent, key?.fingerprint ?? null);
   const [result, setResult] = useState<{
     loading: boolean;
     install: AgentInstall | null;
@@ -178,10 +214,18 @@ export default function AgentUpgrade({ device }: { device: Device }) {
     device.arch,
   );
   const build = release ? runningBuild(device, release) : null;
+  const optIn = canOptIn && !noService ? consentRead.consent : undefined;
+  // A build that is already current needs no run, unless the run is how the
+  // host is opted in to updates.
   const command =
-    install && release && !build?.current
-      ? upgradeCommand(install, device)
+    install && release && (!build?.current || !!optIn)
+      ? upgradeCommand(install, device, optIn)
       : null;
+  // What the host already allows, with the key this server signs with now.
+  const kept =
+    optedIn && report && key ? consentFor(report, key.fingerprint) : null;
+  const pinAgain =
+    install && release && kept ? upgradeCommand(install, device, kept) : null;
   return (
     <>
       <button
@@ -213,6 +257,53 @@ export default function AgentUpgrade({ device }: { device: Device }) {
                 </dd>
               </div>
             </dl>
+            {optedIn && report && (
+              <section
+                className="update-upgrade-opted"
+                aria-labelledby="agent-upgrade-opted-title"
+              >
+                <h3 id="agent-upgrade-opted-title">
+                  This device takes updates from the dashboard
+                </h3>
+                <p>{updatesLine(report)}</p>
+                {report.rollover_conflict && (
+                  <p
+                    className="update-device-note"
+                    data-tone="danger"
+                    role="note"
+                  >
+                    {forkSentence(report.rollover_conflict)}
+                  </p>
+                )}
+                {user && can(user, "operate") && !settings.updates?.stopped && (
+                  <Button
+                    onClick={() => {
+                      setOpen(false);
+                      setRolling(true);
+                    }}
+                  >
+                    Roll out to this device
+                  </Button>
+                )}
+                {pinAgain && (
+                  <details
+                    className="agent-upgrade-manual"
+                    open={!!report.rollover_conflict}
+                  >
+                    <summary>Pin this server&apos;s current key again</summary>
+                    <p className="agent-upgrade-note">
+                      The same command, keeping what this host already allows,
+                      with the key this server signs with now. It is how a host
+                      takes a new key, or leaves a fork.
+                    </p>
+                    <CommandBlock
+                      command={pinAgain}
+                      label={`Command to pin the current key on ${device.name}`}
+                    />
+                  </details>
+                )}
+              </section>
+            )}
             {result.loading ? (
               <p role="status">
                 <Spinner /> Checking available downloads…
@@ -226,16 +317,65 @@ export default function AgentUpgrade({ device }: { device: Device }) {
               <p className="agent-upgrade-note" role="status">
                 {reason} Ask your administrator for a verified package.
               </p>
-            ) : build?.current ? (
+            ) : build?.current && !canOptIn ? (
               <p className="agent-upgrade-current" role="status">
                 {build.line}
               </p>
             ) : (
               <>
-                {build && (
-                  <p className="agent-upgrade-note agent-upgrade-build">
-                    {build.line}
-                  </p>
+                {build &&
+                  (build.current ? (
+                    <p className="agent-upgrade-current" role="status">
+                      {build.line}
+                    </p>
+                  ) : (
+                    <p className="agent-upgrade-note agent-upgrade-build">
+                      {build.line}
+                    </p>
+                  ))}
+                {canOptIn && (
+                  <section
+                    className="update-upgrade-step"
+                    aria-labelledby="agent-upgrade-updates-title"
+                  >
+                    <h3 id="agent-upgrade-updates-title">Agent updates</h3>
+                    {noService ? (
+                      <p className="agent-upgrade-note">
+                        {device.name}&apos;s agent isn&apos;t kept running by a
+                        service, so it can&apos;t take agent updates. Run it
+                        under a service first.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="agent-upgrade-note">
+                          {report
+                            ? "Updates are off on this host."
+                            : "Its last check-in carried no update report."}{" "}
+                          One run of the command below, with a choice made here,
+                          lets the dashboard update it.
+                        </p>
+                        <UpdateConsentFields
+                          value={consent}
+                          onChange={(patch) =>
+                            setConsent((previous) => ({
+                              ...previous,
+                              ...patch,
+                            }))
+                          }
+                          read={consentRead}
+                          signingKey={key}
+                          name="upgrade-update-level"
+                        />
+                        {!consentRead.chosen && (
+                          <p className="agent-upgrade-note">
+                            Without a choice the command only upgrades the
+                            agent. It doesn&apos;t change how this host takes
+                            updates.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </section>
                 )}
                 {command && install ? (
                   <>
@@ -275,7 +415,7 @@ export default function AgentUpgrade({ device }: { device: Device }) {
                       <ByHand device={device} release={release} />
                     </details>
                   </>
-                ) : (
+                ) : build?.current ? null : (
                   <ByHand device={device} release={release} />
                 )}
               </>
@@ -296,6 +436,15 @@ export default function AgentUpgrade({ device }: { device: Device }) {
             </Button>
           </div>
         </Modal>
+      )}
+      {rolling && settings.updates && user && (
+        <DeviceRollout
+          device={device}
+          user={user}
+          updates={settings.updates}
+          returnFocusRef={opener}
+          onClose={() => setRolling(false)}
+        />
       )}
     </>
   );
