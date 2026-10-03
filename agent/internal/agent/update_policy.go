@@ -29,15 +29,13 @@ const (
 	// UpdateTrackPatch takes the running major and minor with a newer patch;
 	// UpdateTrackMinor takes the running major with a newer minor or patch. There
 	// is no major track.
-	UpdateTrackPatch = "patch"
-	UpdateTrackMinor = "minor"
+	UpdateTrackPatch = ReleaseTrackPatch
+	UpdateTrackMinor = ReleaseTrackMinor
 
 	updatePolicySchema = "vectory.update-policy.v1"
 	// maxUpdatePolicy bounds the file: four keys and seven windows are about 1.5 KiB.
 	maxUpdatePolicy = 8 * 1024
 	maxPinnedKeys   = 4
-
-	updateMajorTrackMessage = "This release offers patch and minor tracks. Upgrade to a new major version by hand."
 )
 
 // ErrUpdatePolicyInvalid is what a policy file that is not what the contract
@@ -119,15 +117,14 @@ func ParseUpdatePolicy(data []byte) (UpdatePolicy, error) {
 	if err := decodeStrictJSON(data, &wire); err != nil {
 		return UpdatePolicy{}, invalidPolicy("policy.json %v", err)
 	}
+	_, trackErr := ParseReleaseTrack(wire.Track)
 	switch {
 	case wire.Schema != updatePolicySchema:
 		return UpdatePolicy{}, invalidPolicy("the schema is %q, and this agent reads %q", wire.Schema, updatePolicySchema)
 	case !oneOf(wire.Consent, []string{UpdateConsentOff, UpdateConsentAuto, UpdateConsentAsk}):
 		return UpdatePolicy{}, invalidPolicy("consent %q isn't off, auto or ask", wire.Consent)
-	case wire.Track == "major":
-		return UpdatePolicy{}, invalidPolicy("track is major. %s", updateMajorTrackMessage)
-	case !oneOf(wire.Track, []string{UpdateTrackPatch, UpdateTrackMinor}):
-		return UpdatePolicy{}, invalidPolicy("track %q isn't patch or minor", wire.Track)
+	case trackErr != nil:
+		return UpdatePolicy{}, invalidPolicy("track: %v", trackErr)
 	case wire.Windows == nil:
 		return UpdatePolicy{}, invalidPolicy("windows isn't a list")
 	case wire.Paused == nil:
