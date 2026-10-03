@@ -309,7 +309,7 @@ func TestWriteUpdatePolicyThenReadItBack(t *testing.T) {
 	p := samplePolicy(t)
 	p.Keys = append(p.Keys, PinnedKey{Key: testKey(t, nextKeyLine)}) // never pinned: pinned now
 	p.Keys[0].PinnedAt = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	if err := writeUpdatePolicy(paths, p, written); err != nil {
+	if err := writeUpdatePolicy(paths, p, written, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadUpdatePolicy()
@@ -343,7 +343,7 @@ func TestWriteUpdatePolicyThenReadItBack(t *testing.T) {
 	}
 	// Writing again replaces the file and leaves nothing beside it.
 	p.Paused = true
-	if err := writeUpdatePolicy(paths, p, written.Add(time.Hour)); err != nil {
+	if err := writeUpdatePolicy(paths, p, written.Add(time.Hour), nil); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := ReadUpdatePolicy(); err != nil || !again.Paused {
@@ -358,7 +358,7 @@ func TestWriteUpdatePolicyThenReadItBack(t *testing.T) {
 func TestWriteUpdatePolicyRefusesAPolicyAReaderWouldRefuseAndKeepsWhatWasThere(t *testing.T) {
 	requireRootOwnedWriter(t)
 	paths := useUpdateRoots(t)
-	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now()); err != nil {
+	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(paths.Policy)
@@ -367,12 +367,12 @@ func TestWriteUpdatePolicyRefusesAPolicyAReaderWouldRefuseAndKeepsWhatWasThere(t
 	}
 	bad := samplePolicy(t)
 	bad.Keys = nil
-	if err := writeUpdatePolicy(paths, bad, time.Now()); err == nil || !errors.Is(err, ErrUpdatePolicyInvalid) {
+	if err := writeUpdatePolicy(paths, bad, time.Now(), nil); err == nil || !errors.Is(err, ErrUpdatePolicyInvalid) {
 		t.Errorf("auto with no key: %v", err)
 	}
 	bad = samplePolicy(t)
 	bad.Windows = []string{"whenever"}
-	if err := writeUpdatePolicy(paths, bad, time.Now()); err == nil {
+	if err := writeUpdatePolicy(paths, bad, time.Now(), nil); err == nil {
 		t.Error("a window that doesn't parse was written")
 	}
 	if after, _ := os.ReadFile(paths.Policy); !bytes.Equal(before, after) {
@@ -385,7 +385,7 @@ func TestAPolicyInADirectoryAnotherAccountCanWriteIsNotBelieved(t *testing.T) {
 		t.Skip("the Windows rule is tested with real access lists in rootpath_windows_test.go")
 	}
 	paths := useUpdateRoots(t)
-	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now()); err != nil {
+	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadUpdatePolicy(); err != nil {
@@ -404,7 +404,7 @@ func TestAPolicyInADirectoryAnotherAccountCanWriteIsNotBelieved(t *testing.T) {
 		refusedAs(t, err)
 		if name != "the policy file is writable by everyone" {
 			// Nothing is written below a directory that isn't root's alone.
-			if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now()); err == nil {
+			if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err == nil {
 				t.Errorf("%s: a policy was written", name)
 			}
 		}
@@ -428,7 +428,7 @@ func TestAPolicyInADirectoryAnotherAccountCanWriteIsNotBelieved(t *testing.T) {
 	_, err := ReadUpdatePolicy()
 	refusedAs(t, err)
 	// A write replaces the link itself, and the policy is read again.
-	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now()); err != nil {
+	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadUpdatePolicy(); err != nil {
