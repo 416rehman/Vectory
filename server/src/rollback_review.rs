@@ -182,6 +182,68 @@ fn artifact(label: &Value) -> String {
         (None, None) => "another version".to_owned(),
     }
 }
+/// `text` cut to `max` characters, with an ellipsis where it was cut.
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+/// "edge-a, edge-b, edge-c and 4 more", at most three names.
+fn some_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [first, second, third] => format!("{first}, {second} and {third}"),
+        [first, second, third, rest @ ..] => {
+            format!("{first}, {second}, {third} and {} more", rest.len())
+        }
+    }
+}
+/// The devices and the version each would return to, for a rollback that
+/// cannot be one deployment: "edge-nyc-01 and edge-nyc-02 to Edge syslog
+/// processing v1; edge-fra-01 to QA refused sink v1". The text stays under
+/// the limit the dashboard accepts however many devices and versions there are.
+fn mixed_prior_versions(
+    returning: &[(String, String)],
+    labels: &BTreeMap<String, Value>,
+) -> String {
+    const GROUPS: usize = 3;
+    let mut by_version: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (device, version) in returning {
+        by_version
+            .entry(version.as_str())
+            .or_default()
+            .push(shorten(device, 40));
+    }
+    let mut groups: Vec<(String, Vec<String>)> = by_version
+        .into_iter()
+        .map(|(version, mut names)| {
+            names.sort();
+            (shorten(&artifact(&label(labels, Some(version))), 60), names)
+        })
+        .collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    let more = groups.len().saturating_sub(GROUPS);
+    let mut listed: Vec<String> = groups
+        .iter()
+        .take(GROUPS)
+        .map(|(version, names)| format!("{} to {version}", some_names(names)))
+        .collect();
+    if more > 0 {
+        listed.push(format!(
+            "{more} more {}",
+            if more == 1 { "version" } else { "versions" }
+        ));
+    }
+    format!(
+        "These devices would return to different versions: {}. Deploy each version to its own devices from its pipeline's Version history. No subset has been selected for you.",
+        listed.join("; ")
+    )
+}
 pub async fn get(
     AppState(s): AppState<State>,
     h: HeaderMap,
@@ -227,6 +289,9 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
     let mut excluded = Vec::new();
     let mut identities = Vec::new();
     let mut previous = BTreeSet::new();
+    // Each eligible device and the version it would return to.
+    let mut returning: Vec<(String, String)> = Vec::new();
+    let mut released_any = false;
     let mut unknown_previous = false;
     // Live devices the rollback won't include: (position, UUID, desired version).
     let mut live: Vec<(usize, String, Option<String>)> = Vec::new();
@@ -253,6 +318,7 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
             None
         };
         let name: Option<String> = row.get("device_name");
+        released_any |= generation > 0;
         if let Some(reason) = reason {
             if exists && !revoked {
                 live.push((
@@ -277,6 +343,10 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
             }
             match prior.as_deref().and_then(|v| id(v).ok()) {
                 Some(v) => {
+                    returning.push((
+                        name.clone().unwrap_or_else(|| "An unnamed device".into()),
+                        v.clone(),
+                    ));
                     previous.insert(v);
                 }
                 None => unknown_previous = true,
@@ -291,10 +361,17 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
         blockers.push(blocker("SOURCE_NOT_ROLLBACKABLE","This assignment is not eligible for rollback. Create a new reviewed deployment instead."));
     }
     if eligible.is_empty() {
-        blockers.push(blocker(
-            "NO_ELIGIBLE_TARGETS",
-            "No original released identities remain eligible for this rollback.",
-        ));
+        if released_any {
+            blockers.push(blocker(
+                "NO_ELIGIBLE_TARGETS",
+                "No original released identities remain eligible for this rollback.",
+            ));
+        } else {
+            blockers.push(blocker(
+                "NOTHING_RELEASED",
+                "Nothing was released, so there is nothing to roll back.",
+            ));
+        }
     }
     if unknown_previous {
         blockers.push(blocker("PRIOR_VERSION_UNKNOWN","These devices ran their local config before this deployment, so there is no earlier version to roll back to. Remove this assignment to stop managing them; they keep the config they run now."));
@@ -303,7 +380,11 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
         blockers.push(blocker("PRIOR_ARTIFACT_MISMATCH","The recorded prior artifact no longer matches its target and generation. Preserve history and create a separately reviewed deployment."));
     }
     if previous.len() > 1 {
-        blockers.push(blocker("MIXED_PRIOR_VERSIONS","Eligible identities have different prior versions. Review them in separate deployments; no subset has been selected automatically."));
+        let prior_labels = labels(db, &previous).await?;
+        blockers.push(blocker(
+            "MIXED_PRIOR_VERSIONS",
+            &mixed_prior_versions(&returning, &prior_labels),
+        ));
     }
     // What each live excluded device runs once the rollout stops. A stopped
     // rollout already let go of devices it never reached; an active, paused
@@ -501,4 +582,102 @@ pub(crate) async fn commit(
         actor,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label_map(entries: &[(&str, &str, i64)]) -> BTreeMap<String, Value> {
+        entries
+            .iter()
+            .map(|(id, name, number)| {
+                (
+                    id.to_string(),
+                    json!({"configuration_name":name,"version_number":number}),
+                )
+            })
+            .collect()
+    }
+    fn returning(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+        entries
+            .iter()
+            .map(|(device, version)| (device.to_string(), version.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn devices_are_named_with_the_version_each_returns_to_largest_group_first() {
+        let text = mixed_prior_versions(
+            &returning(&[
+                ("edge-fra-01", "q"),
+                ("edge-nyc-02", "e"),
+                ("edge-nyc-01", "e"),
+            ]),
+            &label_map(&[
+                ("e", "Edge syslog processing", 1),
+                ("q", "QA refused sink", 1),
+            ]),
+        );
+        assert_eq!(
+            text,
+            "These devices would return to different versions: edge-nyc-01 and edge-nyc-02 to Edge syslog processing v1; edge-fra-01 to QA refused sink v1. Deploy each version to its own devices from its pipeline's Version history. No subset has been selected for you."
+        );
+    }
+
+    #[test]
+    fn long_lists_name_a_few_and_count_the_rest() {
+        let devices: Vec<(String, String)> = (1..=6)
+            .map(|n| (format!("edge-{n}"), "a".to_owned()))
+            .chain((1..=5).map(|n| (format!("other-{n}"), format!("v{n}"))))
+            .collect();
+        let mut names = BTreeMap::new();
+        names.insert(
+            "a".to_owned(),
+            json!({"configuration_name":"Edge","version_number":1}),
+        );
+        for n in 1..=5 {
+            names.insert(
+                format!("v{n}"),
+                json!({"configuration_name":format!("Pipeline {n}"),"version_number":n}),
+            );
+        }
+        let text = mixed_prior_versions(&devices, &names);
+        assert!(
+            text.contains("edge-1, edge-2, edge-3 and 3 more to Edge v1; other-1 to Pipeline 1 v1; other-2 to Pipeline 2 v2; 3 more versions."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_unlabelled_version_is_named_as_another_version() {
+        let text = mixed_prior_versions(
+            &returning(&[("edge-1", "x"), ("edge-2", "y")]),
+            &BTreeMap::new(),
+        );
+        assert!(
+            text.contains("edge-1 to another version; edge-2 to another version."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_text_fits_the_dashboard_limit_however_many_devices_and_versions() {
+        let long = "n".repeat(240);
+        let devices: Vec<(String, String)> = (0..10_000)
+            .map(|n| (format!("{long}{n}"), format!("version-{}", n % 50)))
+            .collect();
+        let names: BTreeMap<String, Value> = (0..50)
+            .map(|n| {
+                (
+                    format!("version-{n}"),
+                    json!({"configuration_name":format!("{long}{n}"),"version_number":n + 1}),
+                )
+            })
+            .collect();
+        let text = mixed_prior_versions(&devices, &names);
+        assert!(text.chars().count() <= 1000, "{}", text.chars().count());
+        assert!(text.contains("47 more versions."), "{text}");
+        assert!(text.contains('…'), "long names are cut with an ellipsis");
+    }
 }

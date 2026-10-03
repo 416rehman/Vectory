@@ -1684,6 +1684,395 @@ async fn one_replace_resolves_every_tier_that_keeps_a_device_from_the_request() 
 }
 
 /// Promoted from the preserved resume-canary-overlap-observation evidence.
+/// Reviews the removal of an assignment and confirms it, as the dashboard does.
+async fn remove_assignment(app: &Router, cookie: &str, csrf: &str, d: &Value) {
+    let id = d["id"].as_str().unwrap();
+    let (status, plan) = call(
+        app,
+        "POST",
+        &format!("/api/v1/deployments/{id}/unassign-preview"),
+        json!({}),
+        cookie,
+        csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    let (status, removed) = call(
+        app,
+        "POST",
+        &format!("/api/v1/deployments/{id}/unassign"),
+        json!({"review_token":plan["review_token"]}),
+        cookie,
+        csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+}
+async fn recorded_previous(
+    s: &State,
+    deployment: &Value,
+    device: &str,
+) -> (Option<String>, Option<String>, Option<i64>, i64) {
+    sqlx::query_as("SELECT previous_version_id,previous_artifact_sha256,previous_generation,previous_recorded FROM deployment_targets WHERE deployment_id=? AND device_id=?")
+        .bind(deployment["id"].as_str().unwrap())
+        .bind(device)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap()
+}
+
+/// A rollout takes its devices from v1, another pipeline takes one of them at
+/// a higher priority and is removed again. The rollout still returns every
+/// device to v1: what it replaced is recorded once, when it first took the
+/// device, and the pipeline that held the device in between is not it.
+#[tokio::test]
+async fn a_rollback_returns_devices_to_what_they_ran_before_despite_a_deployment_that_held_one() {
+    let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
+    ids.sort();
+    let edge = seed_pipeline(&s, "Edge syslog processing", &[1, 2]).await;
+    let sink = seed_pipeline(&s, "QA refused sink", &[1]).await;
+    let base = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &edge[0],
+            180,
+            100,
+            "snapshot",
+            json!([]),
+            json!(ids),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    let mut request = binding(
+        "configuration",
+        &edge[1],
+        180,
+        100,
+        "snapshot",
+        json!([]),
+        json!(ids),
+        json!([]),
+        false,
+    );
+    request["replaces"] = json!([base["id"]]);
+    let rollout = create_binding(&app, &cookie, &csrf, request).await;
+    for id in &ids {
+        assert_eq!(desired(&s, id).await.0.as_deref(), Some(edge[1].as_str()));
+        assert_eq!(
+            recorded_previous(&s, &rollout, id).await.0.as_deref(),
+            Some(edge[0].as_str())
+        );
+    }
+    let before = recorded_previous(&s, &rollout, &ids[0]).await;
+    sqlx::query("UPDATE deployment_targets SET state='verified_applied',verified_at=? WHERE deployment_id=?")
+        .bind(db::now())
+        .bind(rollout["id"].as_str().unwrap())
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    vectory_server::rollout::tick(&s).await.unwrap();
+    assert_eq!(
+        get_deployment(&app, &cookie, &rollout).await["status"],
+        "completed"
+    );
+
+    // Another pipeline takes the first device at a higher priority.
+    let held = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &sink[0],
+            180,
+            200,
+            "snapshot",
+            json!([]),
+            json!(ids[..1]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(
+        desired(&s, &ids[0]).await.0.as_deref(),
+        Some(sink[0].as_str())
+    );
+    // Removing it returns the device to the rollout.
+    remove_assignment(&app, &cookie, &csrf, &held).await;
+    let (version, _, assignment) = desired(&s, &ids[0]).await;
+    assert_eq!(version.as_deref(), Some(edge[1].as_str()));
+    assert_eq!(assignment.as_deref(), rollout["id"].as_str());
+    assert_eq!(
+        recorded_previous(&s, &rollout, &ids[0]).await,
+        before,
+        "the rollout still remembers what the device ran before it"
+    );
+
+    let plan = review(&app, &rollout, &cookie).await;
+    assert_eq!(plan["ready"], true, "{plan}");
+    assert_eq!(plan["blockers"], json!([]));
+    assert_eq!(plan["previous_version_id"], edge[0]);
+    assert_eq!(
+        plan["previous_configuration_name"],
+        "Edge syslog processing"
+    );
+    assert_eq!(plan["previous_version_number"], 1);
+    assert_eq!(plan["eligible_devices"].as_array().unwrap().len(), 3);
+    let (status, rollback) = call(
+        &app,
+        "POST",
+        &commit_path(&rollout),
+        json!({"request_id":db::id(),"review_token":plan["review_token"]}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rollback}");
+    for id in &ids {
+        assert_eq!(
+            desired(&s, id).await.0.as_deref(),
+            Some(edge[0].as_str()),
+            "every device returns to Edge syslog processing v1"
+        );
+    }
+}
+
+/// A device that ran its local config before the rollout keeps saying so after
+/// another deployment held it: the rollback has no earlier version to offer, and
+/// the pipeline that held the device is not mistaken for one.
+#[tokio::test]
+async fn a_device_that_ran_its_local_config_keeps_that_after_another_deployment_held_it() {
+    let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
+    ids.sort();
+    let edge = seed_pipeline(&s, "Edge syslog processing", &[1]).await;
+    let sink = seed_pipeline(&s, "QA refused sink", &[1]).await;
+    let rollout = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &edge[0],
+            180,
+            100,
+            "snapshot",
+            json!([]),
+            json!(ids[..2]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(
+        recorded_previous(&s, &rollout, &ids[0]).await,
+        (None, None, None, 1)
+    );
+    let held = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &sink[0],
+            180,
+            200,
+            "snapshot",
+            json!([]),
+            json!(ids[..1]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    remove_assignment(&app, &cookie, &csrf, &held).await;
+    assert_eq!(
+        desired(&s, &ids[0]).await.0.as_deref(),
+        Some(edge[0].as_str())
+    );
+    assert_eq!(
+        recorded_previous(&s, &rollout, &ids[0]).await,
+        (None, None, None, 1)
+    );
+    let plan = review(&app, &rollout, &cookie).await;
+    assert_eq!(plan["ready"], false);
+    assert_eq!(plan["previous_version_id"], Value::Null);
+    let codes: Vec<&str> = plan["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["PRIOR_VERSION_UNKNOWN"], "{plan}");
+}
+
+/// A released target that does not take its device because a higher-priority
+/// assignment holds it records what the device ran when it finally does.
+#[tokio::test]
+async fn a_target_released_behind_a_higher_priority_assignment_records_when_it_takes_the_device() {
+    let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
+    ids.sort();
+    let edge = seed_pipeline(&s, "Edge syslog processing", &[1]).await;
+    let sink = seed_pipeline(&s, "QA refused sink", &[1]).await;
+    let high = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &sink[0],
+            180,
+            200,
+            "snapshot",
+            json!([]),
+            json!(ids[..1]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    let low = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &edge[0],
+            180,
+            100,
+            "snapshot",
+            json!([]),
+            json!(ids[..1]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(
+        desired(&s, &ids[0]).await.0.as_deref(),
+        Some(sink[0].as_str())
+    );
+    assert_eq!(
+        recorded_previous(&s, &low, &ids[0]).await,
+        (None, None, None, 0),
+        "released, but it has not taken the device"
+    );
+    remove_assignment(&app, &cookie, &csrf, &high).await;
+    assert_eq!(
+        desired(&s, &ids[0]).await.0.as_deref(),
+        Some(edge[0].as_str())
+    );
+    let (previous, sha, generation, recorded) = recorded_previous(&s, &low, &ids[0]).await;
+    assert_eq!(previous.as_deref(), Some(sink[0].as_str()));
+    assert!(sha.is_some() && generation.is_some());
+    assert_eq!(recorded, 1);
+}
+
+/// Devices that would return to different versions are named with the
+/// version each returns to, so the person can see what to deploy where.
+#[tokio::test]
+async fn a_review_that_cannot_offer_one_version_names_each_device_and_where_it_would_return() {
+    let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
+    ids.sort();
+    let edge = seed_pipeline(&s, "Edge syslog processing", &[1, 2]).await;
+    let sink = seed_pipeline(&s, "QA refused sink", &[1]).await;
+    for (version, devices) in [(&edge[0], &ids[..2]), (&sink[0], &ids[2..])] {
+        create_binding(
+            &app,
+            &cookie,
+            &csrf,
+            binding(
+                "configuration",
+                version,
+                180,
+                100,
+                "snapshot",
+                json!([]),
+                json!(devices),
+                json!([]),
+                false,
+            ),
+        )
+        .await;
+    }
+    let rollout = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &edge[1],
+            180,
+            200,
+            "snapshot",
+            json!([]),
+            json!(ids),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    let plan = review(&app, &rollout, &cookie).await;
+    assert_eq!(plan["ready"], false);
+    assert_eq!(plan["previous_version_id"], Value::Null);
+    let mut edge_devices = vec![
+        device_name(&s, &ids[0]).await,
+        device_name(&s, &ids[1]).await,
+    ];
+    edge_devices.sort();
+    let sink_device = device_name(&s, &ids[2]).await;
+    assert_eq!(
+        plan["blockers"],
+        json!([{
+            "code":"MIXED_PRIOR_VERSIONS",
+            "reason":format!(
+                "These devices would return to different versions: {} and {} to Edge syslog processing v1; {sink_device} to QA refused sink v1. Deploy each version to its own devices from its pipeline's Version history. No subset has been selected for you.",
+                edge_devices[0], edge_devices[1]
+            )
+        }])
+    );
+}
+
+/// A deployment that never released anything has nothing to roll back, and
+/// says that rather than blaming the devices' prior versions.
+#[tokio::test]
+async fn a_deployment_that_released_nothing_says_nothing_was_released() {
+    let (_temp, s, app, ids, cookie, _, d, _) = scenario(false).await;
+    sqlx::query("UPDATE deployment_targets SET state='pending',generation=0 WHERE deployment_id=?")
+        .bind(d["id"].as_str().unwrap())
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let mut cancelled = d.clone();
+    cancelled["status"] = json!("cancelled");
+    let mut conn = s.pool.acquire().await.unwrap();
+    db::update(&mut conn, "deployment", &cancelled)
+        .await
+        .unwrap();
+    drop(conn);
+    let plan = review(&app, &d, &cookie).await;
+    assert_eq!(plan["ready"], false);
+    assert_eq!(plan["eligible_devices"], json!([]));
+    assert_eq!(
+        plan["blockers"],
+        json!([{"code":"NOTHING_RELEASED","reason":"Nothing was released, so there is nothing to roll back."}])
+    );
+    // A device that was released and has since left keeps the older wording.
+    sqlx::query("UPDATE deployment_targets SET state='removed',generation=2 WHERE deployment_id=? AND device_id=?")
+        .bind(d["id"].as_str().unwrap())
+        .bind(&ids[0])
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let plan = review(&app, &d, &cookie).await;
+    assert_eq!(plan["blockers"][0]["code"], "NO_ELIGIBLE_TARGETS");
+}
+
 #[tokio::test]
 async fn resuming_canary_rejects_overlap_before_admission_and_preserves_state() {
     let (_temp, s, app, mut ids, cookie, csrf) = fixture().await;
