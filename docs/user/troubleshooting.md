@@ -12,6 +12,7 @@ Find your symptom, check the likely causes in order, and fix the first one that 
 5. **Is the certificate trusted?** A private CA needs the pin from **Add device** or a `--ca-file`. See [Trust the server certificate](installation.md#trust-the-server-certificate). Never turn verification off.
 6. **Is the clock right?** Certificates fail when the device's clock is far off.
 7. **Was the device revoked or replaced?** A revoked identity can't reconnect. See [Recover a device identity](agents.md#recover-a-device-identity).
+8. **Does `sudo vectory status` say `The server rejected the request (HTTP 400)`?** The server refused the check-in as invalid, though Vector may run the version. A report in the check-in is the usual cause, such as what Vector logged. The agent sends a refused check-in again without the reports it can do without, and says so once in its log: `The server refused a check-in; the agent sent it again without the Vector log summary.` The device stays online, and its **Recent Vector errors** stays empty until the server accepts that report. If the 400 stays, [prepare a problem report](#prepare-a-useful-problem-report) with the agent's log lines.
 
 Once fixed, the device's check-in time updates within one check-in interval. A Vector that was already running keeps running while the server is unreachable.
 
