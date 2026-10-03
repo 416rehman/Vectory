@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -439,6 +440,8 @@ func ReadReleasePrivateKey(path string) (ReleasePrivateKey, error) {
 		problem, fix := privateFileProblem(path, err)
 		message := fmt.Sprintf("the release key %s %s", path, problem)
 		if fix != "" {
+			// The wording of a fix is shared with the files that hold a token, and
+			// a test pins what it says here for a key.
 			message += ". " + strings.ReplaceAll(fix, "the token", "the key")
 		}
 		return ReleasePrivateKey{}, errors.New(message)
@@ -493,6 +496,9 @@ func WriteReleasePrivateKey(path string, key ReleasePrivateKey) error {
 		_ = os.Remove(path)
 		return err
 	}
+	// The key is in the file; this only makes the file's name durable too. A
+	// system that can't flush a directory is no reason to report a key lost.
+	_ = syncDir(filepath.Dir(path))
 	return nil
 }
 
