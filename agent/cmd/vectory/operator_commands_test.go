@@ -148,7 +148,13 @@ func TestAllowAddsWhatTheHostApprovesAndSaysWhatItAllowsNow(t *testing.T) {
 	if code, _, stderr = invoke("allow", "--state-dir", dir); code != 2 || !strings.Contains(stderr, "name at least one") {
 		t.Fatal(code, stderr)
 	}
-	if code, _, stderr = invoke("allow", "--state-dir", dir, "--network", "no-port"); code != 1 || !strings.Contains(stderr, "host:port") {
+	// A value that can't be an address is a usage error that echoes the value.
+	for _, args := range [][]string{{"--network", "no-port"}, {"--network", "logs.example.net"}, {"--listener", "0.0.0.0:99999"}} {
+		if code, _, stderr = invoke(append([]string{"allow", "--state-dir", dir}, args...)...); code != 2 || !strings.Contains(stderr, args[1]+" isn't an exact host:port") {
+			t.Fatal(args, code, stderr)
+		}
+	}
+	if code, _, stderr = invoke("allow", "--state-dir", dir, "--file-root", "relative/dir"); code != 2 || !strings.Contains(stderr, "file root relative/dir isn't an absolute path") {
 		t.Fatal(code, stderr)
 	}
 	// A complete policy file says what it leaves allowed.

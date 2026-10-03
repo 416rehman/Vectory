@@ -8,7 +8,7 @@ Every command and flag of `vectory`, the agent that runs on each device. For ste
 vectory <command> [flags]
 ```
 
-- Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments.
+- Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments. Put the command first: `vectory status --json`, not `vectory --json status`.
 - Commands that change the agent's files need administrator rights on the host (`sudo` on Linux and macOS).
 - Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `3` `setup` finished but something needs you (on a host without a service manager, nothing keeps the agent running), `78` the agent isn't installed or enrolled (the Linux service doesn't restart on this code), `130` `setup` was interrupted with Ctrl-C.
 
@@ -229,14 +229,14 @@ sudo vectory logs --follow
 
 | Flag | Meaning |
 | --- | --- |
-| `--lines N` | How many recent lines to print. Default 100. |
+| `--lines N` | How many recent lines to print, from 1 to 100000. Default 100. |
 | `--follow`, `-f` | Keep printing new lines until you press Ctrl-C. |
 | `--raw` | Print the log file's lines unchanged. They can hold terminal escape sequences from your events: save them to a file, or pipe them through `cat -v`. |
 | `--json` | Print one JSON object per line: Vector's records as they are, and the agent's own notes with the same `timestamp`, `target` and `message` keys. |
 
 Event text can hold control characters, and a terminal acts on them: it can change the window title, clear the screen or overwrite the start of a line to forge another. So `logs` shows each control character, line or paragraph separator and text-direction control as an escape, such as `\x1b` for ESC and `\x0a` for a newline. `--json` escapes them as `\u001b`, and a program that decodes the JSON and prints a value must remove them itself. Only `--raw` prints them unchanged.
 
-The agent's notes include changes a host operator made, such as `Host operator allowed destination 127.0.0.1:8239 (vectory allow)`. With a `--state-dir` that holds no agent, `logs` says `No agent is installed at …` instead of waiting for a log.
+The agent's notes include changes a host operator made, such as `Host operator allowed destination 127.0.0.1:8239 (vectory allow)`. A note reads `[vectory 2026-10-02T23:43:31Z] Host operator allowed …`, while Vector's own lines read `2026-10-02 23:43:29Z  INFO …`. With a `--state-dir` that holds no agent, `logs` says `No agent is installed at …` instead of waiting for a log.
 
 ## pause and resume
 
@@ -274,7 +274,7 @@ sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx
 | `--listener ADDR:PORT` | An address pipelines may listen on. |
 | `--file-root PATH` | An absolute directory pipelines may read and write under. Not `/` or a drive root, and not a directory that is, holds or lies inside the agent's state directory, the managed configuration or a bound secret file. |
 
-Repeat a flag for more entries. `allow` prints what it added and everything the host allows now, and notes the change in `vectory logs`. Only a host operator can change allowances; the dashboard can't. To remove an entry, replace the lists with `install --capability-policy`.
+Repeat a flag for more entries. `allow` prints what it added and everything the host allows now, and notes the change in `vectory logs`. With `--json`, `added` and `allowances` hold only the lists that have entries. Only a host operator can change allowances; the dashboard can't. To remove an entry, replace the lists with `install --capability-policy`.
 
 ## configure-metrics
 
@@ -360,6 +360,8 @@ Delete this host's credentials, keeping the installation. Also revoke the device
 sudo vectory unenroll
 ```
 
+On a host with no credentials it says so, and there is nothing to revoke.
+
 ## uninstall
 
 Delete the agent's state directory. Stop and unregister the service first.
@@ -372,7 +374,7 @@ sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
 | --- | --- |
 | `--purge` | Delete the state directory named by `--state-dir`, which is required. Vector and the managed configuration stay. |
 
-Without `--purge`, `uninstall` changes nothing and reminds you to remove the service and binary.
+Without `--purge`, `uninstall` changes nothing and reminds you to remove the service and binary. When the state directory doesn't exist, it says `Nothing to remove` and exits `0`, so you can run an interrupted purge again.
 
 ## version and help
 

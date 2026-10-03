@@ -39,6 +39,9 @@ type cli struct {
 	stderr io.Writer
 	state  *string
 	json   *bool
+	// oneLine prints a JSON document on one line, for a command whose --json
+	// output is one object per line, an error included.
+	oneLine bool
 }
 
 func (c *cli) record(name, arg, help string, hidden bool) {
