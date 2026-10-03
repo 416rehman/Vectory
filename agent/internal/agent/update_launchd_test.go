@@ -270,8 +270,9 @@ func TestInstallingTheStepWritesItsDefinitionForEveryoneToReadEnablesItAndLoadsI
 
 func TestInstallingTheStepAgainUnloadsTheJobItHasSoThatLaunchdReadsTheTextNowOnDisk(t *testing.T) {
 	host, recorder, _ := newTestMacOSHost(t)
-	// Loaded: print succeeds. It is gone once bootout has returned.
-	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"})
+	// Loaded: print succeeds. It says so for the check before the bootout, and the job is
+	// gone by the first print after it.
+	recorder.answer("print system/io.vectory.update", launchctlResult{stdout: "system/io.vectory.update = {\n\tstate = not running\n\truns = 4\n}\n"}, notLoaded)
 	if err := host.InstallUnits(macTestUnitSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -478,8 +479,9 @@ func TestAJobThatLaunchdKeepsStartingCountsItsRestartsFromItsRuns(t *testing.T) 
 func TestStoppingAndStartingTheAgentJobAreTheCallsLaunchdGetsAndABootstrapItRefusesIsTriedAgain(t *testing.T) {
 	host, recorder, slept := newTestMacOSHost(t)
 	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
-	// Stop: the job is loaded, so it is booted out (which waits for the drain).
-	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")})
+	// Stop: the job is loaded, so it is booted out, and the stop is done when launchd no
+	// longer knows the job.
+	recorder.answer("print system/io.vectory.agent", launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, notLoaded)
 	if err := host.StopService(context.Background()); err != nil {
 		t.Fatal(err)
 	}

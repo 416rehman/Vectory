@@ -63,7 +63,24 @@ func TestLaunchdStopWaitsForAJobStillStopping(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "print system/io.vectory.agent,bootout system/io.vectory.agent,print system/io.vectory.agent,print system/io.vectory.agent,print system/io.vectory.agent"
-	if strings.Join(f.calls, ",") != want || f.sleeping != 2*time.Second {
+	if strings.Join(f.calls, ",") != want || f.sleeping != 2*launchdStopPoll {
+		t.Fatalf("calls %v, slept %s", f.calls, f.sleeping)
+	}
+}
+
+// launchctl bootout returns when launchd has begun to remove the job, not when it has:
+// the job is still listed, with the process it is stopping, for about half a second
+// (launchd's log shows "removing service" that long after "bootout initiated"). A stop
+// that returned then would let a start find that job and leave it alone; the job would
+// be gone a moment later with nothing started. Stop waits until launchd no longer
+// knows the job, whatever bootout said.
+func TestLaunchdStopWaitsUntilTheJobIsGoneAfterABootoutThatSucceeded(t *testing.T) {
+	f := &fakeLaunchctl{loaded: []bool{true, true, true, true, false}, running: true, clock: time.Now(), bootout: launchctlResult{}}
+	if err := f.job().control("stop"); err != nil {
+		t.Fatal(err)
+	}
+	want := "print system/io.vectory.agent,bootout system/io.vectory.agent,print system/io.vectory.agent,print system/io.vectory.agent,print system/io.vectory.agent,print system/io.vectory.agent"
+	if strings.Join(f.calls, ",") != want || f.sleeping != 3*launchdStopPoll {
 		t.Fatalf("calls %v, slept %s", f.calls, f.sleeping)
 	}
 }
@@ -88,8 +105,8 @@ func TestLaunchdStopReportsOtherFailures(t *testing.T) {
 		t.Fatalf("stopping an unloaded job: %v %v", err, stopped.calls)
 	}
 	// A job launchd still runs is stopped even if its file was removed.
-	orphan := &fakeLaunchctl{loaded: []bool{true}, running: true, removed: true, clock: time.Now()}
-	if err := orphan.job().control("stop"); err != nil || strings.Join(orphan.calls, ",") != "print system/io.vectory.agent,bootout system/io.vectory.agent" {
+	orphan := &fakeLaunchctl{loaded: []bool{true, false}, running: true, removed: true, clock: time.Now()}
+	if err := orphan.job().control("stop"); err != nil || strings.Join(orphan.calls, ",") != "print system/io.vectory.agent,bootout system/io.vectory.agent,print system/io.vectory.agent" {
 		t.Fatalf("stopping a loaded job without its file: %v %v", err, orphan.calls)
 	}
 }

@@ -309,11 +309,16 @@ async function enable(evidence) {
         "the release keys",
       );
       const ca = instanceFiles().ca;
+      // Windows' curl checks revocation through Schannel, and the instance's private
+      // authority publishes no revocation list to check. The chain is still verified
+      // against that authority.
+      const revocation = platform.goos === "windows" ? ["--ssl-no-revoke"] : [];
       const bundle = JSON.parse(
         run(
           "curl",
           [
             "-fsS",
+            ...revocation,
             "--cacert",
             ca,
             `https://localhost:${agentPort}/agent/v1/release-keys`,

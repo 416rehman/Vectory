@@ -28,6 +28,12 @@ import (
 type launchdOverMachine struct {
 	f     *stepFixture
 	calls []string
+	// lingerPrints is how many prints still list the agent's job as it was before its
+	// bootout, after the bootout has returned: launchd answers a bootout when it has
+	// begun to remove the job, and the job is listed for about half a second more.
+	lingerPrints int
+	lingering    int
+	lingerState  launchctlResult
 }
 
 const (
@@ -42,6 +48,10 @@ func (m *launchdOverMachine) run(ctx context.Context, args ...string) launchctlR
 		if args[1] != machineAgentTarget {
 			return notLoaded
 		}
+		if m.lingering > 0 {
+			m.lingering--
+			return m.lingerState
+		}
 		state, err := m.f.host.ServiceState(ctx)
 		if err != nil {
 			return launchctlResult{status: 5, stderr: err.Error()}
@@ -49,9 +59,15 @@ func (m *launchdOverMachine) run(ctx context.Context, args ...string) launchctlR
 		return renderLaunchdPrint(state)
 	case "bootout":
 		if args[1] == machineAgentTarget {
+			if m.lingerPrints > 0 {
+				if state, err := m.f.host.ServiceState(ctx); err == nil {
+					m.lingerState = renderLaunchdPrint(state)
+				}
+			}
 			if err := m.f.host.StopService(ctx); err != nil {
 				return launchctlResult{status: 5, stderr: "Boot-out failed: 5: Input/output error"}
 			}
+			m.lingering = m.lingerPrints
 		}
 	case "bootstrap", "kickstart":
 		if args[len(args)-1] == machineAgentTarget || strings.HasSuffix(args[len(args)-1], "io.vectory.agent.plist") {
@@ -157,6 +173,30 @@ func TestAGoodBuildIsTriedAndCommittedThroughLaunchd(t *testing.T) {
 	}
 	if got := strings.Join(f.service().History, ","); got != "start 0.1.0,stop,start 0.1.1" {
 		t.Errorf("the service's history: %s", got)
+	}
+}
+
+// launchctl bootout returns when launchd has begun to remove the job, and print lists the
+// job, with the process it is stopping, until launchd has finished. The new build is
+// started when the job is gone, not when the old one is still listed: a start that found
+// the old job would leave it alone, and the build would never run.
+func TestAGoodBuildIsCommittedThroughLaunchdWhenItsRemovalOfTheOldJobLags(t *testing.T) {
+	f := newStepFixture(t)
+	machine, _ := f.useLaunchd()
+	machine.lingerPrints = 3
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+
+	f.mustRun()
+
+	if got := f.executableDigest(); got != release.buildSHA() {
+		t.Fatalf("the executable is %s, want the new build %s; the result: %+v", got, release.buildSHA(), f.status().Last)
+	}
+	if got := strings.Join(f.service().History, ","); got != "start 0.1.0,stop,start 0.1.1" {
+		t.Errorf("the service's history: %s", got)
+	}
+	if machine.lingering != 0 {
+		t.Errorf("%d prints of the departing job were never read: the step didn't wait for it to go", machine.lingering)
 	}
 }
 
