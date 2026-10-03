@@ -33,6 +33,74 @@ describe("pipeline node configuration summaries", () => {
     expect(componentTitle("aws_s3", "sinks")).toBe("Amazon S3");
   });
 
+  it("says a source decodes and a sink encodes, from the option that holds it", () => {
+    // What the HTTP Server starter writes: events are decoded as JSON.
+    expect(
+      componentSummary(
+        {
+          type: "http_server",
+          address: "127.0.0.1:8088",
+          decoding: { codec: "json" },
+        },
+        "sources",
+      ),
+    ).toEqual({
+      primary: "Listen on 127.0.0.1:8088",
+      secondary: "JSON decoding",
+    });
+    expect(
+      componentSummary(
+        {
+          type: "syslog",
+          address: "0.0.0.0:514",
+          decoding: { codec: "bytes" },
+        },
+        "sources",
+      ).secondary,
+    ).toBe("BYTES decoding");
+    expect(
+      componentSummary(
+        { type: "console", encoding: { codec: "text" }, target: "stdout" },
+        "sinks",
+      ).secondary,
+    ).toBe("TEXT encoding");
+  });
+
+  it("never reads a format from an option Vector doesn't read there", () => {
+    // Vector ignores an `encoding` on a source without a word, so the card
+    // must not claim JSON for events that arrive as text. It refuses a plain
+    // string `encoding` on a sink, so that is no format either.
+    const ignored = componentSummary(
+      { type: "http_server", address: "127.0.0.1:8088", encoding: "json" },
+      "sources",
+    );
+    expect(ignored.secondary).toBeUndefined();
+    expect(
+      componentSummary(
+        {
+          type: "http_server",
+          address: "127.0.0.1:8088",
+          encoding: { codec: "json" },
+        },
+        "sources",
+      ).secondary,
+    ).toBeUndefined();
+    expect(
+      componentSummary({ type: "console", encoding: "json" }, "sinks")
+        .secondary,
+    ).toBeUndefined();
+    expect(
+      componentSummary(
+        {
+          type: "http",
+          uri: "http://127.0.0.1:9/",
+          decoding: { codec: "json" },
+        },
+        "sinks",
+      ).secondary,
+    ).toBeUndefined();
+  });
+
   it("keeps broker addresses intact and shows topics and consumer groups", () => {
     expect(
       componentSummary(

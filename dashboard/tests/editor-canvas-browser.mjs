@@ -158,6 +158,8 @@ async function load({
     mutations: [],
     validations: [],
     validationValid: true,
+    // Findings the synthetic checker answers with, as the server words them.
+    validationDiagnostics: null,
     validationNative: false,
     validationError: false,
     holdValidation: false,
@@ -337,7 +339,8 @@ async function load({
       path === `/configurations/${pipelineId}/validate`
     ) {
       current.validations.push(request.postDataJSON());
-      const valid = current.validationValid;
+      const given = current.validationDiagnostics;
+      const valid = given ? false : current.validationValid;
       const native = current.validationNative;
       const failed = current.validationError;
       if (current.holdValidation)
@@ -357,19 +360,25 @@ async function load({
         deferred: !native,
         deferred_reasons: native ? [] : ["environment variables"],
         placeholders: [],
-        diagnostics: valid
-          ? []
-          : [
-              {
-                severity: "error",
-                section: "transforms",
-                component: "sample",
-                field: "rate",
-                code: "invalid_value",
-                message: "Synthetic configuration rejected",
-              },
-            ],
-        errors: valid ? [] : ["sample: Synthetic configuration rejected"],
+        diagnostics:
+          given ??
+          (valid
+            ? []
+            : [
+                {
+                  severity: "error",
+                  section: "transforms",
+                  component: "sample",
+                  field: "rate",
+                  code: "invalid_value",
+                  message: "Synthetic configuration rejected",
+                },
+              ]),
+        errors: given
+          ? given.map((item) => `${item.component}: ${item.message}`)
+          : valid
+            ? []
+            : ["sample: Synthetic configuration rejected"],
         warnings: [],
         vector_version: "0.58.0",
       });
@@ -1843,7 +1852,115 @@ try {
         }
       },
     );
-    expect(results).toHaveLength(7);
+    await check(
+      "starters leave out what must be chosen and write what Vector reads, and Vector's refusal of a value lands on its step and setting",
+      async () => {
+        await load();
+        // An HTTP Server decodes JSON, and its card says what it does.
+        await button("Add component").click();
+        await choose("http_server", "Sources");
+        await saved((doc) => Object.keys(doc.config.sources).length === 2);
+        expect(fixture.document.config.sources.http_in).toEqual({
+          type: "http_server",
+          address: "127.0.0.1:8088",
+          decoding: { codec: "json" },
+        });
+        const card = page.locator('.react-flow__node[data-id="http_in"]');
+        await expect(card).toContainText("JSON decoding");
+        await expect(card).not.toContainText("encoding");
+        // An HTTP destination has no URL until one is entered: the local
+        // check names it, and Vector never sees an empty one.
+        await closeInspector();
+        await button("Add component").click();
+        await menu()
+          .getByRole("button", { name: "Destinations", exact: true })
+          .click();
+        await menu()
+          .getByRole("textbox", { name: "Search components" })
+          .fill("http");
+        await menu()
+          .locator(".canvas-component-result")
+          .filter({ has: page.locator("code", { hasText: /^http$/ }) })
+          .click();
+        await expect(menu()).toHaveCount(0);
+        await saved((doc) => Object.keys(doc.config.sinks).length === 3);
+        expect(fixture.document.config.sinks.http_out).toEqual({
+          type: "http",
+          inputs: [],
+          encoding: { codec: "json" },
+        });
+        await control().click();
+        const missing = problemsPanel()
+          .locator(".problems-group", { hasText: "http_out" })
+          .locator(".problems-item", { hasText: "Enter uri." });
+        await expect(missing).toBeVisible();
+        await missing.click();
+        await expect(
+          page
+            .locator(".editor-inspector")
+            .getByLabel("Destination URL", { exact: true }),
+        ).toBeFocused();
+        await page.screenshot({
+          path: resolve(output, "starter-destination-1440-light.png"),
+          animations: "disabled",
+        });
+
+        // Vector's own refusal of a value, as the server files it: under the
+        // step it belongs to, beside the setting, never under the pipeline.
+        const refused = baseDocument();
+        refused.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          batch: { max_events: 0 },
+        };
+        const refusal = [
+          {
+            severity: "error",
+            section: "sinks",
+            component: "out_http",
+            field: "batch.max_events",
+            code: "invalid_value",
+            message: "`max_events` must be greater than zero.",
+          },
+        ];
+        await load({ document: refused });
+        fixture.validationDiagnostics = refusal;
+        await control().click();
+        await state("problems");
+        await expect(problemsPanel().locator(".problems-group")).toHaveCount(1);
+        const group = problemsPanel().locator(".problems-group");
+        await expect(group.locator("code").first()).toHaveText("out_http");
+        await expect(group.locator(".problems-location")).toHaveText(
+          "batch.max_events",
+        );
+        await expect(problemsPanel()).not.toContainText("Pipeline settings");
+        await group.locator(".problems-item").click();
+        await expect(page.locator(".editor-inspector")).toContainText(
+          "out_http",
+        );
+        for (const [width, theme] of [
+          [1440, "light"],
+          [1440, "dark"],
+          [390, "light"],
+        ]) {
+          await load({ document: refused, width, height: 900 });
+          fixture.validationDiagnostics = refusal;
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await control().click();
+          await state("problems");
+          await noOverflow(`Vector's refusal on its step ${width} ${theme}`);
+          await page.screenshot({
+            path: resolve(output, `problems-refusal-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    expect(results).toHaveLength(8);
   } else if (nodeActionsOnly) {
     const nodeMenu = () =>
       page.getByRole("menu", { name: "Step: sample", exact: true });
