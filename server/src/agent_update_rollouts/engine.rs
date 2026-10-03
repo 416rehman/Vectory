@@ -59,6 +59,34 @@ fn note_released(rollout: &str) {
     }
 }
 
+/// A rollout with more verified devices than this is advanced no more often
+/// than every `LOOK_SECONDS`: reading every verified device (their check-ins and
+/// the issues opened on them) is the costly part of a step, which runs under the
+/// writer lock, and a rollout that large reacts in seconds, not in ticks.
+const LARGE_ROLLOUT: i64 = 500;
+const LOOK_SECONDS: i64 = 10;
+/// Large rollouts, with the clock of the last time they were advanced.
+static LOOKED: std::sync::Mutex<BTreeMap<String, DateTime<Utc>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+/// Whether a large rollout was advanced a moment ago; when it was not, now is
+/// remembered as the time it was.
+fn looked_recently(rollout: &str, now: DateTime<Utc>) -> bool {
+    let Ok(mut looked) = LOOKED.lock() else {
+        return false;
+    };
+    if looked
+        .get(rollout)
+        .is_some_and(|at| now >= *at && (now - *at).num_seconds() < LOOK_SECONDS)
+    {
+        return true;
+    }
+    if looked.len() > 1000 {
+        looked.clear();
+    }
+    looked.insert(rollout.to_owned(), now);
+    false
+}
+
 pub fn terminal(state: &str) -> bool {
     matches!(
         state,
@@ -348,21 +376,36 @@ pub async fn step(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) ->
 }
 
 /// Ends the targets that fell silent: an offer nobody reported on for an hour
-/// is skipped, a device silent for half an hour after it started applying (or
-/// restarted) failed with `NO_REPORT`, and a device that was revoked is skipped
-/// whatever it was waiting for: its silence says nothing of the build, and it
-/// opens no issue that nothing could ever resolve.
+/// is skipped, and a device silent for half an hour after it started applying
+/// (or restarted) failed with `NO_REPORT`, unless its identity was revoked: its
+/// silence then says nothing of the build, and it opens no issue that nothing
+/// could ever resolve.
+///
+/// Only the targets that wait for a report are read, through their partial
+/// index (the first term of the `WHERE` is the index's own, which is what lets
+/// SQLite use it): the cost follows what is in flight, never the history of
+/// every rollout there has been.
 async fn sweep(conn: &mut SqliteConnection, s: &State, now: DateTime<Utc>) -> Result<()> {
     let at = instant(now);
     let offered_before = instant(now - Duration::minutes(OFFER_SILENCE_MINUTES));
     let applying_before = instant(now - Duration::minutes(APPLY_SILENCE_MINUTES));
-    let rows = sqlx::query(&format!(
-        "{OPEN_TARGET} WHERE (t.state='offered' AND COALESCE(t.released_at,t.updated_at)<=?) OR (t.state IN ('applying','restarted') AND t.updated_at<=?) OR (d.revoked=1 AND t.state IN ('pending','offered','downloading','staged','waiting_for_host','waiting_for_window','applying','restarted')) ORDER BY t.rollout_id,t.device_id"
+    let mut rows = sqlx::query(&format!(
+        "{OPEN_TARGET} WHERE t.state IN ('offered','downloading','staged','applying','restarted') AND ((t.state='offered' AND COALESCE(t.released_at,t.updated_at)<=?) OR (t.state IN ('applying','restarted') AND t.updated_at<=?))"
     ))
     .bind(&offered_before)
     .bind(&applying_before)
     .fetch_all(&mut *conn)
     .await?;
+    rows.sort_by(|a, b| {
+        (
+            a.get::<String, _>("rollout_id"),
+            a.get::<String, _>("device_id"),
+        )
+            .cmp(&(
+                b.get::<String, _>("rollout_id"),
+                b.get::<String, _>("device_id"),
+            ))
+    });
     for row in rows {
         let target = open_target(&row);
         let started = matches!(target.state.as_str(), "applying" | "restarted");
@@ -458,6 +501,9 @@ async fn advance(
     let counts = counts(conn, &rollout.id).await?;
     let n = |state: &str| counts.get(state).copied().unwrap_or(0);
     let settings = &rollout.settings;
+    if n("verified") > LARGE_ROLLOUT && looked_recently(&rollout.id, now) {
+        return Ok(());
+    }
     let hard = n("rolled_back") + n("failed");
     let degraded = if n("verified") > 0 {
         degraded(conn, &rollout.id).await?
@@ -899,4 +945,18 @@ pub async fn pause_rollout(
         .execute(&mut *conn)
         .await?;
     Ok(held)
+}
+
+/// A device's identity was revoked: it never checks in again, so the target it
+/// has that has not ended is skipped, whatever it was waiting for. Its silence
+/// says nothing of the build: nothing counts against the failure threshold, and
+/// no issue opens that nothing could ever resolve. It runs with the revocation,
+/// in its transaction.
+pub async fn device_revoked(conn: &mut SqliteConnection, device: &str) -> Result<()> {
+    sqlx::query("UPDATE agent_update_targets SET state='skipped',updated_at=? WHERE device_id=? AND state IN ('pending','offered','downloading','staged','waiting_for_host','waiting_for_window','applying','restarted')")
+        .bind(instant(Utc::now()))
+        .bind(device)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }

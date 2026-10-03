@@ -29,7 +29,9 @@ use std::collections::BTreeSet;
 
 pub mod detail;
 pub mod engine;
-pub use engine::{Cancelled, cancel_all, cancel_release, cancel_rollout, observe, tick};
+pub use engine::{
+    Cancelled, cancel_all, cancel_release, cancel_rollout, device_revoked, observe, tick,
+};
 
 /// Devices one rollout targets.
 pub const MAX_TARGETS: usize = 10_000;

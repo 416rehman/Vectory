@@ -1331,46 +1331,95 @@ async fn a_revoked_device_ends_what_it_waited_for() {
                 .clone(),
         )
     };
-    revoke(&r.f, &canary).await;
-    revoke(&r.f, &other).await;
-    step(&r.f, at + Duration::seconds(5)).await;
+    // The revocation itself ends what the device was waiting for.
+    revoke_through_the_api(&r.f, &canary).await;
+    revoke_through_the_api(&r.f, &other).await;
     assert_eq!(r.state(&rollout, &canary).await, "skipped");
     assert_eq!(r.state(&rollout, &other).await, "skipped");
     // Nobody is left to update: the rollout ends.
-    step(&r.f, at + Duration::seconds(10)).await;
+    step(&r.f, at + Duration::seconds(5)).await;
     assert_ne!(r.status(&rollout).await, "active");
 }
 
 #[tokio::test]
 async fn a_device_revoked_while_it_updates_is_skipped_and_is_no_failure_of_the_build() {
-    let r = Rig::build(3).await;
+    let r = Rig::build(4).await;
     let refs: Vec<&String> = r.ids.iter().collect();
     let rollout = r
         .start(
             &refs,
-            json!({"canary_size":3,"failure_threshold":0,"observation_seconds":60}),
+            json!({"canary_size":4,"failure_threshold":0,"observation_seconds":60}),
         )
         .await;
     let at = Utc::now();
     step(&r.f, at).await;
-    let [applying, restarted, other] = [&r.ids[0], &r.ids[1], &r.ids[2]];
+    let [applying, restarted, quiet, other] = [&r.ids[0], &r.ids[1], &r.ids[2], &r.ids[3]];
     r.apply(&rollout, applying).await;
     r.apply(&rollout, restarted).await;
     r.new(restarted, &r.about("trial")).await;
     assert_eq!(r.state(&rollout, restarted).await, "restarted");
-    revoke(&r.f, applying).await;
-    revoke(&r.f, restarted).await;
-    step(&r.f, at + Duration::seconds(5)).await;
-    // Its silence says nothing of the build: nothing is counted against the
+    r.apply(&rollout, quiet).await;
+    // Its silence says nothing of the build: nothing is counted against a
     // threshold of none, no issue opens that nothing could ever resolve, and the
     // devices still to answer keep the rollout going.
+    revoke_through_the_api(&r.f, applying).await;
+    revoke_through_the_api(&r.f, restarted).await;
     for device in [applying, restarted] {
         assert_eq!(r.state(&rollout, device).await, "skipped");
         assert_eq!(r.code(&rollout, device).await, None);
     }
+    // A device that was revoked without anything following it is not failed for
+    // its silence either, when the silence rule finds it half an hour later.
+    revoke(&r.f, quiet).await;
+    step(&r.f, at + Duration::minutes(31)).await;
+    assert_eq!(r.state(&rollout, quiet).await, "skipped");
+    assert_eq!(r.code(&rollout, quiet).await, None);
     assert!(open_issues(&r.f).await.is_empty());
     assert_eq!(r.status(&rollout).await, "active");
     assert_eq!(r.state(&rollout, other).await, "offered");
+}
+
+#[tokio::test]
+async fn a_rollout_with_many_verified_devices_is_advanced_every_ten_seconds_not_every_tick() {
+    let r = Rig::build(520).await;
+    let refs: Vec<&String> = r.ids.iter().collect();
+    let rollout = r
+        .start(
+            &refs,
+            json!({"canary_size":100,"failure_threshold":0,"observation_seconds":60}),
+        )
+        .await;
+    let at = Utc::now();
+    step(&r.f, at).await;
+    // Every device verified and running the new build: more than the rollout is
+    // advanced for at every tick.
+    sqlx::query("UPDATE agent_update_targets SET state='verified',stage=COALESCE(stage,0),released_at=COALESCE(released_at,?),verified_at=? WHERE rollout_id=?")
+        .bind(db::now())
+        .bind(db::now())
+        .bind(&rollout)
+        .execute(&r.f.state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.agent_sha256',?,'$.agent_version','0.1.1','$.last_seen',?)")
+        .bind(r.new_sha())
+        .bind(db::now())
+        .execute(&r.f.state.pool)
+        .await
+        .unwrap();
+    step(&r.f, at + Duration::seconds(1)).await;
+    assert_eq!(r.status(&rollout).await, "active");
+    // A device that rolled back is more than a threshold of none allows, but a
+    // step two seconds later does not look yet, and one ten seconds later does.
+    sqlx::query("UPDATE agent_update_targets SET state='rolled_back',code='UNHEALTHY' WHERE rollout_id=? AND device_id=?")
+        .bind(&rollout)
+        .bind(&r.ids[0])
+        .execute(&r.f.state.pool)
+        .await
+        .unwrap();
+    step(&r.f, at + Duration::seconds(3)).await;
+    assert_eq!(r.status(&rollout).await, "active");
+    step(&r.f, at + Duration::seconds(12)).await;
+    assert_eq!(r.status(&rollout).await, "failed");
 }
 
 #[tokio::test]
