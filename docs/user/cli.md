@@ -131,7 +131,7 @@ Pinning a key lets whoever holds its private half run code as root on this host.
 - there is no service manager, or you passed `--service none`: the update step restarts the agent through its service manager;
 - the agent is installed from a package, which the package manager owns;
 - the operating system's updates are not in this release (`Hosts of this kind update by hand in this release.`);
-- the install directory, the update policy's directory or the update step's directory can be changed by an account other than root (an Administrator on Windows);
+- the install directory, the update policy's directory or the update step's directory can be changed by an account other than root (an Administrator on Windows). The message names the directory that failed. For the install directory it says to make that directory and every directory above it writable by root alone, or to install the agent in one that already is (the installer takes `--install-dir` for that), and to run the command again;
 - the server doesn't offer agent updates: `This server doesn't offer agent updates.` Turn them on in **Settings → Agent updates**, or leave out `--updates`.
 
 `setup` finds the key to pin in the server's list of release keys, which it fetches over the connection it already verified, with no token and no client certificate. It computes the SHA-256 of each key itself and pins the one whose fingerprint is the value you passed. The list's own `fingerprint` member is never used for matching, and one that disagrees with its key makes the whole list invalid (`RELEASE_KEY_INVALID`) with nothing pinned. A fingerprint the server doesn't offer fails with the fingerprints it does, in the rows `--ca-sha256` uses, and nothing changes.

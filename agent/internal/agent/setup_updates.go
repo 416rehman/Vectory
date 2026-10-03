@@ -208,9 +208,14 @@ func (r *setupRun) preflightUpdates(plan *updatePlan, choice serviceChoice, plat
 	case "PACKAGE_MANAGED":
 		return r.refuseUpdates("This agent is installed from a package, and the package manager owns its file.", "Leave out "+leave+", and upgrade it with the package manager.")
 	}
-	if problem := untrustedDirectory(filepath.Dir(agentPath)); problem != nil {
-		return r.refuseUpdates("Agent updates need an install directory that only "+updateRootWord()+" can change. "+untrustedDetail(problem)+".",
-			"Install the agent in a directory only "+updateRootWord()+" can write, such as "+DefaultPaths().Binary+", then run the command again. Or leave out "+leave+".")
+	install := filepath.Dir(agentPath)
+	if problem := untrustedDirectory(install); problem != nil {
+		// The fix names the directory the agent is in, whichever directory on its way
+		// failed (the detail says which): making it, and every directory above it,
+		// writable by root alone puts it right.
+		root := updateRootWord()
+		return r.refuseUpdates("Agent updates need an install directory that only "+root+" can change. "+untrustedDetail(problem)+".",
+			"Make "+install+", and every directory above it, writable by "+root+" alone, or install the agent in a directory that already is (the installer takes --install-dir for that), then run the command again. Or leave out "+leave+".")
 	}
 	paths := UpdateLocations()
 	for _, dir := range []string{paths.PolicyDir, paths.StepDir} {
