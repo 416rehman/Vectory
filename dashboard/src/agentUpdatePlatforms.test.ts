@@ -39,7 +39,7 @@ describe("the systems whose hosts take agent updates", () => {
 
   it("name the system and say what to do instead", () => {
     expect(updatesNotInRelease("windows")).toBe(
-      "Agent updates aren't in this release for Windows hosts. They are upgraded on the host with the Upgrade agent command.",
+      "Agent updates aren't in this release for Windows hosts. Upgrade the agent on the host instead; Upgrade agent on the device's page shows how.",
     );
     expect(Object.values(systemName)).toEqual(["Linux", "macOS", "Windows"]);
   });

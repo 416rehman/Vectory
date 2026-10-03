@@ -12,6 +12,7 @@ import {
 } from "./api";
 import {
   agentUpgradeRelease,
+  hasUpgradeCommand,
   runningBuild,
   upgradeCommand,
   upgradeNotes,
@@ -150,7 +151,8 @@ export default function AgentUpgrade({
     settings.on &&
     !optedIn &&
     device.status !== "revoked" &&
-    updatesShip(device.os);
+    updatesShip(device.os) &&
+    hasUpgradeCommand(device.os);
   const noService = device.service_manager === "none";
   const [consent, setConsent] = useState<ConsentForm>(emptyConsent);
   const consentRead = readConsent(consent, key?.fingerprint ?? null);

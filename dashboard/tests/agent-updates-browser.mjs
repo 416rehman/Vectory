@@ -2835,7 +2835,7 @@ try {
       ).toBeVisible();
       await expect(
         page.getByText(
-          "Agent updates aren't in this release for Windows hosts. They are upgraded on the host with the Upgrade agent command.",
+          "Agent updates aren't in this release for Windows hosts. Upgrade the agent on the host instead; Upgrade agent on the device's page shows how.",
         ),
       ).toBeVisible();
       await expect(levelCards()).toHaveCount(0);
