@@ -13,13 +13,18 @@ import (
 // system's. Two variables let a test build a tree it owns and point the update
 // code at it: rootOwnedTrust and updateLocationsOverride. Two more let a test
 // shorten the bounds of a transfer of an agent build, five minutes and twenty
-// seconds without a byte: updateDownloadDeadline and updateDownloadStall. They
-// are declared in code that ships and assigned only in test files, so the agent
-// that ships has no way to relax the check or the bounds.
-// TestProductionAgentContainsNoTestHooks, in cmd/vectory, keeps the same promise
-// for the older seams and for these.
+// seconds without a byte: updateDownloadDeadline and updateDownloadStall. The
+// privileged step adds three: the service manager and the host's service files
+// (updateHostOverride), the clock (updateClockOverride) and the point a test
+// stops the step at (updateFault). They are declared in code that ships and
+// assigned only in test files, so the agent that ships has no way to relax the
+// check or the bounds. TestProductionAgentContainsNoTestHooks, in cmd/vectory,
+// keeps the same promise for the older seams and for these.
 func TestTheUpdateSeamsAreAssignedOnlyByTests(t *testing.T) {
-	seams := map[string]bool{"rootOwnedTrust": true, "updateLocationsOverride": true, "updateDownloadDeadline": true, "updateDownloadStall": true}
+	seams := map[string]bool{
+		"rootOwnedTrust": true, "updateLocationsOverride": true, "updateDownloadDeadline": true, "updateDownloadStall": true,
+		"updateHostOverride": true, "updateClockOverride": true, "updateFault": true,
+	}
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no source to check: %v", err)

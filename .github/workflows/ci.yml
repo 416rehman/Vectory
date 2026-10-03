@@ -578,6 +578,16 @@ jobs:
         timeout-minutes: 10
         working-directory: agent
         run: sudo -E env "PATH=$PATH" GOCACHE=/tmp/vectory-go-cache-root go test -count=1 -run 'RootOwnedChecksOnReal|PosixAccessList' ./internal/agent
+      # The update step's tests that need root (a hard link to a root-owned file,
+      # another account's health record, the probe's switch of account, root as
+      # the service account) skip when unprivileged, so they run once as root.
+      - name: Run the update step's tests as root
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        timeout-minutes: 15
+        working-directory: agent
+        run: |
+          tests="$(grep -h -o '^func Test[A-Za-z0-9_]*' internal/agent/update_*_test.go | grep -v '^func TestNative' | sed 's/func //' | paste -sd '|' -)"
+          sudo -E env "PATH=$PATH" GOCACHE=/tmp/vectory-go-cache-root go test -count=1 -run "^($tests)\$" ./internal/agent
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ !cancelled() }}
         timeout-minutes: 10
