@@ -41,10 +41,10 @@ Open [**Devices**](/#/devices) and select a device.
 | **Running vs desired** | The version the device should run, what it runs now, and each apply step. **View pipeline assignment** opens the deployment that decided it. |
 | **Operational metrics** | Throughput, errors, discarded events and buffers, when the pipeline exports metrics. See [Read history and gaps](#read-history-and-gaps). |
 | **Components** | Each component's events in and out, errors and buffers in the latest sample. At 1100 pixels wide or more it spans the page below the cards; on a narrower screen it is part of **Operational metrics**. |
-| **Recent Vector warnings and errors** | Vector's own warnings and errors from the last hour, redacted on the device, with control characters shown as spaces. |
+| **Recent Vector errors** | Vector's own errors and warnings from the last hour, since it last started or reloaded a configuration, redacted on the device, with control characters shown as spaces. It appears only when there is something to show. |
 | **Activity** | This device's open issues and recent changes. |
 | **About this device** | Platform, Vector and agent versions, mode, groups and the agent settings in force: **Check-in 15 s · applied by Ada on Sep 29 (not saved)**. The line names who applied the settings and when only when the server reports it, and says **(not saved)** for settings never saved under a name. **Upgrade agent** is here. |
-| **Sync, recovery and access** | Pause sync, device recovery and **Revoke device identity…**. |
+| **Sync, recovery and access** | **Review pause policy…** (**Review resume policy…** while sync is paused), device recovery and **Revoke device identity…**. |
 
 A pipeline and agent settings can come from different deployments with different priorities. When something is unknown, the page says so; it never guesses an assignment.
 
@@ -242,7 +242,7 @@ Each issue leads with what it most likely needs next, as a link, and only when t
 
 - An apply issue resolves by itself when the device next applies a version and confirms it.
 - A delivery issue (**Not delivering**) resolves by itself after three clean checks, or when the device stops running that version.
-- **Acknowledge issue** records that you've looked into it, with an optional note. **Reopen issue** brings it back. Both are recorded in the audit log.
+- **Acknowledge issue** records that you've looked into it, with an optional note. **Reopen issue** brings it back and needs a reason. Both are recorded in the audit log with what you wrote.
 - A new failure after an acknowledgement reopens the issue.
 
 ## Retry a failed application

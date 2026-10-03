@@ -482,6 +482,18 @@ a.rollout-fix-link {
   font-size: 12px;
 }
 
+/* Where the page heading stacks, its actions have the full width, and a label
+   that names a pipeline and version ("Open rollback (Edge syslog processing
+   v2)") wraps inside it instead of widening the page. Wider, a button keeps
+   its one line: wrapping would let the heading squeeze it. */
+@media (max-width: 760px) {
+  .rollout-action-row > .button {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+}
 @media (max-width: 720px) {
   .deployment-device-results .pagination {
     gap: 10px;
@@ -531,7 +543,8 @@ a.rollout-fix-link {
   }
   /* A short name keeps the state beside it; a name too long for that takes
      the row and the state drops under it, never off the card. */
-  .rollout-card-title > a {
+  .rollout-card-title > a,
+  .rollout-card-title > .retired-name {
     flex: 1 1 auto;
     min-width: 0;
     overflow-wrap: anywhere;

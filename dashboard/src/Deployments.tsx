@@ -85,6 +85,8 @@ import {
   type DeploymentQuery,
   type DeploymentSort,
 } from "./deploymentRouting";
+import { deviceDisplay } from "./deviceName";
+import { RetiredName } from "./RetiredBadge";
 import {
   deploymentLifecycle,
   describeDeployment,
@@ -98,6 +100,7 @@ import {
   pipelineFixable,
   pickupText,
   progressSegments,
+  releasedNothing,
   rolloutProgress,
   takeRollbackReview,
   statusFilters,
@@ -828,27 +831,34 @@ function DeviceResults({
   useEffect(() => {
     if (correcting) onQuery({ page: lastPage });
   }, [correcting, lastPage, onQuery]);
-  /** The device's name, opening its page; the table cell and phone card share it. */
-  const deviceLink = (t: DeploymentTarget) => (
-    <a
-      className="control-row-title"
-      href={`#/devices/${encodeURIComponent(t.device_id)}`}
-      onClick={(event) => {
-        if (
-          event.button === 0 &&
-          !event.ctrlKey &&
-          !event.metaKey &&
-          !event.shiftKey &&
-          !event.altKey
-        ) {
-          event.preventDefault();
-          navigate(`devices/${encodeURIComponent(t.device_id)}`);
-        }
-      }}
-    >
-      {t.device_name || t.device_id}
-    </a>
-  );
+  /**
+   * The device's name, opening its page, with a badge when the record is a
+   * retired identity; the table cell and phone card share it.
+   */
+  const deviceLink = (t: DeploymentTarget) => {
+    const shown = t.device_name ? deviceDisplay(t.device_name) : null;
+    const link = (
+      <a
+        className="control-row-title"
+        href={`#/devices/${encodeURIComponent(t.device_id)}`}
+        onClick={(event) => {
+          if (
+            event.button === 0 &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            !event.altKey
+          ) {
+            event.preventDefault();
+            navigate(`devices/${encodeURIComponent(t.device_id)}`);
+          }
+        }}
+      >
+        {shown?.name || t.device_id}
+      </a>
+    );
+    return shown?.retired ? <RetiredName>{link}</RetiredName> : link;
+  };
   const states = [
     ...new Set([
       ...targetFilterStates,
@@ -1695,11 +1705,14 @@ function RolloutPage({
     "cancelled",
     "failed",
   ].includes(status);
+  // A schedule cancelled before its start released nothing: there is no
+  // previous version to return to, so the menu doesn't offer it.
   const canRollBack =
     operate &&
     !!deployment?.version_id &&
     candidate &&
-    !deployment?.rolled_back_by;
+    !deployment?.rolled_back_by &&
+    !releasedNothing(deployment);
   const rollbackUnavailable = deployment?.rollback_available === false;
   const unavailableReason =
     (deployment?.target_count || 0) -
@@ -2671,7 +2684,9 @@ function ActionDialog({
               ? "Don't wait for this stage to finish. The release is recorded as early."
               : action === "pause"
                 ? "Stop releasing to more devices. Devices that already received it keep it."
-                : "Stop releasing to more devices. Devices that already received it keep it. Rollback is separate."
+                : deployment?.status === "scheduled"
+                  ? "Nothing has been released. The schedule never starts, and no device changes."
+                  : "Stop releasing to more devices. Devices that already received it keep it. Rollback is separate."
       }
     >
       <div className="modal-body">

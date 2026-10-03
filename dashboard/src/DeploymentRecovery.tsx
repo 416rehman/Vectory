@@ -9,6 +9,7 @@ import {
   type DeploymentReceipt,
   type User,
 } from "./api";
+import { countLabel } from "./countLabel";
 import { deploymentRoute } from "./deploymentRouting";
 import {
   assertDeploymentLookup,
@@ -223,8 +224,8 @@ export function DeploymentRecoveryDialog({
         <strong>{operation.label}</strong>
         {operation.kind === "create" ? (
           <p>
-            {operation.request.expected_device_ids.length} devices · Priority{" "}
-            {operation.request.priority}
+            {countLabel(operation.request.expected_device_ids.length, "device")}{" "}
+            · Priority {operation.request.priority}
           </p>
         ) : operation.review ? (
           <p>

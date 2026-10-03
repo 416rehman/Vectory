@@ -11021,6 +11021,23 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 1000
+              },
+              "resource": {
+                "enum": [
+                  "configuration",
+                  "policy"
+                ],
+                "description": "Compatibility blockers only: the resource the schedule releases."
+              },
+              "device_ids": {
+                "type": "array",
+                "maxItems": 10000,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Compatibility blockers only (FULL_VECTOR_MODE_REQUIRED, VECTOR_VERSION_INCOMPATIBLE): the proposed devices the blocker affects, each once. Other blockers speak for the whole schedule and omit it."
               }
             },
             "required": [

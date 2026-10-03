@@ -266,6 +266,64 @@ func TestSetupEnrollsWithPinAdoptsWorkloadAndResumes(t *testing.T) {
 	}
 }
 
+// An enrolled host keeps the address it enrolled with. A command that names
+// another address stops, says what setup sees and what to run when it is the
+// same server, and mentions the move last. Nothing about the host changes.
+func TestSetupNamesTheEnrolledAddressWhenTheCommandNamesAnother(t *testing.T) {
+	server := newSetupServer(t)
+	options, dir, _ := setupFixture(t)
+	options.Server, options.CASHA256, options.VectorBinary = server.url, server.pin, fakeVector(t, VectorVersion)
+	options.Token = func() (string, error) { return "synthetic-setup-token", nil }
+	if first, err := Setup(context.Background(), options); err != nil || !first.OK {
+		t.Fatal(first, err)
+	}
+	enrolledWith, err := LoadSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := server.url[strings.LastIndex(server.url, ":")+1:]
+	options.CASHA256 = ""
+	options.Token = func() (string, error) { t.Fatal("an enrolled host asked for a token"); return "", nil }
+
+	// The same listener under another name is another address.
+	other := "https://localhost:" + port
+	options.Server = other
+	result, err := Setup(context.Background(), options)
+	if err == nil || stepStatus(result, "server") != "fail" {
+		t.Fatal("another address was accepted", result, err)
+	}
+	step := result.Steps[len(result.Steps)-1]
+	if want := "This host is enrolled with " + server.url + "; this command names " + other + "."; step.Detail != want {
+		t.Fatalf("setup should say what it sees first:\n%s\nwant:\n%s", step.Detail, want)
+	}
+	rerun := strings.Index(step.Fix, "If it is the same server, run the command again with `--server "+server.url+"`.")
+	move := strings.Index(step.Fix, "To move this host to another server, run `vectory unenroll`, revoke the old device in the dashboard, then run setup again.")
+	if rerun != 0 || move <= rerun {
+		t.Fatalf("the rerun comes first and the move last: %q", step.Fix)
+	}
+	if strings.Contains(step.Detail, "unenroll") {
+		t.Fatalf("the first thing setup says must not be the move: %q", step.Detail)
+	}
+
+	// An address that can't be used is named as such, with the same way out.
+	options.Server = "http://" + strings.TrimPrefix(server.url, "https://")
+	result, err = Setup(context.Background(), options)
+	step = result.Steps[len(result.Steps)-1]
+	if err == nil || !strings.HasPrefix(step.Detail, "This host is enrolled with "+server.url+"; this command's --server isn't an HTTPS address") || !strings.Contains(step.Fix, "`--server "+server.url+"`") {
+		t.Fatal("an unusable address wasn't explained", step, err)
+	}
+
+	// Another spelling of the same origin is the same address.
+	options.Server = server.url + "/"
+	if again, err := Setup(context.Background(), options); err != nil || !again.OK {
+		t.Fatal(again, err)
+	}
+	after, err := LoadSettings(dir)
+	if err != nil || after.Server != enrolledWith.Server || server.enrolls.Load() != 1 {
+		t.Fatalf("the enrolled host changed: %+v %v enrollments=%d", after, err, server.enrolls.Load())
+	}
+}
+
 func TestSetupFailsEarlyWithoutChangesAndExplains(t *testing.T) {
 	server := newSetupServer(t)
 	options, dir, _ := setupFixture(t)

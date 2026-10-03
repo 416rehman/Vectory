@@ -36,7 +36,7 @@ The target set is every device you selected, plus the members of every group you
 | **Only the selected devices** | Fixed when you deploy. | A controlled release to a reviewed list. |
 | **Also include future group members** | Follows group membership. New members get the version too. | Groups whose new devices should inherit it. |
 
-Scheduled deployments always use a fixed list.
+Scheduled deployments always use a fixed list. A group needs at least one device when you create the deployment, even with **Also include future group members**: the dashboard doesn't offer an empty selection yet.
 
 The review also blocks devices that can't run the version, and says why:
 
@@ -248,7 +248,7 @@ The Overview's **Needs you** lists what still needs a person, most urgent first:
 
 Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 devices applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering**, is named apart (**2 of 3 devices applied · 1 not delivering**) and doesn't count as applied. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
 
-Before a schedule starts, **Update scheduled devices** compares its saved device list with current group membership. Review who is added and removed, then confirm. If anything changes while you review, refresh the review and confirm again.
+Before a schedule starts, **Review scheduled devices** on its page compares its saved device list with current group membership. Review who is added and removed, then choose **Update scheduled devices**. If a device can't take the version, for example a restricted device when the version needs full mode, the review names it and **Update scheduled devices** stays unavailable. If anything changes while you review, refresh the review and confirm again.
 
 ## Pause, cancel and remove
 
@@ -258,7 +258,7 @@ A rollout's **Stop rollout** menu (**Roll back or remove** once it finished) hol
 | --- | --- |
 | **Pause** | Stops releasing to more devices; resume later. Devices already updated keep the version. |
 | **Cancel** | Stops releasing for good. Devices already updated keep the version. A schedule cancelled before it starts never starts. |
-| **Roll back** | Returns the devices it released to their previous version. See [Roll back deliberately](#roll-back-deliberately). |
+| **Roll back** | Returns the devices it released to their previous version. A schedule cancelled before it started released nothing, so it doesn't offer it. See [Roll back deliberately](#roll-back-deliberately). |
 | **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
 | **Pause configuration sync** (agent settings) | Devices keep their current configuration and stop applying new versions. |
 | `vectory pause` on a device | The same, set by the host. Only the host can clear it. |
@@ -300,5 +300,7 @@ A canary that's still running rolls back in the same step: confirming stops the 
 Each device returns to the version it ran before this deployment first reached it, even if other deployments held it in between. When devices would return to different versions, the review names each device and its version. Deploy each version to its own devices.
 
 Devices that ran their own local configuration before this deployment have nothing to roll back to. For them, **Remove assignment** returns them to that configuration.
+
+A schedule cancelled before it started released nothing, so its page doesn't offer **Roll back**. A review of any deployment that released nothing says **Nothing was released, so there is nothing to roll back.**
 
 After a failed attempt, fix the cause, then use **Retry application** on the device or deploy a corrected version. A device doesn't retry a failed version by itself, so it can't restart Vector in a loop. Retrying one device doesn't restart a canary that stopped; deploy again with the rollout you want.

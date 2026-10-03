@@ -1369,6 +1369,73 @@ try {
       }
     },
   );
+  await check(
+    "A rollout that released nothing says so in the server's words, with no restore story and nothing to confirm",
+    async () => {
+      const sentence =
+        "Nothing was released, so there is nothing to roll back.";
+      for (const [width, theme] of [
+        [899, "light"],
+        [390, "dark"],
+      ]) {
+        const f = fixture({
+          preview: preview({
+            source_status: "cancelled",
+            previous_version_id: null,
+            previous_version_number: null,
+            previous_configuration_id: null,
+            previous_configuration_name: null,
+            eligible_devices: [],
+            excluded_devices: [
+              {
+                device_id: id(1),
+                device_name: "Synthetic live alpha",
+                reason: "not_released",
+              },
+            ],
+            blockers: [{ code: "NOTHING_RELEASED", reason: sentence }],
+            ready: false,
+          }),
+        });
+        const app = await start(f, { width, theme });
+        try {
+          const { page } = app;
+          await begin(page);
+          await expect(review(page)).toContainText("Nothing to roll back");
+          await expect(review(page)).toContainText(sentence);
+          await expect(review(page)).not.toContainText("Restores");
+          await expect(
+            review(page).getByRole("list", { name: "What changes" }),
+          ).toHaveCount(0);
+          await expect(
+            review(page).getByRole("button", {
+              name: "Roll back",
+              exact: true,
+            }),
+          ).toBeDisabled();
+          const axe = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            width,
+            theme,
+            view: "nothing released",
+            violations: axe.violations.map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              nodes: v.nodes.map((n) => n.target),
+            })),
+          });
+          expect(axe.violations).toEqual([]);
+          const file = `rollback-nothing-released-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          expect(f.rollbacks).toEqual([]);
+          await clean(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -1378,9 +1445,9 @@ try {
     scope:
       "Actual App with intercepted synthetic rollback preview, commit and lookup. No live API, native transition or agent activation executed.",
     passed:
-      results.length === 9 &&
+      results.length === 10 &&
       results.every((r) => r.passed) &&
-      accessibility.length === 4 &&
+      accessibility.length === 6 &&
       accessibility.every((s) => !s.violations.length),
     results,
     accessibility,

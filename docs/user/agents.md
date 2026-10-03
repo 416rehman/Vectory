@@ -141,6 +141,8 @@ On Linux and macOS, choose **Upgrade agent** on the device page. If the device a
 
 The command passes `--state-dir` when the device keeps its state elsewhere, and `--service none` when nothing keeps its agent running. Without a service, setup says to stop `vectory run` and start it again on the new build. If the agent is installed outside `/usr/local/bin`, add `--install-dir` with its directory.
 
+A host keeps the address it enrolled with. If the command names another address, setup stops before it changes anything and prints the address the host is enrolled with. If it's the same server, run the command again with `--server` set to that address. Moving a host to another server is a separate step: run `vectory unenroll`, revoke the old device in the dashboard, then run setup again.
+
 To upgrade by hand instead (on Windows, the only way), open **By hand** in the same dialog:
 
 <!-- steps -->
@@ -265,6 +267,8 @@ Use recovery when a device's credentials are lost or can no longer renew. It cre
 4. **In the dashboard:** find the new device identity, add it back to its groups and deploy its pipeline. Recovery keeps the files on the host but not groups or assignments.
 
 If the server refuses the token because it expired, was revoked or was mistyped, run the command again with a new one. If the connection dropped after the command sent its request, run it again with the same token: it finishes the request it started, and a different token is refused until it does.
+
+The old identity stays in **Devices → Status → Revoked**, in rollout results and in the audit log, under the name the device had and with a **Retired identity** badge. Its record keeps its history; the new identity has the name now.
 
 Delete any downloaded token file afterwards. If creating the token was interrupted, see [If a request is interrupted](interrupted-requests.md).
 

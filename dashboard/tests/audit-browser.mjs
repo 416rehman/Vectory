@@ -105,6 +105,9 @@ const event = (number) => ({
   target_kind: number % 2 ? "configuration" : "issue",
   target_name: `Synthetic ${number < 25 ? "Alpha" : "Beta"} ${number}`,
   device_id: id(number % 2 ? 800 : 801),
+  // The server names a device by its current name; a device that no longer
+  // exists has none.
+  device_name: number % 2 ? "Synthetic edge 800" : null,
   outcome: number % 7 ? "success" : "denied",
   created_at: "2026-09-26T12:00:00Z",
   request_id: `synthetic-request-${number}`,
@@ -878,6 +881,114 @@ try {
         expect(
           f.state.calls.filter((c) => c.method !== "GET").map((c) => c.path),
         ).toEqual(["/login"]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "the detail names the device an event is about, and falls back to its ID when the server gives no name",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.render();
+        // Event 3 is about a device the server names; event 2 about one it does not.
+        await f.page
+          .getByRole("link", { name: "Pipeline published", exact: true })
+          .first()
+          .click();
+        const dialog = f.page.getByRole("dialog", { name: "Event details" });
+        const named = dialog.getByRole("link", {
+          name: "Synthetic edge 800",
+          exact: true,
+        });
+        await expect(named).toHaveAttribute("href", `#/devices/${id(800)}`);
+        await expect(dialog).not.toContainText(id(800));
+        await f.page.keyboard.press("Escape");
+        await f.page
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
+          .first()
+          .click();
+        await expect(
+          dialog.getByRole("link", { name: id(801), exact: true }),
+        ).toHaveAttribute("href", `#/devices/${id(801)}`);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "a retired identity's events show the device's own name with a badge, in the list, on a phone and in the detail",
+    async () => {
+      const f = await fixture();
+      try {
+        // What a recovery stores: the old record keeps its name with its own
+        // id appended, so the new identity can take the name.
+        const stored = `edge-nyc-01#retired-${id(60)}`;
+        f.state.records = [
+          {
+            ...event(2),
+            action: "device.revoke",
+            target: stored,
+            target_id: id(60),
+            target_kind: "device",
+            target_name: stored,
+            device_id: id(60),
+          },
+          event(3),
+        ];
+        await f.render();
+        const row = f.page.locator(".audit-table tbody tr").first();
+        await expect(row.locator(".audit-target")).toContainText("edge-nyc-01");
+        await expect(row.locator(".audit-target a")).toHaveText("edge-nyc-01");
+        await expect(row.locator(".audit-target")).toContainText(
+          "Retired identity",
+        );
+        await expect(f.page.locator(".audit-table")).not.toContainText(
+          "#retired-",
+        );
+        for (const [width, theme] of [
+          [1280, "light"],
+          [1280, "dark"],
+          [390, "light"],
+          [390, "dark"],
+        ]) {
+          await f.page.setViewportSize({ width, height: 960 });
+          await f.page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await expect(f.page.locator("body")).not.toContainText("#retired-");
+          await expect(
+            f.page.getByText("Retired identity", { exact: true }).first(),
+          ).toBeVisible();
+          expect(
+            await f.page.evaluate(
+              () => document.documentElement.scrollWidth <= window.innerWidth,
+            ),
+          ).toBe(true);
+          await f.page.screenshot({
+            path: resolve(output, `audit-retired-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+        await f.page.setViewportSize({ width: 1280, height: 960 });
+        await f.page
+          .getByRole("link", { name: "Device access revoked", exact: true })
+          .first()
+          .click();
+        const dialog = f.page.getByRole("dialog", { name: "Event details" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText("edge-nyc-01");
+        await expect(dialog).toContainText("Retired identity");
+        await expect(dialog.getByText("Target", { exact: true })).toBeVisible();
+        const axe = await new AxeBuilder({ page: f.page }).analyze();
+        accessibility.push({
+          width: 1280,
+          theme: "dark",
+          view: "retired detail",
+          violations: axe.violations,
+        });
+        expect(axe.violations).toEqual([]);
       } finally {
         await f.close();
       }

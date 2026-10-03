@@ -53,6 +53,8 @@ import {
   type InventoryQuery,
 } from "./deviceInventory";
 import { useInventory } from "./useInventory";
+import { deviceDisplay, deviceLabel } from "./deviceName";
+import { RetiredBadge, RetiredName } from "./RetiredBadge";
 import "./devices.css";
 import type { Notify } from "./toast";
 
@@ -341,7 +343,7 @@ export default function DeviceList({
   const now = Date.now();
   const checkbox = (device: Device) => (
     <input
-      aria-label={`Select ${device.name}`}
+      aria-label={`Select ${deviceLabel(device.name)}`}
       type="checkbox"
       disabled={device.status === "revoked" || stale || settling}
       checked={selection.ids.has(device.id)}
@@ -378,17 +380,23 @@ export default function DeviceList({
       header: "Device",
       width: "22%",
       sortable: true,
-      cell: (device) => (
-        <span className="device-name-cell">
+      cell: (device) => {
+        const shown = deviceDisplay(device.name);
+        const link = (
           <a
             className="device-name"
             href={`#/devices/${encodeURIComponent(device.id)}`}
           >
-            {device.name}
+            {shown.name}
           </a>
-          <small>{platform(device)}</small>
-        </span>
-      ),
+        );
+        return (
+          <span className="device-name-cell">
+            {shown.retired ? <RetiredName>{link}</RetiredName> : link}
+            <small>{platform(device)}</small>
+          </span>
+        );
+      },
     },
     {
       id: "status",
@@ -712,7 +720,7 @@ export default function DeviceList({
                     }
               }
               mobileCard={(device) => ({
-                title: device.name,
+                title: deviceDisplay(device.name).name,
                 href: `#/devices/${encodeURIComponent(device.id)}`,
                 leading: operate ? checkbox(device) : undefined,
                 status: (
@@ -731,6 +739,9 @@ export default function DeviceList({
                     "Never connected"
                   ),
                   flowText(device, now),
+                  deviceDisplay(device.name).retired ? (
+                    <RetiredBadge key="retired" />
+                  ) : null,
                 ],
               })}
               empty={

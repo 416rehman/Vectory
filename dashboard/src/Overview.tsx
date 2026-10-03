@@ -1229,6 +1229,10 @@ function Rollouts({
             const starts = rollout.scheduled_at
               ? Date.parse(rollout.scheduled_at)
               : NaN;
+            // Devices that left it (revoked, or moved to another assignment)
+            // stay in history but are no longer counted.
+            const following =
+              rollout.target_count - (rollout.state_counts.removed || 0);
             return (
               <li key={rollout.id}>
                 <a
@@ -1251,9 +1255,11 @@ function Rollouts({
                           ? `Starts in ${duration(starts - now)}`
                           : "Starting now"
                         : "Scheduled"}
-                      {rollout.target_count
-                        ? ` · ${countLabel(rollout.target_count, "device")}`
-                        : ""}
+                      {following > 0
+                        ? ` · ${countLabel(following, "device")}`
+                        : rollout.target_count > 0
+                          ? " · No devices follow this now"
+                          : ""}
                       {Number.isFinite(starts) && (
                         <span className="sr-only">
                           {" "}
@@ -1270,7 +1276,7 @@ function Rollouts({
                         label="Device progress"
                       />
                       <span className="overview-rollout-meta">
-                        {progress.total
+                        {rollout.target_count > 0
                           ? deploymentCounts(rollout).sentence
                           : "No devices targeted yet"}
                       </span>

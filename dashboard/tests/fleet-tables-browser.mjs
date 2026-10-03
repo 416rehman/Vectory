@@ -124,7 +124,7 @@ const tokens = [
   },
 ];
 let context, page, state;
-async function load(name, props = {}) {
+async function load(name, props = {}, seed = {}) {
   if (context) await context.close();
   context = await browser.newContext({
     viewport: { width: 1280, height: 960 },
@@ -142,8 +142,16 @@ async function load(name, props = {}) {
     writes: [],
     previews: [],
     failDevices: false,
+    refreshProposed: 3,
+    refreshBlockers: [],
+    history: [],
+    devices,
+    ...seed,
   };
-  const replies = fleetReplies({ devices, groups: () => state.groups });
+  const replies = fleetReplies({
+    devices: state.devices,
+    groups: () => state.groups,
+  });
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url());
@@ -166,7 +174,7 @@ async function load(name, props = {}) {
         });
       if (await fulfillFleetRead(replies, route)) return;
       // Add device still lists the fleet once to know which devices are new.
-      if (path === "/devices") return reply(devices);
+      if (path === "/devices") return reply(state.devices);
       if (path === "/groups") return reply(state.groups);
       if (path === "/policies") return reply(policies);
       if (path === "/tokens") return reply(tokens);
@@ -227,16 +235,16 @@ async function load(name, props = {}) {
         source_status: "scheduled",
         resource: "configuration",
         scheduled_at: "2026-10-01T12:00:00Z",
-        ready: true,
+        ready: state.refreshBlockers.length === 0,
         review_token: "b".repeat(64),
         saved_devices: devices
           .slice(0, 1)
           .map(({ id, name, status }) => ({ id, name, status })),
         devices: devices
-          .slice(0, 3)
+          .slice(0, state.refreshProposed)
           .map(({ id, name, status }) => ({ id, name, status })),
         warnings: [],
-        blockers: [],
+        blockers: state.refreshBlockers,
       });
     if (method === "POST" && path === "/groups") {
       const group = { id: id(1999), revision: 1, ...body };
@@ -299,7 +307,12 @@ async function load(name, props = {}) {
     // Agent settings also lists settings that were applied without saving.
     if (method === "GET" && path === "/deployments/history")
       return route.fulfill({
-        json: { items: [], total: 0, page: 1, page_size: 50 },
+        json: {
+          items: state.history,
+          total: state.history.length,
+          page: 1,
+          page_size: 50,
+        },
       });
     // Add device lists the last day's enrollment attempts.
     if (method === "GET" && path === "/agent-install/activity")
@@ -308,7 +321,7 @@ async function load(name, props = {}) {
       });
     throw Error(`Unexpected synthetic request ${method} ${path}`);
   });
-  await page.goto(origin + "/__fleet-tables");
+  await page.goto(origin + "/__fleet-tables" + (seed.hash || ""));
   await page.waitForFunction(() => window.ready);
   await page.evaluate(({ name, props }) => window.mount(name, props), {
     name,
@@ -672,6 +685,148 @@ try {
     },
   );
   await check(
+    "a retired identity in the Devices list keeps the device's own name and carries a badge",
+    async () => {
+      // What a recovery stores: the old record keeps its name with its own
+      // id appended, so the new identity can take the name.
+      const retired = {
+        ...devices[1],
+        id: id(500),
+        name: `edge-nyc-01#retired-${id(500)}`,
+        status: "revoked",
+      };
+      for (const width of [1280, 390])
+        for (const theme of ["light", "dark"]) {
+          await load(
+            "devices",
+            {},
+            {
+              devices: [devices[0], retired],
+              hash: "#/devices?status=revoked",
+            },
+          );
+          await page.setViewportSize({ width, height: 900 });
+          await page.evaluate(
+            (t) => (document.documentElement.dataset.theme = t),
+            theme,
+          );
+          const list =
+            width < 640
+              ? page.getByRole("list", { name: "Devices", exact: true })
+              : rows("Devices");
+          await expect(
+            list.getByRole("link", { name: "edge-nyc-01", exact: true }),
+          ).toBeVisible();
+          await expect(list).toContainText("Retired identity");
+          await expect(list).not.toContainText("#retired-");
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const audit = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            theme,
+            view: `retired-identity-${width}`,
+            violations: audit.violations.map((v) => v.id),
+          });
+          expect(audit.violations).toEqual([]);
+          await page.screenshot({
+            path: resolve(output, `devices-retired-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      expect(state.writes).toEqual([]);
+    },
+  );
+  await check(
+    "agent settings applied without saving list every deployment that applies the same values",
+    async () => {
+      const applied = (n, count, policy, by) => ({
+        id: id(9000 + n),
+        name: null,
+        version_id: null,
+        policy,
+        policy_id: null,
+        status: "completed",
+        target_count: count,
+        verified_count: count,
+        state_counts: { verified_applied: count },
+        created_by_name: by,
+        created_at: `2026-09-${20 + n}T10:15:00Z`,
+      });
+      const fast = {
+        heartbeat_seconds: 15,
+        sync_paused: false,
+        telemetry_enabled: true,
+      };
+      // Three devices run the fast values through two deployments; a third
+      // deployment applies other values.
+      const history = [
+        applied(3, 1, fast, "Demo operator"),
+        applied(
+          2,
+          4,
+          {
+            heartbeat_seconds: 300,
+            sync_paused: true,
+            telemetry_enabled: false,
+          },
+          "Demo operator",
+        ),
+        applied(1, 2, fast, "Demo operator"),
+      ];
+      for (const width of [1280, 390])
+        for (const theme of ["light", "dark"]) {
+          await load("policies", {}, { history });
+          await page.setViewportSize({ width, height: 900 });
+          await page.evaluate(
+            (t) => (document.documentElement.dataset.theme = t),
+            theme,
+          );
+          const card = page.getByRole("region", {
+            name: "Applied without saving",
+            exact: true,
+          });
+          await expect(card.getByRole("listitem")).toHaveCount(2);
+          const fastEntry = card.getByRole("listitem").first();
+          await expect(fastEntry).toContainText("Check-ins every 15 s");
+          await expect(
+            fastEntry.getByRole("link", { name: "Applied to 1 device" }),
+          ).toHaveAttribute("href", `#/deployments/${id(9003)}?page=1`);
+          await expect(
+            fastEntry.getByRole("link", { name: "Applied to 2 devices" }),
+          ).toHaveAttribute("href", `#/deployments/${id(9001)}?page=1`);
+          await expect(
+            fastEntry.getByRole("button", { name: "Save as settings…" }),
+          ).toHaveCount(1);
+          await expect(card.getByRole("listitem").nth(1)).toContainText(
+            "Applied to 4 devices",
+          );
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const audit = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            theme,
+            view: `unsaved-settings-${width}`,
+            violations: audit.violations.map((v) => v.id),
+          });
+          expect(audit.violations).toEqual([]);
+          await page.screenshot({
+            path: resolve(
+              output,
+              `agent-settings-unsaved-${width}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+        }
+      expect(state.writes).toEqual([]);
+    },
+  );
+  await check(
     "filtering deployment reviews never narrows confirmed target payloads",
     async () => {
       await load("target", {
@@ -719,6 +874,43 @@ try {
       expect(state.writes.at(-1).body.expected_device_ids).toEqual(
         devices.slice(0, 3).map((d) => d.id),
       );
+    },
+  );
+  await check(
+    "a scheduled device review names the devices a blocker affects, as many as fit, and offers no update",
+    async () => {
+      await load("recovery", {
+        deployment: { id: id(8000), status: "scheduled" },
+      });
+      await expect(rows("Scheduled device selection")).toHaveCount(3);
+      state.refreshProposed = 30;
+      state.refreshBlockers = [
+        {
+          code: "FULL_VECTOR_MODE_REQUIRED",
+          reason:
+            "This published configuration requires full Vector mode on the selected device. Only its host operator can enable that mode locally.",
+          resource: "configuration",
+          device_ids: devices.slice(0, 30).map((d) => d.id),
+        },
+      ];
+      await page
+        .getByRole("button", { name: "Refresh review", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("Selection cannot be updated");
+      await expect(dialog).toContainText(
+        "30 affected devices: Device 0000, Device 0001,",
+      );
+      await expect(dialog).toContainText("Device 0024, and 5 more.");
+      await expect(dialog).not.toContainText("Device 0025");
+      await expect(dialog).not.toContainText("does not match this dashboard");
+      await expect(
+        dialog.getByRole("button", {
+          name: "Update scheduled devices",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      expect(state.writes).toEqual([]);
     },
   );
   await check(
