@@ -145,9 +145,9 @@ test("session links and session ids are private", () => {
 
 test("home directories name a person; placeholder accounts do not", () => {
   const found = scanText(
-    "cd /home/jane/src && ls /Users/jane/Library C:\\Users\\jane\\Documents C:\\\\Users\\\\jane\\\\x",
+    "cd /home/jane/src && ls /Users/jane/Library C:\\Users\\jane\\Documents C:\\\\Users\\\\jane\\\\x /mnt/c/Users/jane/x",
   );
-  assert.equal(found.length, 4);
+  assert.equal(found.length, 5);
   assert.ok(found.every((hit) => hit.rule === "home-directory"));
   assert.deepEqual(
     rulesIn("/home/$USER/x, /home/<name>/x, ~/x, %USERPROFILE%"),
