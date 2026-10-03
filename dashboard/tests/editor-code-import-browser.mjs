@@ -713,6 +713,29 @@ try {
   );
 
   await check(
+    "an import error is about its page: it stays while the person does and leaves with the page",
+    async () => {
+      await load({ document: emptyDocument() });
+      await drop([{ name: "array.json", text: "[]" }]);
+      await toast(/object/i);
+      await page.waitForTimeout(1500);
+      await expect(page.locator(".toast")).toHaveCount(1);
+      // Another page of the same app: the failure is not about this one.
+      await page.evaluate(() => {
+        window.location.hash = "#/nowhere";
+      });
+      await expect(
+        page.getByRole("heading", { name: "Page not found", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator(".toast")).toHaveCount(0);
+      // Coming back shows the editor without the old message.
+      await page.goBack();
+      await expect(page.locator(".editor-draft-workspace")).toBeVisible();
+      await expect(page.locator(".toast")).toHaveCount(0);
+    },
+  );
+
+  await check(
     "read-only and archived code stays selectable while file drops cannot edit it",
     async () => {
       for (const options of [{ role: "viewer" }, { archived: true }]) {
@@ -773,7 +796,7 @@ try {
       }
     },
   );
-  expect(results).toHaveLength(9);
+  expect(results).toHaveLength(10);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

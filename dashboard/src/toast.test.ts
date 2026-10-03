@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { notifyToast, refusal, toast, toastSnapshot } from "./toast";
 
-beforeEach(() => toast.clear());
+beforeEach(() => {
+  toast.clear();
+  toast.leavePage("");
+});
 
 describe("toast store", () => {
   it("uses the tone the caller states, whatever the wording", () => {
@@ -22,17 +25,46 @@ describe("toast store", () => {
       duration: 6000,
     });
     notifyToast("Couldn't publish.", { tone: "error" });
-    expect(toastSnapshot()[1]).toMatchObject({ tone: "error", duration: null });
+    expect(toastSnapshot()[1]).toMatchObject({
+      tone: "error",
+      duration: 30000,
+    });
   });
 
-  it("keeps errors until dismissed and confirmations for five seconds", () => {
+  it("keeps a confirmation for five seconds, an error about a page for thirty and one that asks for something until dismissed", () => {
     toast.error("Couldn't load devices.");
     toast.success("Saved.");
-    const [error, success] = toastSnapshot();
-    expect(error.duration).toBeNull();
+    toast.error("The agent is out of date.", {
+      action: { label: "Update agents", href: "#/devices" },
+    });
+    const [error, success, asking] = toastSnapshot();
+    expect(error.duration).toBe(30000);
     expect(success.duration).toBe(5000);
+    expect(asking.duration).toBeNull();
     toast.info("Custom", { duration: 1000 });
     expect(toastSnapshot()[2].duration).toBe(1000);
+  });
+
+  it("takes an error about a page away when the person leaves it", () => {
+    toast.leavePage("configurations/a");
+    toast.error("Import failed: unexpected token.");
+    toast.error("Couldn't save.", { action: { label: "Retry", onClick() {} } });
+    toast.success("Saved.");
+    // Moving within the page, or to the same page again, leaves them be.
+    toast.leavePage("configurations/a");
+    expect(toastSnapshot()).toHaveLength(3);
+    toast.leavePage("configurations/b");
+    expect(toastSnapshot().map((item) => item.message)).toEqual([
+      "Couldn't save.",
+      "Saved.",
+    ]);
+    // An error raised on the new page belongs to it.
+    toast.error("Cannot format: bad input.");
+    toast.leavePage("devices");
+    expect(toastSnapshot().map((item) => item.message)).toEqual([
+      "Couldn't save.",
+      "Saved.",
+    ]);
   });
 
   it("replaces an identical visible message instead of stacking it", () => {
@@ -61,6 +93,33 @@ describe("toast store", () => {
       "Second failure.",
       "Third failure.",
       "Fourth failure.",
+    ]);
+  });
+
+  it("lets an error that asks for something outlast the ones that dismiss themselves", () => {
+    const action = { label: "Retry", onClick() {} };
+    toast.error("Couldn't save.", { action });
+    toast.error("Import failed.");
+    toast.success("One.");
+    toast.error("Cannot format.");
+    expect(toastSnapshot().map((item) => item.message)).toEqual([
+      "Couldn't save.",
+      "Import failed.",
+      "Cannot format.",
+    ]);
+    toast.error("Second.", { action });
+    toast.error("Third.", { action });
+    // Three that ask for something are all that stays; the newest shows.
+    expect(toastSnapshot().map((item) => item.message)).toEqual([
+      "Couldn't save.",
+      "Second.",
+      "Third.",
+    ]);
+    toast.error("Fourth.", { action });
+    expect(toastSnapshot().map((item) => item.message)).toEqual([
+      "Second.",
+      "Third.",
+      "Fourth.",
     ]);
   });
 

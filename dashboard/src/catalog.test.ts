@@ -352,8 +352,22 @@ describe("guided pipeline editing", () => {
     expect(pipelineIssues(config)).toContainEqual({
       id: "http_out",
       message:
-        "http_out: enter a valid token secret reference in Authentication.",
+        "http_out.auth.token: enter a valid token secret reference in Authentication.",
     });
+    // One sentence for the one missing setting, not that and "Enter auth.token."
+    expect(
+      pipelineIssues(config).filter((issue) => /token/.test(issue.message)),
+    ).toHaveLength(1);
+    config.sinks.http_out.auth = { strategy: "basic" };
+    expect(
+      pipelineIssues(config)
+        .filter((issue) => issue.id === "http_out")
+        .map((issue) => issue.message),
+    ).toEqual([
+      "http_out.auth.user: enter a valid username secret reference in Authentication.",
+      "http_out.auth.password: enter a valid password secret reference in Authentication.",
+    ]);
+    config.sinks.http_out.auth = { strategy: "bearer" };
     config.sinks.http_out.auth.token = "plaintext-not-a-reference";
     expect(pipelineIssues(config)).toEqual([
       {

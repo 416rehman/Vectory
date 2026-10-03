@@ -53,17 +53,23 @@ export function usePendingField(dirty: boolean) {
 }
 export function usePendingScope() {
   const parent = useContext(PendingFieldsContext),
-    fields = useRef(new Set<string>());
+    fields = useRef(new Set<string>()),
+    // Whether anything under this scope is unapplied, for what must react to
+    // it clearing (the set itself changes without a render).
+    [pending, setPending] = useState(false);
   const report = useCallback(
     (id: string, dirty: boolean) => {
       if (dirty) fields.current.add(id);
       else fields.current.delete(id);
+      setPending(fields.current.size > 0);
       parent(id, dirty);
     },
     [parent],
   );
-  return { fields, report };
+  return { fields, report, pending };
 }
+/** A message that refuses an action until unapplied edits are dealt with. */
+export const PENDING_REFUSAL = "Apply or discard pending";
 const asText = (value: any) =>
   typeof value === "string" || typeof value === "number" ? String(value) : "";
 const json = (value: any) =>

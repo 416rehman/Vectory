@@ -159,6 +159,9 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     if !instance_metadata_transforms(config).is_empty() {
         reasons.insert(INSTANCE_METADATA_ON_DEVICES.into());
     }
+    if !file_remap_transforms(config).is_empty() {
+        reasons.insert(REMAP_FILE_ON_DEVICES.into());
+    }
     if let Some(sources) = config["sources"].as_object() {
         for source in sources.values() {
             let component = source["type"].as_str().unwrap_or("");
@@ -668,6 +671,33 @@ pub const INSTANCE_METADATA_ON_DEVICES: &str =
 const INSTANCE_METADATA_STAND_IN: &str =
     "asks an AWS instance metadata service, so only a device checks it";
 
+/// The `deferred_reasons` value for a draft with a remap that loads its VRL
+/// program from a file (`file` or `files`). Vector opens the file when it
+/// builds the remap, which `vector test` does, and quotes the program's lines
+/// in its errors. The server never reads a path an author names: a device
+/// reads its own files.
+pub const REMAP_FILE_ON_DEVICES: &str = "A VRL program in a file is read on devices";
+
+/// Why a remap that loads its program from a file is replaced by a stand-in;
+/// the note reads "This step ...".
+const REMAP_FILE_STAND_IN: &str = "loads its VRL program from a file on each device";
+
+/// How many of a remap's three ways to name its program are set. Vector wants
+/// exactly one of them.
+fn remap_program_sources(remap: &Value) -> usize {
+    ["source", "file", "files"]
+        .iter()
+        .filter(|key| !remap[**key].is_null())
+        .count()
+}
+
+/// Whether a remap's program is in a file: `file` or `files` and no other way
+/// to name it. A remap that names its program twice never reaches a file, and
+/// Vector says so itself, so the check lets it.
+fn loads_program_from_file(remap: &Value) -> bool {
+    remap_program_sources(remap) == 1 && (!remap["file"].is_null() || !remap["files"].is_null())
+}
+
 /// A component's `type` as the checked copy reads it, once references are
 /// replaced the way `static_candidate` replaces them: `${KIND:-lua}` is `lua`.
 fn resolved_type(kind: &Value) -> Option<String> {
@@ -700,6 +730,21 @@ pub fn instance_metadata_transforms(config: &Value) -> Vec<String> {
     transforms_of_type(config, "aws_ec2_metadata")
 }
 
+/// The IDs of the remaps that load their VRL program from a file, in the copy
+/// Vector would read.
+pub fn file_remap_transforms(config: &Value) -> Vec<String> {
+    config["transforms"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, transform)| {
+            resolved_type(&transform["type"]).as_deref() == Some("remap")
+                && loads_program_from_file(transform)
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 /// The IDs of the enrichment tables that read a file: every type but `memory`,
 /// so a type this server does not know counts as one that reads a file.
 pub fn file_enrichment_tables(config: &Value) -> Vec<String> {
@@ -713,9 +758,10 @@ pub fn file_enrichment_tables(config: &Value) -> Vec<String> {
 }
 
 /// The finding for tests the server does not run because the draft has a Lua
-/// step, an enrichment table that reads a file or an AWS instance metadata
-/// step: a device runs them, and the check on devices can include them. It names
-/// every cause the draft has. `None` for any other draft.
+/// step, an enrichment table that reads a file, an AWS instance metadata step
+/// or a remap that loads its program from a file: a device runs them, and the
+/// check on devices can include them. It names every cause the draft has.
+/// `None` for any other draft.
 pub fn tests_on_devices_diagnostic(config: &Value) -> Option<Diagnostic> {
     // The causes in the order they are named: whether the draft has one, what
     // the sentence says of it, and how the sentence ends when it is the only one.
@@ -733,6 +779,11 @@ pub fn tests_on_devices_diagnostic(config: &Value) -> Option<Diagnostic> {
         (
             !instance_metadata_transforms(config).is_empty(),
             "the AWS instance metadata step asks the host's own metadata service",
+            "include it",
+        ),
+        (
+            !file_remap_transforms(config).is_empty(),
+            "a VRL program in a file is read on devices",
             "include it",
         ),
     ]
@@ -968,9 +1019,11 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
                 ))
             } else if section == "transforms"
                 && kind == "remap"
-                && (!component["file"].is_null() || !component["files"].is_null())
+                && loads_program_from_file(component)
             {
-                Some("loads its VRL program from a file on each device".to_owned())
+                // A remap that also names an inline program is left to Vector,
+                // which refuses it before it opens any file.
+                Some(REMAP_FILE_STAND_IN.to_owned())
             } else if reads_a_file(component) {
                 // Compiling these reads the file, and the worker's answer would
                 // describe the worker's files, not the device's.
@@ -1271,6 +1324,7 @@ fn reason_phrase(reasons: &[String]) -> String {
             "VRL access to device resources" => "VRL that reads device resources".into(),
             LUA_ON_DEVICES => "Lua code".into(),
             INSTANCE_METADATA_ON_DEVICES => "the AWS instance metadata step".into(),
+            REMAP_FILE_ON_DEVICES => "local files and paths".into(),
             "native configuration provider" => "the configuration provider".into(),
             "device enrichment data" | ENRICHMENT_ON_DEVICES => "enrichment data files".into(),
             "device-local paths or external code files" => "local files and paths".into(),
@@ -1585,9 +1639,14 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
             "Vector rejected the configuration without a specific message.",
         ));
     }
-    // A Lua or instance metadata step's stand-in is explained by its own reason;
-    // any other stand-in is a device-local file or component.
-    let explained = [lua_transforms(config), instance_metadata_transforms(config)].concat();
+    // A Lua, instance metadata or file-backed remap step's stand-in is explained
+    // by its own reason; any other stand-in is a device-local file or component.
+    let explained = [
+        lua_transforms(config),
+        instance_metadata_transforms(config),
+        file_remap_transforms(config),
+    ]
+    .concat();
     if stubbed.iter().any(|id| !explained.contains(id))
         && !reasons
             .iter()
@@ -2548,8 +2607,9 @@ pub(crate) async fn run_pipeline_tests(
         );
         return Ok(finish(result, vec![], false, false));
     }
-    // Vector runs a Lua step's code, and opens an enrichment table's file, when
-    // it builds them for a test. The worker is not asked: the tests run on devices.
+    // Vector runs a Lua step's code, opens an enrichment table's file and a
+    // remap's program file, and asks an instance metadata service, when it
+    // builds them for a test. The worker is not asked: the tests run on devices.
     if let Some(diagnostic) = tests_on_devices_diagnostic(config) {
         let result = check_result(vec![diagnostic], false, false, reasons, vec![]);
         return Ok(finish(result, vec![], false, false));
@@ -4423,6 +4483,109 @@ mod tests {
         }
     }
 
+    /// A pipeline whose one remap names its program the ways `program` says.
+    fn remap_pipeline(program: Value) -> Value {
+        let mut remap = json!({"type": "remap", "inputs": ["in"]});
+        for (key, value) in program.as_object().unwrap() {
+            remap[key] = value.clone();
+        }
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"norm": remap},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["norm"]}},
+        })
+    }
+
+    #[test]
+    fn a_remap_with_its_program_in_a_file_is_replaced_and_deferred_to_devices() {
+        // Exactly one way to name the program, and it is a file: the step is a
+        // device's to read, in either spelling, with the others unset or null,
+        // and whatever a default reference supplies as its type.
+        for program in [
+            json!({"file": "/etc/vector/normalize.vrl"}),
+            json!({"files": ["/etc/vector/a.vrl", "/etc/vector/b.vrl"]}),
+            json!({"file": "/etc/vector/normalize.vrl", "source": null, "files": null}),
+            json!({"files": [], "file": null}),
+            json!({"type": "${KIND:-remap}", "file": "/etc/vector/normalize.vrl"}),
+        ] {
+            let config = remap_pipeline(program.clone());
+            assert_eq!(file_remap_transforms(&config), vec!["norm"], "{program}");
+            let candidate = static_candidate(&config, |_, _| true);
+            assert_eq!(
+                candidate.stubbed.get("norm").map(String::as_str),
+                Some(REMAP_FILE_STAND_IN),
+                "{program}"
+            );
+            // The path Vector would open is gone from what it is given.
+            assert_eq!(
+                candidate.config["transforms"]["norm"],
+                json!({"type": "remap", "inputs": ["in"], "source": "."}),
+                "{program}"
+            );
+            let reasons = device_context_reasons(&config);
+            assert!(
+                reasons.contains(&REMAP_FILE_ON_DEVICES.to_owned()),
+                "{program}"
+            );
+            let result = check_result(vec![], true, true, reasons, vec![]);
+            assert_eq!(result["deferred"], true, "{program}");
+            assert_eq!(result["vector_validated"], false, "{program}");
+            assert!(
+                result["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|warning| warning
+                        .as_str()
+                        .unwrap()
+                        .starts_with("Each device checks local files and paths")),
+                "{result}"
+            );
+            // Its tests wait for a device, whatever else the draft holds.
+            let diagnostic = tests_on_devices_diagnostic(&config).unwrap();
+            assert_eq!(
+                diagnostic.message,
+                "A VRL program in a file is read on devices, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests.",
+                "{program}"
+            );
+            assert_eq!(diagnostic.code.as_deref(), Some("tests_on_devices"));
+        }
+        assert_eq!(
+            REMAP_FILE_ON_DEVICES,
+            "A VRL program in a file is read on devices"
+        );
+        // Anything else is the worker's: an inline program, no program, and a
+        // remap that names its program twice, which Vector refuses before it
+        // opens a file and which is therefore left to say so itself.
+        for program in [
+            json!({"source": ".x = 1"}),
+            json!({}),
+            json!({"source": null, "file": null, "files": null}),
+            json!({"source": ".x = 1", "file": "/etc/vector/normalize.vrl"}),
+            json!({"source": ".x = 1", "files": ["/etc/vector/a.vrl"]}),
+            json!({"file": "/etc/vector/a.vrl", "files": ["/etc/vector/b.vrl"]}),
+            json!({"source": ".x = 1", "file": "/a.vrl", "files": ["/b.vrl"]}),
+            json!({"source": ".x = 1", "file": "/etc/vector/normalize.vrl", "drop_on_error": false}),
+        ] {
+            let config = remap_pipeline(program.clone());
+            assert!(file_remap_transforms(&config).is_empty(), "{program}");
+            assert!(
+                static_candidate(&config, |_, _| true).stubbed.is_empty(),
+                "{program}"
+            );
+            assert!(
+                !device_context_reasons(&config).contains(&REMAP_FILE_ON_DEVICES.to_owned()),
+                "{program}"
+            );
+            assert!(tests_on_devices_diagnostic(&config).is_none(), "{program}");
+        }
+        // Other steps that carry a `file` are not remaps.
+        let config =
+            json!({"transforms": {"f": {"type": "filter", "inputs": ["in"], "file": "/x"}}});
+        assert!(file_remap_transforms(&config).is_empty());
+        assert!(static_candidate(&config, |_, _| true).stubbed.is_empty());
+    }
+
     #[test]
     fn tests_wait_for_devices_and_name_every_cause_the_draft_has() {
         let causes = [
@@ -4441,10 +4604,16 @@ mod tests {
                 "meta",
                 json!({"type": "aws_ec2_metadata", "inputs": ["in"]}),
             ),
+            (
+                "transforms",
+                "norm",
+                json!({"type": "remap", "inputs": ["in"], "file": "/etc/vector/normalize.vrl"}),
+            ),
         ];
         let lua = "Lua can run any program";
         let tables = "enrichment tables are read on devices";
         let metadata = "the AWS instance metadata step asks the host's own metadata service";
+        let program = "a VRL program in a file is read on devices";
         let ending = "Use Check on devices with Also run the pipeline's tests.";
         // Every subset of the causes, named in one order, with the sentence's
         // ending that fits how many there are.
@@ -4489,6 +4658,30 @@ mod tests {
                     "{lua}, {tables} and {metadata}, so tests that include them run only on devices. {ending}"
                 ),
             ),
+            (
+                0b1000,
+                format!(
+                    "A VRL program in a file is read on devices, so tests that include it run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b1001,
+                format!(
+                    "{lua} and {program}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b1010,
+                format!(
+                    "Enrichment tables are read on devices and {program}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
+            (
+                0b1111,
+                format!(
+                    "{lua}, {tables}, {metadata} and {program}, so tests that include them run only on devices. {ending}"
+                ),
+            ),
         ] {
             let mut config = json!({"transforms": {}, "enrichment_tables": {}});
             for (index, (section, id, component)) in causes.iter().enumerate() {
@@ -4497,7 +4690,7 @@ mod tests {
                 }
             }
             let diagnostic = tests_on_devices_diagnostic(&config).unwrap();
-            assert_eq!(diagnostic.message, expected, "{mask:03b}");
+            assert_eq!(diagnostic.message, expected, "{mask:04b}");
             assert_eq!(diagnostic.severity, "error");
             assert_eq!(diagnostic.section.as_deref(), Some("tests"));
             assert_eq!(diagnostic.code.as_deref(), Some("tests_on_devices"));

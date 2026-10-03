@@ -267,8 +267,104 @@ fn suggestion(found: &str, message: &str) -> Option<String> {
         .map(|(_, choice)| choice.to_owned())
 }
 
+/// A setting's name as Vector writes it: lowercase words joined by `_`.
+fn setting_name(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Keys the path to a setting may pass through. A key with a `.` or a
+/// control character would make the dotted path name something else.
+fn plain_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_IDENTIFIER
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Every path below `value` that ends in the key `word`.
+fn paths_named(value: &Value, word: &str, prefix: &str, depth: usize, out: &mut Vec<String>) {
+    let Some(object) = value.as_object().filter(|_| depth <= 4) else {
+        return;
+    };
+    for (key, child) in object {
+        if !plain_key(key) {
+            continue;
+        }
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        if key == word {
+            out.push(path.clone());
+        }
+        if out.len() < 2 {
+            paths_named(child, word, &path, depth + 1, out);
+        }
+    }
+}
+
+/// The setting a refusal's first word names, as its path in this component's
+/// settings: a key the component has, or the one place below it that carries
+/// that name. A word that names no setting of this component, or names it in
+/// two places, points at nothing; the step is still the right place.
+fn named_setting<'a>(component: &Value, reason: &'a str) -> Option<(String, &'a str)> {
+    let first = reason.split_whitespace().next()?;
+    let word = first.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+    if !setting_name(word) {
+        return None;
+    }
+    if component.get(word).is_some() {
+        return Some((word.to_owned(), word));
+    }
+    let mut found = Vec::new();
+    paths_named(component, word, "", 0, &mut found);
+    (found.len() == 1).then(|| (found.remove(0), word))
+}
+
+/// `Failed to validate sink "http_out": uri must not be empty`: Vector built
+/// the component from valid settings and refused what they say. The line names
+/// the step, and usually in its first word the setting. Without this the
+/// finding belongs to no step and reads as a pipeline-wide problem.
+fn validate_failure(config: &Value, text: &str) -> Option<Diagnostic> {
+    let rest = text.strip_prefix("Failed to validate ")?;
+    let (section, rest) = [
+        ("source \"", "sources"),
+        ("transform \"", "transforms"),
+        ("sink \"", "sinks"),
+        ("enrichment table sink \"", "enrichment_tables"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, section)| rest.strip_prefix(prefix).map(|rest| (section, rest)))?;
+    let (id, reason) = rest.split_once("\": ")?;
+    if !identifier(id) || config[section].get(id).is_none() {
+        return None;
+    }
+    let reason = reason.trim();
+    let mut diagnostic = Diagnostic::error(reason);
+    diagnostic.section = Some(section.into());
+    diagnostic.component = Some(id.into());
+    diagnostic.code = Some("invalid_value".into());
+    if let Some((field, word)) = named_setting(&config[section][id], reason) {
+        // Vector leads with the bare name (`uri must not be empty`) in some
+        // refusals and with a quoted one in others; show it quoted in both.
+        if let Some(tail) = reason.strip_prefix(word) {
+            diagnostic.message = format!("`{word}`{tail}");
+        }
+        diagnostic.field = Some(field);
+    }
+    Some(diagnostic)
+}
+
 /// `x <message>` lines from Vector's "Failed to load" section.
 fn load_error(config: &Value, text: &str) -> Diagnostic {
+    if let Some(diagnostic) = validate_failure(config, text) {
+        return diagnostic;
+    }
     let mut diagnostic = Diagnostic::error(text);
     // `sources.<id>: <reason>`
     for section in ["sources", "transforms", "sinks", "enrichment_tables"] {
@@ -1293,6 +1389,145 @@ mod tests {
             b"",
         );
         assert_eq!(forged[0].component, None);
+    }
+
+    fn validation_failure(config: &Value, line: &str) -> Diagnostic {
+        let output = format!("Failed to load [\"/tmp/.tmpAbC/config.json\"]\n------\nx {line}\n");
+        let mut found = parse_validate(config, output.as_bytes(), b"");
+        assert_eq!(found.len(), 1, "{line}");
+        let diagnostic = found.remove(0);
+        assert!(!diagnostic.to_json().to_string().contains(".tmpAbC"));
+        diagnostic
+    }
+
+    #[test]
+    fn validation_failures_belong_to_their_step_and_setting() {
+        let config = json!({
+            "sources": {"seed": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"keep": {"type": "filter", "inputs": ["seed"], "condition": ""}},
+            "sinks": {
+                "http_out": {"type": "http", "inputs": ["seed"], "uri": "", "encoding": {"codec": "json"}},
+                "out_http": {"type": "http", "inputs": ["seed"], "uri": "http://127.0.0.1:9/", "batch": {"max_events": 0}},
+                "both": {"type": "http", "inputs": ["seed"], "uri": "http://127.0.0.1:9/", "batch": {"max_events": 0}, "buffer": {"type": "memory", "max_events": 0}},
+                "search_out": {"type": "elasticsearch", "inputs": ["seed"], "mode": "bulk"}
+            },
+            "enrichment_tables": {"recent": {"type": "memory", "inputs": ["seed"], "ttl": 0}}
+        });
+        // The refusal as a short message reads, and as Vector 0.58 prints it.
+        for line in [
+            "Failed to validate sink \"http_out\": uri must not be empty",
+            "Failed to validate sink \"http_out\": uri must not be empty, e.g. `https://example.com/endpoint`",
+        ] {
+            let diagnostic = validation_failure(&config, line);
+            assert_eq!(diagnostic.section.as_deref(), Some("sinks"), "{line}");
+            assert_eq!(diagnostic.component.as_deref(), Some("http_out"), "{line}");
+            assert_eq!(diagnostic.field.as_deref(), Some("uri"), "{line}");
+            assert_eq!(diagnostic.code.as_deref(), Some("invalid_value"), "{line}");
+            assert!(diagnostic.message.starts_with("`uri` must not be empty"));
+        }
+        assert_eq!(
+            validation_failure(
+                &config,
+                "Failed to validate sink \"http_out\": uri must not be empty, e.g. `https://example.com/endpoint`"
+            )
+            .message,
+            "`uri` must not be empty, e.g. `https://example.com/endpoint`"
+        );
+        // A setting below the step is named by its path, quoted or not.
+        for (line, message) in [
+            (
+                "Failed to validate sink \"out_http\": max_events must be greater than zero.",
+                "`max_events` must be greater than zero.",
+            ),
+            (
+                "Failed to validate sink \"out_http\": `max_events` must be greater than zero",
+                "`max_events` must be greater than zero",
+            ),
+        ] {
+            let diagnostic = validation_failure(&config, line);
+            assert_eq!(diagnostic.component.as_deref(), Some("out_http"), "{line}");
+            assert_eq!(
+                diagnostic.field.as_deref(),
+                Some("batch.max_events"),
+                "{line}"
+            );
+            assert_eq!(diagnostic.message, message, "{line}");
+        }
+        // The same name in two places points at neither; the step is still right.
+        let both = validation_failure(
+            &config,
+            "Failed to validate sink \"both\": `max_events` must be greater than zero",
+        );
+        assert_eq!(both.component.as_deref(), Some("both"));
+        assert_eq!(both.field, None);
+        // A first word that is no setting of this step points at no field.
+        let endpoints = validation_failure(
+            &config,
+            "Failed to validate sink \"search_out\": Endpoints option must be specified",
+        );
+        assert_eq!(endpoints.section.as_deref(), Some("sinks"));
+        assert_eq!(endpoints.component.as_deref(), Some("search_out"));
+        assert_eq!(endpoints.field, None);
+        assert_eq!(endpoints.message, "Endpoints option must be specified");
+        // Every kind Vector words this way.
+        for (line, section, component, field) in [
+            (
+                "Failed to validate transform \"keep\": condition must not be empty",
+                "transforms",
+                "keep",
+                Some("condition"),
+            ),
+            (
+                "Failed to validate enrichment table sink \"recent\": ttl must be greater than zero",
+                "enrichment_tables",
+                "recent",
+                Some("ttl"),
+            ),
+            (
+                "Failed to validate source \"seed\": format is not supported",
+                "sources",
+                "seed",
+                Some("format"),
+            ),
+        ] {
+            let diagnostic = validation_failure(&config, line);
+            assert_eq!(diagnostic.section.as_deref(), Some(section), "{line}");
+            assert_eq!(diagnostic.component.as_deref(), Some(component), "{line}");
+            assert_eq!(diagnostic.field.as_deref(), field, "{line}");
+        }
+        // A step this draft doesn't have, or one in another section, is not
+        // attributed: the line stays as Vector wrote it.
+        for line in [
+            "Failed to validate sink \"nope\": uri must not be empty",
+            "Failed to validate source \"http_out\": uri must not be empty",
+        ] {
+            let diagnostic = validation_failure(&config, line);
+            assert_eq!(diagnostic.component, None, "{line}");
+            assert_eq!(diagnostic.section, None, "{line}");
+            assert_eq!(diagnostic.message, line);
+        }
+        // What the API re-checks keeps the step and the field.
+        let diagnostic = validation_failure(
+            &config,
+            "Failed to validate sink \"out_http\": max_events must be greater than zero.",
+        );
+        let clean = sanitize(&config, &json!([diagnostic.to_json()])).unwrap();
+        assert_eq!(clean[0]["section"], "sinks");
+        assert_eq!(clean[0]["component"], "out_http");
+        assert_eq!(clean[0]["field"], "batch.max_events");
+    }
+
+    #[test]
+    fn a_path_through_an_odd_key_names_no_field() {
+        let config = json!({
+            "sinks": {"out": {"type": "http", "inputs": [], "headers": {"x.y": {"max_events": 0}}}}
+        });
+        let diagnostic = validation_failure(
+            &config,
+            "Failed to validate sink \"out\": max_events must be greater than zero",
+        );
+        assert_eq!(diagnostic.component.as_deref(), Some("out"));
+        assert_eq!(diagnostic.field, None);
     }
 
     #[test]

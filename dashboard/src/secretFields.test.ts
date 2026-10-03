@@ -620,6 +620,7 @@ describe("where a version's secrets are shown", () => {
     const html = renderToStaticMarkup(
       createElement(PublishReview, {
         config: secretPipeline,
+        variables: [],
         published: {
           id: "version-3",
           number: 3,

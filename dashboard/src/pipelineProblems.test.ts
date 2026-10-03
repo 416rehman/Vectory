@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { APIError } from "./api";
+import { pipelineIssues } from "./catalog";
 import { cleanSummary } from "./ProblemsPanel";
 import {
   applyFix,
@@ -398,6 +399,38 @@ describe("pipeline problems", () => {
     );
   });
 
+  it("says a remap's program file is read on devices once, in a sentence", () => {
+    // The two reasons a remap with a `file` brings read the same to a person.
+    const program: PipelineCheck = {
+      ...check,
+      valid: true,
+      diagnostics: [],
+      deferred_reasons: [
+        "A VRL program in a file is read on devices",
+        "device-local paths or external code files",
+      ],
+    };
+    const verdict = checkVerdict(program, 0);
+    expect(verdict).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks local files and paths before applying it.",
+    );
+    expect(verdict).not.toContain("A VRL program in a file");
+    expect(
+      checkVerdict(
+        {
+          ...program,
+          deferred_reasons: [
+            "Lua runs on devices",
+            "A VRL program in a file is read on devices",
+          ],
+        },
+        0,
+      ),
+    ).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks Lua code and local files and paths before applying it.",
+    );
+  });
+
   it("applies span and line fixes and refuses stale positions", () => {
     const program = '. = parse_nginx_log(.message, "combined")\n.ok = true';
     expect(applyFix(program, check.diagnostics![0] as any)).toBe(
@@ -464,6 +497,42 @@ describe("pipeline problems", () => {
       message: "Must be at least 1.",
     });
     expect(local[1]).toMatchObject({ field: "source", code: "missing_field" });
+  });
+
+  it("jumps to the credential a bearer or basic strategy still needs", () => {
+    const sink = {
+      sinks: {
+        out: { type: "http", inputs: ["in"], auth: { strategy: "bearer" } },
+      },
+    };
+    const issue = pipelineIssues({
+      sources: { in: { type: "demo_logs", format: "json" } },
+      sinks: {
+        out: {
+          type: "http",
+          inputs: ["in"],
+          uri: "https://logs.example.test",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer" },
+        },
+      },
+    }).filter((item) => item.id === "out");
+    expect(issue).toHaveLength(1);
+    const [problem] = localProblems(
+      issue.map((item) => ({
+        severity: "error" as const,
+        message: item.message,
+        componentId: item.id,
+      })),
+      new Map(),
+      [],
+      sink,
+    );
+    expect(problem).toMatchObject({
+      component: "out",
+      field: "auth.token",
+      message: "Enter a valid token secret reference in Authentication.",
+    });
   });
 
   it("lets a local settings finding stand in for Vector's, but never hides VRL or unknown options", () => {

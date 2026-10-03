@@ -44,6 +44,7 @@ import {
 } from "./secretFieldContext";
 import { secretReferences } from "./secretFields";
 import { fieldIsSet } from "./pipelineDestination";
+import { controlPathFor } from "./controlPath";
 import {
   checkProblems,
   type Problem,
@@ -457,7 +458,10 @@ export default function PipelineSettings({
           ? { "docs::syntax_override": "vrl_program" }
           : {}),
         ...(field.type === "array"
-          ? { "vectory::entry_label": key === "include" ? "path" : "item" }
+          ? {
+              "vectory::entry_label":
+                key === "include" || key === "exclude" ? "path" : "item",
+            }
           : {}),
       },
     };
@@ -550,9 +554,19 @@ export default function PipelineSettings({
       if (field && vrlPath(field)) {
         if (jump(field, focus.line || 1, focus.column || 1)) return;
       } else if (field) {
-        const control = root.current?.querySelector<HTMLElement>(
-          `[data-field-path="${CSS.escape(field)}"]`,
+        const target = controlPathFor(
+          field,
+          Array.from(
+            root.current?.querySelectorAll<HTMLElement>("[data-field-path]") ??
+              [],
+            (element) => element.dataset.fieldPath ?? "",
+          ),
         );
+        const control = target
+          ? root.current?.querySelector<HTMLElement>(
+              `[data-field-path="${CSS.escape(target)}"]`,
+            )
+          : null;
         if (control) {
           control.scrollIntoView?.({ block: "center" });
           // The value itself, not the help or actions buttons in its header.

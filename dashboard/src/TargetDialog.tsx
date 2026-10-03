@@ -50,6 +50,16 @@ import {
 } from "./hostRequirements";
 import { hostApprovalCommands, namedDevices } from "./hostApprovalCommands";
 import {
+  approvalBasis,
+  approvalEvidence,
+  approvalHeadline,
+  approvalParagraphs,
+  passedHeadline,
+  passedSentence,
+  refusalCondition,
+} from "./hostApprovalStanding";
+import { useRunningApprovals } from "./useRunningApprovals";
+import {
   AssignmentLink,
   ConflictTable,
   CopyDetails,
@@ -111,41 +121,47 @@ function blockerRowLabel(code: string): string {
 }
 /**
  * A restricted host refuses destinations, listeners and paths it hasn't
- * approved. Say which ones this version uses, and hand over the commands
- * made for each host: its state directory and what keeps its agent running,
- * with `vectory allow`, which adds to what the host already allows.
+ * allowed, and Vectory can't see what a host allows. So say which ones this
+ * version uses as a condition, and hand over the commands made for each host:
+ * its state directory and what keeps its agent running, with `vectory allow`,
+ * which adds to what the host already allows. A device the review knows
+ * accepts them (a check passed on it, or the version it runs uses them too)
+ * is left out of the condition and named after it.
  */
 function HostApprovalNote({
   approvals,
   devices,
+  passed,
+  runs,
 }: {
   approvals: ReturnType<typeof hostApprovals>;
+  /** Restricted devices that may still be refused. */
   devices: Device[];
+  /** Restricted devices a check passed on. */
+  passed: Device[];
+  /** Restricted devices that run a version using all of this. */
+  runs: Device[];
 }) {
-  const parts = [
-    approvals.destinations.length
-      ? `${approvals.destinations.length === 1 ? "destination" : "destinations"} ${approvals.destinations.join(", ")}`
-      : "",
-    approvals.listeners.length
-      ? `${approvals.listeners.length === 1 ? "listener" : "listeners"} ${approvals.listeners.join(", ")}`
-      : "",
-    approvals.fileRoots.length
-      ? `files under ${approvals.fileRoots.join(", ")}`
-      : "",
-  ].filter(Boolean);
+  const evidence = approvalEvidence(
+    passed.map((device) => device.name),
+    runs.map((device) => device.name),
+  );
+  if (!devices.length)
+    return (
+      <div className="control-note target-approval-note" role="status">
+        <strong>{passedHeadline(passed.map((device) => device.name))}</strong>
+        <p>{passedSentence(passed.length)}</p>
+      </div>
+    );
   const blocks = hostApprovalCommands(approvals, devices);
   const unreported = devices.filter((device) => !device.state_dir);
   return (
     <div className="control-note target-approval-note" role="status">
-      <strong>
-        {devices.length === 1
-          ? `${devices[0].name} runs in restricted mode and refuses this version until its host approves it`
-          : `${devices.length.toLocaleString()} selected devices run in restricted mode and refuse this version until their hosts approve it`}
-      </strong>
-      <p>
-        It uses {parts.join("; ")}. Only the host operator can allow these; the
-        dashboard can&apos;t.
-      </p>
+      <strong>{approvalHeadline(devices.map((device) => device.name))}</strong>
+      {approvalParagraphs(approvals, devices.length).map((text) => (
+        <p key={text}>{text}</p>
+      ))}
+      {evidence && <p>{evidence}</p>}
       <details className="target-approval-steps">
         <summary>Commands for the host</summary>
         <p>
@@ -726,17 +742,48 @@ export default function TargetDialog({
   const capabilityBlocked =
     requirements.length > 0 && restrictedTargets.length > 0;
   // Restricted devices also refuse destinations, listeners and paths their
-  // host hasn't approved. Nothing here knows a host's allowances, so say
-  // exactly what each restricted host must allow before this version runs.
+  // host doesn't allow. Nothing here sees a host's allowances, so the review
+  // names what this version uses as a condition. It drops the condition for a
+  // device that a check in this review passed on, and for one whose verified
+  // running version already uses all of it: that applied, so its host allows
+  // it. Addresses that differ by device can't be compared across versions.
   const approvals = useMemo(
     () => (version ? hostApprovals(version.config) : null),
     [version],
   );
-  const needsApproval =
-    !capabilityBlocked &&
-    !!approvals &&
-    hasHostApprovals(approvals) &&
-    restrictedTargets.length > 0;
+  const wantsApproval =
+    !capabilityBlocked && !!approvals && hasHostApprovals(approvals);
+  const comparable = declarations.length === 0;
+  const [passedOnHost, setPassedOnHost] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const runningUse = useRunningApprovals(
+    wantsApproval && comparable
+      ? restrictedTargets.flatMap((device) =>
+          device.running_version?.id ? [device.running_version.id] : [],
+        )
+      : [],
+  );
+  const approvalKnown =
+    wantsApproval && approvals
+      ? approvalBasis(approvals, restrictedTargets, {
+          passed: passedOnHost,
+          running: runningUse.held,
+          comparable,
+        })
+      : new Map<string, "passed" | "runs">();
+  const unconfirmed = restrictedTargets.filter(
+    (device) => !approvalKnown.has(device.id),
+  );
+  const confirmedBy = (basis: "passed" | "runs") =>
+    restrictedTargets.filter(
+      (device) => approvalKnown.get(device.id) === basis,
+    );
+  // A running version still being read could take the claim back.
+  const needsApproval = wantsApproval && !runningUse.pending;
+  const showApprovalNote =
+    needsApproval &&
+    (unconfirmed.length > 0 || confirmedBy("passed").length > 0);
   const settingsMismatch: Device[] =
     policy && preserveExistingSettings
       ? (preview?.devices || chosenRows).filter((device: Device) => {
@@ -1057,16 +1104,18 @@ export default function TargetDialog({
   const shortName = (assignment: AssignmentDescription) =>
     shortAssignmentName(assignment, configurationId);
   const restrictedIds = new Set(restrictedTargets.map((device) => device.id));
+  const unconfirmedIds = new Set(unconfirmed.map((device) => device.id));
   function outcomeFor(device: Device): Outcome | null {
     const outcome = reviewOutcome(device);
-    // A restricted host refuses what it hasn't approved: the row says so
-    // instead of reading as if the device simply takes this version.
+    // A restricted host refuses what it doesn't allow: the row says so,
+    // as a condition where it can't tell, instead of reading as if the device
+    // simply takes this version.
     const refusal = !restrictedIds.has(device.id)
       ? null
       : capabilityBlocked
         ? "refused: needs Full Vector mode"
-        : needsApproval
-          ? "refused until its host approves it"
+        : needsApproval && approvals && unconfirmedIds.has(device.id)
+          ? refusalCondition(approvals)
           : null;
     if (!outcome?.takes || !refusal) return outcome;
     return {
@@ -1474,8 +1523,13 @@ export default function TargetDialog({
             )}
           </div>
         )}
-        {needsApproval && approvals && (
-          <HostApprovalNote approvals={approvals} devices={restrictedTargets} />
+        {showApprovalNote && approvals && (
+          <HostApprovalNote
+            approvals={approvals}
+            devices={unconfirmed}
+            passed={confirmedBy("passed")}
+            runs={confirmedBy("runs")}
+          />
         )}
         {!preview ? (
           <fieldset
@@ -1874,6 +1928,14 @@ export default function TargetDialog({
                   Array.isArray(version.config?.tests)
                     ? version.config.tests.length
                     : 0
+                }
+                onPassed={(ids) =>
+                  setPassedOnHost((previous) =>
+                    previous.size === ids.size &&
+                    [...ids].every((id) => previous.has(id))
+                      ? previous
+                      : ids,
+                  )
                 }
               />
             )}
