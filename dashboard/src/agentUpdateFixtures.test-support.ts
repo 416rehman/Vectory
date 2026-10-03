@@ -1,6 +1,7 @@
 // Synthetic data for the tests of agent updates. Every key here is one of the
 // published test keys of the shared vectors (their seeds are public): none is
 // a real key and none may be pinned on a host.
+import { AgentInstallSchema, type AgentInstall, type Device } from "./api";
 import type {
   AgentRelease,
   AgentUpdates,
@@ -11,6 +12,61 @@ import type {
   UpdateRolloutDetail,
   UpdateTarget,
 } from "./agentUpdateModel";
+
+export const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
+export const caPem = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIBszCCAVmgAwIBAgIUU3ludGhldGljIGFnZW50IENBIGZvciB0ZXN0cy4wCgYI",
+  "-----END CERTIFICATE-----",
+  "",
+].join("\n");
+/** What the server says about downloads: a private CA, the installer, one Windows build. */
+export const install: AgentInstall = AgentInstallSchema.parse({
+  agent_url: "https://vectory.example.test:8443",
+  agent_url_configured: false,
+  listener_enabled: true,
+  dashboard_url: "https://vectory.example.test",
+  certificate: {
+    available: true,
+    publicly_trusted: false,
+    ca_sha256: "1f3c" + "0".repeat(56) + "9ab0",
+    ca_pem: caPem,
+    problem: null,
+  },
+  downloads_enabled: true,
+  installer: {
+    url: "https://vectory.example.test:8443/agent/v1/install.sh",
+    sha256: installerSha,
+    platforms: ["linux/amd64"],
+  },
+  default_install_dir: "/usr/local/bin",
+  releases: [
+    {
+      name: "vectory-0.1.0-windows-amd64.exe",
+      os: "windows",
+      arch: "amd64",
+      version: "0.1.0",
+      sha256: "e".repeat(64),
+      size: 7_000_000,
+      url: "/api/v1/releases/vectory-0.1.0-windows-amd64.exe",
+      signed: false,
+    },
+  ],
+  catalog_problems: [],
+});
+/** A device with the members a host command reads; the rest of a device is not needed here. */
+export const device = (
+  over: Partial<Device> & { name?: string } = {},
+): Device =>
+  ({
+    id: "00000000-0000-4000-8000-000000000001",
+    name: "edge-01",
+    os: "linux",
+    arch: "amd64",
+    state_dir: "/var/lib/vectory-agent",
+    service_manager: "systemd",
+    ...over,
+  }) as Device;
 
 export const id = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;

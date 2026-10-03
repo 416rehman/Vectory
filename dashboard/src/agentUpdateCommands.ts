@@ -84,7 +84,11 @@ export function updateVerbCommand(
   });
 }
 
-export type ConsentChoice = { level: "auto" | "ask"; track?: UpdateTrack };
+export type ConsentChoice = {
+  level: "auto" | "ask";
+  track?: UpdateTrack;
+  windows?: readonly string[];
+};
 
 /**
  * The consent a command should carry for one host. A host that already takes
@@ -109,7 +113,7 @@ export function consentFor(
   return {
     level: options.choice.level,
     track: options.track ?? options.choice.track ?? "patch",
-    windows: [],
+    windows: options.choice.windows ?? [],
     key,
   };
 }
