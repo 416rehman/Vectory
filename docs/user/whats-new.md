@@ -7,6 +7,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - **Visual pipeline editor** for all 128 component types of Vector 0.58.0, with typed settings, a code view (YAML, TOML or JSON), import and export, VRL and pipeline tests, and immutable history with diffs.
 - **Safe publishing.** Every version is checked by a sandboxed Vector before it can be published.
 - **Controlled rollouts.** Target devices and groups with a preview, set priorities, release as a canary or on a schedule, pause, cancel and roll back.
+- **Agent updates.** Roll out a signed agent build from the dashboard to hosts that agreed to it, a canary first, and each host takes a failed build back by itself. A host is visited once, to agree.
 - **Outbound-only agents.** Mutual TLS, per-device signed configurations, protection against rollback to older versions, and automatic restore of the last working configuration.
 - **Host-owned safety.** Restricted and full modes, local allowances, and credentials that stay on the device.
 - **Operations.** Device metrics, issues, and an exportable audit log.
@@ -15,6 +16,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 
 ## The details
 
+- **Agent updates.** Turn them on in **Settings → Agent updates** and choose who holds the release key: this server, or a key you keep offline and sign with `vectory release`. **Add device** and **Upgrade agent** gain a step where a host agrees, once, to **Automatic (recommended)**, **Ask on the host** or **Off**, and to the key it pins. Then **Devices → Agent updates** shows the fleet's versions, prepares and signs releases, reviews exactly who will and won't update, and runs a rollout with a canary, batches, a watch period and a failure threshold. A host installs a build only if a key it pinned signed it, tries a release at most once and takes it back if the new build doesn't check in healthy within five minutes. **Stop all updates** ends every rollout at once. See [Agent updates](agent-updates.md).
 - **Check on devices before you deploy.** The deploy review can ask the devices it would reach to validate the version on their own hosts first, without applying anything. Each answers **Passes here**, **Needs a fix** (with the step and setting) or names the device secret it hasn't bound, with the command to bind it. Results are advice: Deploy never waits for them. See [Check on devices](deployments.md#check-on-devices).
 - **A live graph you can read.** Rates sit on labels and connections route around the steps, so nothing runs behind a card. **Fit** keeps the numbers readable, **Show as table** lists them, and **Live** is on when a device runs the pipeline. See [Add and connect components](pipelines.md#add-and-connect-components).
 - **From a problem to its fix.** **Fix in pipeline** opens the step and setting a failure names. Issue cards lead with **Roll back**, **Fix in pipeline**, **Open rollout** or **Open device**. Deploying a pipeline that already runs starts from the devices that run it. The command palette pauses, cancels and rolls back rollouts, deploys and duplicates pipelines, and shows a device's issues, through the same reviews as the pages. See [Work with issues](telemetry.md#work-with-issues) and [Deploy a published version](deployments.md#deploy-a-published-version).
@@ -43,7 +45,8 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 
 - Images and packages aren't published yet; the server builds from source.
 - Agent downloads carry SHA-256 checksums but aren't signed.
-- An agent is upgraded on its host, one command per device. Agents don't update themselves and the dashboard can't update them; see [Upgrade many devices](agents.md#upgrade-many-devices).
+- A host takes agent updates only after someone ran a command on it that agreed to them. Hosts that haven't, agents that predate updates and platforms a release doesn't carry are upgraded on the host, one command per device; see [Upgrade many devices](agents.md#upgrade-many-devices).
+- Agent updates have no major track: a host takes patch releases, or minor releases too, and a new major version is an upgrade by hand. Who holds the release key is fixed while updates are on.
 - Reboot and upgrade tests aren't done on any platform, and the service tests run on Ubuntu 24.04, macOS 15 and Windows Server 2025 only. See [Compatibility](compatibility.md).
 - On a restricted host, **Check on devices** reports one finding at a time (a missing secret first, then each allowance the host hasn't approved), so run it again after each fix.
 - Agent settings and groups can't be deleted or archived yet.

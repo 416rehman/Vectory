@@ -70,6 +70,10 @@ const UsersSecurity = lazy(() =>
   ),
 );
 const Notifications = lazy(() => loadPage(() => import("./Notifications")));
+const AgentUpdatesPage = lazy(() => loadPage(() => import("./AgentUpdates")));
+const AgentUpdatesSettings = lazy(() =>
+  loadPage(() => import("./AgentUpdatesSettings")),
+);
 
 /** The new page's title, or its main region when the title can't take focus. */
 function arrivalTarget() {
@@ -626,6 +630,19 @@ export default function SignedInShell({
                     user={user}
                     notify={notify}
                     query={route.split("?")[1] || ""}
+                  />
+                ) : page === "agent-updates" ? (
+                  <AgentUpdatesPage
+                    user={user}
+                    notify={notify}
+                    navigate={navigate}
+                    rolloutId={id}
+                  />
+                ) : page === "agent-updates-settings" && !id ? (
+                  <AgentUpdatesSettings
+                    user={user}
+                    notify={notify}
+                    navigate={navigate}
                   />
                 ) : (
                   <NotFound onSearch={() => openShellModal("search")} />

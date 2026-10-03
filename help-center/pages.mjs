@@ -35,6 +35,7 @@ export const groups = [
     pages: [
       ["security", "shield-check"],
       ["agents", "cpu"],
+      ["agent-updates", "circle-arrow-up"],
       ["administer", "settings-2"],
     ],
   },

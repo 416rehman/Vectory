@@ -11,6 +11,7 @@ See which devices are healthy, what they run and how much data flows through the
 - **Group** shows one group's devices. A group name in a row does the same.
 - **Sort** by name, status, pipeline, Vector version, events per second or last seen. Names sort the way people read them, so `edge-2` comes before `edge-10`, and a device with no value sorts last in both directions.
 - Devices you have revoked are hidden. Choose **Status → Revoked** to list them.
+- With [agent updates](agent-updates.md) on, a count under **Devices → Agent updates** opens this list filtered to it: **Agent updates: Automatic**, **Ask**, **Off**, **Can't update** or **Not reported**, or one **Agent version**. A chip names the filter and clears it. While updates are off these filters don't exist.
 
 The page number, rows per page, search, filters and sort are all in the page's address, so a reload, **Back** and a copied link return to the same view.
 

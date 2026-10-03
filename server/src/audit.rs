@@ -226,6 +226,41 @@ fn compound_sql(expression: &str) -> String {
         uuid_sql(&format!("substr({expression},38,36)"))
     )
 }
+/// The ids of the devices an event lists, at most 100 of them, as a JSON array.
+fn id_list(path: &str) -> String {
+    format!(
+        "CASE WHEN json_type(r.data,'$.{path}')='array' THEN json((SELECT json_group_array(value) FROM (SELECT value FROM json_each(r.data,'$.{path}') WHERE type='text' AND length(value)=36 LIMIT 100))) ELSE NULL END"
+    )
+}
+/// What the audit events of agent updates may show, a second projection beside
+/// the first one (a function takes only so many arguments): versions, digests,
+/// counters, fingerprints, codes and counts, never key material.
+fn update_details() -> String {
+    format!(
+        ",json_object('custody',{},'fingerprint',{},'from_fingerprint',{},'source',{},'version',{},'counter',{},'manifest_sha256',{},'release_id',{},'rollout_id',{},'stage',{},'gate_state',{},'device_ids',{},'released_count',{},'verified_count',{},'withdrawn_releases',{},'cancelled_rollouts',{},'from_version',{},'to_version',{},'code',{},'state',{},'reason',{}) AS extra_updates",
+        text("details.custody", 16),
+        digest("details.fingerprint"),
+        digest("details.from_fingerprint"),
+        text("details.source", 16),
+        text("details.version", 32),
+        number("details.counter"),
+        digest("details.manifest_sha256"),
+        text("details.release_id", 36),
+        text("details.rollout_id", 36),
+        text("details.stage", 32),
+        text("details.gate_state", 32),
+        id_list("details.device_ids"),
+        number("details.released_count"),
+        number("details.verified_count"),
+        number("details.withdrawn_releases"),
+        number("details.cancelled_rollouts"),
+        text("details.from_version", 128),
+        text("details.to_version", 32),
+        text("details.code", 64),
+        text("details.state", 32),
+        text("details.reason", 1000)
+    )
+}
 fn digest(path: &str) -> String {
     let t = text(path, 65);
     format!("CASE WHEN length({t})=64 AND {t} NOT GLOB '*[^0-9a-f]*' THEN {t} ELSE NULL END")
@@ -236,7 +271,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{},'validation_id',{},'configuration_id',{},'run_tests',{},'truncated',{},'device_count',{},'pending_count',{},'offline_count',{},'unsupported_count',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{},'validation_id',{},'configuration_id',{},'run_tests',{},'truncated',{},'device_count',{},'pending_count',{},'offline_count',{},'unsupported_count',{}) AS extra{}",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -285,7 +320,8 @@ fn base(details: bool) -> String {
             number("details.device_count"),
             number("details.pending_count"),
             number("details.offline_count"),
-            number("details.unsupported_count")
+            number("details.unsupported_count"),
+            update_details()
         )
     } else {
         String::new()
@@ -319,6 +355,10 @@ fn base(details: bool) -> String {
                      WHEN action LIKE 'issue.%' THEN 'issue' WHEN action LIKE 'group.%' THEN 'group'
                      WHEN action LIKE 'policy.%' THEN 'policy' WHEN action LIKE 'token.%' THEN 'token'
                      WHEN action LIKE 'signing.%' THEN 'signing_key' WHEN action LIKE 'server.%' THEN 'server'
+                     WHEN substr(action,1,18)='agent_release_key.' THEN 'agent_release_key'
+                     WHEN substr(action,1,14)='agent_release.' THEN 'agent_release'
+                     WHEN substr(action,1,20)='agent_update_rollout' THEN 'agent_update_rollout'
+                     WHEN substr(action,1,13)='agent_update.' THEN 'server'
                      WHEN action IN ('bootstrap','login','logout') OR action LIKE 'user.%' OR action LIKE 'account.%' OR action LIKE 'mfa.%' THEN 'user'
                      ELSE 'unknown' END AS target_kind
             FROM raw
@@ -335,6 +375,9 @@ fn base(details: bool) -> String {
                      WHEN 'token' THEN et.id IS NOT NULL
                      WHEN 'deployment' THEN other.id IS NOT NULL WHEN 'group' THEN other.id IS NOT NULL
                      WHEN 'policy' THEN other.id IS NOT NULL WHEN 'issue' THEN other.id IS NOT NULL
+                     WHEN 'agent_release' THEN EXISTS(SELECT 1 FROM agent_releases WHERE id=a.linked_target)
+                     WHEN 'agent_update_rollout' THEN EXISTS(SELECT 1 FROM agent_update_rollouts WHERE id=a.linked_target)
+                     WHEN 'agent_release_key' THEN EXISTS(SELECT 1 FROM agent_release_keys WHERE fingerprint=a.linked_target)
                      ELSE 0 END AS target_exists,
                 COALESCE(substr(tu.name,1,120),substr(td.name,1,256),
                     CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END,
@@ -345,7 +388,11 @@ fn base(details: bool) -> String {
                     CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
                     CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END,
                     CASE WHEN a.action LIKE 'notification.channel.%' THEN a.detail_name
-                         WHEN a.action='detection.update' THEN 'Detection thresholds' END) AS target_name,
+                         WHEN a.action='detection.update' THEN 'Detection thresholds' END,
+                    CASE a.target_kind
+                         WHEN 'agent_release' THEN (SELECT 'Agent '||version FROM agent_releases WHERE id=a.linked_target)
+                         WHEN 'agent_update_rollout' THEN (SELECT COALESCE(substr(ro.name,1,120),'Update to '||rel.version) FROM agent_update_rollouts ro JOIN agent_releases rel ON rel.id=ro.release_id WHERE ro.id=a.linked_target)
+                         WHEN 'agent_release_key' THEN (SELECT 'Release key '||substr(fingerprint,1,16) FROM agent_release_keys WHERE fingerprint=a.linked_target) END) AS target_name,
                 CASE WHEN length(a.explicit_device)=36 THEN a.explicit_device
                      WHEN a.action='deployment.release' AND {a_compound} THEN substr(a.target,38,36)
                      WHEN a.target_kind='device' AND length(a.linked_target)=36 THEN a.linked_target
@@ -528,7 +575,7 @@ async fn ordered_rows(
         .push(SUMMARY)
         .push(" AS summary,sequence");
     if detail {
-        q.push(",extra");
+        q.push(",extra,extra_updates");
     }
     q.push(" FROM named");
     filter(&mut q, f, cutoff);
@@ -554,7 +601,8 @@ async fn ordered_rows(
             let mut v = db::parse(r.get("summary"))?;
             if detail {
                 let extra = db::parse(r.get("extra"))?;
-                v["details"] = details(&v, &extra);
+                let updates = db::parse(r.get("extra_updates"))?;
+                v["details"] = details(&v, &extra, &updates);
             }
             Ok((
                 v,
@@ -565,10 +613,79 @@ async fn ordered_rows(
         })
         .collect()
 }
-fn details(v: &Value, extra: &Value) -> Value {
+/// The keys an agent update event shows: all from the second projection.
+fn update_keys(action: &str) -> Option<&'static [&'static str]> {
+    Some(match action {
+        "agent_update.enable" => &["custody", "fingerprint"],
+        "agent_update.stop" => &["reason", "cancelled_rollouts"],
+        "agent_release_key.rotate" | "agent_release_key.rollover" => {
+            &["fingerprint", "from_fingerprint", "source"]
+        }
+        "agent_release_key.revoke" => &[
+            "fingerprint",
+            "reason",
+            "withdrawn_releases",
+            "cancelled_rollouts",
+        ],
+        "agent_release.prepare" | "agent_update_rollout.create" => {
+            &["release_id", "version", "counter", "manifest_sha256"]
+        }
+        "agent_release.sign" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "fingerprint",
+        ],
+        "agent_release.signature_upload" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "fingerprint",
+            "reason",
+        ],
+        "agent_release.withdraw" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "reason",
+            "cancelled_rollouts",
+        ],
+        "agent_update_rollout.release" => &["stage", "device_ids", "released_count"],
+        "agent_update_rollout.gate" => &["gate_state", "reason", "verified_count"],
+        "device.agent_update" => &[
+            "rollout_id",
+            "release_id",
+            "version",
+            "manifest_sha256",
+            "from_version",
+            "to_version",
+            "code",
+            "state",
+        ],
+        _ => return None,
+    })
+}
+
+fn details(v: &Value, extra: &Value, updates: &Value) -> Value {
     let mut out = json!({});
     let action = v["action"].as_str().unwrap_or("");
-    let keys: &[&str] = match action {
+    let (extra, keys): (&Value, &[&str]) = match update_keys(action) {
+        Some(keys) => (updates, keys),
+        None => (extra, existing_keys(action)),
+    };
+    for key in keys {
+        if !extra[*key].is_null() {
+            out[*key] = extra[*key].clone();
+        }
+    }
+    positional(&mut out, v, action);
+    out
+}
+fn existing_keys(action: &str) -> &'static [&'static str] {
+    match action {
         "issue.acknowledge" | "issue.reopen" => &["reason", "issue_revision"],
         "group.update" => &["previous_group_revision", "group_revision"],
         "device.secret_reconciliation" => &[
@@ -649,12 +766,10 @@ fn details(v: &Value, extra: &Value) -> Value {
             "client_address",
         ],
         _ => &[],
-    };
-    for key in keys {
-        if !extra[*key].is_null() {
-            out[*key] = extra[*key].clone();
-        }
     }
+}
+/// What a compound target says by its position.
+fn positional(out: &mut Value, v: &Value, action: &str) {
     let target = v["target"].as_str().unwrap_or("");
     if let Some((left, right)) = target.split_once(':') {
         if uuid::Uuid::parse_str(left).is_ok() && uuid::Uuid::parse_str(right).is_ok() {
@@ -679,7 +794,6 @@ fn details(v: &Value, extra: &Value) -> Value {
             out["signing_key_id"] = json!(right);
         }
     }
-    out
 }
 pub async fn history(
     AppState(s): AppState<State>,
@@ -727,7 +841,7 @@ pub async fn detail(
     let mut q = QueryBuilder::new(base(true));
     q.push(" SELECT ")
         .push(SUMMARY)
-        .push(" AS summary,extra FROM named WHERE id=")
+        .push(" AS summary,extra,extra_updates FROM named WHERE id=")
         .push_bind(id);
     let r = q
         .build()
@@ -735,7 +849,11 @@ pub async fn detail(
         .await?
         .ok_or_else(ApiError::missing)?;
     let mut v = db::parse(r.get("summary"))?;
-    v["details"] = details(&v, &db::parse(r.get("extra"))?);
+    v["details"] = details(
+        &v,
+        &db::parse(r.get("extra"))?,
+        &db::parse(r.get("extra_updates"))?,
+    );
     Ok(Json(for_reader(v, &reader)))
 }
 

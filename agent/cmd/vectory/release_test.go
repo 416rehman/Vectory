@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -166,9 +167,14 @@ func TestReleaseKeygenWritesAPrivateKeyAndPrintsThePublicOne(t *testing.T) {
 	if code, _, stderr := invoke("release", "keygen", "--out", "relative.key"); code != 0 || stderr != "" || !f.exists("relative.key") {
 		t.Errorf("a relative name: %d %q", code, stderr)
 	}
-	// The default name is release.
-	if _, stdout, _ := invoke("release", "keygen", "--out", "unnamed.key"); !strings.Contains(stdout, " release\n") {
-		t.Errorf("the default name:\n%s", stdout)
+	// The default name is release- and the first 8 characters of the
+	// fingerprint, the name the server gives a key it makes.
+	_, unnamed, _ := invoke("release", "keygen", "--out", "unnamed.key")
+	unnamedLines := strings.Split(strings.TrimSpace(unnamed), "\n")
+	unnamedPrint := strings.ReplaceAll(unnamedLines[len(unnamedLines)-1], " ", "")
+	unnamedName := regexp.MustCompile(`(?m)^vectory-release-key ed25519 \S+ (release-[0-9a-f]{8})$`).FindStringSubmatch(unnamed)
+	if unnamedName == nil || len(unnamedPrint) != 64 || unnamedName[1] != "release-"+unnamedPrint[:8] {
+		t.Errorf("the default name:\n%s", unnamed)
 	}
 }
 

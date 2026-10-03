@@ -4,6 +4,7 @@ import {
   BookOpen,
   CalendarClock,
   CircleAlert,
+  CircleArrowUp,
   Home,
   Layers,
   Plus,
@@ -24,6 +25,8 @@ export type NavigationItem = {
   icon: LucideIcon;
   /** Go-to shortcut key pressed after "g". */
   key?: string;
+  /** A tab shown only while this feature is on (the strip reads that). */
+  requires?: "agent-updates";
 };
 export const primaryNavigation: NavigationItem[] = [
   { id: "overview", label: "Overview", icon: Home, key: "o" },
@@ -36,6 +39,13 @@ export const sectionTabs: Record<string, NavigationItem[]> = {
     { id: "devices", label: "Devices", icon: Server },
     { id: "groups", label: "Groups", icon: Layers },
     { id: "policies", label: "Agent settings", icon: SlidersHorizontal },
+    // The strip shows it while agent updates are on, and on its own page.
+    {
+      id: "agent-updates",
+      label: "Agent updates",
+      icon: CircleArrowUp,
+      requires: "agent-updates",
+    },
   ],
   deployments: [
     { id: "deployments", label: "Deployments", icon: Rocket },
@@ -47,6 +57,11 @@ export const sectionTabs: Record<string, NavigationItem[]> = {
     { id: "settings", label: "General", icon: Settings },
     { id: "users", label: "People & security", icon: UsersRound },
     { id: "notifications", label: "Notifications", icon: Bell },
+    {
+      id: "agent-updates-settings",
+      label: "Agent updates",
+      icon: CircleArrowUp,
+    },
   ],
 };
 const sectionLabels: Record<string, string> = {
@@ -57,7 +72,11 @@ const sectionLabels: Record<string, string> = {
   settings: "Settings",
 };
 export function sectionOf(page: string) {
-  if (["devices", "groups", "policies", "enrollment"].includes(page))
+  if (
+    ["devices", "groups", "policies", "agent-updates", "enrollment"].includes(
+      page,
+    )
+  )
     return "devices";
   if (sectionTabs.deployments.some((tab) => tab.id === page))
     return "deployments";
@@ -77,6 +96,7 @@ export function shellInfo(page: string, id?: string): ShellInfo {
       label: tab.label,
       icon: tab.icon,
       href: `#/${tab.id}`,
+      requires: tab.requires,
     })),
     currentTab: id ? undefined : page,
     tabsLabel:
@@ -149,6 +169,14 @@ export const pageEntries: PageEntry[] = [
     keywords: "policy pause resume interval heartbeat",
   },
   {
+    id: "agent-updates",
+    name: "Agent updates",
+    description: "Agent versions, releases and update rollouts",
+    icon: CircleArrowUp,
+    keywords:
+      "devices upgrade agent release rollout signature key stop roll out version",
+  },
+  {
     id: "enrollment",
     name: "Add device",
     description: "Download, install and enroll an agent",
@@ -205,6 +233,14 @@ export const pageEntries: PageEntry[] = [
     icon: Bell,
     keywords:
       "alerts alerting slack webhook email smtp channel quiet hours delivery log detection thresholds",
+  },
+  {
+    id: "agent-updates-settings",
+    name: "Agent updates settings",
+    description: "Turn agent updates on, and manage the release key",
+    icon: CircleArrowUp,
+    keywords:
+      "settings agent updates release key custody rotate rollover revoke stop turn on off",
   },
   {
     id: "docs/",

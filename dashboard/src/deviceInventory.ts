@@ -24,6 +24,10 @@ export type InventoryQuery = {
   version?: string;
   /** The pipeline version a device verifiably runs. */
   running?: string;
+  /** How hosts take agent updates: a level of the fleet's counts. */
+  agent_update?: string;
+  /** The agent version devices report, exactly as reported. */
+  agent_version?: string;
   sort?: string;
   dir?: string;
   page?: number;
@@ -95,6 +99,8 @@ export function inventoryFilters(query: InventoryQuery) {
   set("group", query.group);
   set("desired_version", query.version);
   set("running_version", query.running);
+  set("agent_update", query.agent_update);
+  set("agent_version", query.agent_version);
   set("sort", query.sort && (sortNames[query.sort] ?? query.sort));
   if (query.sort) set("dir", query.dir);
   return params;

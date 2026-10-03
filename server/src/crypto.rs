@@ -399,6 +399,17 @@ impl Keys {
         )
     }
     pub fn seal_mfa(&self, user: &str, secret: &str) -> Result<String> {
+        Ok(STANDARD.encode(self.seal_bytes(user, secret.as_bytes())?))
+    }
+    pub fn open_mfa(&self, user: &str, value: &str) -> Result<String> {
+        let data = STANDARD.decode(value).map_err(|_| ApiError::forbidden())?;
+        String::from_utf8(self.open_bytes(user, &data)?).map_err(|_| ApiError::forbidden())
+    }
+    /// Seals `bytes` with the instance's AES-256-GCM key (`keys/mfa-sealing.key`):
+    /// a random 12-byte nonce, then the ciphertext and its tag. `aad` binds what
+    /// the bytes are for, so a sealed value is opened only where it was sealed
+    /// for.
+    pub fn seal_bytes(&self, aad: &str, bytes: &[u8]) -> Result<Vec<u8>> {
         use aes_gcm::{
             Aes256Gcm, KeyInit, Nonce,
             aead::{Aead, Payload},
@@ -411,36 +422,64 @@ impl Keys {
             .encrypt(
                 Nonce::from_slice(&nonce),
                 Payload {
-                    msg: secret.as_bytes(),
-                    aad: user.as_bytes(),
+                    msg: bytes,
+                    aad: aad.as_bytes(),
                 },
             )
             .map_err(|_| ApiError::forbidden())?;
         let mut out = nonce.to_vec();
         out.extend_from_slice(&encrypted);
-        Ok(STANDARD.encode(out))
+        Ok(out)
     }
-    pub fn open_mfa(&self, user: &str, value: &str) -> Result<String> {
+    /// The bytes `seal_bytes` sealed for `aad`; a refusal for any other `aad`,
+    /// for bytes that were changed and for a different sealing key.
+    pub fn open_bytes(&self, aad: &str, sealed: &[u8]) -> Result<Vec<u8>> {
         use aes_gcm::{
             Aes256Gcm, KeyInit, Nonce,
             aead::{Aead, Payload},
         };
-        let data = STANDARD.decode(value).map_err(|_| ApiError::forbidden())?;
-        if data.len() < 28 {
+        if sealed.len() < 28 {
             return Err(ApiError::forbidden());
         }
         let cipher =
             Aes256Gcm::new_from_slice(&self.mfa_sealing).map_err(|_| ApiError::forbidden())?;
-        let decrypted = cipher
+        cipher
             .decrypt(
-                Nonce::from_slice(&data[..12]),
+                Nonce::from_slice(&sealed[..12]),
                 Payload {
-                    msg: &data[12..],
-                    aad: user.as_bytes(),
+                    msg: &sealed[12..],
+                    aad: aad.as_bytes(),
                 },
             )
-            .map_err(|_| ApiError::forbidden())?;
-        String::from_utf8(decrypted).map_err(|_| ApiError::forbidden())
+            .map_err(|_| ApiError::forbidden())
+    }
+    /// The 32-byte public keys the server's own identities use: its manifest
+    /// signing keys (the current one and the retained previous ones) and the
+    /// device CAs' public keys when they are 32 bytes. A release key is never
+    /// one of them.
+    pub fn identity_public_keys(&self) -> Vec<[u8; 32]> {
+        let mut keys = vec![self.signing.verifying_key().to_bytes()];
+        keys.extend(
+            self.previous_signing
+                .values()
+                .map(|key| key.verifying_key().to_bytes()),
+        );
+        let pems = std::iter::once(self.ca_pem.as_str())
+            .chain(self.previous_device_ca.iter().map(|(pem, _)| pem.as_str()));
+        for pem in pems {
+            let Some(Ok(der)) = CertificateDer::pem_slice_iter(pem.as_bytes()).next() else {
+                continue;
+            };
+            let Ok((_, parsed)) = x509_parser::parse_x509_certificate(&der) else {
+                continue;
+            };
+            if let Ok(raw) =
+                <[u8; 32]>::try_from(parsed.public_key().subject_public_key.data.as_ref())
+            {
+                keys.push(raw);
+            }
+        }
+        keys
     }
     pub fn csr_key_hash(csr: &str) -> Result<String> {
         let request =

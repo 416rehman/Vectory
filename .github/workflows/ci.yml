@@ -723,6 +723,13 @@ jobs:
           mkdir -p docs/evidence artifacts/end-to-end
           node tests/contracts.mjs
           cp docs/evidence/contract-tests.json artifacts/end-to-end/
+      - name: Run a real agent against the compiled server's agent-update offers
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: agent
+        env:
+          VECTORY_TEST_SERVER: ${{ github.workspace }}/server/target/debug/vectory-server
+        run: go test -count=1 -v -run TestAnAgentTakesAnOfferFromTheServer ./internal/agent
       # Installed only here, so a failed browser download never hides the
       # results above.
       - name: Install Chromium for the dashboard specs
@@ -1011,6 +1018,12 @@ jobs:
         run: node tests/agent-settings-recovery-browser.mjs
         env:
           VECTORY_AGENT_SETTINGS_RECOVERY_OUTPUT: artifacts/browsers/agent-settings-recovery
+      - name: Check the agent update screens
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-updates-browser.mjs
+        env:
+          VECTORY_AGENT_UPDATES_OUTPUT: artifacts/browsers/agent-updates
       - name: Check agent upgrade guidance on the device page
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}

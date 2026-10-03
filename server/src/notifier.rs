@@ -8,7 +8,8 @@
 //! clock.
 //!
 //! - Rollout facts come from the audit trail (`deployment.gate`,
-//!   `deployment.activate`, `deployment.rollback`), read from a cursor.
+//!   `deployment.activate`, `deployment.rollback`), read from a cursor, and so
+//!   do the four events of agent updates (see `agent_updates::notify`).
 //! - Issue facts come from hooks in `issues` (see `notifications`).
 //! - Offline and back-online facts come from a scan of check-in times, one
 //!   outage per device: announced once when it passes a channel's threshold,
@@ -23,7 +24,9 @@
 //!   digest when they end. A failed send retries after 1, 5 and 30 minutes,
 //!   then gives up.
 use crate::{
-    State, db,
+    State,
+    agent_updates::notify,
+    db,
     error::Result,
     notifications::{self, Channel, Kind, Secrets},
     outbound::{self, Outcome},
@@ -95,7 +98,7 @@ impl Runtime {
 fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-fn stamp(at: DateTime<Utc>) -> String {
+pub(crate) fn stamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 fn parse_time(value: &str) -> Option<DateTime<Utc>> {
@@ -103,7 +106,7 @@ fn parse_time(value: &str) -> Option<DateTime<Utc>> {
         .ok()
         .map(|t| t.with_timezone(&Utc))
 }
-fn bounded(text: &str, max: usize) -> String {
+pub(crate) fn bounded(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_owned()
     } else {
@@ -259,7 +262,11 @@ async fn audit_facts(
     if !listening {
         return Ok((Vec::new(), Some(upto)));
     }
-    let rows = sqlx::query("SELECT r.id,r.data FROM audit_sequence s JOIN records r ON r.kind='audit' AND r.id=s.audit_id WHERE s.sequence>? AND s.sequence<=? AND json_extract(r.data,'$.action') IN ('deployment.gate','deployment.activate','deployment.rollback') ORDER BY s.sequence")
+    let updates: String = notify::ACTIONS
+        .iter()
+        .map(|action| format!(",'{action}'"))
+        .collect();
+    let rows = sqlx::query(&format!("SELECT r.id,r.data FROM audit_sequence s JOIN records r ON r.kind='audit' AND r.id=s.audit_id WHERE s.sequence>? AND s.sequence<=? AND json_extract(r.data,'$.action') IN ('deployment.gate','deployment.activate','deployment.rollback'{updates}) ORDER BY s.sequence"))
         .bind(cursor)
         .bind(upto)
         .fetch_all(&mut *db)
@@ -270,6 +277,22 @@ async fn audit_facts(
         let event = db::parse(row.get("data"))?;
         let action = event["action"].as_str().unwrap_or("");
         let outcome = event["outcome"].as_str().unwrap_or("");
+        let at = event["created_at"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(db::now);
+        // The four events of agent updates, with the facts their messages are
+        // made of.
+        if let Some((kind, data)) = notify::fact(&event) {
+            facts.push(Fact {
+                identity: format!("audit:{id}"),
+                kind,
+                channel: None,
+                data,
+                at,
+            });
+            continue;
+        }
         let kind = match (action, outcome) {
             ("deployment.gate", "failed" | "incompatible") => "rollout.failed",
             ("deployment.activate", "blocked" | "incompatible" | "conflict") => "rollout.failed",
@@ -288,10 +311,7 @@ async fn audit_facts(
                 "outcome": outcome,
                 "severity": if kind == "rollout.failed" { "error" } else { "warning" },
             }),
-            at: event["created_at"]
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(db::now),
+            at,
         });
     }
     Ok((facts, Some(upto)))
@@ -457,7 +477,10 @@ struct Context {
     pipeline: Option<String>,
     groups: BTreeSet<String>,
 }
-async fn device_groups(db: &mut SqliteConnection, device: &str) -> Result<BTreeSet<String>> {
+pub(crate) async fn device_groups(
+    db: &mut SqliteConnection,
+    device: &str,
+) -> Result<BTreeSet<String>> {
     Ok(sqlx::query_scalar::<_, String>("SELECT g.id FROM records g WHERE g.kind='group' AND EXISTS(SELECT 1 FROM json_each(g.data,'$.device_ids') m WHERE m.value=?)")
         .bind(device)
         .fetch_all(&mut *db)
@@ -469,12 +492,12 @@ async fn device_groups(db: &mut SqliteConnection, device: &str) -> Result<BTreeS
 /// saved before the write rules refused line breaks and text-direction
 /// controls can still hold them, so every name that reaches a message passes
 /// through here. A name with nothing printable left is `fallback`.
-fn named(name: Option<&str>, max: usize, fallback: &str) -> String {
+pub(crate) fn named(name: Option<&str>, max: usize, fallback: &str) -> String {
     name.map(|name| bounded(&db::one_line(name), max))
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| fallback.to_owned())
 }
-async fn device_name(
+pub(crate) async fn device_name(
     db: &mut SqliteConnection,
     device: &str,
 ) -> Result<Option<(String, Option<String>)>> {
@@ -523,7 +546,7 @@ fn duration_words(seconds: i64) -> String {
     }
     format!("{} days", hours / 24)
 }
-fn identity_id(identity: &str) -> String {
+pub(crate) fn identity_id(identity: &str) -> String {
     db::hash(identity)[..32].to_owned()
 }
 async fn context(
@@ -683,6 +706,14 @@ async fn context(
             if kind == "rollout.rolled_back" {
                 notice["restored"] = restored.unwrap_or(Value::Null);
             }
+        }
+        "agent_update.failed"
+        | "agent_update.rolled_back"
+        | "agent_update.stopped"
+        | "agent_update.key_changed" => {
+            // No pipeline: a rule that names one never matches these.
+            pipeline_id = None;
+            groups = notify::context(db, kind, data, &mut notice).await?;
         }
         _ => {
             let device = data["device_id"].as_str().unwrap_or("");
@@ -1226,6 +1257,12 @@ pub fn test_notice(channel: &Channel, now: DateTime<Utc>) -> Value {
 /// A sample message for the dashboard's preview. Clearly an example: the
 /// names say so, and the response carries `example: true`.
 pub fn example_notice(kind: &str, now: DateTime<Utc>) -> Value {
+    if let Some(mut notice) = notify::example(kind) {
+        notice["id"] = json!(identity_id(&format!("example:{kind}")));
+        notice["type"] = json!(kind);
+        notice["occurred_at"] = json!(stamp(now));
+        return notice;
+    }
     let device = json!({"id": "00000000-0000-4000-8000-000000000000", "name": "example-device"});
     let pipeline = json!({"id": "00000000-0000-4000-8000-000000000000", "name": "Example pipeline", "version_number": 3});
     let deployment =
@@ -1338,6 +1375,12 @@ fn event_json(s: &crate::App, notice: &Value) -> Value {
     }
     if notice["type"] == "rollout.rolled_back" {
         event.insert("restored".into(), notice["restored"].clone());
+    }
+    if notice["type"]
+        .as_str()
+        .is_some_and(|kind| kind.starts_with("agent_update."))
+    {
+        event.insert("agent_update".into(), notice["agent_update"].clone());
     }
     Value::Object(event)
 }

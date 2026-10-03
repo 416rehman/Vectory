@@ -7,6 +7,7 @@ What Vectory guarantees, who has to trust whom, and where the limits are. Read t
 - **Devices only connect out.** The agent opens every connection, over TLS 1.3. Nothing on a device listens for Vectory. No option skips certificate checks: not in the agent, the installer, or the install command, which checks its download against your server's CA. To hear about changes within seconds, the agent keeps one of its own requests open; the answer only tells it to check in.
 - **Devices prove who they are.** Each device has its own key and certificate. Every request after enrollment uses mutual TLS, and a revoked device is refused at once.
 - **Devices only run what they can verify.** A configuration is an immutable, published version. It arrives in a manifest signed for that one device, and the agent refuses anything older than what it has already accepted.
+- **An agent updates only with the host's consent and a signature.** A host installs a new agent build only if someone on it agreed to updates, and only if a key it pinned signed the build. Updates are off until an administrator turns them on. See [Agent updates](#agent-updates).
 - **The host decides what a pipeline may touch.** Restricted mode, files, destinations and listeners are local choices. The server can't widen them. The one exception is a loopback-only exporter of Vector's own metrics, described under [Restricted and full mode](#restricted-and-full-mode).
 - **Credentials stay on the host.** Pipelines reference secrets by name. The values live in local files the server never sees.
 - **Your events stay yours.** Events flow from Vector to your destinations. Vectory receives only status and the bounded metrics you enable.
@@ -19,7 +20,8 @@ What Vectory guarantees, who has to trust whom, and where the limits are. Read t
 | **Administrators** | Manage people, recover device identities and run server maintenance. | Server-side role checks; password plus optional two-factor sign-in. |
 | **Operators** | Publish and deploy to devices, and manage enrollment tokens and device access. | Server-side role checks. Every deployment is previewed and audited. |
 | **Pipeline publishers** | Run the components each device allows. In full mode, act with Vector's permissions on that host. | The device's local mode and allowances. |
-| **Host operators** | Choose restricted or full mode, approve resources and provide credentials. | Local files and flags that only someone on the host can change. |
+| **Host operators** | Choose restricted or full mode, approve resources and provide credentials. They also choose, once, whether the host takes agent updates and which key it pins. | Local files and flags that only someone on the host can change. |
+| **The holder of a release key** | Decide which agent builds every host that pinned the key installs, as root. | The signature a host checks, the key it pinned, its release counters and its own consent. |
 | **The Vectory server** | Tell devices which signed version to run. | Signed manifests, generation checks and local policy on each device. |
 
 A person who can publish pipelines to a full-mode device can make that host's Vector do anything Vector can do. Choose full mode only where you trust everyone with the Operator role.
@@ -95,6 +97,30 @@ A token can also give the devices it enrolls up to 8 labels, such as `site=berli
 
 A device that is offline, or runs an agent that can't be checked, is named and not waited for.
 
+## Agent updates
+
+[Agent updates](agent-updates.md) replace the agent on many hosts from the dashboard. They add a second kind of trust to the one that governs pipelines: a key that decides which agent builds hosts install, as root. They're off until an administrator turns them on.
+
+- **A host opts in, locally.** It fetches an agent build only if a command run on that host gave it a level, **Automatic** or **Ask on the host**, and a key to pin. The choice lives in a file only root can write. Nothing the server sends changes it, and a host with no choice, or with **Off**, never fetches a build.
+- **A pinned key authorizes a build.** The host pins a release key by the whole SHA-256 fingerprint the command carries, and installs only a build whose signature verifies under a key it pinned, with the key's own bytes. The server signs the offer, which makes it fresh and addressed to one device, and that signature authorizes no code.
+- **A build is checked before it runs.** The agent verifies the signature before it downloads, and stages the file only when its size and SHA-256 match the signed ones. A small step run by root verifies everything again, from files it copied first, before it swaps, and runs the new build once to see that it reports the version and platform the release names.
+- **Counters only go forward.** Each release has a counter. The host keeps, in a root-owned file, the highest counter it tried for each key it pins, and refuses a release at or below it. A server can't make a host try a release twice or take one at or below a counter it already tried, and a host never goes backward. A release it hasn't tried yet stays valid until it expires (see below).
+- **A trial, then a rollback.** The new build runs for five minutes. If it doesn't start, doesn't check in or isn't healthy, the host restores the previous build from a copy it kept and reports why. A release that was taken back is never tried again on that host.
+- **Rollouts are gated.** A canary goes first, batches follow, and a rollout stops when devices roll back, fail or stop delivering. **Stop all updates** cancels every rollout and refuses new ones.
+
+**Who can approve a build** depends on who holds the release key:
+
+| You chose | Who can sign a build that hosts install |
+| --- | --- |
+| **This server signs** | Anyone who administers the server, or holds a backup of it. The key is sealed with a key in the same data volume, so a backup carries both. |
+| **A key kept offline** | Whoever holds the private key file. The server holds the public half only, and can offer a release you signed but never make one. |
+
+> [!IMPORTANT]
+> **Pinning a key trusts its holder with root on that host**
+> Choose who holds the key deliberately, keep an offline key off the server, and treat its backups like the host's own root password.
+
+A host trusts a key until someone runs its **Upgrade agent** command with another one. Revoking a key stops this server from offering what it signed, but it doesn't unpin the key on any host. If a key is stolen, follow [If a key is stolen](agent-updates.md#if-a-key-is-stolen).
+
 ## Credentials and data
 
 - **Device secrets.** A reference such as `vectory-secret:API_TOKEN` is resolved by the agent from a private local file, in any credential field. Plain text in a credential field is refused at save and publish. The agent substitutes only at the credential fields of its own built-in table, never where the server asks, so a pipeline can't move a secret into a URL, header or program. It reports bound names at check-in, never values or paths. The value is written only into the device's managed configuration, which the agent keeps private. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
@@ -122,6 +148,8 @@ A device that is offline, or runs an agent that can't be checked, is named and n
 - **The server is a high-value system.** Whoever controls it can deploy any configuration each device's local policy allows. Restrict access to it and to its backups.
 - **A certificate authority isn't an identity.** A device must present a certificate the server issued and still has on record, so the device CA's key alone can't impersonate a device.
 - **Backups restore old decisions.** Restoring an old backup brings back old accounts, roles and device access. Follow [Restore a backup](administer.md#restore-a-backup) before reconnecting anyone.
-- **Releases aren't signed yet.** Agent downloads carry SHA-256 checksums. Check them against the values shown in **Add device**.
+- **The project's downloads aren't signed yet.** Agent downloads carry SHA-256 checksums. Check them against the values shown in **Add device**. A build you roll out with [agent updates](agent-updates.md) is signed with your own release key.
+- **A signed release stays valid until it expires.** A compromised server can offer a release you signed to any host that agreed to updates, within its 180 days, and can withhold one. It can't offer a build you didn't sign. Withdraw a release you no longer want offered, and keep the key's holder small.
+- **Expiry uses each host's own clock.** A host whose clock is far behind accepts a release that has expired.
 
 The detailed threat model is in the source repository at `docs/security/THREAT-MODEL.md`. To report a vulnerability, follow the repository's `SECURITY.md`.

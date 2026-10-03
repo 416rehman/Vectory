@@ -196,6 +196,7 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 			}
 		}
 	}
+	report.Checks = append(report.Checks, updateChecks(ReadUpdateView(dir, now))...)
 	return report, nil
 }
 

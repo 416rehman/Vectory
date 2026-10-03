@@ -9,6 +9,7 @@
 // devices run (none unless it lists versions). Test data only; nothing here
 // says a device runs anything.
 import { pipelineTelemetry } from "./telemetry-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 
 const BUCKETS = [
   "applied",
@@ -52,9 +53,12 @@ const INVENTORY = [
   "version",
   "desired_version",
   "running_version",
+  "agent_update",
+  "agent_version",
   "sort",
   "dir",
 ];
+const LEVELS = ["automatic", "ask", "off", "cannot_update", "not_reported"];
 const IDS = INVENTORY.filter((key) => !key.startsWith("page"));
 
 const reply = (json, status = 200) => ({ status, json });
@@ -153,6 +157,13 @@ export function bucketOf(display) {
       return "updating";
   }
 }
+/** How a host takes agent updates, tested in the order the contract gives. */
+const levelOf = (row) =>
+  !row.agent_update
+    ? "not_reported"
+    : row.agent_update.eligibility !== "eligible"
+      ? "cannot_update"
+      : { off: "off", ask: "ask", auto: "automatic" }[row.agent_update.consent];
 const runsDesired = (row) =>
   !!row.desired_version_id &&
   row.status !== "revoked" &&
@@ -170,6 +181,10 @@ const runsDesired = (row) =>
  * @param {() => number} [source.now]
  * @param {boolean} [source.groupById] Answer `GET /groups/{id}` too. A harness
  *   that scripts that read itself (failures, holds) turns it off.
+ * @param {() => boolean} [source.agentUpdates] Whether agent updates are on
+ *   (default: off, as on a server nobody turned them on). While they are off,
+ *   `GET /agent-updates` says so and the `agent_update` filter answers 404
+ *   AGENT_UPDATES_OFF; while they are on, a harness answers those itself.
  */
 export function fleetReplies({
   devices,
@@ -177,6 +192,7 @@ export function fleetReplies({
   versions = [],
   now = () => Date.now(),
   groupById = true,
+  agentUpdates = () => false,
 }) {
   const deviceRows = () =>
     typeof devices === "function" ? devices() : devices;
@@ -315,6 +331,26 @@ export function fleetReplies({
       return { error: refuse("Search must be at most 100 characters") };
     if ([...given("version")].length > 64)
       return { error: refuse("version must be at most 64 characters") };
+    if (given("agent_update") && !LEVELS.includes(given("agent_update")))
+      return {
+        error: refuse(
+          "agent_update must be automatic, ask, off, cannot_update or not_reported",
+        ),
+      };
+    if (given("agent_update") && !agentUpdates())
+      return {
+        error: reply(
+          {
+            error: {
+              code: "AGENT_UPDATES_OFF",
+              message: "Agent updates are off.",
+            },
+          },
+          404,
+        ),
+      };
+    if (new TextEncoder().encode(given("agent_version")).length > 128)
+      return { error: refuse("agent_version must be at most 128 bytes") };
     return {
       filter: {
         q: q.replace(/[A-Z]/g, (c) => c.toLowerCase()),
@@ -324,6 +360,8 @@ export function fleetReplies({
         version: given("version"),
         desired: given("desired_version"),
         running: given("running_version"),
+        agentUpdate: given("agent_update"),
+        agentVersion: given("agent_version"),
         sort,
         descending: dir
           ? dir === "desc"
@@ -348,6 +386,8 @@ export function fleetReplies({
       if (f.version && row.vector_version !== f.version) continue;
       if (f.desired && row.desired_version_id !== f.desired) continue;
       if (f.running && entry.running !== f.running) continue;
+      if (f.agentUpdate && levelOf(row) !== f.agentUpdate) continue;
+      if (f.agentVersion && row.agent_version !== f.agentVersion) continue;
       if (entry.bucket === null) revoked += 1;
       else health[entry.bucket] += 1;
       for (const view of entry.views) views[view] += 1;
@@ -423,6 +463,8 @@ export function fleetReplies({
       if (method !== "GET") return null;
       const path = url.pathname.replace(/^\/api\/v1/, "");
       const params = [...url.searchParams];
+      if (path === "/agent-updates" && !agentUpdates())
+        return reply(updatesOff());
       if (path === "/devices/inventory") {
         const { values, error } = options(params, INVENTORY);
         if (error) return error;

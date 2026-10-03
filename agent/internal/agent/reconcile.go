@@ -46,6 +46,10 @@ type Engine struct {
 	// saidLeftOut holds the kinds of report the log has already said a refused
 	// check-in went through without (sayLeftOut): each is said once in a run.
 	saidLeftOut map[string]bool
+	// update is what the engine keeps about agent updates between check-ins: what
+	// it decided about the offer in front of it, the transfer in progress, and
+	// whether the server accepts the report (update_offer.go).
+	update updateRun
 }
 
 func (e *Engine) now() time.Time {
@@ -331,12 +335,20 @@ func (e *Engine) poll(ctx context.Context) error {
 	if err = e.boundary("accepted"); err != nil {
 		return err
 	}
+	// The server answered with a manifest this agent verified: that is a
+	// successful check-in, whatever the apply below finds. What the manifest
+	// offers is noted at once, so the record the privileged step watches says it.
+	e.noteUpdateOffer(m)
+	e.recordUpdateHealth()
 	// A check on request is answered after the apply, never during it, and never
 	// fails the check-in: whatever it finds goes in its result.
 	check := validationRequest(m, e.now())
 	e.settleValidation(check)
 	err = e.Reconcile(ctx, m)
 	e.checkCandidate(ctx, check)
+	// An offer of an agent build is taken up after both: a configuration apply
+	// finishes first, and the build waits (update_offer.go).
+	e.stepUpdates(ctx, check)
 	return err
 }
 
@@ -347,6 +359,10 @@ func (e *Engine) poll(ctx context.Context) error {
 // again with fewer of them, each retry with its own nonce and request id. In
 // this order, each step only when the heartbeat still carries something of it:
 //
+//   - the report on agent updates, which a server that refuses it doesn't get for
+//     the rest of this process. It goes first: its rules are written twice, in the
+//     agent and in the server, and no mistake in either may keep a device from
+//     checking in;
 //   - the result of a check on request, which is then never sent again;
 //   - the reports of what Vector logged and found (the log summary and the
 //     diagnostics), the likeliest to hold something a server refuses: they echo
@@ -363,7 +379,7 @@ func (e *Engine) poll(ctx context.Context) error {
 // in one step the server refused, so it names all it left out, not the culprit.
 // A refusal that leaving all of them out doesn't end is a failed check-in.
 func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, error) {
-	announcementsDropped := false
+	announcementsDropped, updateDropped := false, false
 	// What the check-in that goes through lacks: said once it has.
 	var left []string
 	for {
@@ -372,13 +388,20 @@ func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, err
 			if announcementsDropped {
 				e.validation.optionalRefused = true
 			}
+			if updateDropped {
+				e.update.memberRefused = true
+			}
 			e.sayLeftOut(left)
 			return b, h.Nonce, nil
 		}
 		if ce, ok := AsConnectionError(err); !ok || ce.Status != http.StatusBadRequest {
 			return nil, h.Nonce, err
 		}
-		if h.ValidationResult != nil {
+		if h.AgentUpdate != nil {
+			h.AgentUpdate = nil
+			updateDropped = true
+			left = append(left, reportAgentUpdate)
+		} else if h.ValidationResult != nil {
 			e.dropValidationResult()
 			h.ValidationResult = nil
 			left = append(left, reportCheckResult)
@@ -404,6 +427,7 @@ func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, err
 // The kinds of report exchange leaves out of a check-in the server refused, as
 // the log names them.
 const (
+	reportAgentUpdate   = "agent update report"
 	reportCheckResult   = "Check on devices result"
 	reportAnnouncements = "Check on devices announcement"
 	reportLogSummary    = "Vector log summary"
@@ -1142,6 +1166,9 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		e.ServiceManager = runningServiceManager()
 	}
 	defer func() { e.Client.Close() }()
+	// A build being downloaded is dropped with the process: nothing under a final
+	// name is left, and the next run starts the transfer over.
+	defer e.stopUpdateDownload()
 	defer func() {
 		if e.Metrics != nil {
 			e.Metrics.client.CloseIdleConnections()
@@ -1260,8 +1287,9 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		_, _ = rand.Read(b[:])
 		delay := time.Duration(float64(seconds) * (0.8 + float64(b[0])/255*0.4) * float64(time.Second))
 		// Never two follow-ups in a row: a flapping outcome can't speed up
-		// the check-in cadence.
-		followed = err == nil && !followed && followUp(reported, appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration})
+		// the check-in cadence. A change in where an agent update stands is
+		// one more reason for a follow-up: it is reported at once, once.
+		followed = err == nil && !followed && (followUp(reported, appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}) || e.update.unreported)
 		if followed {
 			delay = followUpDelay
 		}

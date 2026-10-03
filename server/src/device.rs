@@ -34,6 +34,14 @@ pub fn router(s: State) -> Router {
         .route("/agent/v1/heartbeat", post(heartbeat))
         .route("/agent/v1/wait", get(crate::wake::wait))
         .route("/agent/v1/artifacts/{sha256}", get(artifact))
+        .route(
+            "/agent/v1/agent-releases/{sha256}",
+            get(crate::agent_releases::download),
+        )
+        .route(
+            "/agent/v1/release-keys",
+            get(crate::agent_release_keys::bundle),
+        )
         .route("/agent/v1/renew", post(renew))
         .route("/agent/v1/identity", get(crate::install::identity))
         .route("/agent/v1/install.sh", get(crate::install::install_sh))
@@ -432,11 +440,16 @@ pub const HEARTBEAT_FEATURES: &[&str] = &[
 ];
 
 /// The manifest's `features`: the heartbeat fields above, plus `wake` while
-/// this server holds waits (`GET /agent/v1/wait`).
-fn features(s: &State) -> Vec<&'static str> {
+/// this server holds waits (`GET /agent/v1/wait`) and `agent_update` while
+/// agent updates are on.
+fn features(s: &State, agent_update: bool) -> Vec<&'static str> {
     let mut features = HEARTBEAT_FEATURES.to_vec();
     if s.wake.enabled() {
         features.push(crate::wake::FEATURE);
+    }
+    // Listed only while agent updates are on (a stopped server still lists it).
+    if agent_update {
+        features.push(crate::agent_updates::FEATURE);
     }
     features
 }
@@ -623,7 +636,12 @@ const FIRST_ROW_WINDOW: std::time::Duration = std::time::Duration::from_secs(600
 /// generation and apply state a `device.apply_state` row records; the first such
 /// row of a state that starts or ends an attempt is always allowed and is not
 /// counted.
-fn audit_row_allowed(s: &State, device: &str, action: &str, reached: Option<(i64, &str)>) -> bool {
+pub(crate) fn audit_row_allowed(
+    s: &State,
+    device: &str,
+    action: &str,
+    reached: Option<(i64, &str)>,
+) -> bool {
     if let Some((generation, state)) = reached
         && matches!(state, "desired" | "verified_applied" | "failed")
         && s.limit(
@@ -778,6 +796,9 @@ pub async fn heartbeat(
     // device check: strictly validated like every other member, before any
     // write, so a refusal leaves nothing behind.
     let checks = crate::device_validations::parse(&v)?;
+    // What the host reports about agent updates: strict like the rest, before
+    // anything is written, so a refusal leaves nothing behind.
+    let update_report = crate::agent_updates::parse(&v)?;
     let mut tx = db::begin_write(&s.pool).await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
         .bind(&id)
@@ -1218,10 +1239,28 @@ pub async fn heartbeat(
     // check this device is asked to run now. Neither touches desired state,
     // a generation, the policy or an issue.
     let validation = crate::device_validations::heartbeat(&mut tx, &id, &checks).await?;
+    // The host's report of agent updates, how far it moves the device's update
+    // target, and the offer the signed manifest carries for it.
+    let update = crate::agent_updates::heartbeat(
+        &mut tx,
+        &s,
+        &db::now(),
+        &crate::agent_updates::Build {
+            device_id: &id,
+            agent_version: text(&v, "agent_version"),
+            agent_sha256,
+            boot_id: text(&v, "boot_id"),
+        },
+        update_report.as_ref(),
+    )
+    .await?;
     let issued = Utc::now();
-    let mut payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":features(&s)});
+    let mut payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":features(&s, update.enabled)});
     if let Some(validation) = validation {
         payload["validation"] = validation;
+    }
+    if let Some(offer) = update.offer {
+        payload["agent_update"] = offer;
     }
     let signing_id: Option<String> =
         sqlx::query_scalar("SELECT signing_key_id FROM credentials WHERE fingerprint=?")
