@@ -730,6 +730,36 @@ export function macosHost() {
           }
         },
       );
+      // The step runs the new build as the service account from the probe directory
+      // before it stops anything. A temporary folder on a Mac is private to its owner,
+      // and a script there can't be started as another account (EACCES); the probe
+      // directory is root's and open to everyone, and its parents are made so, which
+      // this shows for the real account on the real directories.
+      await evidence.softStep(
+        `The service account (${host.account}) can enter every directory down to the probe directory, where the step runs a new build as it`,
+        () => {
+          const entered = run(
+            "sudo",
+            [
+              "-n",
+              "-u",
+              host.account,
+              "/bin/sh",
+              "-c",
+              `cd ${quoted(paths.probe)} && /bin/pwd -P && /bin/ls -ld .`,
+            ],
+            { allowFailure: true, quiet: true },
+          );
+          evidence.observe(
+            "probe_directory_as_the_service_account",
+            entered.text,
+          );
+          assert(
+            entered.code === 0,
+            `${host.account} can't enter ${paths.probe}:\n${entered.text}`,
+          );
+        },
+      );
       await evidence.softStep(
         "launchd loaded what the file says: a daemon that runs as root from the helper copy, every 30 seconds, started at load",
         () => {
