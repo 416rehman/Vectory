@@ -569,6 +569,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path ../artifacts | Out-Null
           go test -json ./... > ../artifacts/agent-go-test.json
           exit $LASTEXITCODE
+      # The path check that guards the update policy and the install directory
+      # is judged on a tree root really owns; the normal run is unprivileged, so
+      # its real-root tests skip there. Root gets its own build cache so nothing
+      # root-owned is left in the runner's.
+      - name: Run the root-owned path check as root
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        timeout-minutes: 10
+        working-directory: agent
+        run: sudo -E env "PATH=$PATH" GOCACHE=/tmp/vectory-go-cache-root go test -count=1 -run 'RootOwnedChecksOnReal|PosixAccessList' ./internal/agent
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ !cancelled() }}
         timeout-minutes: 10
