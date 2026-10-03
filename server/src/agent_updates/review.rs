@@ -594,10 +594,13 @@ async fn build(
     })
 }
 
-/// The lowercase SHA-256 that binds a review: the release, the settings, the
-/// exact `will_update` set (with the level and windows each applies under) and
-/// `wont_update` sets. What changes with the clock, such as the start of a
-/// device's next window, is not in it.
+/// The lowercase SHA-256 that binds a review: the release, the settings (which
+/// hold the canary devices the request named), the exact `will_update` set (with
+/// the level and windows each applies under) and `wont_update` sets. What
+/// changes with the clock is not in it: neither the start of a device's next
+/// window, nor the canary the server would pick when the request named none,
+/// which is a ranking of the same devices that changes with every check-in and
+/// that the stage releasing it ranks again.
 fn token(
     release: &Release,
     settings: &RolloutSettings,

@@ -438,9 +438,9 @@ pub(crate) fn password_of(request: &serde_json::Map<String, Value>) -> Result<St
 }
 
 /// `POST /api/v1/agent-release-keys/rotate {current_password}`: with server
-/// custody, a new key signs a statement-bearing successor of the current one:
-/// the server generates the successor, signs a rollover statement from the
-/// current key to it, makes it current and retires the old key.
+/// custody, the server generates the successor, signs a rollover statement from
+/// the current key to it with the current key, makes the successor current and
+/// retires the old key, whose sealed seed is removed once this commits.
 pub async fn rotate(
     AppState(s): AppState<State>,
     h: HeaderMap,
