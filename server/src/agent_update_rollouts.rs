@@ -332,7 +332,10 @@ fn request_of(body: &serde_json::Map<String, Value>) -> Result<Request> {
     })
 }
 
-/// The devices a request targets and the review of them.
+/// The devices a request targets and the review of them. The selector resolves
+/// as it does for deployments (`rollout::select`), so one that names an unknown
+/// or revoked device is refused instead of reviewed: `DEVICE_REVOKED` is what
+/// the stages find when a target's device is revoked after the rollout began.
 async fn reviewed(
     conn: &mut SqliteConnection,
     release: &agent_releases::Release,
