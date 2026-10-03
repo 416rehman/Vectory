@@ -142,6 +142,8 @@ async function load(name, props = {}) {
     writes: [],
     previews: [],
     failDevices: false,
+    refreshProposed: 3,
+    refreshBlockers: [],
   };
   const replies = fleetReplies({ devices, groups: () => state.groups });
   await context.route("**/*", async (route) => {
@@ -227,16 +229,16 @@ async function load(name, props = {}) {
         source_status: "scheduled",
         resource: "configuration",
         scheduled_at: "2026-10-01T12:00:00Z",
-        ready: true,
+        ready: state.refreshBlockers.length === 0,
         review_token: "b".repeat(64),
         saved_devices: devices
           .slice(0, 1)
           .map(({ id, name, status }) => ({ id, name, status })),
         devices: devices
-          .slice(0, 3)
+          .slice(0, state.refreshProposed)
           .map(({ id, name, status }) => ({ id, name, status })),
         warnings: [],
-        blockers: [],
+        blockers: state.refreshBlockers,
       });
     if (method === "POST" && path === "/groups") {
       const group = { id: id(1999), revision: 1, ...body };
@@ -719,6 +721,43 @@ try {
       expect(state.writes.at(-1).body.expected_device_ids).toEqual(
         devices.slice(0, 3).map((d) => d.id),
       );
+    },
+  );
+  await check(
+    "a scheduled device review names the devices a blocker affects, as many as fit, and offers no update",
+    async () => {
+      await load("recovery", {
+        deployment: { id: id(8000), status: "scheduled" },
+      });
+      await expect(rows("Scheduled device selection")).toHaveCount(3);
+      state.refreshProposed = 30;
+      state.refreshBlockers = [
+        {
+          code: "FULL_VECTOR_MODE_REQUIRED",
+          reason:
+            "This published configuration requires full Vector mode on the selected device. Only its host operator can enable that mode locally.",
+          resource: "configuration",
+          device_ids: devices.slice(0, 30).map((d) => d.id),
+        },
+      ];
+      await page
+        .getByRole("button", { name: "Refresh review", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("Selection cannot be updated");
+      await expect(dialog).toContainText(
+        "30 affected devices: Device 0000, Device 0001,",
+      );
+      await expect(dialog).toContainText("Device 0024, and 5 more.");
+      await expect(dialog).not.toContainText("Device 0025");
+      await expect(dialog).not.toContainText("does not match this dashboard");
+      await expect(
+        dialog.getByRole("button", {
+          name: "Update scheduled devices",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      expect(state.writes).toEqual([]);
     },
   );
   await check(

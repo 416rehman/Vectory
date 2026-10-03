@@ -939,6 +939,83 @@ try {
       },
     );
     await check(
+      "A device the pipeline cannot reach is named by the blocker, in every theme and width, and nothing is sent",
+      async () => {
+        const reason =
+          "This published configuration requires full Vector mode on the selected device. Only its host operator can enable that mode locally.";
+        for (const width of [899, 390])
+          for (const theme of ["light", "dark"]) {
+            await load({ width, theme });
+            state.members = [1, 2, 3];
+            state.blockers = [
+              {
+                code: "FULL_VECTOR_MODE_REQUIRED",
+                reason,
+                resource: "configuration",
+                device_ids: [id(2), id(3)],
+              },
+              {
+                code: "VECTOR_VERSION_INCOMPATIBLE",
+                reason:
+                  "The selected device does not report a Vector 0.58.x version. Review its local Vector installation before deploying.",
+                resource: "configuration",
+                device_ids: [id(3)],
+              },
+            ];
+            await openReview();
+            await expect(review()).toContainText("Selection cannot be updated");
+            await expect(review()).toContainText(reason);
+            await expect(review()).toContainText(
+              "2 affected devices: Synthetic beta, Synthetic gamma.",
+            );
+            await expect(review()).toContainText(
+              "1 affected device: Synthetic gamma.",
+            );
+            await expect(review()).not.toContainText(
+              "does not match this dashboard version",
+            );
+            await expect(review().getByRole("alert")).toHaveCount(0);
+            await expect(confirm()).toBeDisabled();
+            const scan = await new AxeBuilder({ page })
+              .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+              .analyze();
+            expect(scan.violations).toEqual([]);
+            accessibility.push({
+              width,
+              theme,
+              view: "blocked",
+              violations: scan.violations,
+            });
+            const g = await review().evaluate((el) => {
+              const box = el.getBoundingClientRect(),
+                note = el
+                  .querySelector(".scheduled-refresh-blocked")
+                  .getBoundingClientRect();
+              return {
+                x: box.x,
+                right: box.right,
+                noteLeft: note.x,
+                noteRight: note.right,
+                scroll: document.documentElement.scrollWidth,
+                width: innerWidth,
+              };
+            });
+            expect(g.x).toBeGreaterThanOrEqual(0);
+            expect(g.right).toBeLessThanOrEqual(g.width);
+            expect(g.noteLeft).toBeGreaterThanOrEqual(g.x);
+            expect(g.noteRight).toBeLessThanOrEqual(g.right);
+            expect(g.scroll).toBeLessThanOrEqual(g.width);
+            await page.screenshot({
+              path: resolve(
+                output,
+                `scheduled-refresh-blocked-${width}-${theme}.png`,
+              ),
+            });
+            expect(state.commits).toHaveLength(0);
+          }
+      },
+    );
+    await check(
       "Saved proposal differences keep usable keyboard focus and mobile light-dark accessible controls",
       async () => {
         for (const width of [899, 375])

@@ -33,6 +33,7 @@
   font-size: 12px;
 }
 .scheduled-refresh-notice {
+  margin: 0 0 var(--space-3);
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -44,6 +45,11 @@
   padding-left: 18px;
   margin-top: 5px;
   margin-bottom: 0;
+}
+.scheduled-refresh-blocked {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
 }
 .scheduled-refresh-device,
 .scheduled-refresh-change {
