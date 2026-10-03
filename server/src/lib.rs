@@ -1,5 +1,6 @@
 pub mod access_requests;
 pub mod accounts;
+pub mod agent_release;
 pub mod agent_release_keys;
 pub mod agent_releases;
 pub mod agent_update_rollouts;
