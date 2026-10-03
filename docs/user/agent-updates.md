@@ -221,7 +221,7 @@ On the rollout page, an Operator or Administrator can:
 
 **Stop all updates** is for the moment a build is wrong and you need every update to stop. It's on **Devices → Agent updates**, for Operators and Administrators. Give a reason; everyone sees it.
 
-It cancels every update rollout, withdraws every offer and refuses new rollouts until an administrator chooses **Clear the stop** in **Settings → Agent updates**. Devices already trying a build finish. A device that already downloaded one may still start within about a minute, because it learns of the stop at its next check-in. Clearing the stop resumes nothing: the rollouts it cancelled stay cancelled.
+It cancels every update rollout, withdraws every offer and refuses new rollouts until an administrator chooses **Clear the stop** in **Settings → Agent updates**. Devices already trying a build finish. A device that already downloaded one may still start until its next check-in tells it of the stop, usually within a minute, and the update step looks for work every 30 seconds. A host that checks in less often takes longer. Clearing the stop resumes nothing: the rollouts it cancelled stay cancelled.
 
 ## When a host rolls back
 
