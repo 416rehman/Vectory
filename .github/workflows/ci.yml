@@ -1002,6 +1002,12 @@ jobs:
         run: node tests/agent-settings-recovery-browser.mjs
         env:
           VECTORY_AGENT_SETTINGS_RECOVERY_OUTPUT: artifacts/browsers/agent-settings-recovery
+      - name: Check the agent update screens
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-updates-browser.mjs
+        env:
+          VECTORY_AGENT_UPDATES_OUTPUT: artifacts/browsers/agent-updates
       - name: Check agent upgrade guidance on the device page
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
