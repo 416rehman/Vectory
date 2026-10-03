@@ -79,6 +79,10 @@ func runAsChildProgram() {
 			paths := newUpdatePaths(filepath.Join(os.Args[3], "policy"), filepath.Join(os.Args[3], "step"), true)
 			updateLocationsOverride = &paths
 			updateGateOverride = func(string) bool { return false }
+			// The tree is the test's, under its own account's temporary directory: the
+			// path check the step's log is opened through still refuses a link or an
+			// alias on the way, and judges no access list.
+			rootOwnedTrust = ownerTrust{unjudged: true}
 			if err := RunUpdateHelperCommand(context.Background(), os.Args[3]); err != nil {
 				os.Exit(1)
 			}

@@ -141,14 +141,23 @@ func TestTheStepServiceCommandIsTheHelperCopyToldTheStateDirectory(t *testing.T)
 
 // isolatedStepLocations moves every path of the step into a directory of the test
 // and gives it no host, so that a step that runs in this process finds nothing of
-// the machine's own.
+// the machine's own. The service writes its log through the path check, which trusts
+// the account that runs the test in this tree (and nobody else but root), so the
+// directories the log is reached through have access lists that name only that account,
+// SYSTEM and the Administrators.
 func isolatedStepLocations(t *testing.T) UpdatePaths {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := finalDirectoryPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustTree(t, dir)
 	paths := newUpdatePaths(filepath.Join(dir, "policy"), filepath.Join(dir, "step"), true)
 	if err := os.MkdirAll(paths.Private, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	setDACL(t, filepath.Dir(paths.Private), ownDACL(t, true))
+	setDACL(t, paths.Private, ownDACL(t, true))
 	oldLocations, oldHost, oldGate := updateLocationsOverride, updateHostOverride, updateGateOverride
 	updateLocationsOverride, updateHostOverride = &paths, nil
 	updateGateOverride = func(string) bool { return false }
