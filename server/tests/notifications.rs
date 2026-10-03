@@ -1565,7 +1565,7 @@ async fn after_a_restart_a_device_is_reported_at_the_later_of_its_minutes_and_th
     // minute of it; and a device that returns in the window.
     device(&f, "edge-ancient", started - minutes(30)).await;
     let long = device(&f, "edge-long", started - minutes(12)).await;
-    device(&f, "edge-brief", started - minutes(1)).await;
+    device(&f, "edge-recent", started - minutes(1)).await;
     let returns = device(&f, "edge-returns", started - minutes(10)).await;
     f.s.notifier.begin_recovery_window(started);
     let half_past = |minute: i64| started + minutes(minute) + Duration::seconds(30);
@@ -1624,8 +1624,8 @@ async fn after_a_restart_a_device_is_reported_at_the_later_of_its_minutes_and_th
                 at_minutes,
                 [
                     "edge-ancient is offline",
-                    "edge-brief is offline",
-                    "edge-long is offline"
+                    "edge-long is offline",
+                    "edge-recent is offline"
                 ],
                 "reported at its own minutes"
             );
@@ -1636,7 +1636,7 @@ async fn after_a_restart_a_device_is_reported_at_the_later_of_its_minutes_and_th
     assert_eq!(every.len(), 3, "each once, and the returning device never");
     assert_eq!(
         texts_on(&hook, "/late"),
-        ["edge-brief is offline"],
+        ["edge-recent is offline"],
         "only what passed its minutes after the channel existed"
     );
 }
