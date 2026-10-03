@@ -18,7 +18,6 @@ const local = path.join(root, ".local");
 const preview = process.env.VECTORY_PREVIEW_DIR || path.join(local, "preview");
 const demoRoot = process.env.VECTORY_DEMO_DIR || path.join(local, "demo");
 const web = `http://127.0.0.1:${process.env.VECTORY_PREVIEW_WEB_PORT || 8080}`;
-const agentServer = `https://localhost:${process.env.VECTORY_PREVIEW_AGENT_PORT || 8443}`;
 // Each agent's pipeline exports Vector's metrics on its own loopback port
 // (metricsBase + index); the agent discovers the exporter by itself.
 const metricsBase = Number(process.env.VECTORY_DEMO_METRICS_PORT || 19600);
@@ -29,6 +28,11 @@ const agentCount = Math.min(
   Math.max(1, Number(args[args.indexOf("--agents") + 1]) || 4),
 );
 
+// A path relative to the repository when it is inside it, otherwise as given.
+const shown = (target) => {
+  const relative = path.relative(root, target);
+  return relative.startsWith("..") || path.isAbsolute(relative) ? target : relative;
+};
 const say = (message) => console.log(`\x1b[2m›\x1b[0m ${message}`);
 const done = (message) => console.log(`\x1b[32m✓\x1b[0m ${message}`);
 const fail = (message) => {
@@ -97,7 +101,7 @@ async function stopDemo() {
     await new Promise((resolve) => setTimeout(resolve, 500));
   if (stopping.some(alive)) say("Some agents are still stopping; they exit on their own.");
   run(path.join(root, "scripts/preview.sh"), ["stop"]);
-  done("Demo agents and preview stopped. State remains in .local/ for next time.");
+  done(`Demo agents and preview stopped. State remains in ${shown(demoRoot)} and ${shown(preview)} for next time.`);
 }
 
 function vectorTarget() {
@@ -226,7 +230,7 @@ function agentCli(agent, cliArgs, input = "") {
 
 const names = ["edge-nyc-01", "edge-nyc-02", "edge-fra-01", "web-ams-01", "web-ams-02", "edge-sfo-01", "edge-sfo-02", "web-sin-01", "edge-syd-01", "web-lon-01", "edge-tor-01", "web-sao-01"];
 
-async function startAgent(agent, vector, api, token, name, index) {
+async function startAgent(agent, vector, server, token, name, index) {
   const home = path.join(demoRoot, "agents", name);
   const state = path.join(home, "state");
   const managed = path.join(home, "config", "managed.json");
@@ -237,7 +241,7 @@ async function startAgent(agent, vector, api, token, name, index) {
   if (priorPid) {
     try {
       process.kill(priorPid, 0);
-      return { name, metricsPort, reused: true };
+      return { name, metricsPort, outcome: "already running" };
     } catch {
       /* restart below */
     }
@@ -263,13 +267,14 @@ async function startAgent(agent, vector, api, token, name, index) {
       "--json",
     ]);
   }
-  if (!existsSync(path.join(state, "identity.json"))) {
+  const enrolling = !existsSync(path.join(state, "identity.json"));
+  if (enrolling) {
     agentCli(
       agent,
       [
         "enroll",
         "--state-dir", state,
-        "--server", agentServer,
+        "--server", server,
         "--ca-file", path.join(local, "pki", "ca.pem"),
         "--name", name,
         "--token-stdin",
@@ -286,7 +291,7 @@ async function startAgent(agent, vector, api, token, name, index) {
   daemon.unref();
   closeSync(log);
   await fs.writeFile(pidFile, String(daemon.pid));
-  return { name, metricsPort, reused: false };
+  return { name, metricsPort, outcome: enrolling ? "enrolled and running" : "restarted" };
 }
 
 function demoPipeline(format) {
@@ -365,6 +370,10 @@ async function main() {
     env: { ...process.env, VECTORY_PREVIEW_VECTOR: vector, VECTORY_INSTANCE_NAME: "Vectory demo" },
   });
   const { api, credentials } = await session();
+  // Enroll with the address Add device shows: a host keeps the address it
+  // enrolled with, and the upgrade command names this one.
+  const { agent_url: server } = await api("/agent-install");
+  if (!server) fail("The preview has no agent listener address to enroll the demo agents with.");
   const token = await api("/tokens", {
     name: `Demo fleet ${new Date().toISOString().slice(0, 16)}`,
     expires_hours: 1,
@@ -372,8 +381,8 @@ async function main() {
   });
   const fleet = [];
   for (let i = 0; i < agentCount; i++) {
-    fleet.push(await startAgent(agent, vector, api, token.token, names[i], i));
-    done(`${names[i]} ${fleet.at(-1).reused ? "already running" : "enrolled and running"}`);
+    fleet.push(await startAgent(agent, vector, server, token.token, names[i], i));
+    done(`${names[i]} ${fleet.at(-1).outcome}`);
   }
   // Give first heartbeats a moment so the devices exist before deployment.
   await new Promise((resolve) => setTimeout(resolve, 3000));

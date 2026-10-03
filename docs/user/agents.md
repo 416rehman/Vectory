@@ -141,6 +141,8 @@ On Linux and macOS, choose **Upgrade agent** on the device page. If the device a
 
 The command passes `--state-dir` when the device keeps its state elsewhere, and `--service none` when nothing keeps its agent running. Without a service, setup says to stop `vectory run` and start it again on the new build. If the agent is installed outside `/usr/local/bin`, add `--install-dir` with its directory.
 
+A host keeps the address it enrolled with. If the command names another address, setup stops before it changes anything and prints the address the host is enrolled with. If it's the same server, run the command again with `--server` set to that address. Moving a host to another server is a separate step: run `vectory unenroll`, revoke the old device in the dashboard, then run setup again.
+
 To upgrade by hand instead (on Windows, the only way), open **By hand** in the same dialog:
 
 <!-- steps -->
