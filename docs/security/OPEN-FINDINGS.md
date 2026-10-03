@@ -18,6 +18,7 @@ A file root that covers `/run` would let a sink that connects to Unix sockets re
 
 ## P3
 
+- The help center's build tool (`astro`) depends on `http-cache-semantics`, whose advisory ([GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp), high) affects every release and has no patched one. Nothing that ships contains the package. The release-candidate gate acknowledges it in `packaging/npm-audit-exceptions.json` until 2026-12-31, after which the gate fails until someone reviews the entry ([why nothing shipped is affected](../internal/DEPENDENCY-AUDIT.md)).
 - The release-candidate workflow's SBOM job uses a SHA-pinned action that downloads the SBOM tool's install script from that project's main branch at job time (the tool's version is pinned, the script is not). Replace it with the tool's release archive pinned by checksum. The job has a read-only token and runs only when started by hand.
 - The dashboard's and the Help center's content security policy allows `style-src 'unsafe-inline'`. No HTML-injection sink exists today, so no style can be injected; hashing or moving the small set of inline styles would let the policy drop it as defence in depth.
 - Hypothesis, not demonstrated: a flood of a public endpoint delaying writers through the process-wide writer mutex. A control flood showed the same or higher write latency without the lock in the path.
