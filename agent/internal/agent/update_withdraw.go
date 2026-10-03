@@ -80,18 +80,24 @@ func updateInProgress() error {
 	return updateStageBusy(status)
 }
 
+// UpdateBusyError says that an update is being applied, tried or taken back, so
+// what it works on can't be withdrawn now. Its text names when that ends.
+type UpdateBusyError struct{ Message string }
+
+func (e *UpdateBusyError) Error() string { return e.Message }
+
 // updateStageBusy is the error for a status that shows the step at work, or nil.
 func updateStageBusy(status UpdateStatus) error {
 	switch status.Stage {
 	case UpdateStageTrial:
 		if !status.Deadline.IsZero() {
-			return fmt.Errorf("an update is being tried on this host; it ends by %s", humanClock(status.Deadline))
+			return &UpdateBusyError{fmt.Sprintf("an update is being tried on this host; it ends by %s", humanClock(status.Deadline))}
 		}
-		return errors.New("an update is being tried on this host; it ends within 5 minutes")
+		return &UpdateBusyError{"an update is being tried on this host; it ends within 5 minutes"}
 	case UpdateStagePreparing, UpdateStageSwapping:
-		return errors.New("an update is being applied on this host; it takes a few minutes")
+		return &UpdateBusyError{"an update is being applied on this host; it takes a few minutes"}
 	case UpdateStageRollingBack:
-		return errors.New("an update is being rolled back on this host; it takes a few minutes")
+		return &UpdateBusyError{"an update is being rolled back on this host; it takes a few minutes"}
 	}
 	return nil
 }

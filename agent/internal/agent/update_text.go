@@ -213,7 +213,7 @@ func updateEligibilityWords(code string) string {
 	case "SERVICE_DEFINITION_OUTDATED":
 		return "this host's service definition is older than the one the next release needs"
 	case "PLATFORM_NOT_IN_RELEASE":
-		return "agent updates aren't in this release for " + platformName(runtime.GOOS) + ". " + byHand()
+		return "agent updates aren't in this release for " + platformName(runtime.GOOS) + ": hosts of this kind update by hand"
 	}
 	return "code " + code
 }
