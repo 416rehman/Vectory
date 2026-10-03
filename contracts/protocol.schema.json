@@ -19697,6 +19697,61 @@
           ],
           "description": "Null while updates are off."
         },
+        "frozen_devices": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "items": {
+                  "type": "array",
+                  "maxItems": 20,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "device_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "device_name": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 240
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "rollover_conflict": {
+                        "$ref": "#/$defs/RolloverConflict"
+                      }
+                    },
+                    "required": [
+                      "device_id",
+                      "device_name",
+                      "rollover_conflict"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "total",
+                "items"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Hosts frozen on a fork of the rollover chain until they are re-pinned: the non-revoked devices whose latest report carries a rollover_conflict, at most 20 by name. Null while updates are off."
+        },
         "catalog": {
           "anyOf": [
             {
@@ -19721,6 +19776,7 @@
         "stopped",
         "active_rollouts",
         "fleet",
+        "frozen_devices",
         "catalog"
       ],
       "additionalProperties": false,
