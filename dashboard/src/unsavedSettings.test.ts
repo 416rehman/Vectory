@@ -25,7 +25,11 @@ const settings = (
 
 describe("agent settings applied without saving", () => {
   it("lists settings deployments that have no saved record and still reach devices", () => {
-    expect(unsavedSettings([settings()])).toHaveLength(1);
+    const rows = unsavedSettings([settings()]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].deployments.map((d) => d.id)).toEqual([
+      "00000000-0000-4000-8000-000000000001",
+    ]);
   });
   it("skips saved settings, pipelines, rollbacks, removals and empty rollouts", () => {
     expect(
@@ -43,7 +47,6 @@ describe("agent settings applied without saving", () => {
     const newest = settings({ id: "00000000-0000-4000-8000-000000000002" });
     const rows = unsavedSettings([
       newest,
-      settings({ id: "00000000-0000-4000-8000-000000000003" }),
       settings({
         id: "00000000-0000-4000-8000-000000000004",
         policy: {
@@ -53,9 +56,43 @@ describe("agent settings applied without saving", () => {
         },
       }),
     ]);
-    expect(rows.map((row) => row.id)).toEqual([
+    expect(rows.map((row) => row.deployments[0].id)).toEqual([
       newest.id,
       "00000000-0000-4000-8000-000000000004",
+    ]);
+  });
+  it("keeps every deployment that applies the same values, so no device goes uncounted", () => {
+    // Three devices run the values: one through the newer deployment and two
+    // through the older one. One entry must still account for all three.
+    const newer = settings({
+      id: "00000000-0000-4000-8000-000000000002",
+      target_count: 1,
+      state_counts: { verified_applied: 1 },
+    });
+    const older = settings({
+      id: "00000000-0000-4000-8000-000000000003",
+      target_count: 2,
+      state_counts: { verified_applied: 2 },
+    });
+    const rows = unsavedSettings([newer, older]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].policy).toEqual(newer.policy);
+    expect(rows[0].deployments.map((d) => d.id)).toEqual([newer.id, older.id]);
+    expect(rows[0].deployments.map((d) => d.target_count)).toEqual([1, 2]);
+  });
+  it("leaves a deployment out of its entry once its devices have all left", () => {
+    const older = settings({
+      id: "00000000-0000-4000-8000-000000000003",
+      target_count: 2,
+      state_counts: { removed: 2 },
+    });
+    const rows = unsavedSettings([
+      settings({ id: "00000000-0000-4000-8000-000000000002" }),
+      older,
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].deployments.map((d) => d.id)).toEqual([
+      "00000000-0000-4000-8000-000000000002",
     ]);
   });
 });
