@@ -221,6 +221,7 @@ import { connectionRoutes } from "./canvasLayout";
 const LIVE_REFRESH_MS = 15000;
 import { coalesces, editedField } from "./editHistory";
 import { draftSummary } from "./draftSummary";
+import { refusedSave, type SaveRefusal } from "./saveRefusal";
 import {
   pipelineTemplates,
   withMonitoring,
@@ -515,6 +516,8 @@ export default function Editor({
     } | null>(null),
     [dirty, setDirty] = useState(false),
     [saveStatus, setSaveStatus] = useState("All changes saved"),
+    // The server refused to store this draft. The edits stay; this says where.
+    [saveRefusal, setSaveRefusal] = useState<SaveRefusal | null>(null),
     [loadAttempt, setLoadAttempt] = useState(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -1460,6 +1463,7 @@ export default function Editor({
           saveUncertain.current = false;
           uncertainSaveRevision.current = null;
           saveNeedsReload.current = false;
+          setSaveRefusal(null);
           setDoc(updated);
           latest.current.doc = updated;
           // Measurements and selection change node and edge objects without
@@ -1490,12 +1494,19 @@ export default function Editor({
             saveUncertain.current = true;
             uncertainSaveRevision.current ??= revision;
           }
+          // A refusal other than a changed draft leaves nothing to reload:
+          // the edits stay and the fix is in them.
+          const refusal =
+            rejected && !saveNeedsReload.current && !saveUncertain.current
+              ? refusedSave(e as APIError, current.config)
+              : null;
+          setSaveRefusal(refusal);
           setError(
             saveNeedsReload.current
               ? "The server draft changed. Reload it before discarding or saving these local edits."
               : saveUncertain.current
                 ? "The draft save was not confirmed. Your edits are still here. Retry Save draft or reload the server draft."
-                : (e as Error).message,
+                : (refusal?.message ?? (e as Error).message),
           );
           setSaveStatus(
             saveNeedsReload.current
@@ -2733,6 +2744,7 @@ export default function Editor({
     explicitSaveInFlight.current = true;
     setSavingDraft(true);
     setError("");
+    setSaveRefusal(null);
     try {
       return await persist(true, undefined, undefined, note);
     } finally {
@@ -3062,6 +3074,7 @@ export default function Editor({
     stack.current = [];
     future.current = [];
     setSaveStatus("All changes saved");
+    setSaveRefusal(null);
   }
   function requestDiscard() {
     if (!editable || busy) return;
@@ -3185,6 +3198,7 @@ export default function Editor({
       setDirty(false);
       importedCodeDirty.current = false;
       setSaveStatus("All changes saved");
+      setSaveRefusal(null);
       notify(
         `Restored as draft revision ${restored.revision}. Published versions and devices are unchanged.`,
         { tone: "success" },
@@ -3453,6 +3467,20 @@ export default function Editor({
             })
         : undefined,
     });
+  }
+  // The server refused the draft over one setting: go where it is written, in
+  // Code, or to the field in the step's settings.
+  function goToRefusedField() {
+    const target = saveRefusal;
+    if (!target?.component) return;
+    if (view === "code") {
+      setCodeReveal({
+        offset: sourceOffset(code, target.component),
+        nonce: Date.now(),
+      });
+      return;
+    }
+    openStep({ panel: "step", select: target.component, field: target.field });
   }
   // Open the step a problem belongs to and reveal the field and position.
   // Pipeline-wide problems open the matching pipeline settings section.
@@ -4221,14 +4249,18 @@ export default function Editor({
                   ? "The server draft changed. Reload it before continuing."
                   : saveUncertain.current
                     ? "The draft save was not confirmed. Reload the server draft or retry Save draft."
-                    : "The draft save failed. Your edits are still here.")
+                    : saveRefusal?.message ||
+                      "The draft save failed. Your edits are still here.")
               }
             />
-            {(saveStatus.startsWith("Save failed") ||
-              saveUncertain.current ||
-              saveNeedsReload.current) && (
+            {(saveUncertain.current || saveNeedsReload.current) && (
               <Button variant="secondary" onClick={reloadLatest}>
                 Reload server draft
+              </Button>
+            )}
+            {saveRefusal?.component && saveRefusal.field && (
+              <Button variant="secondary" onClick={goToRefusedField}>
+                Go to field
               </Button>
             )}
             {saveUncertain.current && dirty && (
