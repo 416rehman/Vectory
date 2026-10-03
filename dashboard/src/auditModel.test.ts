@@ -9,6 +9,8 @@ import {
   auditResourceRoute,
   auditRoute,
   auditEventLabel,
+  auditFamilies,
+  auditOutcomeLabel,
   defaultAuditQuery,
   deviceResultsSummary,
   groupDeviceResults,
@@ -142,6 +144,74 @@ describe("audit view queries and identities", () => {
     expect(auditDateError("2026-02-30", "")).toMatch(/valid start/);
     expect(auditDateError("2024-02-29", "2024-02-29")).toBe("");
     expect(auditDateError("2026-09-01T00:00:00Z", "")).toMatch(/valid/);
+  });
+});
+
+describe("agent update events", () => {
+  const actions = [
+    "agent_update.enable",
+    "agent_update.disable",
+    "agent_update.stop",
+    "agent_update.stop_clear",
+    "agent_release_key.rotate",
+    "agent_release_key.rollover",
+    "agent_release_key.revoke",
+    "agent_release.prepare",
+    "agent_release.sign",
+    "agent_release.signature_upload",
+    "agent_release.withdraw",
+    "agent_update_rollout.create",
+    "agent_update_rollout.pause",
+    "agent_update_rollout.resume",
+    "agent_update_rollout.cancel",
+    "agent_update_rollout.release",
+    "agent_update_rollout.gate",
+    "device.agent_update",
+  ];
+  it("names every event in words, never as its stored code", () => {
+    for (const action of actions) {
+      expect(auditActions[action], action).toBeTruthy();
+      expect(auditActionLabel(action)).not.toContain("_");
+      expect(auditActionLabel(action)).not.toContain(".");
+    }
+    expect(auditActionLabel("agent_update.stop")).toBe(
+      "All agent updates stopped",
+    );
+    expect(auditActionLabel("device.agent_update")).toBe("Device agent update");
+  });
+  it("groups them so a family filter finds each by its dot-delimited prefix", () => {
+    const prefixes = new Set(actions.map((action) => action.split(".")[0]));
+    expect([...prefixes].sort()).toEqual(
+      [
+        "agent_release",
+        "agent_release_key",
+        "agent_update",
+        "agent_update_rollout",
+        "device",
+      ].sort(),
+    );
+    for (const family of [...prefixes].filter((name) => name !== "device"))
+      expect(auditFamilies[family], family).toBeTruthy();
+    // An exact family never swallows a longer name that merely starts with it.
+    expect("agent_release_key.rotate".startsWith("agent_release.")).toBe(false);
+    expect("agent_update_rollout.pause".startsWith("agent_update.")).toBe(
+      false,
+    );
+  });
+  it("links a rollout to its page and nothing else of agent updates", () => {
+    expect(auditResourceRoute("agent_update_rollout", id)).toBe(
+      `agent-updates/${id.toLowerCase()}`,
+    );
+    expect(auditResourceRoute("agent_release", id)).toBeNull();
+    expect(
+      auditResourceRoute("agent_release_key", "05cc6c02351af0cb"),
+    ).toBeNull();
+  });
+  it("shows the result of a device's update as a word, not its state code", () => {
+    expect(auditOutcomeLabel("verified")).toBe("Updated");
+    expect(auditOutcomeLabel("rolled_back")).toBe("Rolled back");
+    expect(auditOutcomeLabel("refused")).toBe("Refused");
+    expect(auditOutcomeLabel("failed")).toBe("Failed");
   });
 });
 

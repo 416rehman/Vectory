@@ -60,7 +60,7 @@ const strategies: {
   },
 ];
 
-function NumberField({
+export function NumberField({
   label,
   hint,
   value,

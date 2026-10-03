@@ -3,10 +3,28 @@
 // or an operator choice that is quoted for the target shell. The enrollment
 // token is never part of a command.
 import type { AgentInstall, Release } from "./api";
+import { windowProblem, WINDOW_LIMIT } from "./updateWindow";
 
 export type HostOS = "linux" | "darwin" | "windows";
 export type Mode = "restricted" | "full";
 export type ServiceChoice = "auto" | "none";
+export type UpdateTrack = "patch" | "minor";
+/**
+ * What a host agrees to about agent updates, written by `vectory setup` to a
+ * root-owned file. A host that is given no consent never installs a build,
+ * whatever the server says. Automatic and ask hosts pin the release key by its
+ * fingerprint (the whole SHA-256, never a shortened form).
+ */
+export type UpdateConsent =
+  | { level: "off" }
+  | {
+      level: "auto" | "ask";
+      track: UpdateTrack;
+      /** Windows in the agent's grammar; none means any time. */
+      windows: readonly string[];
+      /** The release key's fingerprint: 64 lowercase hex characters. */
+      key: string;
+    };
 /**
  * How the host checks the server before it sends the token: pin the
  * server's CA by the fingerprint this page shows, trust a CA certificate file
@@ -34,6 +52,8 @@ export type SetupChoices = {
   caFile?: string;
   /** Empty: the installer's default directory (Linux and macOS). */
   installDir?: string;
+  /** Absent: no update flag, so a host keeps whatever it has. */
+  updates?: UpdateConsent;
 };
 
 /** The same defaults `vectory setup`, the service definitions and the docs use. */
@@ -173,6 +193,34 @@ export function commandValueProblem(label: string, value: string, os: HostOS) {
     : "";
 }
 
+/**
+ * The setup flags for a host's consent to agent updates, nothing when none was
+ * chosen. Every value is checked first: a command never carries a key that
+ * isn't a whole fingerprint, or a window the agent wouldn't read.
+ */
+export function updateArguments(
+  consent: UpdateConsent | undefined,
+  os: HostOS,
+): string[] {
+  if (!consent) return [];
+  if (consent.level === "off") return ["--updates", "off"];
+  if (
+    !/^[0-9a-f]{64}$/.test(consent.key) ||
+    consent.windows.length > WINDOW_LIMIT ||
+    consent.windows.some((spec) => windowProblem(spec))
+  )
+    throw new CommandValueError("control");
+  return [
+    "--updates",
+    consent.level,
+    "--update-key-sha256",
+    consent.key,
+    "--update-track",
+    consent.track,
+    ...consent.windows.flatMap((spec) => ["--update-window", quote(spec, os)]),
+  ];
+}
+
 /** Setup options for the operator's choices, defaults omitted. */
 export function setupArguments(choices: SetupChoices): string[] {
   const defaults = platformDefaults(choices.os);
@@ -198,6 +246,7 @@ export function setupArguments(choices: SetupChoices): string[] {
     add("--capability-policy", choices.capabilityPolicy.trim());
   if (choices.vectorBinary?.trim())
     add("--vector-binary", choices.vectorBinary.trim());
+  args.push(...updateArguments(choices.updates, choices.os));
   return args;
 }
 

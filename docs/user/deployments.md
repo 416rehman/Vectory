@@ -2,6 +2,8 @@
 
 A deployment sends one published version, or a set of agent settings, to the devices you choose. Publishing freezes a version; deploying decides who gets it and when. Deploying needs the Operator or Administrator role.
 
+An [agent update](agent-updates.md#roll-out-an-update) is a different thing. It replaces the agent on a host, with its own review, rollout page and gates, and it never touches a deployment, a version or a generation. A pipeline rollout and an update rollout can't gate, replace or roll back each other.
+
 ## Deploy a published version
 
 <!-- steps -->

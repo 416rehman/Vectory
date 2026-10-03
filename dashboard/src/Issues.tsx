@@ -35,6 +35,7 @@ import {
   useResource,
 } from "./ui";
 import { agentRefusal } from "./agentRefusals";
+import { isAgentUpdateIssue } from "./agentUpdateAttention";
 import { countLabel } from "./countLabel";
 import DocLink from "./DocLink";
 import { DataTable, type TableColumn } from "./DataTable";
@@ -534,23 +535,30 @@ function IssueSummary({ issue }: { issue: Issue }) {
       {/* The column sorts by this code, so its order reads at a glance. */}
       <code className="issue-code">{issue.code}</code>
       <p className="issue-context">
-        {issue.desired_version_id && issue.configuration_id ? (
-          <a
-            href={`#/configurations/${encodeURIComponent(issue.configuration_id)}`}
-          >
-            {versionLabel(issue, issue.desired_version_id)}
-          </a>
+        {isAgentUpdateIssue(issue) ? (
+          // The agent's own build: there is no pipeline version to name.
+          <a href="#/agent-updates">Agent update</a>
         ) : (
-          versionLabel(issue, issue.desired_version_id)
-        )}
-        {issue.deployment_id && (
           <>
-            {" · "}
-            <a
-              href={`#/deployments/${encodeURIComponent(issue.deployment_id)}`}
-            >
-              Deployment
-            </a>
+            {issue.desired_version_id && issue.configuration_id ? (
+              <a
+                href={`#/configurations/${encodeURIComponent(issue.configuration_id)}`}
+              >
+                {versionLabel(issue, issue.desired_version_id)}
+              </a>
+            ) : (
+              versionLabel(issue, issue.desired_version_id)
+            )}
+            {issue.deployment_id && (
+              <>
+                {" · "}
+                <a
+                  href={`#/deployments/${encodeURIComponent(issue.deployment_id)}`}
+                >
+                  Deployment
+                </a>
+              </>
+            )}
           </>
         )}
       </p>
@@ -718,7 +726,8 @@ function IssueActions({
       {acting &&
         !issue.device_revoked &&
         issue.desired_version_id &&
-        !isDataPlaneCode(issue.code) && (
+        !isDataPlaneCode(issue.code) &&
+        !isAgentUpdateIssue(issue) && (
           <Button
             variant="secondary compact"
             aria-label={`Retry on device ${issue.device_name || ""}`.trim()}
@@ -890,25 +899,31 @@ function IssueGroupCard({
         <div>
           <h2 id={`${detailsId}-title`}>{group.title}</h2>
           <p className="issue-context">
-            {group.version_id && group.configuration_id ? (
-              <a
-                href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}
-              >
-                {versionLabel(group, group.version_id)}
-              </a>
+            {isAgentUpdateIssue(group) ? (
+              <a href="#/agent-updates">Agent update</a>
             ) : (
-              versionLabel(group, group.version_id)
+              <>
+                {group.version_id && group.configuration_id ? (
+                  <a
+                    href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}
+                  >
+                    {versionLabel(group, group.version_id)}
+                  </a>
+                ) : (
+                  versionLabel(group, group.version_id)
+                )}
+                {group.deployment_ids.map((id, index) => (
+                  <span key={id}>
+                    {" · "}
+                    <a href={`#/deployments/${encodeURIComponent(id)}`}>
+                      {group.deployment_ids.length > 1
+                        ? `Deployment ${index + 1}`
+                        : "Deployment"}
+                    </a>
+                  </span>
+                ))}
+              </>
             )}
-            {group.deployment_ids.map((id, index) => (
-              <span key={id}>
-                {" · "}
-                <a href={`#/deployments/${encodeURIComponent(id)}`}>
-                  {group.deployment_ids.length > 1
-                    ? `Deployment ${index + 1}`
-                    : "Deployment"}
-                </a>
-              </span>
-            ))}
           </p>
         </div>
         <p className="issue-group-status">

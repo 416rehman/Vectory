@@ -267,6 +267,27 @@ export function describeActivity(item: ActivityItem): Part[] {
         { text: verb },
       ];
     }
+    case "device.agent_update": {
+      // The outcome is the device's update state: what its agent reported.
+      const verbs: Record<string, string> = {
+        verified: " updated its agent",
+        rolled_back: " rolled back an agent update",
+        failed: " couldn't update its agent",
+        refused: " refused an agent update",
+      };
+      return [
+        targetPart(item),
+        { text: verbs[item.outcome] ?? " reported an agent update result" },
+      ];
+    }
+    case "agent_update.enable":
+      return [actor, { text: " turned on agent updates" }];
+    case "agent_update.disable":
+      return [actor, { text: " turned off agent updates" }];
+    case "agent_update.stop":
+      return [actor, { text: " stopped all agent updates" }];
+    case "agent_update.stop_clear":
+      return [actor, { text: " cleared the stop on agent updates" }];
     case "group.create":
       return [actor, { text: " created group " }, targetPart(item)];
     case "group.update":
@@ -293,8 +314,9 @@ export function describeActivity(item: ActivityItem): Part[] {
 export const activityTone = (item: ActivityItem) =>
   ["failed", "failure", "denied", "rolled_back"].includes(item.outcome)
     ? "danger"
-    : ["verification_unknown", "conflict", "missed"].includes(item.outcome) ||
-        item.action === "deployment.missed"
+    : ["verification_unknown", "conflict", "missed", "refused"].includes(
+          item.outcome,
+        ) || item.action === "deployment.missed"
       ? "warning"
       : item.action === "device.apply_state" &&
           item.outcome === "verified_applied"
@@ -335,6 +357,14 @@ export function activityGlyph(item: ActivityItem): ActivityGlyph {
           : item.outcome === "verification_unknown"
             ? "check"
             : "progress";
+  if (item.action === "device.agent_update")
+    return item.outcome === "verified"
+      ? "applied"
+      : item.outcome === "rolled_back"
+        ? "rollback"
+        : item.outcome === "failed"
+          ? "failed"
+          : "check";
   const direct: Record<string, ActivityGlyph> = {
     "configuration.publish": "publish",
     "deployment.rollback": "rollback",
@@ -361,6 +391,10 @@ export function activityGlyph(item: ActivityItem): ActivityGlyph {
         group: "group",
         token: "token",
         issue: "issue",
+        agent_update: "settings",
+        agent_release_key: "settings",
+        agent_release: "publish",
+        agent_update_rollout: "deploy",
       } as Record<string, ActivityGlyph>
     )[family] ?? "other"
   );

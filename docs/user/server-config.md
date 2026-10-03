@@ -60,6 +60,7 @@ For the three HTTP listener limits (`VECTORY_HTTP_HEADER_TIMEOUT_SECONDS`, `VECT
 | `VECTORY_RELEASES_DIR` | `<data dir>/releases` | Optional mirror of agent downloads with a `catalog.json`. An entry here overrides the bundled one for the same OS and CPU. |
 | `VECTORY_PUBLIC_AGENT_URL` | The agent listener | Agent URL that **Add device** puts in install commands, for when devices reach the server through another name or port. |
 | `VECTORY_PUBLIC_AGENT_DOWNLOADS` | `true` | Serve the installer and agent downloads on the agent listener. Set `false` to require manual downloads. |
+| `VECTORY_AGENT_RELEASE_STORAGE_BYTES` | `2147483648` (2 GiB) | Space for the releases that [agent updates](agent-updates.md) prepare. Preparing a release that would pass it is refused with `RELEASE_STORAGE_FULL`: withdraw releases you no longer need, or raise it. Up to 20 releases that aren't withdrawn can exist, whatever the space. |
 | `VECTORY_PUBLIC_URL` | `http://<this host>:<web port>` | The dashboard address people use (`https://` or `http://`). The installer prints a link to the new device there, the startup banner shows it, and, when you set it, notifications link back to it. |
 
 > [!IMPORTANT]
@@ -90,5 +91,7 @@ The validator container (`vector-validator`) reads these.
 | `VECTORY_PREVIEW_AGENT_TARGETS` | Every supported platform | Space-separated `os/arch` list of bundled agents to build, for example `linux/amd64 darwin/arm64`, for a faster first start. |
 
 The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `node scripts/demo.mjs` uses the same preview variables, plus `VECTORY_DEMO_DIR` (default `.local/demo`) for its agents and `VECTORY_DEMO_METRICS_PORT` (default `19600`), the first loopback port its agents' metrics exporters use.
+
+`VECTORY_UPDATE_GOLDEN` is read only by the server's own tests: set to `1`, it rewrites the golden file of the release tests. It has no effect on a running server.
 
 `VECTORY_REQUEST_FIXTURES` is read only by the server's own tests, which then print query plans prefixed with `VECTORY_REQUEST_PLAN`. It has no effect on a running server.

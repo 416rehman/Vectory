@@ -2,6 +2,7 @@
 // second record by itself. Actual App, synthetic committed-response-loss transport.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve, dirname } from "node:path";
@@ -99,6 +100,8 @@ await context.route("**/*", async (route) => {
       });
     if (path === "/settings")
       return reply({ instance_name: "Synthetic settings create check" });
+    // Agent updates are off here, so the page is what it was without them.
+    if (path === "/agent-updates") return reply(updatesOff());
     if (path === "/mfa") return reply({ enabled: false });
     // The page looks for settings applied without saving in the history.
     if (path === "/deployments/history")

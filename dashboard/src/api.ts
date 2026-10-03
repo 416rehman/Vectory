@@ -38,6 +38,11 @@ import {
   type TelemetrySample,
   type VectorLogSummary,
 } from "./runtimeModel";
+import {
+  agentUpdateResponseSchema,
+  DeviceAgentUpdateSchema,
+  type DeviceAgentUpdate,
+} from "./agentUpdateModel";
 
 export class APIError extends Error {
   constructor(
@@ -104,8 +109,29 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
       match = route.match(/^\/device-validations\/([^/]+)$/);
       resource = "device check";
     }
+    if (!match) {
+      match = route.match(/^\/agent-releases\/([^/]+)$/);
+      resource = "agent release details";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-update-rollouts\/([^/]+)$/);
+      resource = "update rollout details";
+    }
   } else if (method === "POST") {
     match = route.match(/^\/devices\/([^/]+)\/retry$/);
+    if (!match) {
+      match = route.match(
+        /^\/agent-update-rollouts\/([^/]+)\/(?:pause|resume|cancel)$/,
+      );
+      resource = "update rollout";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-releases\/([^/]+)\/withdraw$/);
+      resource = "agent release";
+    }
+  } else if (method === "PUT") {
+    match = route.match(/^\/agent-releases\/([^/]+)\/signature$/);
+    resource = "agent release";
   }
   if (!match) return;
   let expected: string | undefined;
@@ -718,6 +744,11 @@ export type Device = {
   agent_sha256?: string;
   /** The agent's state directory on the host, from the latest check-in. */
   state_dir?: string;
+  /**
+   * What the agent last reported about updates, while updates are on and it
+   * sent a report. Absent means "Not reported", never "off".
+   */
+  agent_update?: DeviceAgentUpdate | null;
 };
 /**
  * Whether the device's agent holds a wait right now, so a change reaches it
@@ -1455,6 +1486,9 @@ export const AuditSummarySchema = z.object({
     "issue",
     "signing_key",
     "server",
+    "agent_release_key",
+    "agent_release",
+    "agent_update_rollout",
     "unknown",
   ]),
   target_name: z.string().nullable(),
@@ -1467,6 +1501,8 @@ export const AuditSummarySchema = z.object({
   request_id: z.string().nullable(),
 });
 const auditNumber = z.number().int().nonnegative();
+const soft = <T extends z.ZodType>(schema: T) =>
+  schema.optional().catch(undefined);
 export const AuditDetailsSchema = z.object({
   reason: z.string().optional(),
   previous_group_revision: auditNumber.max(Number.MAX_SAFE_INTEGER).optional(),
@@ -1509,6 +1545,29 @@ export const AuditDetailsSchema = z.object({
     .string()
     .refine((value) => Array.from(value).length <= 500)
     .optional(),
+  // Agent updates: versions, digests, counters, fingerprints and codes, never
+  // key material. The event view only displays them, so one that doesn't fit
+  // its shape is left out instead of hiding the event.
+  custody: soft(z.enum(["server", "offline"])),
+  fingerprint: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  from_fingerprint: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  source: soft(z.enum(["server", "upload"])),
+  version: soft(z.string().max(64)),
+  counter: soft(z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)),
+  manifest_sha256: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  release_id: soft(z.string().max(128)),
+  rollout_id: soft(z.string().max(128)),
+  stage: soft(z.string().max(32)),
+  gate_state: soft(z.string().max(32)),
+  released_count: soft(auditNumber),
+  verified_count: soft(auditNumber),
+  withdrawn_releases: soft(auditNumber),
+  cancelled_rollouts: soft(auditNumber),
+  from_version: soft(z.string().max(128)),
+  to_version: soft(z.string().max(64)),
+  code: soft(z.string().max(64)),
+  state: soft(z.string().max(32)),
+  device_ids: soft(z.array(z.string().max(128)).max(100)),
 });
 export const AuditDetailSchema = AuditSummarySchema.extend({
   details: AuditDetailsSchema,
@@ -1841,6 +1900,7 @@ export const DeviceSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .nullable()
       .optional(),
+    agent_update: DeviceAgentUpdateSchema.nullish(),
   })
   .passthrough();
 const artifactDigest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -2393,6 +2453,8 @@ export type OverviewFleet = z.infer<typeof OverviewFleetSchema>;
 function responseSchema(path: string, method: string): z.ZodType | undefined {
   const slim = /(?:^|&)slim=(?:1|true)(?:&|$)/.test(path.split("?")[1] || "");
   path = path.split("?")[0];
+  const update = agentUpdateResponseSchema(path, method);
+  if (update) return update;
   if (method === "GET") {
     if (path === "/devices/inventory") return DeviceInventoryPageSchema;
     if (path === "/devices/inventory/ids") return DeviceInventoryIdsSchema;

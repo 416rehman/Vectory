@@ -74,6 +74,16 @@ See [Deploy and roll back](deployments.md) for the workflow and [Read the apply 
 | **Local pause** | A pause set on the host with `vectory pause`. Only the host can clear it. |
 | **Device secret** | A `vectory-secret:NAME` reference in a credential field. The agent fills it from a private file bound on the device with `configure-secrets`. [Use one](resources.md#keep-credentials-on-the-device). |
 | **Secret provider** | A Vector backend that looks up credentials by name. Full mode only. |
+| **Agent update** | Replacing the agent on a host from the dashboard, in a rollout. A host takes it only if it agreed to updates and a key it pinned signed the build. [Agent updates](agent-updates.md). |
+| **Consent (to updates)** | A host's choice about agent updates: **Automatic**, **Ask on the host** or **Off**. It is made once, in the command run on the host, and kept in a file only root can write. |
+| **Release key** | The key that signs agent builds. A host pins its fingerprint and installs only builds that a pinned key signed. **This server signs** or **A key kept offline** says who holds the private half. |
+| **Fingerprint / short ID** | The SHA-256 of a key's bytes, in lower-case hexadecimal. Its first 16 characters are the short ID the dashboard and `vectory update status` show. |
+| **Pinning** | A host's trust in a release key, written when it agrees to updates. Pinning a key trusts its holder with root on that host. |
+| **Custody** | Who holds the release key's private half: the server, or you offline. Fixed while updates are on. |
+| **Rollover** | A statement, signed by the old release key, that names its successor. Hosts that pin the old key follow it when they are offered a release the new key signed. |
+| **Release** | One agent build from this server's catalog, with a counter, an expiry and the signature hosts check. |
+| **Release counter** | A number that only goes up. A host never tries a release at or below the highest counter it already tried. |
+| **Update rollout** | Sending a release to a chosen set of devices: a canary first, then batches. Separate from a [deployment](deployments.md) of a pipeline. |
 | **Revocation** | Permanently blocking a device identity. |
 | **Identity recovery** | Replacing a lost device identity with a new one, authorized by an administrator. |
 | **CSRF token** | A per-session value every change through the API must include, so other sites can't act as you. [API](api.md). |
