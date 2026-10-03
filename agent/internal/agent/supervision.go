@@ -126,6 +126,11 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 			if _, err := os.Lstat(filepath.Join(e.Dir, retryRequestName)); err == nil {
 				return true
 			}
+			// A build that finished downloading, or the privileged step's verdict
+			// on the one this agent runs on trial, is for the server to hear now.
+			if e.updateAttention() {
+				return true
+			}
 		case answer := <-current.answer():
 			held := time.Since(current.started)
 			current.cancel()

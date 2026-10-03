@@ -70,6 +70,7 @@ func init() {
 			about:    "Adds to this host's restricted-mode allowances and keeps everything already allowed. Only a host operator can do this; the dashboard can't. Run it while the agent is stopped. A version this host refused is tried again when the agent starts. The change is noted in `vectory logs`.",
 			examples: []string{"sudo vectory service-stop && sudo vectory allow --network logs.example.net:443 && sudo vectory service-start", "sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx"},
 			define:   defineAllow},
+		updateCommand,
 		{name: "logs", group: "Day to day", summary: "Show Vector's own log on this host",
 			usage:    "logs [--lines N] [--follow] [--raw | --json] [--state-dir PATH]",
 			about:    "Prints Vector's recent log lines (startup, reloads, component warnings and errors) from the agent's rotated log file. It never streams your events, but a pipeline that logs event fields (VRL log()) shows them. Control characters in that text show as escapes such as \\x1b, and --json escapes them too; --raw prints the file's lines unchanged and can hold terminal escape sequences. Works while the service runs. --json prints one JSON object per line: Vector's records as they are, and the agent's notes with the same timestamp, target and message keys.",
