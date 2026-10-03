@@ -89,6 +89,8 @@ const results = [],
   geometry = [],
   screenshots = [];
 let context, page, state, fleet, failure;
+// The width and theme the page was loaded in: a picture is named for them.
+let shown = { width: 1100, theme: "light" };
 
 // The fleet the screens read: a few devices that report updates in different
 // states, and one that reported nothing.
@@ -267,17 +269,39 @@ async function load({
   page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror", (error) => errors.push(error.message));
+  shown = { width, theme };
   await page.goto(`${origin}/__agent-updates#/${path}`);
+  // A cold dev server compiles the App on first use; the checks below keep
+  // their own short timeouts once it is up.
+  await page
+    .getByText("Loading Vectory…")
+    .waitFor({ state: "detached", timeout: 180000 })
+    .catch(() => undefined);
 }
 
+// While developing a screen: VECTORY_AGENT_UPDATES_ONLY=review runs only the
+// checks whose name has that word. Unset, every check runs.
+const only = process.env.VECTORY_AGENT_UPDATES_ONLY?.toLowerCase();
 async function check(name, run) {
+  if (only && !name.toLowerCase().includes(only)) return;
   const start = Date.now();
   await run();
   results.push({ name, passed: true, milliseconds: Date.now() - start });
   console.log("PASS", name);
 }
-/** The page as it is: accessibility, no sideways scroll, and a picture to look at. */
-async function look(name, { width, theme }) {
+/**
+ * The page as it is: accessibility, no sideways scroll, and a picture to look
+ * at. The picture is named for the width and theme the page was loaded in; a
+ * different width resizes the window first, a different theme is refused.
+ */
+async function look(name, view = shown) {
+  if (view.theme !== shown.theme)
+    throw new Error(`${name}: the page is ${shown.theme}, not ${view.theme}`);
+  const { width, theme } = view;
+  if (width !== shown.width) {
+    await page.setViewportSize({ width, height: 900 });
+    shown = { width, theme };
+  }
   const metrics = await page.evaluate(() => ({
     page: document.documentElement.scrollWidth,
     viewport: innerWidth,
@@ -301,6 +325,20 @@ async function look(name, { width, theme }) {
     animations: "disabled",
   });
   screenshots.push(relative(repository, resolve(output, file)));
+  // A tall phone page is read in pieces: VECTORY_AGENT_UPDATES_SLICES=1 also
+  // writes it as pictures of 1300 px each, which stay legible.
+  if (process.env.VECTORY_AGENT_UPDATES_SLICES && width <= 480) {
+    const total = await page.evaluate(
+      () => document.documentElement.scrollHeight,
+    );
+    for (let top = 0, n = 1; top < total; top += 1300, n++)
+      await page.screenshot({
+        path: resolve(output, `${name}-${width}-${theme}-part${n}.png`),
+        fullPage: true,
+        clip: { x: 0, y: top, width, height: Math.min(1300, total - top) },
+        animations: "disabled",
+      });
+  }
 }
 const views = [
   { width: 1100, theme: "light" },
@@ -309,6 +347,89 @@ const views = [
 ];
 const heading = (name) =>
   page.getByRole("heading", { name, exact: true, level: 1 });
+const platforms = [
+  { os: "linux", arch: "amd64" },
+  { os: "linux", arch: "arm64" },
+  { os: "darwin", arch: "arm64" },
+];
+/**
+ * A server with updates on, the key kept offline, three builds in its catalog
+ * (one without a release, one waiting for a signature, one ready and rolling
+ * out), and rollouts in each state a list shows.
+ */
+const richState = (over = {}) =>
+  onState({
+    updates: updatesBody({
+      catalog: [
+        {
+          version: "0.1.3",
+          platforms,
+          devices_behind: 41,
+          release: null,
+        },
+        {
+          version: "0.1.2",
+          platforms,
+          devices_behind: 41,
+          release: { id: id(31), state: "awaiting_signature" },
+        },
+        {
+          version: "0.1.1",
+          platforms,
+          devices_behind: 38,
+          release: { id: id(30), state: "ready" },
+        },
+      ],
+    }),
+    releases: [
+      release({
+        id: id(31),
+        version: "0.1.2",
+        counter: 8,
+        state: "awaiting_signature",
+        signer: null,
+        rollouts: [],
+      }),
+      release({
+        rollouts: [
+          { id: id(40), status: "active" },
+          { id: id(41), status: "completed" },
+        ],
+      }),
+      release({
+        id: id(32),
+        version: "0.1.0",
+        counter: 5,
+        state: "withdrawn",
+        withdrawn_at: "2026-10-01T09:00:00Z",
+        withdrawn_reason: "A build that didn't start on arm64",
+        rollouts: [{ id: id(42), status: "cancelled" }],
+      }),
+    ],
+    rollouts: [
+      rollout(),
+      rollout({
+        id: id(41),
+        name: "Edge fleet, second wave",
+        status: "completed",
+        completed_at: "2026-10-02T09:00:00Z",
+        target_count: 20,
+        state_counts: { ...noCounts, verified: 18, rolled_back: 2 },
+      }),
+      rollout({
+        id: id(42),
+        release: { ...rollout().release, version: "0.1.0", counter: 5 },
+        status: "cancelled",
+        cancel_reason: "release_withdrawn",
+        cancelled_at: "2026-10-01T09:00:00Z",
+        target_count: 6,
+        state_counts: { ...noCounts, verified: 1, cancelled: 5 },
+      }),
+    ],
+    details: { [id(40)]: detailBody() },
+    targets: { [id(40)]: [targetRow()] },
+    ...over,
+  });
 
 try {
   await check(
@@ -410,6 +531,241 @@ try {
       }
     },
   );
+
+  await check(
+    "Devices: the fleet, the builds, the releases and the rollouts",
+    async () => {
+      for (const view of views) {
+        await load({ ...view, path: "agent-updates", scenario: richState() });
+        await expect(heading("Agent updates")).toBeVisible();
+        await expect(
+          page.getByRole("heading", { name: "Your fleet" }),
+        ).toBeVisible();
+        // The server's counts, as it gave them: nothing summed here.
+        await expect(
+          page.getByRole("link", { name: /^0\.1\.0\s*41 devices$/ }),
+        ).toHaveAttribute("href", "#/devices?agent_version=0.1.0");
+        await expect(
+          page.getByRole("link", { name: /^30\s*Automatic$/ }),
+        ).toHaveAttribute("href", "#/devices?agent_update=automatic");
+        await expect(
+          page.getByRole("link", { name: /^3\s*Can't update$/ }),
+        ).toHaveAttribute("href", "#/devices?agent_update=cannot_update");
+        // Versions this server can't read have no filter to open.
+        await expect(page.getByText("Unknown version")).toBeVisible();
+        await expect(
+          page.getByRole("link", { name: /Unknown version/ }),
+        ).toHaveCount(0);
+        // Builds, and what each one needs next.
+        await expect(
+          page.getByRole("button", { name: "Roll out agent 0.1.3" }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Roll out agent 0.1.1" }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Sign it" }),
+        ).toBeVisible();
+        // Releases, the one waiting for a signature first.
+        const waiting = page.getByRole("article", { name: "Agent 0.1.2" });
+        await expect(
+          waiting.getByRole("heading", { name: "Waiting for your signature" }),
+        ).toBeVisible();
+        await expect(
+          waiting.getByRole("link", { name: "Download release.json" }),
+        ).toHaveAttribute("href", `/api/v1/agent-releases/${id(31)}/manifest`);
+        await expect(
+          waiting.getByLabel("Sign command", { exact: true }),
+        ).toHaveText(
+          "vectory release sign --key team.key --checksums SHA256SUMS release.json",
+        );
+        await expect(
+          waiting.getByText(
+            "from the project's release page or from your own build",
+            { exact: false },
+          ),
+        ).toBeVisible();
+        await expect(
+          waiting.getByText("a list from the server would only check", {
+            exact: false,
+          }),
+        ).toBeVisible();
+        await expect(waiting.getByLabel("Signature file")).toBeVisible();
+        // Rollouts, with the deployments page's bar.
+        await expect(
+          page.getByRole("link", { name: "Edge fleet, second wave" }).first(),
+        ).toBeVisible();
+        await expect(
+          page.getByText("Cancelled: its release was withdrawn").first(),
+        ).toBeVisible();
+        await look("devices-updates", view);
+      }
+    },
+  );
+
+  await check(
+    "Devices: prepare a release, sign it with a file, withdraw it",
+    async () => {
+      await load({ path: "agent-updates", scenario: richState() });
+      // Prepare: the server copies a catalog build; with a key kept offline it
+      // then waits for a signature, and no host is offered it before that.
+      await page.getByRole("button", { name: "Roll out agent 0.1.3" }).click();
+      const prepare = page.getByRole("dialog", { name: "Prepare agent 0.1.3" });
+      await expect(prepare).toContainText(
+        "It then waits for your signature: nothing is offered until you sign it with the key you keep offline.",
+      );
+      await look("devices-prepare");
+      await prepare.getByRole("button", { name: "Prepare release" }).click();
+      await expect(
+        page.getByText(
+          "Agent 0.1.3 is prepared. It waits for your signature below.",
+        ),
+      ).toBeVisible();
+      expect(state.writes.at(-1)).toEqual({
+        route: "prepare",
+        body: { version: "0.1.3" },
+      });
+      await expect(
+        page
+          .getByRole("article", { name: "Agent 0.1.3" })
+          .getByRole("heading", { name: "Waiting for your signature" }),
+      ).toBeVisible();
+
+      // A file that isn't a signature file is named as such and can't be sent.
+      const waiting = page.getByRole("article", { name: "Agent 0.1.2" });
+      const chooser = waiting.getByLabel("Signature file");
+      await chooser.setInputFiles({
+        name: "release.json.sig",
+        mimeType: "application/json",
+        buffer: Buffer.from("not json at all"),
+      });
+      await expect(waiting.getByRole("alert")).toBeVisible();
+      await expect(
+        waiting.getByRole("button", { name: "Upload signature" }),
+      ).toBeDisabled();
+      // A real one names the key it is by, before anything is sent.
+      await chooser.setInputFiles({
+        name: "release.json.sig",
+        mimeType: "application/json",
+        buffer: Buffer.from(signatureFile),
+      });
+      await expect(
+        waiting.getByText(
+          `release.json.sig holds a signature by key ${teamFingerprint.slice(0, 16)}, the current key. The server verifies it.`,
+        ),
+      ).toBeVisible();
+      await waiting.getByRole("button", { name: "Upload signature" }).click();
+      await expect(
+        page.getByText("Signature accepted. Agent 0.1.2 is ready to roll out."),
+      ).toBeVisible();
+      expect(state.writes.at(-1)).toMatchObject({
+        route: "signature",
+        id: id(31),
+        bytes: signatureFile,
+      });
+      await expect(
+        page.getByRole("heading", { name: "Waiting for your signature" }),
+      ).toHaveCount(1);
+
+      // Withdraw: a reason, and the rollouts it will cancel, named first.
+      await page
+        .getByRole("article", { name: "Agent 0.1.1" })
+        .getByRole("button", { name: "Withdraw…" })
+        .click();
+      const withdraw = page.getByRole("dialog", {
+        name: "Withdraw agent 0.1.1",
+      });
+      await expect(withdraw).toContainText(
+        "1 update rollout of this release is running and will be cancelled.",
+      );
+      await expect(
+        withdraw.getByRole("button", { name: "Withdraw release" }),
+      ).toBeDisabled();
+      await withdraw.getByLabel("Reason").fill("It crashes on arm64");
+      await look("devices-withdraw");
+      await withdraw.getByRole("button", { name: "Withdraw release" }).click();
+      await expect(page.getByText("Agent 0.1.1 was withdrawn.")).toBeVisible();
+      expect(state.writes.at(-1)).toEqual({
+        route: "withdraw",
+        body: { reason: "It crashes on arm64" },
+      });
+    },
+  );
+
+  await check("Devices: Stop all updates, then the stop is shown", async () => {
+    await load({
+      role: "operator",
+      path: "agent-updates",
+      scenario: richState(),
+    });
+    // Operators stop updates and start rollouts; preparing and signing a
+    // release is for administrators.
+    await expect(
+      page.getByRole("button", { name: "Roll out agent 0.1.3" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("An administrator prepares it first."),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Only an administrator can upload the signature."),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Stop all updates" }).click();
+    const stop = page.getByRole("dialog", { name: "Stop all updates" });
+    await expect(stop).toContainText(
+      "Cancels every update rollout and withdraws every offer. Devices already trying a build finish, and a device that already downloaded it may still start within about a minute.",
+    );
+    await expect(
+      stop.getByRole("button", { name: "Stop all updates" }),
+    ).toBeDisabled();
+    await stop.getByLabel("Reason").fill("The 0.1.1 build crashes on arm64");
+    await look("devices-stop");
+    await stop.getByRole("button", { name: "Stop all updates" }).click();
+    await expect(
+      page.getByText(
+        "All agent updates are stopped. Every update rollout was cancelled.",
+      ),
+    ).toBeVisible();
+    expect(state.writes.at(-1)).toEqual({
+      route: "stop",
+      body: { reason: "The 0.1.1 build crashes on arm64" },
+    });
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "All agent updates are stopped",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Stop all updates" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Roll out agent/ }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "New update rollout" }),
+    ).toHaveCount(0);
+    // The stop, as everyone reads it afterwards.
+    for (const view of views) {
+      await load({
+        ...view,
+        path: "agent-updates",
+        scenario: richState({
+          updates: {
+            ...richState().updates,
+            stopped: {
+              reason: "The 0.1.1 build crashes on arm64",
+              by_name: "Maria Costa",
+              at: "2026-10-03T13:00:00Z",
+            },
+            active_rollouts: 0,
+          },
+        }),
+      });
+      await expect(
+        page.getByText("All agent updates are stopped").first(),
+      ).toBeVisible();
+      await look("devices-stopped", view);
+    }
+  });
 
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);

@@ -48,6 +48,7 @@ import { updateRolloutStatuses } from "./status";
 import { useAgentUpdates } from "./useAgentUpdates";
 import type { Notify } from "./toast";
 import "./control.css";
+import "./deployments.css";
 import "./agent-updates.css";
 
 const ReviewDialog = lazy(() => import("./AgentUpdateReview"));
@@ -633,6 +634,17 @@ function AgentUpdatesList({
                           )}
                         </span>
                       ),
+                      filter: {
+                        value: query.status,
+                        emptyValue: "all",
+                        allLabel: "All statuses",
+                        manual: true,
+                        options: Object.entries(updateRolloutStatuses).map(
+                          ([value, entry]) => ({ value, label: entry.label }),
+                        ),
+                        onChange: (status) =>
+                          setQuery((old) => ({ ...old, status, page: 1 })),
+                      },
                     },
                     {
                       id: "devices",

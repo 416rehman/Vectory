@@ -307,6 +307,76 @@ describe("activity sentences", () => {
       sentence(describeActivity(item({ action: "device.renew" }))),
     ).toContain("Device credentials renewed");
   });
+
+  it("says what a device's agent update came to, from its own state", () => {
+    const update = (outcome: string) =>
+      sentence(
+        describeActivity(
+          item({
+            action: "device.agent_update",
+            actor: "edge-02",
+            actor_kind: "device",
+            target_kind: "device",
+            target_name: "edge-02",
+            outcome,
+          }),
+        ),
+      );
+    expect(update("verified")).toBe("edge-02 updated its agent");
+    expect(update("rolled_back")).toBe("edge-02 rolled back an agent update");
+    expect(update("failed")).toBe("edge-02 couldn't update its agent");
+    expect(update("refused")).toBe("edge-02 refused an agent update");
+    expect(update("something_new")).toBe(
+      "edge-02 reported an agent update result",
+    );
+  });
+
+  it("names who turned agent updates on, off or stopped them", () => {
+    const action = (name: string) =>
+      sentence(
+        describeActivity(
+          item({ action: name, target_kind: "server", target_name: null }),
+        ),
+      );
+    expect(action("agent_update.enable")).toBe(
+      "Morgan Lee turned on agent updates",
+    );
+    expect(action("agent_update.disable")).toBe(
+      "Morgan Lee turned off agent updates",
+    );
+    expect(action("agent_update.stop")).toBe(
+      "Morgan Lee stopped all agent updates",
+    );
+    expect(action("agent_update.stop_clear")).toBe(
+      "Morgan Lee cleared the stop on agent updates",
+    );
+  });
+
+  it("keeps the other update events readable without a sentence of their own", () => {
+    expect(
+      sentence(
+        describeActivity(
+          item({
+            action: "agent_update_rollout.pause",
+            target_kind: "agent_update_rollout",
+            target_name: null,
+          }),
+        ),
+      ),
+    ).toBe("Morgan Lee · Agent update rollout paused");
+    expect(
+      links(
+        describeActivity(
+          item({
+            action: "agent_update_rollout.create",
+            target_kind: "agent_update_rollout",
+            target_id: uuid(9),
+            target_name: "Agent 0.1.1",
+          }),
+        ),
+      ),
+    ).toEqual([["Agent 0.1.1", `#/agent-updates/${uuid(9)}`]]);
+  });
 });
 
 describe("activity glyphs", () => {
@@ -328,6 +398,21 @@ describe("activity glyphs", () => {
     );
     expect(activityGlyph(item({ action: "something.new" }))).toBe("other");
   });
+
+  it("reads a device's agent update by its result", () => {
+    const glyph = (outcome: string) =>
+      activityGlyph(item({ action: "device.agent_update", outcome }));
+    expect(glyph("verified")).toBe("applied");
+    expect(glyph("rolled_back")).toBe("rollback");
+    expect(glyph("failed")).toBe("failed");
+    expect(glyph("refused")).toBe("check");
+    expect(activityGlyph(item({ action: "agent_update.stop" }))).toBe(
+      "settings",
+    );
+    expect(activityGlyph(item({ action: "agent_update_rollout.create" }))).toBe(
+      "deploy",
+    );
+  });
 });
 
 describe("activity tone", () => {
@@ -338,6 +423,7 @@ describe("activity tone", () => {
       "warning",
     );
     expect(activityTone(item({ action: "deployment.missed" }))).toBe("warning");
+    expect(activityTone(item({ outcome: "refused" }))).toBe("warning");
     expect(activityTone(item({}))).toBe("neutral");
   });
 });

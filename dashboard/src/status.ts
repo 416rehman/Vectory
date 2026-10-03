@@ -401,6 +401,20 @@ export const auditOutcomes = {
   rolled_back: applyStates.rolled_back,
   incompatible: targetStates.incompatible,
   paused: applyStates.paused,
+  // The result of a device's agent update (`device.agent_update`), which
+  // names the target's state; a refused signature upload says refused too.
+  verified: entry(
+    "Updated",
+    "success",
+    "check",
+    "The new build checked in after the restart, and the host reported it healthy.",
+  ),
+  refused: entry(
+    "Refused",
+    "warning",
+    "ban",
+    "The host or the server refused it.",
+  ),
 } satisfies Record<string, StatusEntry>;
 
 export const gateStates = {

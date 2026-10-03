@@ -166,6 +166,8 @@ const kindLabels: Record<string, string> = {
   policy: "Agent settings",
   token: "Enrollment token",
   user: "Person",
+  agent_release: "Agent release",
+  agent_update_rollout: "Agent update rollout",
 };
 /** A readable target: its name, else its kind and short ID, never a raw compound key. */
 function targetLabel(
@@ -177,6 +179,12 @@ function targetLabel(
   if (item.target_name) return item.target_name;
   // A refused enrollment never created a device.
   if (item.target === "unregistered") return "Unregistered device";
+  // A release key is named by its fingerprint; its short ID is the name.
+  if (
+    item.target_kind === "agent_release_key" &&
+    /^[0-9a-f]{64}$/.test(item.target)
+  )
+    return `Release key ${item.target.slice(0, 16)}`;
   const kind = kindLabels[item.target_kind];
   if (kind && item.target_id && isAuditId(item.target_id))
     return `${kind} ${item.target_id.slice(0, 8)}`;
@@ -973,6 +981,24 @@ const detailLabels: Record<string, string> = {
   agent_version: "Agent version",
   configuration_mode: "Configuration mode",
   client_address: "Client address",
+  custody: "Key custody",
+  fingerprint: "Key fingerprint",
+  from_fingerprint: "Previous key fingerprint",
+  source: "Signature source",
+  version: "Release version",
+  counter: "Release counter",
+  manifest_sha256: "Release manifest digest",
+  release_id: "Release ID",
+  rollout_id: "Rollout ID",
+  stage: "Stage",
+  gate_state: "Gate",
+  released_count: "Devices released",
+  verified_count: "Devices updated",
+  withdrawn_releases: "Releases withdrawn",
+  cancelled_rollouts: "Rollouts cancelled",
+  from_version: "Updated from",
+  to_version: "Updated to",
+  code: "Agent code",
 };
 
 function AuditInspector({
