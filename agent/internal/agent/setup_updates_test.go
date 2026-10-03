@@ -440,6 +440,9 @@ func TestSetupRefusesAKeyThatBreaksTheKeyRule(t *testing.T) {
 // refusals is every reason setup refuses consent before it changes anything, with
 // the words it says them in.
 func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
+	// What setup says to do about an install directory that others can write, on
+	// any system: name the directory, and say how to make it right.
+	const installFix = "Make INSTALLDIR, and every directory above it, writable by root alone, or install the agent in a directory that already is (the installer takes --install-dir for that), then run the command again. Or leave out --updates."
 	for name, tc := range map[string]struct {
 		// prepare gets the test of its own case: it may skip it or fail it.
 		prepare func(t *testing.T, f *consentFixture)
@@ -472,30 +475,31 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 			detail:  "This agent is installed from a package, and the package manager owns its file.",
 			fix:     "Leave out --updates, and upgrade it with the package manager.",
 		},
+		// The detail names the directory that failed, whichever one it is; the fix names
+		// the directory the agent is in. Both are what a person reads when the install
+		// directory of a hosted runner is writable by everyone.
 		"an install directory others can write": {
+			prepare: func(t *testing.T, f *consentFixture) { loosen(t, filepath.Dir(f.agent), 0o775) },
+			detail:  "Agent updates need an install directory that only root can change. INSTALLDIR is writable by its group (mode 0775).",
+			fix:     installFix,
+		},
+		"an install directory everyone can write": {
+			prepare: func(t *testing.T, f *consentFixture) { loosen(t, filepath.Dir(f.agent), 0o777) },
+			detail:  "Agent updates need an install directory that only root can change. INSTALLDIR is writable by its group and by everyone (mode 0777).",
+			fix:     installFix,
+		},
+		"a directory above the install directory that others can write": {
 			prepare: func(t *testing.T, f *consentFixture) {
-				dir := filepath.Dir(f.agent)
-				if err := os.MkdirAll(dir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(dir, 0o775); err != nil {
-					t.Fatal(err)
-				}
+				loosen(t, filepath.Dir(f.agent), 0o755)
+				loosen(t, filepath.Dir(filepath.Dir(f.agent)), 0o775)
 			},
-			detail: "Agent updates need an install directory that only root can change. ",
-			fix:    "Install the agent in a directory only root can write, such as " + DefaultPaths().Binary + ", then run the command again. Or leave out --updates.",
+			detail: "Agent updates need an install directory that only root can change. ABOVEDIR is writable by its group (mode 0775).",
+			fix:    installFix,
 		},
 		"a policy directory others can write": {
-			prepare: func(t *testing.T, f *consentFixture) {
-				if err := os.MkdirAll(f.paths.PolicyDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(f.paths.PolicyDir, 0o777); err != nil {
-					t.Fatal(err)
-				}
-			},
-			detail: "Agent updates keep what decides an install where only root can change it. ",
-			fix:    "Make " + "POLICYDIR" + " and every directory above it root's alone, then run the command again. Or leave out --updates.",
+			prepare: func(t *testing.T, f *consentFixture) { loosen(t, f.paths.PolicyDir, 0o777) },
+			detail:  "Agent updates keep what decides an install where only root can change it. POLICYDIR is writable by its group and by everyone (mode 0777).",
+			fix:     "Make POLICYDIR and every directory above it root's alone, then run the command again. Or leave out --updates.",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -507,9 +511,11 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 			if !errors.As(err, &failed) || failed.Step.ID != "updates" || result.OK {
 				t.Fatalf("%v\n%s", err, serviceDetail(result))
 			}
-			fix := strings.ReplaceAll(tc.fix, "POLICYDIR", f.paths.PolicyDir)
-			if !strings.HasPrefix(failed.Step.Detail, tc.detail) || failed.Step.Fix != fix {
-				t.Fatalf("detail %q\nfix %q\nwant %q\n and %q", failed.Step.Detail, failed.Step.Fix, tc.detail, fix)
+			install := filepath.Dir(f.agent)
+			places := strings.NewReplacer("INSTALLDIR", install, "ABOVEDIR", filepath.Dir(install), "POLICYDIR", f.paths.PolicyDir)
+			detail, fix := places.Replace(tc.detail), places.Replace(tc.fix)
+			if failed.Step.Detail != detail || failed.Step.Fix != fix {
+				t.Fatalf("detail %q\nfix %q\nwant %q\n and %q", failed.Step.Detail, failed.Step.Fix, detail, fix)
 			}
 			// The server is asked for its keys only after the host passed.
 			if f.server.keyRequests.Load() != 0 || f.server.enrolls.Load() != 0 || f.tokens != 0 || len(f.manager.actions) != 0 {
@@ -526,6 +532,17 @@ func TestSetupRefusesConsentWhereUpdatesCantWork(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// loosen makes dir exist, with mode.
+func loosen(t *testing.T, dir string, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
 	}
 }
 
