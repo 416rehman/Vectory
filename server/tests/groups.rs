@@ -1960,6 +1960,118 @@ async fn removal_retains_history_readdition_resets_proof_error_and_admission() {
     assert_eq!(readded["original"], before["original"]);
 }
 
+/// A member that leaves the group and returns is released the deployment
+/// afresh, so the target records what the device runs when it comes back, not
+/// what it ran the first time.
+#[tokio::test]
+async fn a_member_that_leaves_and_returns_records_what_the_device_ran_on_its_return() {
+    let (_temp, s, app, ids, cookie, csrf) = fixture().await;
+    let (a, b) = seed_versions(&s).await;
+    let c = db::id();
+    let mut conn = s.pool.acquire().await.unwrap();
+    let artifact = "{\"data_dir\":\"/var/lib/vector/third\"}\n";
+    db::insert(&mut conn,"version",&json!({"id":c,"configuration_id":db::id(),"number":1,"artifact":artifact,"sha256":db::hash(artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+    drop(conn);
+    create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &a,
+            180,
+            10,
+            "snapshot",
+            json!([]),
+            json!(ids[..2]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    let group = create_group(&app, &cookie, &csrf, &ids[..2]).await;
+    let d = create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &b,
+            180,
+            100,
+            "persistent",
+            json!([group["id"]]),
+            json!([]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    let recorded = || async {
+        sqlx::query_as::<_, (Option<String>, i64)>("SELECT previous_version_id,previous_recorded FROM deployment_targets WHERE deployment_id=? AND device_id=?")
+            .bind(d["id"].as_str().unwrap())
+            .bind(&ids[0])
+            .fetch_one(&s.pool)
+            .await
+            .unwrap()
+    };
+    let running = || async {
+        sqlx::query_scalar::<_, Option<String>>("SELECT desired_version_id FROM devices WHERE id=?")
+            .bind(&ids[0])
+            .fetch_one(&s.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(running().await.as_deref(), Some(b.as_str()));
+    assert_eq!(recorded().await, (Some(a.clone()), 1));
+    // The device leaves the group, goes to another deployment, then returns.
+    let (status, group) = call(
+        &app,
+        "PUT",
+        &path(&group),
+        edit(&group, &ids[1..2]),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    assert_eq!(running().await.as_deref(), Some(a.as_str()));
+    create_binding(
+        &app,
+        &cookie,
+        &csrf,
+        binding(
+            "configuration",
+            &c,
+            180,
+            50,
+            "snapshot",
+            json!([]),
+            json!(ids[..1]),
+            json!([]),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(running().await.as_deref(), Some(c.as_str()));
+    let (status, group) = call(
+        &app,
+        "PUT",
+        &path(&group),
+        edit(&group, &ids[..2]),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    assert_eq!(running().await.as_deref(), Some(b.as_str()));
+    assert_eq!(
+        recorded().await,
+        (Some(c), 1),
+        "a fresh release records what the device ran when it came back"
+    );
+}
+
 #[tokio::test]
 async fn removed_generation_cannot_claim_cancelled_assignment_or_rollback_targets() {
     for stopped in ["cancelled", "failed", "rollback"] {
