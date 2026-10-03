@@ -506,15 +506,62 @@ func matchReleaseKeys(offered []BundleKey, wanted []string) (pins []ReleaseKey, 
 	return pins, missing
 }
 
+// pendingUpdateStep is the half of turning updates on that waits for the service.
+// The policy is written before the service is registered or started, so that
+// consent is in place before its first check-in. The privileged step is installed
+// once the service is registered: it checks the registered service and restarts
+// the agent through its service manager, and a fresh install has no service until
+// setup registers it. The order is the same for every service manager (a systemd
+// unit, a launchd job, a Windows service), so it belongs to setup.
+type pendingUpdateStep struct {
+	// words is the Updates step as it reads once the update step is installed.
+	words string
+	// updates is what the run did, for --json.
+	updates SetupUpdates
+}
+
+// finishUpdates installs the privileged update step for a run that turned updates
+// on or amended them, and says what is now in force. The service path calls it
+// right after it registers the service, with its definition in the form the step
+// checks, and before it starts or restarts the service. A failure says what was
+// saved and what wasn't, and stops setup before the service is started; running
+// the same command again resumes here, with nothing to write twice.
+func (r *setupRun) finishUpdates(agentPath, dir string) error {
+	pending := r.updateStep
+	if pending == nil {
+		return nil
+	}
+	r.updateStep = nil
+	if err := r.host.installUpdateStep(dir, agentPath); err != nil {
+		return r.refuseUpdates("The agent is installed and enrolled, the update policy is saved and the service is registered, but the update step couldn't be installed ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Setup stopped before it started or restarted the service. Until the step is installed, this host takes no update.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
+	}
+	r.add("updates", "ok", "Updates", pending.words, "")
+	updates := pending.updates
+	r.result.Updates = &updates
+	return nil
+}
+
+// updatesWaitForTheService says, when the service couldn't be registered, that the
+// update policy is saved and the update step isn't installed, since it can only be
+// installed once the service is.
+func (r *setupRun) updatesWaitForTheService() {
+	if r.updateStep == nil {
+		return
+	}
+	r.updateStep = nil
+	r.add("updates", "warn", "Updates", "The update policy is saved, but the update step isn't installed: it can only be installed once the service is registered. Run the same command again when the service is fixed; setup resumes where it stopped.", "")
+}
+
 // applyUpdates is the Updates step of setup, after the agent is installed and
-// enrolled and before the service starts: it writes the policy, then installs
-// the privileged step. A failure here says what was saved and what wasn't.
-func (r *setupRun) applyUpdates(plan *updatePlan, agentPath, dir string) error {
+// enrolled and before the service is registered or started: it writes the policy
+// and leaves the privileged step for the service path (finishUpdates). A failure
+// here says what was saved and what wasn't.
+func (r *setupRun) applyUpdates(plan *updatePlan, dir string) error {
 	if plan.consent == UpdateConsentOff {
 		return r.withdrawUpdates(dir)
 	}
 	if plan.amend {
-		return r.amendUpdates(plan, agentPath, dir)
+		return r.amendUpdates(plan, dir)
 	}
 	existing, err := ReadUpdatePolicy()
 	if err != nil {
@@ -531,15 +578,11 @@ func (r *setupRun) applyUpdates(plan *updatePlan, agentPath, dir string) error {
 			return r.refuseUpdates(saved+": the update policy couldn't be written ("+strings.TrimSuffix(sentence(err.Error()), ".")+").", "Fix the cause, then run the same command again; setup resumes where it stopped.")
 		}
 	}
-	if err := r.host.installUpdateStep(dir, agentPath); err != nil {
-		return r.refuseUpdates("The agent is installed and enrolled and the update policy is saved, but the update step couldn't be installed ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Until it is, this host takes no update.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
-	}
 	words := UpdatePolicyWords(policy) + " (pinned)"
 	if policy.Paused {
 		words += " · paused on this host: " + AdminCommandFor(dir, "vectory update resume")
 	}
-	r.add("updates", "ok", "Updates", words, "")
-	r.result.Updates = &SetupUpdates{Consent: policy.Consent, Track: policy.Track, Windows: policy.Windows, Keys: policy.Fingerprints(), Paused: policy.Paused}
+	r.updateStep = &pendingUpdateStep{words: words, updates: SetupUpdates{Consent: policy.Consent, Track: policy.Track, Windows: policy.Windows, Keys: policy.Fingerprints(), Paused: policy.Paused}}
 	return nil
 }
 
@@ -594,12 +637,13 @@ func amendedParts(before, after UpdatePolicy) []string {
 
 // amendUpdates is the Updates step of a command with update flags and no
 // --updates: it changes, in the policy the host has, the parts the flags name,
-// and installs the privileged step if it is missing. The policy is edited where it
-// is written (ChangeUpdatePolicy reads it again and writes only over what it
-// read), so a consent withdrawn in the meantime stays withdrawn and a write of the
-// update step isn't lost. A policy that already says what the flags name is left
-// as it is. The counter floors and the step's own state are never touched here.
-func (r *setupRun) amendUpdates(plan *updatePlan, agentPath, dir string) error {
+// and leaves the privileged step to be installed (or installed again, where it is
+// missing) once the service is registered (finishUpdates). The policy is edited
+// where it is written (ChangeUpdatePolicy reads it again and writes only over what
+// it read), so a consent withdrawn in the meantime stays withdrawn and a write of
+// the update step isn't lost. A policy that already says what the flags name is
+// left as it is. The counter floors and the step's own state are never touched here.
+func (r *setupRun) amendUpdates(plan *updatePlan, dir string) error {
 	saved := "The agent is installed and enrolled, but the update choices weren't changed"
 	var now UpdatePolicy
 	var parts []string
@@ -623,9 +667,6 @@ func (r *setupRun) amendUpdates(plan *updatePlan, agentPath, dir string) error {
 	default:
 		return r.refuseUpdates(saved+": the update policy couldn't be changed ("+strings.TrimSuffix(sentence(err.Error()), ".")+").", "Fix the cause, then run the same command again; setup resumes where it stopped.")
 	}
-	if err := r.host.installUpdateStep(dir, agentPath); err != nil {
-		return r.refuseUpdates("The agent is installed and enrolled and the update policy is saved, but the update step couldn't be installed ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Until it is, this host takes no update.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
-	}
 	words := UpdatePolicyWords(now) + " (pinned)"
 	if len(parts) == 0 {
 		words += " · nothing changed"
@@ -635,8 +676,7 @@ func (r *setupRun) amendUpdates(plan *updatePlan, agentPath, dir string) error {
 	if now.Paused {
 		words += " · paused on this host: " + AdminCommandFor(dir, "vectory update resume")
 	}
-	r.add("updates", "ok", "Updates", words, "")
-	r.result.Updates = &SetupUpdates{Consent: now.Consent, Track: now.Track, Windows: now.Windows, Keys: now.Fingerprints(), Paused: now.Paused}
+	r.updateStep = &pendingUpdateStep{words: words, updates: SetupUpdates{Consent: now.Consent, Track: now.Track, Windows: now.Windows, Keys: now.Fingerprints(), Paused: now.Paused}}
 	return nil
 }
 
