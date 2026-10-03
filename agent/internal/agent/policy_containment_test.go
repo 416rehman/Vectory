@@ -13,7 +13,9 @@ import (
 // serverAcceptsDiagnostic mirrors the bounds the server puts on every
 // diagnostic of a heartbeat (server/src/configuration_attempt.rs). A diagnostic
 // that breaks one gets the whole heartbeat refused, so the agent must never
-// send it.
+// send it. The rule for an ID is reportableID, which the shared fixture
+// component-ids.json pins to the server's, and the size is measured as the
+// server measures it (diagnosticBytes, pinned by report-bounds.json).
 func serverAcceptsDiagnostic(d Diagnostic) error {
 	asciiToken := func(value string, max int, extra string) bool {
 		if value == "" || len(value) > max {
@@ -30,7 +32,6 @@ func serverAcceptsDiagnostic(d Diagnostic) error {
 		n := utf8.RuneCountInString(value)
 		return n >= min && n <= max && strings.IndexFunc(value, unicode.IsControl) < 0
 	}
-	encoded, _ := json.Marshal(d)
 	switch {
 	case d.Severity != "error" && d.Severity != "warning":
 		return fmt.Errorf("severity %q", d.Severity)
@@ -38,16 +39,18 @@ func serverAcceptsDiagnostic(d Diagnostic) error {
 		return fmt.Errorf("code %q", d.Code)
 	case d.ComponentKind != "" && d.ComponentKind != "source" && d.ComponentKind != "transform" && d.ComponentKind != "sink":
 		return fmt.Errorf("component kind %q", d.ComponentKind)
-	case d.ComponentID != "" && !asciiToken(d.ComponentID, 100, "_.-"):
+	case d.ComponentID != "" && !reportableID(d.ComponentID):
 		return fmt.Errorf("component ID %q", d.ComponentID)
+	case d.RouteOutput != "" && !reportableID(d.RouteOutput):
+		return fmt.Errorf("route output %q", d.RouteOutput)
 	case d.Field != "" && !text(d.Field, 1, 128):
 		return fmt.Errorf("field %q", d.Field)
 	case !text(d.Message, 1, 300):
 		return fmt.Errorf("message %q", d.Message)
 	case d.Hint != "" && !text(d.Hint, 1, 200):
 		return fmt.Errorf("hint %q", d.Hint)
-	case len(encoded) > 512:
-		return fmt.Errorf("%d bytes", len(encoded))
+	case diagnosticBytes(d) > 512:
+		return fmt.Errorf("%d bytes", diagnosticBytes(d))
 	}
 	return nil
 }

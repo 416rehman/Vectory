@@ -1,8 +1,10 @@
 package agent
 
 import (
-	"path/filepath"
+	"regexp"
 	"slices"
+	"strings"
+	"unicode/utf8"
 )
 
 // Additive heartbeat fields are sent only to servers that list them in the
@@ -56,7 +58,7 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 		if driver, ok := e.Driver.(*VectorDriver); ok {
 			host.Activation = driver.ActivationMethod()
 		}
-		h.HostRuntime = &host
+		h.HostRuntime = reportableHostRuntime(host)
 	}
 	if e.serverSupports(featureLogSummary) && e.Log != nil {
 		items := e.Log.summaries(e.redactorFor(running))
@@ -75,7 +77,7 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 	if e.serverSupports(featureAgentSHA256) && e.State.Agent != nil && e.State.Agent.SHA256 != "" {
 		h.AgentSHA256 = e.State.Agent.SHA256
 	}
-	if e.serverSupports(featureStateDir) && filepath.IsAbs(e.Dir) {
+	if e.serverSupports(featureStateDir) && reportableStateDir(e.Dir) {
 		h.StateDir = e.Dir
 	}
 	// What this agent can do and how ready the host is go in every heartbeat
@@ -87,6 +89,45 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 		h.Readiness = e.readiness(running)
 		h.ValidationResult = e.validation.pending
 	}
+}
+
+// What the server accepts of the members that name a place on this host: the
+// agent's state directory and the host runtime's directory and metrics address
+// (state_dir_path, plain and the metrics_address rule in server/src/device.rs).
+// The server refuses a whole check-in for one it doesn't accept, so a directory
+// it can't show safely, or an address of another shape, is left out of the
+// report and everything else still goes.
+
+// reportableStateDir is dir as the server accepts it for state_dir: an absolute
+// POSIX path or Windows drive path of at most 4096 bytes, without a character
+// refusedInName.
+func reportableStateDir(dir string) bool {
+	drivePath := len(dir) >= 3 && (dir[0] >= 'A' && dir[0] <= 'Z' || dir[0] >= 'a' && dir[0] <= 'z') &&
+		dir[1] == ':' && (dir[2] == '\\' || dir[2] == '/')
+	return (strings.HasPrefix(dir, "/") || drivePath) && len(dir) <= 4096 && namesNothingHostile(dir)
+}
+
+// namesNothingHostile reports whether text is valid UTF-8 without a character
+// refusedInName.
+func namesNothingHostile(text string) bool {
+	return utf8.ValidString(text) && strings.IndexFunc(text, refusedInName) < 0
+}
+
+// metricsAddressPattern is the shape the server accepts for metrics_address: a
+// host and port of letters, digits, dots, colons and brackets, up to 64.
+var metricsAddressPattern = regexp.MustCompile(`^[A-Za-z0-9.:\[\]]{1,64}$`)
+
+// reportableHostRuntime is host with each member the server wouldn't accept left
+// out: a data directory of more than 4096 characters or with a character
+// refusedInName, and a metrics address of another shape.
+func reportableHostRuntime(host HostRuntime) *HostRuntime {
+	if utf8.RuneCountInString(host.DataDir) > 4096 || !namesNothingHostile(host.DataDir) {
+		host.DataDir, host.DataDirSource = "", ""
+	}
+	if host.MetricsAddress != "" && !metricsAddressPattern.MatchString(host.MetricsAddress) {
+		host.MetricsAddress = ""
+	}
+	return &host
 }
 
 // legacyTelemetry keeps only the fields every server version accepts.

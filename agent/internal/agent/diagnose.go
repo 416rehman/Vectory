@@ -16,13 +16,23 @@ import (
 	"unicode/utf8"
 )
 
-// Bounds for diagnostics that leave the host (heartbeat protocol limits).
+// Bounds for diagnostics that leave the host (heartbeat protocol limits). The
+// server refuses the whole heartbeat for a diagnostic past one of them, so the
+// agent never sends one: vector-catalog/fixtures/report-bounds.json holds the
+// numbers, and the server's tests read it too.
 const (
 	maxDiagnostics       = 10
 	maxDiagnosticBytes   = 512
 	maxDiagnosticMessage = 300
 	maxDiagnosticHint    = 200
-	redactedToken        = "«redacted»"
+	maxDiagnosticField   = 128
+	// maxComponentIDBytes is the longest component ID a pipeline may name and a
+	// device may report.
+	maxComponentIDBytes = 128
+	// maxIssueMessage is the longest message of an apply attempt's error, in
+	// characters.
+	maxIssueMessage = 1000
+	redactedToken   = "«redacted»"
 	// Vector's built-in data_dir when a configuration sets none.
 	vectorDefaultDataDir = "/var/lib/vector/"
 )
@@ -377,15 +387,30 @@ func (r *redactor) text(s string) string {
 	})
 }
 
-// identifier returns a component ID or output name only if it is a bounded
-// token from the template; anything else is dropped rather than echoed.
+// identifier returns a component ID or output name only if the server accepts it
+// in a report (reportableID) and it comes from the template; anything else is
+// dropped rather than echoed.
 func (r *redactor) identifier(value string) string {
-	if value == "" || len(value) > 100 || !r.allowed(value) || strings.IndexFunc(value, func(c rune) bool {
-		return !(unicode.IsLetter(c) || unicode.IsDigit(c) || strings.ContainsRune("_-.", c))
-	}) >= 0 {
+	if !reportableID(value) || !r.allowed(value) {
 		return ""
 	}
 	return value
+}
+
+// reportableID reports whether id may leave the host as a component ID or as the
+// name of a route's output. It is the server's rule for the IDs a device reports
+// (reported_component_id in server/src/validation.rs), which is the pipeline
+// validator's text rule: not empty, at most maxComponentIDBytes bytes of UTF-8,
+// and no "/" or "\", no control character and no drive letter and colon at the
+// start (componentIDProblem, which the policy check applies to a pipeline's IDs).
+// A report adds the characters that can't be shown safely in one line of text
+// and the byte order mark (refusedInName). A dot is allowed. A device that sent
+// an ID the server refuses would be refused its whole check-in, so a fixture
+// (vector-catalog/fixtures/component-ids.json) pins this function and the
+// server's to each other.
+func reportableID(id string) bool {
+	return id != "" && len(id) <= maxComponentIDBytes && utf8.ValidString(id) &&
+		componentIDProblem(id) == "" && strings.IndexFunc(id, refusedInName) < 0
 }
 
 // truncateText is value as one line of at most max characters: the text that
@@ -439,25 +464,80 @@ func (r *redactor) finalize(d Diagnostic) Diagnostic {
 	if d.Hint == "" {
 		d.Hint = codeHints[d.Code]
 	}
-	d.Field = truncateText(r.text(d.Field), 128)
+	d.Field = truncateText(r.text(d.Field), maxDiagnosticField)
 	if d.Message == "" {
 		d.Message = noPrintableDiagnostic
 	}
-	for {
-		encoded, _ := json.Marshal(d)
-		if len(encoded) <= maxDiagnosticBytes {
-			return d
+	// A record that can't be made to fit comes back as small as it gets; the
+	// heartbeat leaves it out (cloneIssue).
+	d, _ = fitDiagnostic(d)
+	return d
+}
+
+// diagnosticBytes is the size of d as the server measures it: the record it
+// parsed, serialized again in compact form, which escapes only the quotation
+// mark, the backslash and the characters below U+0020 and writes everything else
+// as UTF-8. So "<", ">" and "&" count one byte each, where json.Marshal's
+// default writes six. (The encoder also escapes U+2028 and U+2029, which the
+// server writes as three bytes; no diagnostic holds one, because singleLine
+// replaced them.) The fixture vector-catalog/fixtures/report-bounds.json holds
+// records with the size the server measures for each.
+func diagnosticBytes(d Diagnostic) int {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(d)
+	return out.Len() - 1 // Encode ends the value with a newline
+}
+
+// shortestMessage is how many characters of a message are kept before the field
+// and the route's output name go instead.
+const shortestMessage = 60
+
+// fitDiagnostic makes d at most maxDiagnosticBytes as the server measures it, or
+// reports that it can't. The text goes first and the record last: the hint, then
+// the message down to shortestMessage characters, then the field, the route's
+// output name, the rest of the message and the component's ID. A record that
+// still doesn't fit (a code longer than the server accepts is the only way)
+// comes back as small as it got, with false.
+func fitDiagnostic(d Diagnostic) (Diagnostic, bool) {
+	fits := func() bool { return diagnosticBytes(d) <= maxDiagnosticBytes }
+	for _, step := range []func(){
+		func() { d.Hint = "" },
+		func() { d.Message = longestMessage(d, shortestMessage) },
+		func() { d.Field = "" },
+		func() { d.RouteOutput = "" },
+		func() { d.Message = longestMessage(d, 1) },
+		func() { d.ComponentID, d.RouteOutput = "", "" },
+	} {
+		if fits() {
+			return d, true
 		}
-		switch {
-		case d.Hint != "":
-			d.Hint = ""
-		case utf8.RuneCountInString(d.Message) > 60:
-			d.Message = truncateText(d.Message, utf8.RuneCountInString(d.Message)-40)
-		default:
-			d.Field = ""
-			return d
+		step()
+	}
+	return d, fits()
+}
+
+// longestMessage is the longest start of d's message, cut at a character and
+// ended with an ellipsis, that makes d fit, but never fewer than least
+// characters.
+func longestMessage(d Diagnostic, least int) string {
+	message := d.Message
+	if utf8.RuneCountInString(message) <= least {
+		return message
+	}
+	low, high, kept := least, utf8.RuneCountInString(message)-1, least
+	for low <= high {
+		middle := (low + high) / 2
+		trial := d
+		trial.Message = truncateText(message, middle)
+		if diagnosticBytes(trial) <= maxDiagnosticBytes {
+			kept, low = middle, middle+1
+		} else {
+			high = middle - 1
 		}
 	}
+	return truncateText(message, kept)
 }
 
 // codeHints are fixed, secret-free fixes for findings Vector reports without
