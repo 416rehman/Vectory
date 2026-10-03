@@ -20,6 +20,13 @@ export const teamLine =
   "vectory-release-key ed25519 3n1kX5uZnEN2wf+ZrjTlfd3sqUPQff1ANP0I/elZz7o= team";
 export const nextLine =
   "vectory-release-key ed25519 EfEAEZ4zQhLJkpS72PMa8tlIIRVq/eIn895jrezMZpY= team-next";
+export const finalLine =
+  "vectory-release-key ed25519 fP/vTaQk5ujYmxovIxpccphQ5rrr+lUZ71EVXQJMdKM= team-final";
+/** A key line's fingerprint: SHA-256 of its 32 key bytes, in lower-case hex. */
+const fingerprintOf = (line) =>
+  createHash("sha256")
+    .update(Buffer.from(line.split(" ")[2], "base64"))
+    .digest("hex");
 /** The published rollover envelope and signature file of the shared examples. */
 export const rolloverEnvelope = {
   statement:
@@ -394,10 +401,7 @@ export function agentUpdateReplies(state) {
       for (const key of state.keys)
         if (key.state === "current") key.state = "retired";
       const added = releaseKey({
-        fingerprint:
-          body.custody.public_key === nextLine
-            ? nextFingerprint
-            : finalFingerprint,
+        fingerprint: fingerprintOf(body.custody.public_key),
         public_key: body.custody.public_key,
         custody: "offline",
         devices_pinning: 0,
@@ -411,7 +415,7 @@ export function agentUpdateReplies(state) {
         if (key.state === "current") key.state = "retired";
       const added = releaseKey({
         fingerprint: finalFingerprint,
-        public_key: `vectory-release-key ed25519 EfEAEZ4zQhLJkpS72PMa8tlIIRVq/eIn895jrezMZpY= server`,
+        public_key: finalLine,
         custody: "server",
         devices_pinning: 0,
         device_names: [],

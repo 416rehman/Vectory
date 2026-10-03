@@ -309,12 +309,15 @@ export default function UpdateRolloutPage({
               },
             ]}
             titleAside={
-              <span
-                className="rollout-version"
-                aria-label={`Agent ${detail.release.version}`}
-              >
-                {detail.release.version}
-              </span>
+              // A rollout's own name doesn't say which build it carries.
+              detail.name ? (
+                <span
+                  className="rollout-version"
+                  aria-label={`Agent ${detail.release.version}`}
+                >
+                  {detail.release.version}
+                </span>
+              ) : undefined
             }
             live={{
               updatedAt: rollout.updatedAt,

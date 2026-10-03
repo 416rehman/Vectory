@@ -30,6 +30,7 @@ export function UpdateConsentFields({
   disabled = false,
   legend = "How should this host take agent updates?",
   name = "update-level",
+  columns = levels.length >= 3 ? 3 : 2,
 }: {
   value: ConsentForm;
   onChange(patch: Partial<ConsentForm>): void;
@@ -40,6 +41,8 @@ export function UpdateConsentFields({
   disabled?: boolean;
   legend?: string;
   name?: string;
+  /** Cards side by side: fewer where the room is narrow, such as a dialog. */
+  columns?: 1 | 2 | 3;
 }) {
   const id = useId();
   const taking = value.level === "auto" || value.level === "ask";
@@ -51,7 +54,7 @@ export function UpdateConsentFields({
         disabled={disabled}
         value={value.level}
         onChange={(level) => onChange({ level })}
-        columns={levels.length >= 3 ? 3 : 2}
+        columns={columns}
         choices={consentChoices
           .filter((choice) => levels.includes(choice.value))
           .map((choice) => ({

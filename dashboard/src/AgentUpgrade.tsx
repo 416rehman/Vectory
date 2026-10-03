@@ -365,6 +365,7 @@ export default function AgentUpgrade({
                           read={consentRead}
                           signingKey={key}
                           name="upgrade-update-level"
+                          columns={1}
                         />
                         {!consentRead.chosen && (
                           <p className="agent-upgrade-note">
