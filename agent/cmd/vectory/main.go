@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/vectory/vectory/agent/internal/agent"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -61,6 +62,9 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 			if cmd == nil || cmd.hidden {
 				return unknownCommand(stderr, args[1])
 			}
+			if len(cmd.verbs) > 0 {
+				return helpForGroup(cmd, args[2:], stdout, stderr)
+			}
 			c := newCLI(cmd, stdout, stderr)
 			cmd.define(c)
 			printCommandHelp(stdout, cmd, c.specs, flagDefaults(c.fs))
@@ -84,7 +88,60 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 	if cmd == nil {
 		return unknownCommand(stderr, name)
 	}
+	if len(cmd.verbs) > 0 {
+		return executeGroup(cmd, rest, stdout, stderr)
+	}
 	return execute(cmd, rest, stdout, stderr)
+}
+
+// executeGroup runs `vectory <group> <verb> [flags]`. A group with no verb
+// prints its verbs and exits 2, as vectory with no command does; the help flags
+// print them and exit 0.
+func executeGroup(group *command, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printCommandHelp(stderr, group, nil, nil)
+		return exitUsage
+	}
+	switch args[0] {
+	case "-h", "-help", "--help":
+		printCommandHelp(stdout, group, nil, nil)
+		return exitOK
+	case "help":
+		return helpForGroup(group, args[1:], stdout, stderr)
+	}
+	if strings.HasPrefix(args[0], "-") {
+		fmt.Fprintf(stderr, "vectory %s: put the verb first, as in vectory %s <verb> [flags].\nRun 'vectory help %s' for the list of verbs.\n", group.name, group.name, group.name)
+		return exitUsage
+	}
+	verb := group.verb(args[0])
+	if verb == nil {
+		return unknownVerb(stderr, group, args[0])
+	}
+	return execute(verb, args[1:], stdout, stderr)
+}
+
+// helpForGroup answers `vectory help <group> [verb]`.
+func helpForGroup(group *command, rest []string, stdout, stderr io.Writer) int {
+	if len(rest) == 0 {
+		printCommandHelp(stdout, group, nil, nil)
+		return exitOK
+	}
+	verb := group.verb(rest[0])
+	if verb == nil || verb.hidden {
+		return unknownVerb(stderr, group, rest[0])
+	}
+	printVerbHelp(stdout, verb)
+	return exitOK
+}
+
+func unknownVerb(stderr io.Writer, group *command, name string) int {
+	message := fmt.Sprintf("vectory %s: unknown verb %q.", group.name, name)
+	if suggestion := suggestAmong(group.verbs, name); suggestion != "" {
+		message += fmt.Sprintf(" Did you mean %q?", suggestion)
+	}
+	fmt.Fprintln(stderr, message)
+	fmt.Fprintf(stderr, "Run 'vectory help %s' for the list of verbs.\n", group.name)
+	return exitUsage
 }
 
 const versionUsage = "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n"
@@ -132,7 +189,15 @@ func misplacedCommand(args []string) string {
 		return ""
 	}
 	words := []string{"vectory", command.name}
-	for _, word := range append(append([]string{}, args[:len(args)-probe.fs.NArg()]...), probe.fs.Args()[1:]...) {
+	after := probe.fs.Args()[1:]
+	// A group's verb belongs next to the group's name, ahead of the flags.
+	if len(command.verbs) > 0 && len(after) > 0 {
+		if verb := command.verb(after[0]); verb != nil {
+			words = append(words, verb.name)
+			after = after[1:]
+		}
+	}
+	for _, word := range append(append([]string{}, args[:len(args)-probe.fs.NArg()]...), after...) {
 		words = append(words, agent.ShellQuote(word))
 	}
 	return strings.Join(words, " ")
@@ -149,9 +214,9 @@ func unknownCommand(stderr io.Writer, name string) int {
 }
 
 func newCLI(cmd *command, stdout, stderr io.Writer) *cli {
-	fs := flag.NewFlagSet(cmd.name, flag.ContinueOnError)
+	fs := flag.NewFlagSet(cmd.words(), flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	return &cli{cmd: cmd, fs: fs, stdout: stdout, stderr: stderr}
+	return &cli{cmd: cmd, fs: fs, stdout: stdout, stderr: stderr, ask: askOnTerminal}
 }
 
 func flagDefaults(fs *flag.FlagSet) map[string]string {
@@ -161,28 +226,33 @@ func flagDefaults(fs *flag.FlagSet) map[string]string {
 }
 
 func execute(cmd *command, args []string, stdout, stderr io.Writer) int {
-	c := newCLI(cmd, stdout, stderr)
+	return executeWith(newCLI(cmd, stdout, stderr), cmd, args)
+}
+
+// executeWith runs a command with the cli it was given, so a test can replace
+// the terminal a command asks on.
+func executeWith(c *cli, cmd *command, args []string) int {
+	stdout, stderr := c.stdout, c.stderr
 	action := cmd.define(c)
 	if err := c.fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCommandHelp(stdout, cmd, c.specs, flagDefaults(c.fs))
 			return exitOK
 		}
-		fmt.Fprintf(stderr, "vectory %s: %s\nRun 'vectory help %s' for usage.\n", cmd.name, flagError(err), cmd.name)
+		fmt.Fprintf(stderr, "vectory %s: %s\nRun 'vectory help %s' for usage.\n", cmd.words(), flagError(err), cmd.words())
 		return exitUsage
 	}
-	if c.fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "vectory: %s accepts flags only; unexpected positional arguments\n", cmd.name)
-		return exitUsage
+	if code, ok := c.takeOperands(); !ok {
+		return code
 	}
 	if c.state != nil {
 		if flagSupplied(c.fs, "state-dir") {
 			switch {
 			case strings.TrimSpace(*c.state) == "":
-				fmt.Fprintf(stderr, "vectory %s: --state-dir needs a path. Give the agent's state directory in full, or leave the flag out to use %s.\n", cmd.name, agent.DefaultPaths().StateDir)
+				fmt.Fprintf(stderr, "vectory %s: --state-dir needs a path. Give the agent's state directory in full, or leave the flag out to use %s.\n", cmd.words(), agent.DefaultPaths().StateDir)
 				return exitUsage
 			case !filepath.IsAbs(*c.state):
-				fmt.Fprintf(stderr, "vectory %s: --state-dir must be an absolute path, and %s isn't. Write the whole path, such as %s.\n", cmd.name, agent.ShellQuote(*c.state), agent.DefaultPaths().StateDir)
+				fmt.Fprintf(stderr, "vectory %s: --state-dir must be an absolute path, and %s isn't. Write the whole path, such as %s.\n", cmd.words(), agent.ShellQuote(*c.state), agent.DefaultPaths().StateDir)
 				return exitUsage
 			}
 		}
@@ -200,13 +270,73 @@ func execute(cmd *command, args []string, stdout, stderr io.Writer) int {
 func (c *cli) resolvePath(flagName, value string) (string, bool) {
 	resolved, err := agent.ResolveOperatorPath(value)
 	if err != nil {
-		fmt.Fprintf(c.stderr, "vectory %s: --%s %s: %s\n", c.cmd.name, flagName, value, err)
+		fmt.Fprintf(c.stderr, "vectory %s: --%s %s: %s\n", c.cmd.words(), flagName, value, err)
 		return "", false
 	}
 	if resolved.Resolved {
 		fmt.Fprintf(c.stderr, "Using %s for --%s (%s is a symbolic link).\n", resolved.Path, flagName, value)
 	}
 	return resolved.Path, true
+}
+
+// resolveFilePath makes the path of a file this command reads as private or
+// creates: absolute, with the links in its directory resolved and its own name
+// kept, so a link in the file's place is never followed.
+func (c *cli) resolveFilePath(flagName, value string) (string, bool) {
+	if strings.TrimSpace(value) == "" {
+		fmt.Fprintf(c.stderr, "vectory %s: --%s needs a file name.\n", c.cmd.words(), flagName)
+		return "", false
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "vectory %s: --%s %s: %s\n", c.cmd.words(), flagName, value, err)
+		return "", false
+	}
+	directory, ok := c.resolvePath(flagName, filepath.Dir(absolute))
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(directory, filepath.Base(absolute)), true
+}
+
+// takeOperands checks the arguments after the flags against the operands the
+// command declares: a command with none takes flags only. It reports false,
+// with the exit code, after printing a usage error.
+func (c *cli) takeOperands() (int, bool) {
+	args := c.fs.Args()
+	want := c.cmd.operands
+	if len(want) == 0 {
+		if len(args) != 0 {
+			fmt.Fprintf(c.stderr, "vectory: %s accepts flags only; unexpected positional arguments\n", c.cmd.words())
+			return exitUsage, false
+		}
+		return exitOK, true
+	}
+	switch {
+	case len(args) < len(want):
+		fmt.Fprintf(c.stderr, "vectory %s: missing %s.\nRun 'vectory help %s' for usage.\n", c.cmd.words(), want[len(args)], c.cmd.words())
+		return exitUsage, false
+	case len(args) > len(want) && strings.HasPrefix(args[len(want)], "-") && args[len(want)] != "-":
+		fmt.Fprintf(c.stderr, "vectory %s: put the flags before %s: %q came after it.\nRun 'vectory help %s' for usage.\n", c.cmd.words(), want[len(want)-1], args[len(want)], c.cmd.words())
+		return exitUsage, false
+	case len(args) > len(want):
+		fmt.Fprintf(c.stderr, "vectory %s: unexpected argument %q.\nRun 'vectory help %s' for usage.\n", c.cmd.words(), args[len(want)], c.cmd.words())
+		return exitUsage, false
+	}
+	c.operands = args
+	return exitOK, true
+}
+
+// askOnTerminal asks a question on standard error and reads the answer from
+// standard input, when both are terminals. Without a terminal nobody can be
+// asked, and a command that needs a yes has to be told with a flag.
+func askOnTerminal(question string) (string, bool) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
+		return "", false
+	}
+	fmt.Fprint(os.Stderr, question)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.TrimSpace(line), true
 }
 
 // wholeNumbers says what a flag that takes a count accepts.

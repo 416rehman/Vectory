@@ -524,7 +524,8 @@ export const refuse = (code, extra = {}) => ({
 // What a host does with an offered release, in the order of the contract: the
 // offer's shape, the signature file, the rollover chain, the pins, the
 // signatures, the manifest, the clock, the platform, the counter, the version
-// and track, the minimum version, the service definition.
+// (a running version that is not major.minor.patch included) and track, the
+// minimum version, the service definition.
 //
 // `input` holds the manifest, the signature file and the statements as
 // delivered, the host's pins, floors (the highest counter attempted per key),
@@ -612,6 +613,9 @@ export function decide(input, resolveKey) {
         : "COUNTER_REPLAYED",
     );
   const running = parseVersion(input.running_version);
+  // A running version that is not major.minor.patch cannot be compared with the
+  // release's: it is refused as a downgrade is, and never guessed.
+  if (!running) return refuse("DOWNGRADE_REFUSED");
   const order = compareVersions(manifest.version, running);
   if (order === 0) return refuse("ALREADY_RUNNING");
   if (order < 0) return refuse("DOWNGRADE_REFUSED");

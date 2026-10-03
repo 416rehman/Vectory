@@ -8,7 +8,8 @@ Every command and flag of `vectory`, the agent that runs on each device. For ste
 vectory <command> [flags]
 ```
 
-- Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments. Put the command first: `vectory status --json`, not `vectory --json status`.
+- Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments, with one exception: `release sign` and `release verify` take the `release.json` they work on, after the flags. Put the command first: `vectory status --json`, not `vectory --json status`.
+- A few commands are groups of verbs, written `vectory <group> <verb> [flags]`. `vectory help release` lists a group's verbs and `vectory help release sign` shows one verb's flags.
 - Commands that change the agent's files need administrator rights on the host (`sudo` on Linux and macOS).
 - Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `3` `setup` finished but something needs you (on a host without a service manager, nothing keeps the agent running), `78` the agent isn't installed or enrolled (the Linux service doesn't restart on this code), `130` `setup` was interrupted with Ctrl-C.
 
@@ -22,6 +23,8 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 | `--json` | Print machine-readable JSON instead of text. |
 
 When the state directory isn't the default, every command the agent prints for you to run, in `status`, `doctor`, `pause` and the fix of a refused version, includes `--state-dir` with your directory. Copy it as printed.
+
+The `release` verbs keep no agent state, so they take neither flag.
 
 ## Commands at a glance
 
@@ -44,6 +47,7 @@ When the state directory isn't the default, every command the agent prints for y
 | [`service-install`, `service-start`, `service-stop`, `service-uninstall`](#service-commands) | Manage the agent's operating-system service. | Varies |
 | [`unenroll`](#unenroll) | Delete this host's credentials. | Yes |
 | [`uninstall`](#uninstall) | Delete the agent's state with `--purge`. | Yes |
+| [`release`](#release) | Make release keys, sign agent builds and check signatures. | No |
 | [`version`, `help`](#version-and-help) | Print the version or usage. | No |
 
 ## setup
@@ -379,6 +383,131 @@ sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
 | `--purge` | Delete the state directory named by `--state-dir`, which is required. Vector and the managed configuration stay. |
 
 Without `--purge`, `uninstall` changes nothing and reminds you to remove the service and binary. When the state directory doesn't exist, it says `Nothing to remove` and exits `0`, so you can run an interrupted purge again.
+
+## release
+
+Make a release key, sign an agent build with it, and check a signed release the way a host does. A team that keeps its release key offline runs these verbs on the machine that holds the key. They read and write files only: no network, no service and no administrator rights.
+
+```sh
+vectory release keygen --out team.key --name team
+vectory release sign --key team.key --checksums SHA256SUMS release.json
+vectory release verify --key team.pub release.json
+vectory release rollover --key team.key --to team-next.pub
+```
+
+A host installs an agent build only when a key it pinned signed it. Whoever holds a pinned key can sign code that runs as root on those hosts, so keep the private key off the server and out of backups you don't control.
+
+### release keygen
+
+Create a release key. The private half goes in the file you name, which `keygen` creates closed to other accounts and never replaces. The public half is printed.
+
+| Flag | Meaning |
+| --- | --- |
+| `--out FILE` | Required. The file for the private key. It must not exist, and a link in its place is refused. |
+| `--name NAME` | The display name in the public key line, 1 to 64 printable ASCII characters without a quotation mark or a backslash, and not starting or ending with a space. Default `release`. |
+
+```text
+Wrote the private key to team.key, closed to other accounts.
+Keep it off the server. Whoever holds it can sign builds that every host pinning this key installs as root.
+
+Public key (give it to the server, and save it in a file such as team.pub):
+vectory-release-key ed25519 3n1kX5uZnEN2wf+ZrjTlfd3sqUPQff1ANP0I/elZz7o= team
+
+Fingerprint (hosts pin it; compare it with the one the dashboard shows):
+05cc6c02 351af0cb 1be9877e 7cdcd326 c6831001 8746cb7b bbbf6beb 29392618
+```
+
+The public key line starts at the left edge, so what you copy is the line and nothing in front of it. A file that holds it with spaces before it is refused. The fingerprint is the SHA-256 of the key's 32 bytes, written in groups of eight characters. Its first 16 characters are the short ID that the dashboard and `vectory update status` print. An existing file, even one that is a symbolic link, is refused: `team.key already exists, and keygen never replaces a file.`
+
+### release sign
+
+Sign the exact bytes of a `release.json`, the file the server prepared for your key.
+
+| Flag | Meaning |
+| --- | --- |
+| `--key FILE` | Required. The private key file `keygen` made. It must be a regular file with one name, owned by you or root and closed to other accounts. |
+| `--checksums FILE` | Required. A `SHA256SUMS` file that you got without the server, from the project's release page or from your own build. |
+| `--yes` | Sign without asking. Without a terminal, `sign` refuses unless you pass it. |
+| `--out FILE` | Write the signatures here. The default is `release.json.sig` beside the manifest. |
+
+`sign` signs only when every build in `release.json` appears unchanged in `SHA256SUMS`, as a line `<sha-256>  <file name>` (or `<sha-256> *<file name>`), so a signature never repeats only what the server said. It also refuses a manifest that breaks the format or has expired. Then it shows what the signature authorizes and asks:
+
+```text
+Agent 0.1.1 · counter 7 · expires 2027-04-01 12:00 UTC (in 180 days)
+  Issued 2026-10-03 12:00 UTC · service definition 1
+  For agents running 0.1.0 or newer
+  linux/amd64    vectory-0.1.1-linux-amd64        15204352 bytes  sha256 4206fd2a4cefdeff…
+  windows/amd64  vectory-0.1.1-windows-amd64.exe  15892480 bytes  sha256 25043433d22cf8f6…
+Every file name and SHA-256 matches SHA256SUMS.
+Sign this release with key 05cc6c02351af0cb? [y/N] y
+Signed with key 05cc6c02351af0cb. Wrote release.json.sig (1 signature).
+Next: upload release.json.sig to the release on Devices → Agent updates.
+```
+
+The service definition is the generation of the service unit or plist (on Windows, the service registration) that the build needs. A host whose service definition is older refuses the release with `SERVICE_DEFINITION_OUTDATED`, so check that it is what your hosts have (0.1 builds say `1`). The `For agents running` line appears when the release names the oldest agent that may take it.
+
+When a build doesn't match, nothing is written and each difference is named:
+
+```text
+vectory: not signed: the builds in release.json don't match SHA256SUMS:
+  vectory-0.1.1-linux-amd64: release.json says 4206fd2a4cefdeff00f444007d1346ec2ca0d60edf58c0392d5f15a0f275981f and SHA256SUMS says 0000000000000000000000000000000000000000000000000000000000000000
+  SHA256SUMS has no line for vectory-0.1.1-windows-amd64.exe
+```
+
+An existing signature file keeps what it holds. `sign` adds a signature only for a key that isn't in the file yet, up to four. It says `already holds this signature` when the file has this key's signature of this manifest, and refuses a signature by the same key that isn't of this manifest, such as an older release's file. A file that isn't a signature file is never overwritten.
+
+### release rollover
+
+Hand a release key over to a new one without anyone logging in to the hosts that pin it. The old key signs a statement that names its successor, and a host that pins the old key follows the statement when it is offered a release the new key signed.
+
+| Flag | Meaning |
+| --- | --- |
+| `--key FILE` | Required. The private key being replaced. |
+| `--to FILE` | Required. A file that holds the new key's public key line. |
+| `--out FILE` | Write the statement here. The default is `rollover.json`. The file must not exist. |
+
+```text
+Wrote rollover.json: key 05cc6c02351af0cb hands over to key 5f0681261c9f25fa (team-next).
+New key fingerprint, to compare with the key you made: 5f068126 1c9f25fa e4e8a4e2 e6701582 cf20e228 f711848b b8bc9db7 190acadb
+Upload it in Settings → Agent updates. Hosts that pin the old key follow it when they are offered a release the new key signed.
+```
+
+The file holds the statement and its signature, both in base64: `{"statement":"…","signature":"…"}`. A key can't replace itself, and the new key must be a valid key line. Compare the fingerprint it prints with the one `keygen` printed for the new key before you upload.
+
+### release verify
+
+Check a release the way a host does, with the one function every host uses: the signature, the format of the manifest and its expiry.
+
+| Flag | Meaning |
+| --- | --- |
+| `--key FILE` | Required. A file that holds the public key line to verify with. |
+| `--signatures FILE` | The signature file. The default is `release.json.sig` beside the manifest. |
+
+```text
+Valid: release.json is signed by key 05cc6c02351af0cb (team).
+Agent 0.1.1 · counter 7 · expires 2027-04-01 12:00 UTC (in 180 days)
+  Issued 2026-10-03 12:00 UTC · service definition 1
+  For agents running 0.1.0 or newer
+  linux/amd64    vectory-0.1.1-linux-amd64        15204352 bytes  sha256 4206fd2a4cefdeff…
+  windows/amd64  vectory-0.1.1-windows-amd64.exe  15892480 bytes  sha256 25043433d22cf8f6…
+This check has no counter floors or running version. A host also checks those, its track, its platform and its service definition.
+```
+
+When a host would refuse the release, `verify` exits `1` and prints the code the host reports:
+
+```text
+vectory: SIGNATURE_INVALID: the signature of the pinned key doesn't verify over release.json
+```
+
+| Code | Means |
+| --- | --- |
+| `RELEASE_KEY_INVALID` | The key file isn't a valid public key line: malformed, not the canonical encoding of a point on the curve, or a point of small order. |
+| `SIGNATURE_INVALID` | The signature file isn't valid, or no signature in it verifies with the key. |
+| `KEY_NOT_PINNED` | No signature in the file names this key. |
+| `MANIFEST_INVALID` | `release.json` breaks a rule of its format: a duplicate or unknown member, a number such as `1e2` or `07`, a byte that isn't printable ASCII, a counter outside 1 to 2^53−1, a file name that doesn't match its platform, and so on. It also covers an `issued_at` more than 24 hours ahead of your clock. |
+| `MANIFEST_EXPIRED` | The clock of the machine you run `verify` on is at or after `expires_at`. |
+
+The exit codes are `0` when the release is valid, `1` when it isn't or a file can't be read, and `2` for a mistake in the command.
 
 ## version and help
 
