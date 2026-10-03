@@ -138,7 +138,7 @@ func openStepForInstall(host updateHost, paths UpdatePaths) (*rootOwned, func(),
 // errUpdateInProgress is why the step's files can't be replaced or removed now: the
 // step is applying or trying an update, and ends by a time it knows.
 func errUpdateInProgress(journal updateJournal) error {
-	if journal.Deadline.IsZero() || !time.Now().Before(journal.Deadline) {
+	if journal.Deadline.IsZero() || !currentUpdateClock().Now().Before(journal.Deadline) {
 		return errors.New("an update is being applied or was interrupted, and the update step hasn't settled it yet; try again in a few minutes")
 	}
 	return fmt.Errorf("an update is being tried; it ends by %s", journal.Deadline.Local().Format("15:04"))
@@ -159,7 +159,7 @@ func recordInstalled(ctx context.Context, host updateHost, private *rootOwned, f
 	if err != nil {
 		return fmt.Errorf("%s didn't print a version: %w", executable, err)
 	}
-	return writeUpdateInstalled(private, updateInstalled{Version: version, SHA256: digest, RecordedAt: time.Now().UTC().Truncate(time.Second)})
+	return writeUpdateInstalled(private, updateInstalled{Version: version, SHA256: digest, RecordedAt: currentUpdateClock().Now().UTC().Truncate(time.Second)})
 }
 
 // placeHelper makes the helper copy the build whose digest is given: the installed
