@@ -13,12 +13,14 @@ import (
 
 // A rollback that has put the previous build back and can't start it is held open: the
 // step tries again at every run, for as long as it takes. A service that can never start
-// (its job disabled, its definition removed by hand, its unit masked) would keep the
-// person who turns updates off, or removes the service, waiting for ever, with words that
-// give a time that moves on. Removing the step, and `update off`, end such a rollback as
-// the step ends an update interrupted after the swap, and then remove what they remove. A
-// rollback that hasn't put the previous build back is still refused: the step has it to put
-// in place, and says what it is.
+// (its job disabled, its unit masked) would keep the person who turns updates off, or
+// removes the service, waiting for ever, with words that give a time that moves on. Removing
+// the step, and `update off`, end such a rollback as the step ends an update interrupted after
+// the swap, and then remove what they remove. A rollback that hasn't put the previous build
+// back is still refused: the step has it to put in place, and says what it is. So is one whose
+// agent service isn't registered (its definition, unit or service removed by hand), because
+// the step can't tell where the previous build is, and the words say what registers the
+// service again (update_removal_registration_test.go).
 
 // removalWatcher is the macOS fixture's host that looks at what the step's files say at the
 // moment its units are removed: after the removal has ended the rollback, before the
@@ -163,6 +165,111 @@ func TestTurningUpdatesOffEndsARollbackThatCanNeverStartThePreviousBuildAndSaysS
 	}
 	if policy := f.policy(); policy.Consent != UpdateConsentOff {
 		t.Errorf("the policy after turning updates off: %+v", policy)
+	}
+}
+
+// restoreTheExchange makes the directory the running agent keeps its offer and its health in,
+// which turning updates off deleted: an agent that runs makes it again.
+func restoreTheExchange(f *stepFixture) {
+	f.t.Helper()
+	updates := UpdateExchangeFor(f.stateDir).Dir
+	mkdirMode(f.t, updates, 0o700)
+	if os.Geteuid() == 0 {
+		if err := os.Chown(updates, int(f.host.account.UID), int(f.host.account.GID)); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// What `update off` says it ended is what the removal did, and not what the advice it took before
+// it changed anything expected: a run of the step that starts the previous build and ends the
+// rollback itself in between leaves nothing for the removal to end, and a person is not told that
+// nothing will try to start the agent's service when the step has started it.
+func TestTurningUpdatesOffSaysItEndedARollbackOnlyWhenTheRemovalEndedIt(t *testing.T) {
+	f, machine, _, _ := heldRollback(t)
+
+	done, err := withdrawUpdatesReporting(f.stateDir, func() (bool, error) {
+		// The step's next run began after the advice: the person had just enabled the job, the
+		// start worked, and the run watched the previous build to the end.
+		machine.refuseUntil = time.Time{}
+		restoreTheExchange(f)
+		f.clock.advance(30 * time.Second)
+		f.anotherStepProcess(machine)
+		if err := f.run(); err != nil {
+			t.Fatalf("the step's run in between: %v", err)
+		}
+		if journal, found := f.journal(); !found || journal.Stage != updateJournalRolledBack {
+			t.Fatalf("the journal after the step's run: %+v (found %v)", journal, found)
+		}
+		return removeStepReporting(removalUpdateHost())
+	})
+
+	if err != nil || !done.StepRemoved {
+		t.Fatalf("turning updates off: %+v, %v", done, err)
+	}
+	if done.RollbackEnded {
+		t.Errorf("update off says the rollback that was waiting for a start is over and nothing will try again, although the step had started the previous build and ended the rollback itself: %+v", done)
+	}
+	if parts := strings.Join(done.Parts(), ", "); strings.Contains(parts, "rollback") {
+		t.Errorf("the withdrawal says %q", parts)
+	}
+}
+
+// The advice `update off` takes before it changes anything can be out of date by the time the
+// removal decides under the lock: a run of the step that starts the previous build in between
+// makes the removal refuse after the policy was turned off and the staged build deleted. What the
+// withdrawal answers then says what was done, so that the command can say it and say that running
+// it again finishes the removal, which it does.
+func TestTurningUpdatesOffThatIsRefusedAfterItChangedThingsSaysWhatWasDoneAndRunningItAgainFinishesTheRemoval(t *testing.T) {
+	f, machine, _, _ := heldRollback(t)
+	staged := UpdateExchangeFor(f.stateDir).Dir
+	if !exists(staged) {
+		t.Fatal("nothing is staged, so the test shows nothing")
+	}
+	var held func()
+
+	done, err := withdrawUpdates(f.stateDir, func() error {
+		// The step's next run began after the advice: the person had just enabled the job, the
+		// start worked, and the run is watching the previous build, holding the lock.
+		machine.refuseUntil = time.Time{}
+		machine.loaded = true
+		running := f.service()
+		running.State, running.Started, running.Starts = "active", f.clock.Now().UnixNano(), running.Starts+1
+		f.host.saveService(running)
+		release, lockErr := f.host.Lock(f.openPrivate())
+		if lockErr != nil {
+			return lockErr
+		}
+		held = release
+		return RemoveUpdateHelper()
+	})
+	if held != nil {
+		held()
+	}
+
+	if err == nil || !strings.Contains(err.Error(), "the update step is working now") {
+		t.Fatalf("turning updates off while a run holds the lock: %v", err)
+	}
+	if !done.PolicyOff || !done.Discarded || done.StepRemoved {
+		t.Errorf("what the withdrawal did before the removal refused: %+v", done)
+	}
+	if want := "Done so far: the policy says off, the staged build is deleted."; done.saved() != want {
+		t.Errorf("the withdrawal says it did %q, want %q", done.saved(), want)
+	}
+	if f.policy().Consent != UpdateConsentOff {
+		t.Error("the policy doesn't say off")
+	}
+	if exists(staged) {
+		t.Error("the staged build is still there")
+	}
+
+	// The run has ended. Running the command again finishes the removal.
+	again, err := WithdrawUpdates(f.stateDir)
+	if err != nil || !again.StepRemoved {
+		t.Fatalf("running the command again: %+v, %v", again, err)
+	}
+	if _, statErr := os.Lstat(f.paths.StepDir); statErr == nil {
+		t.Error("the step's directory is still there")
 	}
 }
 
@@ -356,6 +463,34 @@ func TestTheRemovalDoesNotWaitForTheRunThatIsWatchingThePreviousBuildItStarted(t
 	}
 	if _, statErr := os.Lstat(f.paths.StepDir); statErr != nil {
 		t.Error("the step's directory was removed")
+	}
+}
+
+// A previous build that starts and ends again isn't one that runs when the removal looks: the
+// service manager shows its job as waiting for its next start, which the step reads as activating.
+// The run that holds the lock is watching it, and the removal waits for that run as it does for one
+// that is trying to start the build, and doesn't say at once that the step is working, as it does
+// for a build that runs (above).
+func TestTheRemovalWaitsForTheRunThatIsWatchingAPreviousBuildThatKeepsEndingAndBeingStartedAgain(t *testing.T) {
+	f := newStepFixture(t)
+	f.writeJournal(UpdateStageRollingBack, nil)
+	crashing := f.service()
+	crashing.State, crashing.Behavior, crashing.Started = "activating", "crash", f.clock.Now().UnixNano()
+	f.host.saveService(crashing)
+	if state, err := f.host.ServiceState(context.Background()); err != nil || state.State != "activating" {
+		t.Fatalf("the service of a build that keeps ending: %+v, %v", state, err)
+	}
+	start := f.clock.Now()
+	holdTheLockFor(f, 62*time.Second)
+
+	if err := RemoveUpdateHelper(); err != nil {
+		t.Fatalf("removing the step while a run watches a previous build that keeps ending: %v", err)
+	}
+	if waited := f.clock.Now().Sub(start); waited < 62*time.Second || waited >= removalLockWait {
+		t.Errorf("it waited %s for a run that held the lock for 62 seconds", waited)
+	}
+	if _, err := os.Lstat(f.paths.StepDir); err == nil {
+		t.Error("the step's directory is still there")
 	}
 }
 

@@ -114,9 +114,13 @@ func (h *windowsUpdateHost) Registered(stateDir string) (registeredService, erro
 	return registeredFromConfig(cfg, stateDir)
 }
 
-// AgentExecutable is the executable the registration of the agent's service runs.
+// AgentExecutable is the executable the registration of the agent's service runs. A service
+// that isn't there is errAgentNotRegistered.
 func (h *windowsUpdateHost) AgentExecutable() (string, error) {
 	service, err := openService(ServiceName, serviceQueryRights)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return "", fmt.Errorf("%w (there is no Windows service called %s)", errAgentNotRegistered, ServiceName)
+	}
 	if err != nil {
 		return "", err
 	}

@@ -95,6 +95,16 @@ type launchdOverMachine struct {
 	lingerChecks        int
 	lingerPID           int
 	lingering           int
+
+	// removalLasts is how long, by the machine's clock, launchd goes on listing a job that was
+	// booted out before it drops it (removeAt is when), where removalPrints counts looks instead.
+	removalLasts time.Duration
+	removeAt     time.Time
+
+	// boot is the Mac's boot session and bootedAt the time it was started: how long it has been
+	// awake is the machine's clock's distance from that. restart makes both new.
+	boot     string
+	bootedAt time.Time
 }
 
 func (m *launchdOverMachine) refused() launchctlResult {
@@ -122,7 +132,7 @@ func (m *launchdOverMachine) run(ctx context.Context, args ...string) launchctlR
 	case "bootstrap":
 		switch {
 		case strings.HasSuffix(args[len(args)-1], "io.vectory.agent.plist"):
-			return m.bootstrap(ctx)
+			return m.bootstrap(ctx, args[len(args)-1])
 		case strings.HasSuffix(args[len(args)-1], "io.vectory.update.plist"):
 			return m.bootstrapStep()
 		}
@@ -254,7 +264,27 @@ func (m *launchdOverMachine) bootoutStep() launchctlResult {
 	return launchctlResult{}
 }
 
+// beingRemoved says launchd lists a job it was told to remove and hasn't dropped yet.
+func (m *launchdOverMachine) beingRemoved() bool {
+	return m.removing > 0 || (!m.removeAt.IsZero() && m.f.clock.Now().Before(m.removeAt))
+}
+
+// awake is how long the Mac has been awake, and restart is what a restart does to it: another
+// boot session, and an uptime that begins again. launchd's jobs are not carried over (a restart
+// loads them again from their definitions, which the tests that restart do themselves).
+func (m *launchdOverMachine) awake() time.Duration { return m.f.clock.Now().Sub(m.bootedAt) }
+
+func (m *launchdOverMachine) restart(session string) {
+	m.boot, m.bootedAt = session, m.f.clock.Now()
+}
+
 func (m *launchdOverMachine) print(ctx context.Context) launchctlResult {
+	if !m.removeAt.IsZero() {
+		if m.f.clock.Now().Before(m.removeAt) {
+			return launchdPrintText(m.departed)
+		}
+		m.removeAt, m.loaded = time.Time{}, false
+	}
 	if m.removing > 0 {
 		m.removing--
 		listed := m.departed
@@ -270,7 +300,7 @@ func (m *launchdOverMachine) print(ctx context.Context) launchctlResult {
 }
 
 func (m *launchdOverMachine) bootout(ctx context.Context) launchctlResult {
-	if m.removing > 0 {
+	if m.beingRemoved() {
 		return launchctlResult{}
 	}
 	if !m.loaded {
@@ -281,21 +311,30 @@ func (m *launchdOverMachine) bootout(ctx context.Context) launchctlResult {
 		return launchctlResult{status: 5, stderr: "Boot-out failed: 5: Input/output error"}
 	}
 	m.lingerPID, m.lingering = listed.pid, m.lingerChecks
-	if m.removalPrints == 0 {
+	if m.removalPrints == 0 && m.removalLasts == 0 {
 		m.loaded = false
 		return launchctlResult{}
 	}
 	// launchd lists the job as it was, running, while it removes it.
 	listed.state = "running"
-	m.removing, m.departed = m.removalPrints, listed
+	m.departed = listed
+	if m.removalLasts > 0 {
+		m.removeAt = m.f.clock.Now().Add(m.removalLasts)
+		return launchctlResult{}
+	}
+	m.removing = m.removalPrints
 	return launchctlResult{}
 }
 
-func (m *launchdOverMachine) bootstrap(ctx context.Context) launchctlResult {
+func (m *launchdOverMachine) bootstrap(ctx context.Context, definition string) launchctlResult {
+	if _, err := os.Stat(definition); err != nil {
+		// launchd reads the definition when it is told to load the job.
+		return launchctlResult{status: 2, stderr: "Bootstrap failed: 2: No such file or directory\n"}
+	}
 	switch {
 	case m.f.clock.Now().Before(m.refuseUntil):
 		return m.refused()
-	case m.removing > 0:
+	case m.beingRemoved():
 		if m.acceptWhileRemoving {
 			return launchctlResult{}
 		}
@@ -315,7 +354,7 @@ func (m *launchdOverMachine) bootstrap(ctx context.Context) launchctlResult {
 
 func (m *launchdOverMachine) kickstart(ctx context.Context) launchctlResult {
 	switch {
-	case m.removing > 0:
+	case m.beingRemoved():
 		return launchctlResult{}
 	case !m.loaded:
 		return agentNotLoaded
@@ -366,6 +405,7 @@ func (f *stepFixture) macOSHostOver(machine *launchdOverMachine) *macosUpdateHos
 	mac.agent = mac.job("", machine.run)
 	mac.step = mac.job(updateLaunchdLabel, machine.run)
 	mac.alive = machine.processIsThere
+	wireMachineClock(mac, machine)
 	for _, job := range []*launchdJob{&mac.agent, &mac.step} {
 		job.sleep = func(d time.Duration) { f.clock.advance(d) }
 		job.now = f.clock.Now
@@ -378,7 +418,7 @@ func (f *stepFixture) useLaunchd() (*launchdOverMachine, *macosUpdateHost) {
 	f.t.Helper()
 	root := filepath.Dir(filepath.Dir(filepath.Dir(f.paths.PolicyDir)))
 	mkdirMode(f.t, filepath.Join(root, "Library", "LaunchDaemons"), 0o755)
-	machine := &launchdOverMachine{f: f, loaded: true}
+	machine := &launchdOverMachine{f: f, loaded: true, boot: "uuid:boot-1", bootedAt: f.clock.Now().Add(-time.Hour)}
 	mac := f.macOSHostOver(machine)
 	// The agent's definition is there, as setup left it.
 	definition, err := launchdPlist(f.exe, f.stateDir, "_vectory")
@@ -591,20 +631,49 @@ func TestABuildLaunchdStartedAgainIsNotHealthyThroughLaunchd(t *testing.T) {
 	f.requireTakenBack(oldDigest, release, "UNHEALTHY")
 }
 
-// A job that launchd won't boot out is the step's INTERRUPTED, as a service that
-// won't stop is anywhere: the executable isn't replaced, and the request ends.
-func TestAJobThatWontBeBootedOutLeavesTheExecutableAsItWasThroughLaunchd(t *testing.T) {
+// A job that launchd won't boot out is the step's INTERRUPTED, as a service that won't stop is
+// anywhere: the executable isn't replaced, and the request ends. What launchctl answers to a
+// bootout doesn't tell a refusal, which leaves the agent running as it was, from a removal that
+// is under way, which leaves the job listed in the same way, so the request ends only when the
+// record of the job the step told launchd to remove is over, and not before: the agent's job is
+// listed as running throughout, and it was never stopped.
+func TestAJobThatWontBeBootedOutLeavesTheExecutableAsItWasAndTheRequestEndsOnceTheRecordOfItIsOverThroughLaunchd(t *testing.T) {
 	f := newStepFixture(t)
-	f.useLaunchd()
+	machine, _ := f.useLaunchd()
 	f.host.cfg.StopFails = true
 	oldDigest := f.executableDigest()
 	release := f.newRelease("0.1.1", "good", releaseOptions{})
 	f.stage(release)
+
+	if err := f.run(); err == nil {
+		t.Fatal("the run ended without an error, although launchd still lists the job the step told it to remove")
+	}
+	if journal, found := f.journal(); !found || journal.Stage != UpdateStageSwapping {
+		t.Fatalf("the journal after a bootout launchd refused: %+v (found %v)", journal, found)
+	}
+	f.clock.advance(recordLife() + time.Minute)
+	f.anotherStepProcess(machine)
 	f.mustRun()
+
 	if got := f.executableDigest(); got != oldDigest {
 		t.Errorf("the executable changed to %s", got)
 	}
 	f.requireAnswered(release, UpdateOutcomeFailed, "INTERRUPTED")
+	if got := strings.Join(f.service().History, ","); got != "start 0.1.0" {
+		t.Errorf("the service's history: %s; the agent was never stopped", got)
+	}
+	bootouts := 0
+	for _, change := range machine.changes() {
+		if strings.HasPrefix(change, "bootout ") {
+			bootouts++
+		}
+		if strings.HasPrefix(change, "bootstrap ") {
+			t.Errorf("launchd was asked %q although it never lost the job", change)
+		}
+	}
+	if bootouts != 1 {
+		t.Errorf("launchd was asked %v: one bootout, which it refused", machine.changes())
+	}
 }
 
 // ---------------------------------------------------------------- the removal of a job

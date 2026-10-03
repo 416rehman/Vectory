@@ -559,6 +559,44 @@ func TestTheAgentServiceIsReadByTheHostThatHasNone(t *testing.T) {
 	}
 }
 
+// A service that was removed by hand is read as one that isn't registered, which is what the
+// removal of the step reads to tell a rollback that can't start the previous build for want of a
+// service from one that waits for a start the service manager won't make: the removal refuses the
+// first with words that say the agent's service isn't registered, and what to run in an elevated
+// PowerShell to register it again, after which the step finishes the rollback itself.
+func TestAnAgentServiceThatWasRemovedByHandIsReadAsNotRegisteredAndRefusesARollbackWithWordsForAnElevatedPowerShell(t *testing.T) {
+	// This host may have the agent's service, from an earlier job; the test needs one that is gone.
+	service, err := openService(ServiceName, serviceQueryRights)
+	switch {
+	case err == nil:
+		service.Close()
+		t.Skip("the agent's service is registered on this host")
+	case !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST):
+		t.Skipf("the Service Control Manager can't be asked here: %v", err)
+	}
+	host := newWindowsUpdateHost()
+	if _, err := host.AgentExecutable(); !errors.Is(err, errAgentNotRegistered) {
+		t.Fatalf("the locator for a service that isn't there: %v", err)
+	}
+
+	journal := updateJournal{Stage: UpdateStageRollingBack, From: &updateBuild{Version: "0.1.0", SHA256: strings.Repeat("a", 64)}}
+	want := "an update is being rolled back on this host, and the agent's service isn't registered (there is no Windows service called " + ServiceName + "), so the update step can't start the previous build. " +
+		"Register the service again with `vectory service-install` in an elevated PowerShell; the update step then finishes the rollback by itself, usually within a minute or two"
+	var busy *UpdateBusyError
+	if err := rollbackWithoutRegistration(host, journal); !errors.As(err, &busy) || busy.Message != want {
+		t.Errorf("the refusal of a rollback whose service is gone: %v\nwant %s", err, want)
+	}
+	// The removal gives these words, and not the words of a rollback in progress.
+	if err := removalRefusal(host, journal); !errors.As(err, &busy) || busy.Message != want {
+		t.Errorf("the removal's refusal: %v\nwant %s", err, want)
+	}
+	// Any other update is refused as it always was.
+	journal.Stage = UpdateStageTrial
+	if err := rollbackWithoutRegistration(host, journal); err != nil {
+		t.Errorf("a trial was refused with the words for a rollback: %v", err)
+	}
+}
+
 // stepLogText is what the step has written to its log so far, or what kept it from
 // being read.
 func stepLogText(paths UpdatePaths) string {
