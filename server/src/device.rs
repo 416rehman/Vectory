@@ -797,8 +797,15 @@ pub async fn heartbeat(
     // write, so a refusal leaves nothing behind.
     let checks = crate::device_validations::parse(&v)?;
     // What the host reports about agent updates: strict like the rest, before
-    // anything is written, so a refusal leaves nothing behind.
-    let update_report = crate::agent_updates::parse(&v)?;
+    // anything is written, so a refusal leaves nothing behind. While updates are
+    // off the member is not read at all: a malformed one refuses nothing and
+    // nothing of it is kept. The writer guard is held, so nobody turns updates
+    // on between this read and the check-in's own.
+    let update_report = if crate::agent_updates::is_on(&s).await? {
+        crate::agent_updates::parse(&v)?
+    } else {
+        None
+    };
     let mut tx = db::begin_write(&s.pool).await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
         .bind(&id)

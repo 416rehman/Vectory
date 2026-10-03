@@ -533,10 +533,9 @@ async fn a_device_goes_forward_through_its_states_to_verified_only_by_the_server
         .unwrap();
     assert_eq!(from.as_deref(), Some("0.1.0"), "the version it ran before");
     assert!(verified_at.is_some());
-    // Final: nothing moves it again.
+    // Final: nothing moves it again, and a report that moves nothing adds no
+    // audit row.
     r.old(&device, &r.about("downloading")).await;
-    r.new(&device, &r.result("rolled_back", Some("UNHEALTHY")))
-        .await;
     assert_eq!(r.state(&rollout, &device).await, "verified");
     // One audit row for the device, with what it was told.
     let rows = audits(&r.f, "device.agent_update").await;
@@ -546,6 +545,16 @@ async fn a_device_goes_forward_through_its_states_to_verified_only_by_the_server
     assert_eq!(rows[0]["details"]["rollout_id"], json!(rollout));
     assert_eq!(rows[0]["details"]["from_version"], "0.1.0");
     assert_eq!(rows[0]["details"]["to_version"], "0.1.1");
+    // A rollback it reports afterwards is a result the server records, once,
+    // and the target stays verified.
+    r.new(&device, &r.result("rolled_back", Some("UNHEALTHY")))
+        .await;
+    assert_eq!(r.state(&rollout, &device).await, "verified");
+    let rows = audits(&r.f, "device.agent_update").await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["outcome"], "rolled_back");
+    assert_eq!(rows[1]["details"]["code"], "UNHEALTHY");
+    assert_eq!(rows[1]["details"]["rollout_id"], json!(rollout));
 }
 
 #[tokio::test]
@@ -1227,7 +1236,7 @@ async fn a_device_that_waits_for_its_host_does_not_hold_a_later_stage_and_keeps_
         r.old(
             &batch[0],
             &with(
-                r.idle(),
+                r.about("waiting_for_window"),
                 json!({"windows":["daily 02:00-04:00 UTC"],"window_open":false})
             )
         )
@@ -1262,13 +1271,19 @@ async fn silence_ends_what_waited_for_it() {
     r.new(restarted, &r.about("trial")).await;
     assert_eq!(r.state(&rollout, restarted).await, "restarted");
     // Offered for 59 minutes: still offered. For 61: skipped. A device that
-    // started downloading has reported, so it is not skipped.
+    // started downloading has reported, but one that stays there for an hour is
+    // skipped too, with the code of a server that heard nothing more.
     step(&r.f, at + Duration::minutes(59)).await;
     assert_eq!(r.state(&rollout, silent).await, "offered");
+    assert_eq!(r.state(&rollout, downloading).await, "downloading");
     step(&r.f, at + Duration::minutes(61)).await;
     assert_eq!(r.state(&rollout, silent).await, "skipped");
     assert_eq!(r.code(&rollout, silent).await, None);
-    assert_eq!(r.state(&rollout, downloading).await, "downloading");
+    assert_eq!(r.state(&rollout, downloading).await, "skipped");
+    assert_eq!(
+        r.code(&rollout, downloading).await.as_deref(),
+        Some("NO_REPORT")
+    );
     // Applying or restarted and silent for 30 minutes: failed with NO_REPORT.
     assert_eq!(r.state(&rollout, applying).await, "failed");
     assert_eq!(
@@ -1902,7 +1917,7 @@ async fn while_updates_are_off_the_step_and_the_check_ins_move_nothing() {
 }
 
 #[tokio::test]
-async fn an_expired_release_stops_a_rollout_where_it_is_without_failing_it() {
+async fn an_expired_release_ends_its_rollout_without_failing_it() {
     let r = Rig::build(2).await;
     let refs: Vec<&String> = r.ids.iter().collect();
     let rollout = r
@@ -1919,8 +1934,13 @@ async fn an_expired_release_stops_a_rollout_where_it_is_without_failing_it() {
         .execute(&r.f.state.pool)
         .await
         .unwrap();
-    // The release expires before the canary is released: nothing is.
+    // The release expires before the canary is released: nothing is, and the
+    // rollout ends as cancelled, not failed.
     step(&r.f, Utc::now() + Duration::seconds(10)).await;
     assert_eq!(r.count(&rollout, "offered").await, 0);
-    assert_eq!(r.status(&rollout).await, "active");
+    assert_eq!(r.status(&rollout).await, "cancelled");
+    let shown = r.show(&rollout).await;
+    assert_eq!(shown["cancel_reason"], "release_expired");
+    assert_eq!(shown["failure_reason"], Value::Null);
+    assert_eq!(r.count(&rollout, "cancelled").await, 2);
 }

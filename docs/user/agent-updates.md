@@ -201,13 +201,18 @@ Open a rollout from **Devices → Agent updates**. The page shows how many devic
 | **Updated** | The new build checked in after the restart and is healthy. |
 | **Rolled back** | The host took the build back. It won't try this release again. |
 | **Refused**, **Failed** | The host's own rules refused it, or the update failed. The page shows the agent's reason. |
-| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, or its access was revoked. |
+| **Cancelled**, **Skipped** | It never started: the rollout ended first, the device never became ready, its access was revoked, its host dropped the offer (paused, turned updates off or took another release), or it stayed at **Offered**, **Downloading** or **Staged** for an hour. The page shows the host's reason when it gave one. |
 
-Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. The canary also needs at least one **Updated** device. A device silent for 30 minutes after it started applying becomes **Failed**.
+Each stage waits until every device it released is done or waiting on its host, then watches them for the time you set. A device that falls back or goes silent restarts the watch, and a device whose pipeline stops delivering after the update counts as a failure. A device whose access was revoked, or that has been silent for longer than the watch lasts and three check-in intervals, is no longer watched: it doesn't hold the rollout back and doesn't count as failing. The canary also needs at least one **Updated** device that is still watched. A device silent for 30 minutes after it started applying becomes **Failed**.
 
 When more devices roll back or fail than **Stop if more than** allows, the rollout stops. Devices already applying finish their trial. The rollout is **Completed** when no device is pending or waiting and every released one is done.
 
 A device that waits for its host or its window keeps its offer, and offers come only from a rollout that is running, so the rollout stays **Active** until that device installs or you cancel the rollout. Later stages don't wait for it. You can't turn updates off while a rollout is active or paused, so cancel it first if nobody will approve the waiting hosts.
+
+A rollout doesn't stay open for ever when nothing can move it:
+
+- **A release expires.** Its rollouts end as **Cancelled**, as a withdrawal ends them. Devices already applying finish.
+- **No progress for 24 hours.** A rollout that has devices it can't move on (none that can be released, a build that never changes state, an observation held by a device that stays on the old build) and made no progress for 24 hours ends as **Failed**, and says so. Unstarted offers are withdrawn and devices already applying finish. A change of any device, a stage released, a watch that starts or ends, or a resume counts as progress. Waiting for a person or a window is not stalled: that is by design, and you cancel the rollout when nobody will act.
 
 ### Pause, resume or cancel
 
@@ -223,9 +228,11 @@ On the rollout page, an Operator or Administrator can:
 
 It cancels every update rollout, withdraws every offer and refuses new rollouts until an administrator chooses **Clear the stop** in **Settings → Agent updates**. Devices already trying a build finish. A device that already downloaded one may still start until its next check-in tells it of the stop, usually within a minute, and the update step looks for work every 30 seconds. A host that checks in less often takes longer. Clearing the stop resumes nothing: the rollouts it cancelled stay cancelled.
 
+A server restored from a backup stops all updates too, as a local administrator, until an administrator has reviewed what the backup brought back. See [Restore a backup](administer.md#restore-a-backup).
+
 ## When a host rolls back
 
-The host takes a build back when the new agent doesn't start, doesn't check in within five minutes, isn't healthy or is interrupted twice. It restores the previous build from a copy it kept, and reports the reason. The device shows **Rolled back** with that reason, and the dashboard opens an issue (**AGENT_UPDATE_ROLLED_BACK**) that appears in **Needs you** on the Overview.
+The host takes a build back when the new agent doesn't start, doesn't check in within five minutes, isn't healthy or is interrupted twice. It restores the previous build from a copy it kept, and reports the reason. The device shows **Rolled back** with that reason, and the dashboard opens an issue (**AGENT_UPDATE_ROLLED_BACK**) that appears in **Needs you** on the Overview. A host that had already started when you paused, cancelled or stopped the rollout, and then rolled back, is recorded the same way, once: the issue and the audit entry appear, and a paused rollout counts it toward its failure threshold.
 
 **A rolled-back release is never tried again on that host.** The host remembers the release counter and the release, so even a new rollout can't make it try the same build twice. It takes the next release, which carries a higher counter. To retry, fix the cause, prepare a new release and roll it out.
 
@@ -301,7 +308,7 @@ To change one thing a host agreed to, run `setup` on it with only that flag and 
 
 ## Turn off agent updates
 
-In **Settings → Agent updates**, choose **Turn off…** and enter your password. It's refused while an update rollout is running: cancel it, or choose **Stop all updates**, first. Hosts keep the consent they gave and the build they run. The key, who holds it and a stop are kept, so turning updates on again with the same key needs no re-pinning.
+In **Settings → Agent updates**, choose **Turn off…** and enter your password. It's refused while an update rollout is running: cancel it, or choose **Stop all updates**, first. Hosts keep the consent they gave and the build they run. The key, who holds it and a stop are kept, so turning updates on again with the same key needs no re-pinning. While updates are off, Vectory doesn't read or keep what hosts report about updates, and it deletes what it had: each host reports again at its next check-in once you turn updates on. A device that was still finishing an update gets its waiting time again from the moment you turn them on, so it isn't failed for the time they were off.
 
 ## Limits
 
@@ -310,6 +317,7 @@ In **Settings → Agent updates**, choose **Turn off…** and enter your passwor
 - **A release names only the platforms in this server's catalog.** A host whose platform isn't in it is listed as **Not in this release**: update it by hand. That is what macOS and Windows hosts do when their builds aren't in the release.
 - **Updates only move forward.** A host never takes an older build. Going back is its own automatic rollback, or an upgrade by hand.
 - **A rollout targets the devices the review found.** A device that joins a group afterwards isn't added, and a device is in at most one unfinished update rollout.
+- **At most 200 update rollouts are active or paused at once.** The server reads every active one every two seconds, so the 201st is refused (`UPDATE_ROLLOUT_LIMIT`) until you cancel one or one finishes. A rollout takes up to 10,000 devices, so this is no limit on the fleet.
 - **Expiry uses each host's clock.** A host whose clock is far behind accepts a release that has expired, and one far ahead refuses valid ones.
 - **Vector isn't updated.** Agent updates replace the agent only. Replacing Vector stays a local act: [Replace the Vector binary](agents.md#replace-the-vector-binary).
 

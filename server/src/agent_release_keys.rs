@@ -183,7 +183,9 @@ impl Drop for Written<'_> {
 }
 
 /// A key the server generated and holds: its name carries the start of its
-/// fingerprint, so two of them are told apart in a listing.
+/// fingerprint, so two of them are told apart in a listing. The name is in the
+/// key line the unauthenticated key bundle serves, so it says nothing of who
+/// holds the key.
 fn generate_key() -> Result<(Seed, ReleaseKey)> {
     let seed = Seed::generate();
     let failed = |error: agent_release::KeyError| {
@@ -194,8 +196,8 @@ fn generate_key() -> Result<(Seed, ReleaseKey)> {
             "A release key couldn't be generated.",
         )
     };
-    let probe = ReleaseKey::from_seed(seed.bytes(), "server").map_err(failed)?;
-    let name = format!("server-{}", &probe.fingerprint()[..8]);
+    let probe = ReleaseKey::from_seed(seed.bytes(), "release").map_err(failed)?;
+    let name = format!("release-{}", &probe.fingerprint()[..8]);
     let key = ReleaseKey::from_seed(seed.bytes(), &name).map_err(failed)?;
     Ok((seed, key))
 }
@@ -685,11 +687,45 @@ pub async fn revoke(
     Ok(Json(out))
 }
 
+/// The current key, when updates are on, the server holds it and its sealed seed
+/// can't be read or doesn't open under this instance's sealing key: a database
+/// restored next to another keys directory, or a keys directory restored without
+/// the sealing key. Nothing else says so until a release is prepared.
+pub(crate) async fn current_seed_unavailable(
+    conn: &mut SqliteConnection,
+    keys: &crate::crypto::Keys,
+    data_dir: &std::path::Path,
+) -> Result<Option<String>> {
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT k.fingerprint FROM agent_update_settings s JOIN agent_release_keys k ON k.fingerprint=s.current_key WHERE s.enabled=1 AND k.custody='server' AND k.state='current'",
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(fingerprint) = current else {
+        return Ok(None);
+    };
+    let opens = std::fs::read(data_dir.join("keys").join(sealed_file(&fingerprint)))
+        .ok()
+        .and_then(|sealed| keys.open_bytes(&aad(&fingerprint), &sealed).ok())
+        .is_some_and(|seed| seed.len() == 32);
+    Ok((!opens).then_some(fingerprint))
+}
+
 /// Removes the sealed file of every key that is not the current key of the
 /// server's custody: a file left by a request that did not finish, or by a
 /// rotation or a revocation whose removal failed. It runs in the prune, under
 /// the writer lock, so a file that is being registered is never in its way.
+///
+/// It removes nothing while the current key's own seed can't be read: the files
+/// in that keys directory may hold the only copy of a key the state this server
+/// was restored from no longer knows, and the start said what to do.
 pub(crate) async fn prune_sealed(s: &State, conn: &mut SqliteConnection) -> Result<()> {
+    if current_seed_unavailable(conn, &s.keys, &s.settings.data_dir)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
     let Ok(entries) = std::fs::read_dir(s.settings.data_dir.join("keys")) else {
         return Ok(());
     };
