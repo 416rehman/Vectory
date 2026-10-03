@@ -404,14 +404,14 @@ async fn a_preview_names_the_pipeline_it_deploys() {
     db::insert(
         &mut tx,
         "configuration",
-        &json!({"id":"00000000-0000-4000-8000-000000000200","name":"r2-edge-syslog","created_at":db::now()}),
+        &json!({"id":"00000000-0000-4000-8000-000000000200","name":"eu-edge-syslog","created_at":db::now()}),
     )
     .await
     .unwrap();
     let preview = rollout::preview(&mut tx, &configuration(&ids, 100, VERSION_A))
         .await
         .unwrap();
-    assert_eq!(preview["configuration_name"], "r2-edge-syslog");
+    assert_eq!(preview["configuration_name"], "eu-edge-syslog");
     let settings = rollout::preview(&mut tx, &policy(&ids, 100, false))
         .await
         .unwrap();

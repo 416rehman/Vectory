@@ -73,7 +73,7 @@ const config = {
 };
 const pipeline = {
   id: id(10),
-  name: "Synthetic deployment handoff",
+  name: "Synthetic deployment",
   description: "Never sent to a real device",
   revision: 1,
   archived: false,
@@ -213,7 +213,7 @@ async function load({
           csrf_token: "synthetic",
         });
       if (path === "/settings")
-        return reply({ instance_name: "Synthetic handoff" });
+        return reply({ instance_name: "Synthetic instance" });
       if (path === `/devices/${id(1)}`) current.detailReads++;
       // A page of devices, one device, and the groups without their members.
       if (await fulfillFleetRead(replies, route)) return;
@@ -485,8 +485,8 @@ try {
       await expect(row).toContainText("Keeps current");
       await expect(row).toContainText("Priority 200 wins");
       expect(state.previews[0].priority).toBe(100);
-      // Round-2 operator review P1-3: sending names the devices it changes
-      // and waits until the person accepts what stays behind.
+      // Sending names the devices it changes and waits until the person
+      // accepts what stays behind.
       await expect(applyToOthers()).toBeDisabled();
       await expect(
         page.getByRole("button", { name: "Apply settings", exact: true }),

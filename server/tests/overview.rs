@@ -287,16 +287,15 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
     assert!(bare["desired_version"].is_null());
 }
 
-/// Round-2 operator review P1-1 and P1-2: a rollback reads the right way round
-/// (what was rolled back, on which devices, and what they run now), and a
-/// failing group names the rollout its devices share and whether it can be
-/// rolled back.
+/// A rollback reads the right way round (what was rolled back, on which
+/// devices, and what they run now), and a failing group names the rollout its
+/// devices share and whether it can be rolled back.
 #[tokio::test]
 async fn rollback_lineage_and_failing_groups_name_their_rollout() {
     let (_temp, s, app, actor) = fixture().await;
     let mut conn = s.pool.acquire().await.unwrap();
     let mut versions = Vec::new();
-    for (name, slug) in [("Edge syslog processing", "edge"), ("r15-demo", "demo")] {
+    for (name, slug) in [("Edge syslog processing", "edge"), ("web-demo", "demo")] {
         let pipeline = db::id();
         db::insert(&mut conn,"configuration",&json!({"id":pipeline,"name":name,"description":"","config":{},"graph":{"nodes":[],"edges":[]}})).await.unwrap();
         let version = db::id();
@@ -376,7 +375,7 @@ async fn rollback_lineage_and_failing_groups_name_their_rollout() {
         .find(|item| item["action"] == "deployment.rollback")
         .unwrap();
     assert_eq!(rolled["target_id"], canary_id);
-    assert_eq!(rolled["deployment"]["configuration_name"], "r15-demo");
+    assert_eq!(rolled["deployment"]["configuration_name"], "web-demo");
     assert_eq!(rolled["deployment"]["version_number"], 1);
     assert_eq!(
         rolled["deployment"]["rolled_back_to_configuration_name"],
@@ -395,7 +394,7 @@ async fn rollback_lineage_and_failing_groups_name_their_rollout() {
     );
     assert_eq!(
         created["deployment"]["rollback_of_configuration_name"],
-        "r15-demo"
+        "web-demo"
     );
     assert_eq!(created["deployment"]["rollback_of_version_number"], 1);
     // Rolled back: the rollout is no longer something to roll back.
@@ -421,7 +420,7 @@ async fn rollback_lineage_and_failing_groups_name_their_rollout() {
         .find(|item| item["id"] == rollback["id"])
         .unwrap()
         .clone();
-    assert_eq!(restored["rollback_of_configuration_name"], "r15-demo");
+    assert_eq!(restored["rollback_of_configuration_name"], "web-demo");
     assert_eq!(restored["rollback_of_version"], 1);
     let base_summary = get(
         &app,
@@ -434,7 +433,7 @@ async fn rollback_lineage_and_failing_groups_name_their_rollout() {
     .await;
     assert_eq!(
         base_summary["replaced_by"][0]["configuration_name"],
-        "r15-demo"
+        "web-demo"
     );
 }
 

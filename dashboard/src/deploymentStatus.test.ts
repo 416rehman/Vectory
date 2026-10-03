@@ -727,20 +727,20 @@ describe("lineage names the pipeline whenever it crosses to another", () => {
   it("prints the version alone within the page's own pipeline", () => {
     expect(
       lineageLabel(
-        { configuration_name: "r15-demo", version_number: 3 },
-        "r15-demo",
+        { configuration_name: "web-demo", version_number: 3 },
+        "web-demo",
       ),
     ).toBe("v3");
     expect(
       lineageLabel(
         { configuration_name: "Edge syslog processing", version_number: 1 },
-        "r15-demo",
+        "web-demo",
       ),
     ).toBe("Edge syslog processing v1");
     // Older servers send only the number: it stays a number.
-    expect(lineageLabel({ version_number: 2 }, "r15-demo")).toBe("v2");
-    expect(lineageLabel({}, "r15-demo")).toBe("another version");
-    expect(lineageLabel({}, "r15-demo", "an earlier rollout")).toBe(
+    expect(lineageLabel({ version_number: 2 }, "web-demo")).toBe("v2");
+    expect(lineageLabel({}, "web-demo")).toBe("another version");
+    expect(lineageLabel({}, "web-demo", "an earlier rollout")).toBe(
       "an earlier rollout",
     );
   });
@@ -751,7 +751,7 @@ describe("lineage names the pipeline whenever it crosses to another", () => {
       status_before_rollback: "active",
       rolled_back_by: "00000000-0000-4000-8000-000000000001",
       rolled_back_to_version: 1,
-      configuration_name: "r15-demo",
+      configuration_name: "web-demo",
       rolled_back_to_configuration_name: "Edge syslog processing",
     };
     expect(describeDeployment(rolledBack).note).toBe(
@@ -760,7 +760,7 @@ describe("lineage names the pipeline whenever it crosses to another", () => {
     expect(
       describeDeployment({
         ...rolledBack,
-        rolled_back_to_configuration_name: "r15-demo",
+        rolled_back_to_configuration_name: "web-demo",
         status_before_rollback: "failed",
       }).note,
     ).toBe("To v1 after failing");
@@ -778,11 +778,11 @@ describe("lineage names the pipeline whenever it crosses to another", () => {
             device_count: 1,
             at: "2026-09-29T02:00:00Z",
             version_number: 3,
-            configuration_name: "r15-demo",
+            configuration_name: "web-demo",
           },
         ],
       }).note,
-    ).toBe("By r15-demo v3");
+    ).toBe("By web-demo v3");
   });
 });
 

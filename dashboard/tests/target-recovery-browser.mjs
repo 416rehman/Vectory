@@ -127,7 +127,7 @@ const awsReasons =
   "Native capability: credentials_file, AWS credentials from the host (without both keys, or with assume_role, imds or profile)";
 const pipeline = {
   id: id(10),
-  name: "Synthetic deployment handoff",
+  name: "Synthetic deployment",
   description: "Never sent to a real device",
   revision: 1,
   archived: false,
@@ -319,7 +319,7 @@ async function load({
           csrf_token: "synthetic",
         });
       if (path === "/settings")
-        return reply({ instance_name: "Synthetic handoff" });
+        return reply({ instance_name: "Synthetic instance" });
       if (path === `/devices/${id(1)}`) current.detailReads++;
       // A page of devices, one device, and the groups without their members.
       if (await fulfillFleetRead(replies, route)) return;

@@ -554,7 +554,7 @@ export function when(value: string | null | undefined, now = Date.now()) {
 }
 
 /**
- * "r16-full install command enrolled r16-full at 5:15 PM." for a token that
+ * "lab-full install command enrolled lab-full at 5:15 PM." for a token that
  * enrolled something; null when it enrolled nothing.
  */
 export function enrollmentNote(token: ListedToken, now = Date.now()) {

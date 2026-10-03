@@ -13,7 +13,7 @@ const now = Date.parse("2026-09-29T12:00:00Z");
 const device = (overrides: Partial<Device> = {}): Device =>
   ({
     id: "device",
-    name: "r16-full",
+    name: "lab-full",
     os: "linux",
     arch: "amd64",
     agent_version: "0.1.0-dev",

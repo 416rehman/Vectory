@@ -21,7 +21,7 @@ await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
 const port = reservation.address().port;
 await new Promise((done) => reservation.close(done));
 const virtual = "\0virtual:deployment-routing-fixture";
-// A worker running beside others binds its own port.
+// Each run binds its own port, so harnesses can run side by side.
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),

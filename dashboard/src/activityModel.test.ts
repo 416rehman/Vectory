@@ -65,8 +65,8 @@ describe("activity sentences", () => {
     });
     expect(sentence(describeActivity(refused))).toBe("Enrollment refused");
     expect(
-      sentence(describeActivity({ ...refused, target_name: "r16-neg-again" })),
-    ).toBe("Enrollment refused: r16-neg-again");
+      sentence(describeActivity({ ...refused, target_name: "lab-neg-again" })),
+    ).toBe("Enrollment refused: lab-neg-again");
     expect(links(describeActivity(refused))).toEqual([]);
     expect(activityTone(refused)).toBe("danger");
     expect(
@@ -211,10 +211,10 @@ describe("activity sentences", () => {
           actor: "Demo operator",
           target_kind: "deployment",
           target_id: uuid(5),
-          target_name: "r15-demo v1",
+          target_name: "web-demo v1",
           device_names: ["edge-nyc-02"],
           deployment: {
-            configuration_name: "r15-demo",
+            configuration_name: "web-demo",
             version_number: 1,
             policy: false,
             rollout_kind: "canary",
@@ -230,10 +230,10 @@ describe("activity sentences", () => {
         }),
       );
     expect(sentence(rollback())).toBe(
-      "Demo operator rolled back r15-demo v1 on edge-nyc-02 (now Edge syslog processing v1)",
+      "Demo operator rolled back web-demo v1 on edge-nyc-02 (now Edge syslog processing v1)",
     );
     expect(links(rollback())).toEqual([
-      ["r15-demo v1", `#/deployments/${uuid(5)}`],
+      ["web-demo v1", `#/deployments/${uuid(5)}`],
     ]);
     // Older servers name only the rolled-back deployment: never "to" it.
     expect(
@@ -241,7 +241,7 @@ describe("activity sentences", () => {
         rollback({
           device_names: undefined,
           deployment: {
-            configuration_name: "r15-demo",
+            configuration_name: "web-demo",
             version_number: 1,
             policy: false,
             rollout_kind: "canary",
@@ -250,7 +250,7 @@ describe("activity sentences", () => {
           },
         }),
       ),
-    ).toBe("Demo operator rolled back r15-demo v1");
+    ).toBe("Demo operator rolled back web-demo v1");
     // The rollback's own deployment says what it rolled back.
     expect(
       sentence(
@@ -268,14 +268,14 @@ describe("activity sentences", () => {
               rollout_kind: "all",
               priority: 101,
               target_count: 1,
-              rollback_of_configuration_name: "r15-demo",
+              rollback_of_configuration_name: "web-demo",
               rollback_of_version_number: 1,
             },
           }),
         ),
       ),
     ).toBe(
-      "Demo operator deployed Edge syslog processing v1 to 1 device (rollback of r15-demo v1)",
+      "Demo operator deployed Edge syslog processing v1 to 1 device (rollback of web-demo v1)",
     );
   });
 

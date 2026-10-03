@@ -239,10 +239,10 @@ async fn lanes_follow_release_order_and_failures_group_by_reason() {
     assert_eq!(missing["error"]["code"], "NOT_FOUND");
 }
 
-/// Round-2 operator review P2-2 and P1-6: a failure group says where its
-/// leading finding points, so the rollout page can offer "Fix in pipeline" for
-/// a failure a retry can't clear and name the component that isn't delivering
-/// with its buffer fill. Malformed tokens never leave the server.
+/// A failure group says where its leading finding points, so the rollout page
+/// can offer "Fix in pipeline" for a failure a retry can't clear and name the
+/// component that isn't delivering with its buffer fill. Malformed tokens never
+/// leave the server.
 #[tokio::test]
 async fn failure_groups_name_the_code_component_and_field_they_point_at() {
     let f = fixture(3).await;

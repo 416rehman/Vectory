@@ -345,7 +345,7 @@ export function conflictRows(
   return rows;
 }
 
-/** "r15-demo v1 (cancelled)": an assignment with a status worth saying. */
+/** "web-demo v1 (cancelled)": an assignment with a status worth saying. */
 export function boundName(assignment: AssignmentDescription) {
   const status = ["cancelled", "failed", "paused"].includes(assignment.status)
     ? assignment.status

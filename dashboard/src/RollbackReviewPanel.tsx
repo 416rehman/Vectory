@@ -28,7 +28,7 @@ export default function RollbackReviewPanel({
 }: {
   id: string;
   versionId?: string | null;
-  /** What is rolled back, as the review names it: "r15-demo v1". */
+  /** What is rolled back, as the review names it: "web-demo v1". */
   source: string;
   supported: boolean;
   busy: boolean;

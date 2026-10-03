@@ -261,11 +261,11 @@ async fn a_first_version_that_could_not_start_says_so_and_nothing_claims_to_run(
         &s,
         &cookie,
         &csrf,
-        "r16-full",
+        "lab-full",
         json!({"service_manager":"none"}),
     )
     .await;
-    let version = first_version(&s, &id, "r16-lowport").await;
+    let version = first_version(&s, &id, "lab-lowport").await;
     let peer = agent(&s, &id).await;
     let reason = "Vector can't listen on 127.0.0.1:514: ports below 1024 need a privilege the service account lacks.";
     let attempt = json!({"generation":1,"version_id":version,"sha256":db::hash("{}\n"),"state":"failed","error":{"code":"ROLLBACK_UNAVAILABLE","stage":"rollback","message":"agent text","diagnostics":[{"severity":"error","code":"PRIVILEGED_PORT","component_kind":"source","component_id":"syslog","message":reason,"hint":"Use a port of 1024 or above, or grant the service CAP_NET_BIND_SERVICE."}]}});
@@ -297,7 +297,7 @@ async fn a_first_version_that_could_not_start_says_so_and_nothing_claims_to_run(
     assert_eq!(page["total"], 1, "{page}");
     let issue = &page["items"][0];
     assert_eq!(issue["code"], "ROLLBACK_UNAVAILABLE");
-    assert_eq!(issue["title"], "r16-full couldn't start r16-lowport v1");
+    assert_eq!(issue["title"], "lab-full couldn't start lab-lowport v1");
     assert_eq!(
         issue["message"],
         format!("{} (syslog).", reason.trim_end_matches('.'))
@@ -313,7 +313,7 @@ async fn a_first_version_that_could_not_start_says_so_and_nothing_claims_to_run(
     .await;
     assert_eq!(
         groups["items"][0]["title"],
-        "r16-full couldn't start r16-lowport v1"
+        "lab-full couldn't start lab-lowport v1"
     );
     // Search finds the plain words.
     let (_, found) = call(
@@ -383,8 +383,8 @@ async fn open_delivery(s: &State, cookie: &str) -> Value {
 async fn without_metrics_vectors_log_opens_and_resolves_delivery_issues() {
     let (_temp, s) = state().await;
     let (cookie, csrf) = admin(&s).await;
-    let id = enroll(&s, &cookie, &csrf, "r16-host", json!({})).await;
-    first_version(&s, &id, "r16-http-sink").await;
+    let id = enroll(&s, &cookie, &csrf, "lab-host", json!({})).await;
+    first_version(&s, &id, "lab-http-sink").await;
     let peer = agent(&s, &id).await;
 
     // One check-in with failures is not yet a verdict.
@@ -431,8 +431,8 @@ async fn without_metrics_vectors_log_opens_and_resolves_delivery_issues() {
 async fn a_device_with_metrics_is_never_judged_from_its_log() {
     let (_temp, s) = state().await;
     let (cookie, csrf) = admin(&s).await;
-    let id = enroll(&s, &cookie, &csrf, "r16-full", json!({})).await;
-    first_version(&s, &id, "r16-http-monitored").await;
+    let id = enroll(&s, &cookie, &csrf, "lab-full", json!({})).await;
+    first_version(&s, &id, "lab-http-monitored").await;
     let peer = agent(&s, &id).await;
     // The exporter is known but this check-in carried no sample: nothing is
     // judged, from the log or otherwise.
