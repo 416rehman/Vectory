@@ -1197,6 +1197,59 @@ func TestRolloverForkNeedsTwoVerifyingStatementsFromOnePinnedKey(t *testing.T) {
 	}
 }
 
+// BuildReleaseManifest writes the form the server writes, and what it writes
+// reads back as the manifest it was given.
+func TestBuildReleaseManifestWritesTheServersForm(t *testing.T) {
+	parsed, err := ParseReleaseManifest([]byte(testManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := BuildReleaseManifest(parsed)
+	if err != nil || string(built) != testManifest {
+		t.Fatalf("%s %v", built, err)
+	}
+	// Without a minimum version the member is left out.
+	parsed.MinFrom = ""
+	built, err = BuildReleaseManifest(parsed)
+	if err != nil || strings.Contains(string(built), "min_from") || string(built) != strings.Replace(testManifest, `"min_from":"0.1.0",`, "", 1) {
+		t.Fatalf("%s %v", built, err)
+	}
+	// Nothing is written that a host would refuse.
+	for name, damage := range map[string]func(*ReleaseManifest){
+		"a version with a suffix":    func(m *ReleaseManifest) { m.Version = "0.1.1-rc.1" },
+		"a counter of zero":          func(m *ReleaseManifest) { m.Counter = 0 },
+		"no builds":                  func(m *ReleaseManifest) { m.Artifacts = nil },
+		"a file of another name":     func(m *ReleaseManifest) { m.Artifacts[0].File = "vectory" },
+		"a member smuggled in":       func(m *ReleaseManifest) { m.Version = `0.1.1","counter":9,"x":"` },
+		"an expiry before the issue": func(m *ReleaseManifest) { m.ExpiresAt = m.IssuedAt },
+		"a build over 128 MiB":       func(m *ReleaseManifest) { m.Artifacts[0].Size = 128*1024*1024 + 1 },
+	} {
+		damaged := parsed
+		damaged.Artifacts = append([]ReleaseArtifact(nil), parsed.Artifacts...)
+		damage(&damaged)
+		if built, err := BuildReleaseManifest(damaged); err == nil {
+			t.Errorf("%s: wrote %s", name, built)
+		}
+	}
+	// Every manifest of the vectors that parses is written back as a manifest that
+	// parses to the same thing.
+	for _, vector := range loadReleaseVectors(t).Cases {
+		raw, _ := base64.StdEncoding.DecodeString(vector.ManifestB64)
+		manifest, err := ParseReleaseManifest(raw)
+		if err != nil {
+			continue
+		}
+		built, err := BuildReleaseManifest(manifest)
+		if err != nil {
+			t.Fatalf("%s: %v", vector.Name, err)
+		}
+		again, err := ParseReleaseManifest(built)
+		if err != nil || !reflect.DeepEqual(again, manifest) {
+			t.Errorf("%s: %+v %v", vector.Name, again, err)
+		}
+	}
+}
+
 // ---------------------------------------------------------------- the published examples
 
 // The tools write what the contract shows. The examples come from a reference
@@ -1213,9 +1266,16 @@ func TestSigningToolsReproduceThePublishedExamples(t *testing.T) {
 		t.Fatalf("the example's key pair: %v", err)
 	}
 
-	// release.json.sig: the signature covers the manifest without the line feed
-	// the example file ends with.
+	// release.json: the builder writes the example from its fields, and the
+	// signature covers it without the line feed the example file ends with.
 	manifest := bytes.TrimSuffix(repoFile(t, examples+"release.json"), []byte("\n"))
+	parsedManifest, err := ParseReleaseManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built, err := BuildReleaseManifest(parsedManifest); err != nil || !bytes.Equal(built, manifest) {
+		t.Errorf("release.json\n got %s\nwant %s (%v)", built, manifest, err)
+	}
 	file, err := BuildReleaseSignatures([]ReleaseSignature{releaseSignatureBy(public, private.SignRelease(manifest))})
 	if err != nil {
 		t.Fatal(err)
