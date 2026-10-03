@@ -522,4 +522,20 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 			t.Fatal("the server refused the member")
 		}
 	})
+
+	t.Run("a-build-the-host-holds-no-offer-for-is-gone-as-far-as-the-agent-can-tell", func(t *testing.T) {
+		// 403 for a digest a release has, 404 for one no release has: the agent
+		// reads both as a build the server doesn't offer, and leaves nothing behind.
+		dir := t.TempDir()
+		for label, digest := range map[string]string{"the build of the ended rollout": buildSHA, "a digest no release has": strings.Repeat("0", 64)} {
+			_, err := e.Client.downloadAgentBuild(context.Background(), updateReleasePath+digest, dir, int64(len(build)), digest)
+			var failure *updateDownloadError
+			if !errors.As(err, &failure) || !failure.Gone {
+				t.Fatalf("%s: %v", label, err)
+			}
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("a refused request left files behind: %v", entries)
+		}
+	})
 }
