@@ -343,9 +343,11 @@ const COUNT: &str = "CASE WHEN json_type(i.data,'$.count')='integer' AND json_ex
 const REPORTS: &str = "CASE WHEN json_type(i.data,'$.reports')='integer' AND json_extract(i.data,'$.reports') BETWEEN 0 AND 9007199254740991 THEN json_extract(i.data,'$.reports') ELSE NULL END";
 const CODE: &str = "CASE WHEN json_type(i.data,'$.code')='text' THEN substr(json_extract(i.data,'$.code'),1,128) ELSE 'APPLY_FAILED' END";
 const VERSION: &str = "CASE WHEN json_type(i.data,'$.desired_version_id')='text' THEN substr(json_extract(i.data,'$.desired_version_id'),1,128) ELSE '' END";
-/// SQL for the plain-language title, so search matches what operators read.
-fn title_sql() -> String {
-    let mut sql = format!("CASE {CODE}");
+/// SQL for the plain-language title of the issue record `alias`, so search
+/// matches what operators read and the audit log names an issue event by it.
+pub(crate) fn title_sql(alias: &str) -> String {
+    let code = CODE.replace("i.data", &format!("{alias}.data"));
+    let mut sql = format!("CASE {code}");
     for code in crate::configuration_attempt::CODES {
         let title = crate::configuration_attempt::title(code).replace('\'', "''");
         sql.push_str(&format!(" WHEN '{code}' THEN '{title}'"));
@@ -463,7 +465,7 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, state: &str, device: Option<&str>, s
     if !search.is_empty() {
         // Only advertised bounded fields are searchable. Operator reasons and
         // imported raw diagnostic bodies cannot become a covert search index.
-        q.push(" AND instr(lower(COALESCE(substr(d.name,1,256),'')||' '||CASE WHEN json_type(i.data,'$.device_id')='text' THEN substr(json_extract(i.data,'$.device_id'),1,128) ELSE '' END||' '||").push(CODE).push("||' '||COALESCE(").push(title_sql()).push(",'')||' '||CASE WHEN json_type(i.data,'$.stage')='text' THEN substr(json_extract(i.data,'$.stage'),1,64) ELSE 'apply' END||' '||COALESCE(CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END,'')),lower(").push_bind(search.to_owned()).push("))>0");
+        q.push(" AND instr(lower(COALESCE(substr(d.name,1,256),'')||' '||CASE WHEN json_type(i.data,'$.device_id')='text' THEN substr(json_extract(i.data,'$.device_id'),1,128) ELSE '' END||' '||").push(CODE).push("||' '||COALESCE(").push(title_sql("i")).push(",'')||' '||CASE WHEN json_type(i.data,'$.stage')='text' THEN substr(json_extract(i.data,'$.stage'),1,64) ELSE 'apply' END||' '||COALESCE(CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END,'')),lower(").push_bind(search.to_owned()).push("))>0");
     }
 }
 fn count_query(state: &str, device: Option<&str>, search: &str) -> QueryBuilder<'static, Sqlite> {

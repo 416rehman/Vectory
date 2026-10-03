@@ -34,7 +34,7 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 | `Vector 0.58.x isn't installed here` | Setup looked on `PATH` and in the usual places and found no Vector 0.58. Install it, or pass `--vector-binary PATH`; **Add device → Advanced → Vector binary** puts the path into the command you copy. |
 | The service account can't run Vector or the agent | Setup names the folder or file that blocks it, such as a private `/root`. Install Vector system-wide (https://vector.dev/download/) or pass `--vector-binary` with a path the account can read. Keep the agent at mode `0755`. |
 
-For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log:
+For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log. A refusal is recorded once for each token or address and reason a minute, and at most 60 a minute in all. When more arrive, the audit log adds one **Device enroll refusals summarized** event that says how many were left out.
 
 | Reason | **Add device** says | Fix |
 | --- | --- | --- |
@@ -213,7 +213,7 @@ ReadWritePaths=/srv/logs
 ## Validation says deferred or unavailable
 
 - **Deferred:** part of the check needs the device, such as a local file, a device secret, an environment variable or a provider. The device runs that check before applying. Deferred is not a pass.
-- **Unavailable:** the server got no usable answer from its validator, so publishing is blocked until it's back. It never skips the check. An administrator can read the cause in the server log: `docker compose logs server | grep "isolated validator"` prints a warning with a `reason`, such as `the server could not connect to it`, `it did not answer within 8 seconds`, `it answered HTTP 503` or `it speaks another protocol, or runs another Vector, than this server expects`. Then check the `validator` container.
+- **Unavailable:** the server got no usable answer from its validator, so publishing is blocked until it's back. It never skips the check. An administrator can read the cause in the server log: `docker compose logs server | grep "isolated validator"` prints one warning for each unusable answer, with the `path` it was for (`validate`, `tests` or `transform-test`) and a `reason`, such as `the server could not connect to it`, `it did not answer within 8 seconds`, `it answered HTTP 503`, `it speaks another protocol, or runs another Vector, than this server expects` or `its diagnostics are not in the expected form`. The warning never quotes what the validator sent. Then check the `validator` container.
 - **Structural only:** you're on a development preview without a validator. Production servers can't run that way.
 
 ## A credential is refused when you save or publish

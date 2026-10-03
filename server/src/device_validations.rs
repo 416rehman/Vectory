@@ -324,7 +324,8 @@ pub async fn labels(
         }
         None => None,
     };
-    let name = name.filter(|name| !name.is_empty() && !name.chars().any(char::is_control));
+    let name =
+        name.filter(|name| !name.is_empty() && !name.chars().any(crate::db::hostile_display_char));
     Ok((number, name))
 }
 

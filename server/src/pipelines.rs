@@ -133,7 +133,7 @@ pub(crate) async fn action(
     let source;
     match action {
         "duplicate" => {
-            let name = db::string(input, "name", 120)?;
+            let name = db::name(input, "name", 120, "a pipeline name")?;
             let description = if input.get("description").is_some() {
                 if !input["description"].is_string() {
                     return Err(ApiError::invalid("Description must be text"));

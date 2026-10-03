@@ -1431,6 +1431,15 @@ fn worker_fault(path: &str, reason: &str) {
     );
 }
 
+/// Why an answer in the right protocol still can't be used. The three readers
+/// (`validate`, `tests` and `transform-test`) share the phrases, and each logs
+/// one when it refuses the answer.
+const NO_VERDICT: &str = "its answer lacks a true-or-false verdict";
+const BAD_DIAGNOSTICS: &str = "its diagnostics are not in the expected form";
+const BAD_PLACEHOLDER: &str = "a placeholder it names is not in the draft";
+const BAD_TESTS: &str = "its test results are not in the expected form";
+const BAD_SAMPLES: &str = "its sample results are not in the expected form";
+
 fn request_fault(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "it did not answer within 8 seconds"
@@ -1513,15 +1522,15 @@ type ValidateReply = (Vec<Value>, Vec<String>, Vec<String>, bool, bool);
 
 fn read_validate_reply(config: &Value, value: &Value) -> Result<ValidateReply, &'static str> {
     let native = crate::vector_diagnostics::sanitize(config, &value["diagnostics"])
-        .ok_or("its diagnostics are not in the expected form")?;
-    let placeholders = worker_placeholders(config, &value["placeholders"])
-        .ok_or("a placeholder it names is not in the draft")?;
+        .ok_or(BAD_DIAGNOSTICS)?;
+    let placeholders =
+        worker_placeholders(config, &value["placeholders"]).ok_or(BAD_PLACEHOLDER)?;
     let stubbed = value["stubbed"]
         .as_array()
         .filter(|list| list.len() <= 64)
         .ok_or("its list of stand-ins is missing or too long")?;
     if !value["static_checked"].is_boolean() || !value["valid"].is_boolean() {
-        return Err("its answer lacks a true-or-false verdict");
+        return Err(NO_VERDICT);
     }
     let stubbed: Vec<String> = stubbed
         .iter()
@@ -2379,18 +2388,21 @@ pub async fn synthetic_vrl(
             )
         })?;
     let ports = sample_ports(&transform);
-    let parsed = (|| {
-        let compiled = reply["compiled"].as_bool()?;
-        let diagnostics = crate::vector_diagnostics::sanitize(&json!({}), &reply["diagnostics"])?;
+    let parsed = (|| -> Result<_, &'static str> {
+        let compiled = reply["compiled"].as_bool().ok_or(NO_VERDICT)?;
+        let diagnostics = crate::vector_diagnostics::sanitize(&json!({}), &reply["diagnostics"])
+            .ok_or(BAD_DIAGNOSTICS)?;
         let results = if compiled {
-            sanitize_results(&reply["results"], samples.len(), &ports)?
+            sanitize_results(&reply["results"], samples.len(), &ports).ok_or(BAD_SAMPLES)?
         } else {
             vec![]
         };
-        let placeholders = worker_placeholders(&transform, &reply["placeholders"])?;
-        Some((compiled, diagnostics, results, placeholders))
+        let placeholders =
+            worker_placeholders(&transform, &reply["placeholders"]).ok_or(BAD_PLACEHOLDER)?;
+        Ok((compiled, diagnostics, results, placeholders))
     })();
-    let (compiled, diagnostics, results, placeholders) = parsed.ok_or_else(|| {
+    let (compiled, diagnostics, results, placeholders) = parsed.map_err(|reason| {
+        worker_fault("transform-test", reason);
         api_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "VALIDATION_FAILED",
@@ -2621,14 +2633,19 @@ pub(crate) async fn run_pipeline_tests(
     let reply = worker_call(url, "tests", &json!({"config":config}), 512 * 1024)
         .await
         .ok_or_else(unavailable)?;
-    let parsed = (|| {
-        let tests_run = reply["tests_run"].as_bool()?;
-        let tests = sanitize_tests(&reply["tests"])?;
-        let diagnostics = crate::vector_diagnostics::sanitize(config, &reply["diagnostics"])?;
-        let placeholders = worker_placeholders(config, &reply["placeholders"])?;
-        Some((tests_run, tests, diagnostics, placeholders))
+    let parsed = (|| -> Result<_, &'static str> {
+        let tests_run = reply["tests_run"].as_bool().ok_or(NO_VERDICT)?;
+        let tests = sanitize_tests(&reply["tests"]).ok_or(BAD_TESTS)?;
+        let diagnostics = crate::vector_diagnostics::sanitize(config, &reply["diagnostics"])
+            .ok_or(BAD_DIAGNOSTICS)?;
+        let placeholders =
+            worker_placeholders(config, &reply["placeholders"]).ok_or(BAD_PLACEHOLDER)?;
+        Ok((tests_run, tests, diagnostics, placeholders))
     })();
-    let (tests_run, tests, native, placeholders) = parsed.ok_or_else(unavailable)?;
+    let (tests_run, tests, native, placeholders) = parsed.map_err(|reason| {
+        worker_fault("tests", reason);
+        unavailable()
+    })?;
     let tests = if tests_run {
         complete_results(config, tests)
     } else {

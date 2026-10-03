@@ -10,7 +10,7 @@ Get a message in Slack, any webhook receiver or email when an issue opens, a rol
 | A receiver | A Slack incoming webhook, an HTTPS endpoint of your own, or an SMTP server that speaks TLS. |
 | `VECTORY_PUBLIC_URL` (optional) | Messages get an **Open in Vectory** link. See [Server configuration](server-config.md). |
 
-Messages carry names and states: the device, pipeline, deployment and the issue's message. They never carry event contents.
+Messages carry names and states: the device, pipeline, deployment and the issue's message. They never carry event contents. A name always reads as one line in a message: names can't hold line breaks or text-direction overrides (see [Build a pipeline](pipelines.md#find-and-organize-pipelines)), and one saved earlier shows each such character as a space, with runs of spaces collapsed to one.
 
 ## Add a Slack channel
 
@@ -151,7 +151,7 @@ A new channel starts with every event except **Rollout rolled back** and **Canar
 - **Severity:** **Errors only** sends issues with error severity and failed rollouts. Everything else is a warning.
 - **Pipelines** and **Groups:** send only events about these. A rollout matches the groups it targets and the groups of its devices.
 
-Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline. After the server starts, devices have five minutes to reconnect before an offline alert.
+Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline. After the server starts, no offline alert goes out for five minutes, so devices can reconnect: one that checks in during that time is never reported. Silence is counted from a device's last check-in. A device already silent for the channel's minutes when the five minutes end is reported then, and any other when its own minutes pass.
 
 ## Quiet hours
 

@@ -532,7 +532,7 @@ pub async fn targets(
     for item in &mut items {
         finish_target(item);
     }
-    timelines(&mut tx, &mut items).await?;
+    timelines(&mut tx, &id, &mut items).await?;
     let context = crate::canary_gate::load(&mut tx, &id).await?;
     if crate::canary_gate::enabled(&context) {
         let ids = items
@@ -674,13 +674,21 @@ fn finish_target(item: &mut Value) {
 /// Changes a target's timeline shows, newest last.
 const TIMELINE_CHANGES: i64 = 12;
 /// Observed progress for each released target on this page, from the device's
-/// recorded apply-state changes between its release and the next release of
-/// another deployment (or verification). Heartbeats can skip states; missing
-/// steps stay missing rather than being invented. Each target gets its own
-/// latest changes (a repeat of the previous state isn't a change), so a
+/// recorded apply-state changes after its release and before the next release
+/// of another deployment on that device, and up to its verification. The
+/// window is cut by the audit log's own order, not by the second a row carries:
+/// a release and the previous deployment's last rows can share a second, and
+/// each row belongs to the deployment it followed. A target with no release
+/// row (an older record) falls back to the times. Heartbeats can skip states;
+/// missing steps stay missing rather than being invented. Each target gets its
+/// own latest changes (a repeat of the previous state isn't a change), so a
 /// device that reported thousands of states pushes out neither its newest
 /// ones nor another device's.
-async fn timelines(db: &mut sqlx::SqliteConnection, items: &mut [Value]) -> Result<()> {
+async fn timelines(
+    db: &mut sqlx::SqliteConnection,
+    deployment: &str,
+    items: &mut [Value],
+) -> Result<()> {
     let windows: Vec<Value> = items
         .iter()
         .map(|item| {
@@ -691,20 +699,31 @@ async fn timelines(db: &mut sqlx::SqliteConnection, items: &mut [Value]) -> Resu
             .into_iter()
             .flatten()
             .min();
-            json!([item["device_id"], item["released_at"], end])
+            json!([
+                item["device_id"],
+                item["released_at"],
+                end,
+                item["verified_at"]
+            ])
         })
         .collect();
     let rows = sqlx::query(
-        "WITH w AS (SELECT key AS slot,json_extract(value,'$[0]') AS device,json_extract(value,'$[1]') AS start,json_extract(value,'$[2]') AS finish FROM json_each(?) WHERE json_type(value,'$[0]')='text' AND json_type(value,'$[1]')='text'), \
-         events AS (SELECT w.slot,substr(json_extract(r.data,'$.outcome'),1,32) AS state,r.created_at AS at,s.sequence FROM w \
-          JOIN records r INDEXED BY audit_target ON r.kind='audit' AND json_extract(r.data,'$.target')=w.device JOIN audit_sequence s ON s.audit_id=r.id \
+        "WITH w AS (SELECT key AS slot,json_extract(value,'$[0]') AS device,json_extract(value,'$[1]') AS start,json_extract(value,'$[2]') AS finish,json_extract(value,'$[3]') AS verified FROM json_each(?) WHERE json_type(value,'$[0]')='text' AND json_type(value,'$[1]')='text'), \
+         opened AS MATERIALIZED (SELECT w.*,(SELECT max(s.sequence) FROM records r INDEXED BY audit_target JOIN audit_sequence s ON s.audit_id=r.id WHERE r.kind='audit' AND json_extract(r.data,'$.target')=?||':'||w.device AND json_extract(r.data,'$.action')='deployment.release') AS opened_at FROM w), \
+         bounded AS MATERIALIZED (SELECT opened.*,(SELECT min(s.sequence) FROM deployment_targets x JOIN records r INDEXED BY audit_target ON r.kind='audit' AND json_extract(r.data,'$.target')=x.deployment_id||':'||x.device_id AND json_extract(r.data,'$.action')='deployment.release' JOIN audit_sequence s ON s.audit_id=r.id WHERE x.device_id=opened.device AND x.deployment_id<>? AND s.sequence>opened.opened_at) AS closed_at FROM opened), \
+         events AS (SELECT b.slot,substr(json_extract(r.data,'$.outcome'),1,32) AS state,r.created_at AS at,s.sequence FROM bounded b \
+          JOIN records r INDEXED BY audit_target ON r.kind='audit' AND json_extract(r.data,'$.target')=b.device JOIN audit_sequence s ON s.audit_id=r.id \
           WHERE json_extract(r.data,'$.action')='device.apply_state' AND json_extract(r.data,'$.outcome') IS NOT NULL \
-          AND r.created_at>=w.start AND (w.finish IS NULL OR r.created_at<=w.finish)), \
+          AND CASE WHEN b.opened_at IS NOT NULL \
+              THEN s.sequence>b.opened_at AND (b.closed_at IS NULL OR s.sequence<b.closed_at) AND (b.verified IS NULL OR r.created_at<=b.verified) \
+              ELSE r.created_at>=b.start AND (b.finish IS NULL OR r.created_at<=b.finish) END), \
          changes AS (SELECT *,lag(state) OVER (PARTITION BY slot ORDER BY sequence) AS previous FROM events), \
          latest AS (SELECT *,row_number() OVER (PARTITION BY slot ORDER BY sequence DESC) AS recency FROM changes WHERE previous IS NULL OR previous<>state) \
          SELECT slot,state,at FROM latest WHERE recency<=? ORDER BY slot,sequence",
     )
     .bind(json!(windows).to_string())
+    .bind(deployment)
+    .bind(deployment)
     .bind(TIMELINE_CHANGES)
     .fetch_all(&mut *db)
     .await?;

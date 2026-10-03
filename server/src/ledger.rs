@@ -58,6 +58,10 @@ impl Ledger {
     pub fn seen(&mut self, key: &str) -> bool {
         self.live(key).is_some_and(|entry| entry.count > 0)
     }
+    /// What `key` has counted in its current window.
+    pub fn count(&mut self, key: &str) -> u32 {
+        self.live(key).map_or(0, |entry| entry.count)
+    }
     /// Count one against `key`, opening a `window` if it has none.
     pub fn add(&mut self, key: &str, window: Duration) {
         if let Some(entry) = self.live(key) {
@@ -187,6 +191,26 @@ mod tests {
         // A ceiling of nothing admits nothing, and leaves no entry behind.
         assert!(ledger.admit("closed", 0, Duration::from_secs(60)).is_err());
         assert!(!ledger.seen("closed"));
+    }
+
+    #[test]
+    fn a_key_says_what_it_has_counted_in_its_window() {
+        let mut ledger = Ledger::with_capacity(8);
+        assert_eq!(ledger.count("key"), 0);
+        for _ in 0..4 {
+            ledger.add("key", Duration::from_secs(60));
+        }
+        assert_eq!(ledger.count("key"), 4);
+        // Counts past a ceiling the key never refuses at are all kept.
+        for _ in 0..10 {
+            assert_eq!(
+                ledger.admit("all", u32::MAX, Duration::from_secs(60)),
+                Ok(())
+            );
+        }
+        assert_eq!(ledger.count("all"), 10);
+        ledger.add("gone", Duration::ZERO);
+        assert_eq!(ledger.count("gone"), 0);
     }
 
     #[test]

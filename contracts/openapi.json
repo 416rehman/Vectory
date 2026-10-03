@@ -98,7 +98,8 @@
                     "type": "string"
                   },
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "At most 100 characters after trimming. No line breaks, control characters or text-direction overrides: a name that has one is refused with 400 NAME_INVALID."
                   },
                   "password": {
                     "type": "string",
@@ -897,7 +898,7 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 120,
-                    "description": "At most 120 UTF-8 bytes; NUL is rejected. The dashboard also trims surrounding whitespace."
+                    "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field. The dashboard also trims surrounding whitespace."
                   },
                   "description": {
                     "type": "string",
@@ -1314,7 +1315,8 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "1 to 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
                   },
                   "description": {
                     "type": "string"
@@ -1501,7 +1503,8 @@
                   "name": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 120
+                    "maxLength": 120,
+                    "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
                   },
                   "expires_hours": {
                     "type": "integer",
@@ -1828,7 +1831,8 @@
                       "name": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 100
+                        "maxLength": 100,
+                        "description": "At most 100 characters after trimming. No line breaks, control characters or text-direction overrides: a name that has one is refused with 400 NAME_INVALID."
                       },
                       "email": {
                         "type": "string",
@@ -1868,7 +1872,8 @@
                       "name": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 100
+                        "maxLength": 100,
+                        "description": "At most 100 characters after trimming. No line breaks, control characters or text-direction overrides: a name that has one is refused with 400 NAME_INVALID."
                       },
                       "email": {
                         "type": "string",
@@ -1906,7 +1911,8 @@
                       "name": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 100
+                        "maxLength": 100,
+                        "description": "At most 100 characters after trimming. No line breaks, control characters or text-direction overrides: a name that has one is refused with 400 NAME_INVALID."
                       },
                       "email": {
                         "type": "string",
@@ -2668,7 +2674,8 @@
                   "name": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 120
+                    "maxLength": 120,
+                    "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
                   },
                   "policy": {
                     "$ref": "#/components/schemas/AgentPolicy"
@@ -4467,7 +4474,8 @@
                   "name": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 120
+                    "maxLength": 120,
+                    "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
                   },
                   "description": {
                     "type": "string",
@@ -4948,7 +4956,7 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 120,
-                    "description": "At most 120 UTF-8 bytes."
+                    "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
                   },
                   "description": {
                     "type": "string",
@@ -7850,7 +7858,8 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "1 to 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
                   },
                   "description": {
                     "type": "string"
@@ -10933,7 +10942,8 @@
                     "type": "object",
                     "properties": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "At most 100 characters after trimming. No line breaks, control characters or text-direction overrides: a name that has one is refused with 400 NAME_INVALID."
                       },
                       "role": {
                         "enum": [
@@ -10972,7 +10982,8 @@
                     "type": "object",
                     "properties": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "At most 100 characters after trimming. No line breaks, control characters or text-direction overrides: a name that has one is refused with 400 NAME_INVALID."
                       },
                       "role": {
                         "enum": [
@@ -21370,7 +21381,7 @@
               ],
               "additionalProperties": false
             },
-            "description": "Recorded apply-state changes after release, oldest first. Heartbeats can skip states."
+            "description": "Recorded apply-state changes after this target's own release and before the next deployment's release on the device, in audit order, up to its verification, oldest first. A target with no release event is read by time. Heartbeats can skip states."
           },
           "wake": {
             "type": "object",
@@ -21447,7 +21458,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Optional; at most 120 characters. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
           },
           "version_id": {
             "type": "string",
@@ -24587,7 +24599,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 120,
-            "description": "Optional, for vectory status: the pipeline's name as the server shows it now (cut to 120 characters, omitted when it is empty or has control characters). It can change at an unchanged generation when the pipeline is renamed, so an agent must keep it out of the identity it compares for a repeated generation. An older agent ignores it."
+            "description": "Optional, for vectory status: the pipeline's name as the server shows it now (cut to 120 characters, omitted when it is empty or has a control character, a line or paragraph separator or a text-direction control). It can change at an unchanged generation when the pipeline is renamed, so an agent must keep it out of the identity it compares for a repeated generation. An older agent ignores it."
           }
         },
         "required": [
@@ -28920,7 +28932,8 @@
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 120
+            "maxLength": 120,
+            "description": "At most 120 UTF-8 bytes. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
           },
           "policy": {
             "$ref": "#/components/schemas/AgentPolicy"
@@ -30393,7 +30406,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Optional; at most 120 characters. No line breaks, control characters or text-direction overrides, at the ends too: a name that has one is refused with 400 and a sentence that names the field."
           },
           "version_id": {
             "type": "string",
