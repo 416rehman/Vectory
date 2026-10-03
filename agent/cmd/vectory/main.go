@@ -54,7 +54,7 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprint(stdout, "Usage:  vectory help [command]\n\nShow the list of commands, or the flags and examples of one command.\n")
 				return exitOK
 			case "version":
-				fmt.Fprint(stdout, "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n")
+				fmt.Fprint(stdout, versionUsage)
 				return exitOK
 			}
 			cmd := findCommand(args[1])
@@ -87,6 +87,8 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 	return execute(cmd, rest, stdout, stderr)
 }
 
+const versionUsage = "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n"
+
 // versionCommand prints the version. Like every command it takes flags and no
 // other arguments; --state-dir is accepted and has no effect.
 func versionCommand(args []string, stdout, stderr io.Writer) int {
@@ -96,7 +98,7 @@ func versionCommand(args []string, stdout, stderr io.Writer) int {
 	fs.String("state-dir", "", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(stdout, "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n")
+			fmt.Fprint(stdout, versionUsage)
 			return exitOK
 		}
 		fmt.Fprintf(stderr, "vectory version: %s\nRun 'vectory help version' for usage.\n", flagError(err))

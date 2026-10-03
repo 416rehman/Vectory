@@ -531,7 +531,7 @@ func defineLogs(c *cli) func() int {
 	c.StateDir()
 	follow := c.Bool("follow", "Keep printing new lines until interrupted (also -f)")
 	c.fs.BoolVar(follow, "f", false, "Shorthand for --follow")
-	lines := c.Int("lines", 100, "N", "Number of recent lines to print")
+	lines := c.Int("lines", 100, "N", "Number of recent lines to print, 1 to 100000")
 	raw := c.Bool("raw", "Print the log file's lines unchanged (they can hold terminal escape sequences)")
 	c.JSON("Print one JSON object per line")
 	c.oneLine = true
