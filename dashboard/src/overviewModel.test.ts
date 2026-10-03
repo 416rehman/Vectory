@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   completeSeries,
   checklist,
   countLabel,
+  desiredNote,
   formatRate,
   healthLabels,
   healthOrder,
@@ -10,6 +11,8 @@ import {
   loopbackAddress,
   metricsAdvice,
   quietSummary,
+  readDoneSteps,
+  rememberDoneSteps,
   runningGroups,
   runningNotes,
   runningRate,
@@ -151,6 +154,138 @@ describe("first-run checklist", () => {
       false,
       false,
     ]);
+  });
+
+  const finished = {
+    releases: null,
+    devices: 1,
+    checkedIn: 1,
+    pipelines: 1,
+    versions: 1,
+    applied: 0,
+  };
+  it("keeps Deploy and verify done when the only verified device goes offline", () => {
+    // Online and verified, then offline: nothing is verified right now, but a
+    // device did verify a version.
+    expect(checklist({ ...finished, applied: 1 }).every((s) => s.done)).toBe(
+      true,
+    );
+    const offline = { ...finished, applied: 0 };
+    expect(checklist(offline).at(-1)).toEqual({ id: "deploy", done: false });
+    expect(checklist({ ...offline, verified: 1 }).at(-1)).toEqual({
+      id: "deploy",
+      done: true,
+    });
+    expect(checklist({ ...offline, verified: 0 }).at(-1)?.done).toBe(false);
+  });
+  it("never goes back to a step this account saw done", () => {
+    const nothing = { ...finished, devices: 0, checkedIn: 0, pipelines: 0 };
+    expect(
+      checklist(nothing, new Set(["device", "pipeline"])).map((s) => s.done),
+    ).toEqual([false, true, true, true, false]);
+    // Memory only adds; it never decides a step on its own account.
+    expect(checklist(nothing).map((step) => step.done)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+    ]);
+  });
+  describe("what this account saw done", () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const memory = () => {
+      const data = new Map<string, string>();
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => data.get(key) ?? null,
+        setItem: (key: string, value: string) => void data.set(key, value),
+      });
+      return data;
+    };
+    it("is kept per account in this browser", () => {
+      const data = memory();
+      expect([...readDoneSteps("ada")]).toEqual([]);
+      expect([...rememberDoneSteps("ada", ["device", "deploy"])]).toEqual([
+        "device",
+        "deploy",
+      ]);
+      // Another account has its own, and what was seen only accumulates.
+      expect([...readDoneSteps("grace")]).toEqual([]);
+      expect([...rememberDoneSteps("ada", ["pipeline"])].sort()).toEqual([
+        "deploy",
+        "device",
+        "pipeline",
+      ]);
+      expect([...readDoneSteps("ada")].sort()).toEqual([
+        "deploy",
+        "device",
+        "pipeline",
+      ]);
+      expect(data.size).toBe(1);
+    });
+    it("ignores what it can't read and survives missing storage", () => {
+      const data = memory();
+      data.set(`vectory-setup-steps-done:"ada"`, "not json");
+      expect([...readDoneSteps("ada")]).toEqual([]);
+      data.set(
+        `vectory-setup-steps-done:"ada"`,
+        JSON.stringify(["device", "somewhere-else", 7]),
+      );
+      expect([...readDoneSteps("ada")]).toEqual(["device"]);
+      vi.stubGlobal("localStorage", {
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        setItem: () => {
+          throw new Error("blocked");
+        },
+      });
+      expect([...readDoneSteps("ada")]).toEqual([]);
+      // Without storage a step is remembered for this view only.
+      expect([
+        ...rememberDoneSteps("ada", ["deploy"], new Set(["device"])),
+      ]).toEqual(["device", "deploy"]);
+    });
+  });
+});
+
+describe("the On desired version tile", () => {
+  const tile = {
+    managed: 1,
+    onDesired: 0,
+    held: 0,
+    offlineVerified: 0,
+    lastVerified: null,
+  };
+  it("counts an offline device that verified its version as offline, never as not yet verified", () => {
+    expect(
+      desiredNote({ ...tile, offlineVerified: 1, lastVerified: 2 }),
+    ).toEqual(["1 offline, last verified v2"]);
+    expect(desiredNote({ ...tile, offlineVerified: 1 })).toEqual([
+      "1 offline, last verified their assigned version",
+    ]);
+  });
+  it("says not yet verified only of the devices that are", () => {
+    expect(desiredNote(tile)).toEqual(["1 not yet verified"]);
+    expect(
+      desiredNote({
+        managed: 9,
+        onDesired: 2,
+        held: 1,
+        offlineVerified: 3,
+        lastVerified: 4,
+      }),
+    ).toEqual([
+      "1 held on previous version",
+      "3 offline, last verified v4",
+      "3 not yet verified",
+    ]);
+    // More out of reach than are unsettled can't be: the rest is clamped, so
+    // nothing is invented.
+    expect(
+      desiredNote({ ...tile, managed: 2, onDesired: 1, offlineVerified: 5 }),
+    ).toEqual(["1 offline, last verified their assigned version"]);
+    expect(desiredNote({ ...tile, managed: 1, onDesired: 1 })).toEqual([]);
   });
 });
 

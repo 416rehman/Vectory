@@ -63,6 +63,28 @@ pub(crate) async fn device_aggregates(
         .filter(|d| !d["desired_version_id"].is_null())
         .count();
     let on_desired = live.iter().filter(|d| d["status"] == "verified").count();
+    // Offline devices whose last verified version is the one they are assigned:
+    // out of reach right now, not unverified. When they all share one version,
+    // its number says which.
+    let out_of_reach: Vec<&&Value> = live
+        .iter()
+        .filter(|d| d["status"] == "offline")
+        .filter(|d| {
+            d["desired_version_id"]
+                .as_str()
+                .is_some_and(|desired| d["running_version"]["id"] == desired)
+        })
+        .collect();
+    let out_of_reach_versions: HashSet<Option<&str>> = out_of_reach
+        .iter()
+        .map(|d| d["desired_version_id"].as_str())
+        .collect();
+    let out_of_reach_number = match out_of_reach.first() {
+        Some(first) if out_of_reach_versions.len() == 1 => {
+            first["desired_version"]["number"].clone()
+        }
+        _ => Value::Null,
+    };
     let degraded = live
         .iter()
         .filter(|d| data_plane_issue(d).is_some())
@@ -85,6 +107,8 @@ pub(crate) async fn device_aggregates(
     Ok(json!({
         "devices_managed": managed,
         "devices_on_desired": on_desired,
+        "devices_offline_on_desired": out_of_reach.len(),
+        "offline_on_desired_version": out_of_reach_number,
         "devices_degraded": degraded,
         "devices_unmeasured": unmeasured,
         "versions": versions,

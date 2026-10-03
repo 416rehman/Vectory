@@ -46,6 +46,7 @@ import {
 import {
   checklist,
   countLabel,
+  desiredNote,
   formatRate,
   healthLabels,
   completeSeries,
@@ -54,10 +55,13 @@ import {
   needsYouRows,
   present,
   quietSummary,
+  readDoneSteps,
+  rememberDoneSteps,
   settingsOffPhrase,
   telemetryFromCounts,
   unmanagedDetail,
   versionsToRead,
+  type ChecklistState,
   type ChecklistStep,
   type FleetDeviceRate,
   type HealthBucket,
@@ -159,6 +163,10 @@ export type OverviewData = OverviewFleet & {
   recent_activity: Audit[];
   devices_managed?: number;
   devices_on_desired?: number;
+  /** Offline devices whose last verified version is their assigned one. */
+  devices_offline_on_desired?: number;
+  /** The one version those last verified, when they share one. */
+  offline_on_desired_version?: number | null;
   /** Applied devices with an open data-plane issue. */
   devices_degraded?: number;
   /** Applied devices with no metrics in the last three minutes. */
@@ -297,8 +305,11 @@ export function Overview({
   const stopped = useStoppedRollouts(!!data && total > 0);
   const operate = roleAllows(user, "operate");
   const now = Date.now();
-  const steps = data
-    ? checklist({
+  // A step this account has seen done stays done: a device going offline, or
+  // applying its next version, never reopens the checklist.
+  const [remembered, setRemembered] = useState(() => readDoneSteps(user.id));
+  const state: ChecklistState | null = data
+    ? {
         releases: noDevices
           ? releases.data
             ? releases.data.length
@@ -309,8 +320,24 @@ export function Overview({
         pipelines: data.configurations_total,
         versions: data.versions_total ?? (data.configurations_total ? 1 : 0),
         applied: data.devices_on_desired ?? data.counts.health.applied,
-      })
-    : [];
+        // A version some device verified, whether or not it is online now.
+        verified: data.running_total,
+      }
+    : null;
+  const steps = state ? checklist(state, remembered) : [];
+  const doneNow = (state ? checklist(state) : [])
+    .filter((step) => step.done)
+    .map((step) => step.id)
+    .join(",");
+  useEffect(() => {
+    const fresh = (doneNow ? doneNow.split(",") : []).filter(
+      (id) => !remembered.has(id as ChecklistStep["id"]),
+    ) as ChecklistStep["id"][];
+    if (fresh.length)
+      setRemembered(rememberDoneSteps(user.id, fresh, remembered));
+    // What is done now decides; the memory only grows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doneNow]);
   const showChecklist = steps.some((step) => !step.done);
   return (
     <div className="overview">
@@ -678,14 +705,13 @@ function KpiTiles({
             ? "No device has a pipeline yet"
             : onDesired === managed
               ? "Verified running their assigned version"
-              : [
-                  held > 0 &&
-                    `${held.toLocaleString()} held on previous version`,
-                  managed - onDesired - held > 0 &&
-                    `${(managed - onDesired - held).toLocaleString()} not yet verified`,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+              : desiredNote({
+                  managed,
+                  onDesired,
+                  held,
+                  offlineVerified: data.devices_offline_on_desired ?? 0,
+                  lastVerified: data.offline_on_desired_version ?? null,
+                }).join(" · ")}
           {managed > 0 && unmanaged > 0
             ? ` · ${unmanaged.toLocaleString()} without a pipeline`
             : ""}

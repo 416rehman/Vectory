@@ -371,24 +371,111 @@ export type ChecklistState = {
   checkedIn: number;
   pipelines: number;
   versions: number;
+  /** Devices verified on their assigned version right now. */
   applied: number;
+  /**
+   * Versions a device last verified, online or not: the fact that something
+   * was verified outlives the device being reachable.
+   */
+  verified?: number;
 };
 export type ChecklistStep = {
   id: "downloads" | "device" | "pipeline" | "publish" | "deploy";
   done: boolean;
 };
-/** First-run steps from real state; downloads count as done once a device exists. */
-export function checklist(state: ChecklistState): ChecklistStep[] {
+/**
+ * First-run steps from real state; downloads count as done once a device
+ * exists. A step done once stays done (`remembered`): a device going offline,
+ * or applying its next version, never reopens the checklist.
+ */
+export function checklist(
+  state: ChecklistState,
+  remembered: ReadonlySet<string> = new Set(),
+): ChecklistStep[] {
   return [
     {
-      id: "downloads",
+      id: "downloads" as const,
       done: (state.releases ?? 0) > 0 || state.devices > 0,
     },
-    { id: "device", done: state.checkedIn > 0 },
-    { id: "pipeline", done: state.pipelines > 0 },
-    { id: "publish", done: state.versions > 0 },
-    { id: "deploy", done: state.applied > 0 },
-  ];
+    { id: "device" as const, done: state.checkedIn > 0 },
+    { id: "pipeline" as const, done: state.pipelines > 0 },
+    { id: "publish" as const, done: state.versions > 0 },
+    {
+      id: "deploy" as const,
+      done: state.applied > 0 || (state.verified ?? 0) > 0,
+    },
+  ].map((step) => ({ ...step, done: step.done || remembered.has(step.id) }));
+}
+// The steps this account has seen done, in this browser only: the checklist
+// never goes back to a step that was complete.
+const stepsStore = (userId: string) =>
+  `vectory-setup-steps-done:${JSON.stringify(userId)}`;
+const stepIds: ChecklistStep["id"][] = [
+  "downloads",
+  "device",
+  "pipeline",
+  "publish",
+  "deploy",
+];
+export function readDoneSteps(userId: string): Set<ChecklistStep["id"]> {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(stepsStore(userId)) || "[]",
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? stepIds.filter((id) => (parsed as unknown[]).includes(id))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+/** Remembers steps seen done; without storage they hold until the page reloads. */
+export function rememberDoneSteps(
+  userId: string,
+  done: readonly ChecklistStep["id"][],
+  current: ReadonlySet<ChecklistStep["id"]> = new Set(),
+): Set<ChecklistStep["id"]> {
+  const next = new Set([...readDoneSteps(userId), ...current, ...done]);
+  try {
+    localStorage.setItem(stepsStore(userId), JSON.stringify([...next]));
+  } catch {
+    // Storage is unavailable: they hold for this view only.
+  }
+  return next;
+}
+
+/**
+ * What the "On desired version" tile says beside its count. Devices held on
+ * their previous version and devices out of reach are named for what they
+ * are: an offline device that last verified its assigned version is offline,
+ * never "not yet verified". Only the rest are not yet verified.
+ */
+export function desiredNote({
+  managed,
+  onDesired,
+  held,
+  offlineVerified,
+  lastVerified,
+}: {
+  managed: number;
+  onDesired: number;
+  held: number;
+  /** Offline devices whose last verified version is their assigned one. */
+  offlineVerified: number;
+  /** The number of the one version they last verified, when it is one. */
+  lastVerified: number | null;
+}) {
+  const unsettled = Math.max(0, managed - onDesired - held);
+  const offline = Math.min(Math.max(0, offlineVerified), unsettled);
+  return [
+    held > 0 && `${held.toLocaleString()} held on previous version`,
+    offline > 0 &&
+      `${offline.toLocaleString()} offline, last verified ${lastVerified ? `v${lastVerified}` : "their assigned version"}`,
+    unsettled - offline > 0 &&
+      `${(unsettled - offline).toLocaleString()} not yet verified`,
+  ].filter(Boolean) as string[];
 }
 
 /** "1 device", "3 devices". */
