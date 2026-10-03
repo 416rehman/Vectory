@@ -316,3 +316,76 @@ async fn a_rollout_keeps_to_the_bounds_of_its_settings() {
     assert!(insert(1, 10, 300, 101, "active").await == false);
     assert!(insert(1, 10, 300, 0, "running").await == false);
 }
+
+#[tokio::test]
+async fn a_report_is_one_valid_json_document_of_a_device_that_exists() {
+    let (_temp, pool) = pool().await;
+    let edge = device(&pool, "edge-00").await;
+    let insert = |device: String, report: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO agent_update_reports(device_id,report,reported_at) VALUES(?,?,?)",
+            )
+            .bind(device)
+            .bind(report)
+            .bind(db::now())
+            .execute(&pool)
+            .await
+            .is_ok()
+        }
+    };
+    assert!(
+        !insert(db::id(), "{}".into()).await,
+        "a report is of a device the server knows"
+    );
+    assert!(!insert(edge.clone(), "not json".into()).await);
+    assert!(
+        !insert(edge.clone(), format!("{{\"x\":\"{}\"}}", "x".repeat(16384))).await,
+        "at most 16 KiB"
+    );
+    assert!(insert(edge.clone(), "{}".into()).await);
+    assert!(
+        !insert(edge, "{}".into()).await,
+        "one report for a device: the latest replaces it"
+    );
+}
+
+#[tokio::test]
+async fn a_release_keeps_what_its_manifest_says_about_the_hosts_it_needs() {
+    let (_temp, pool) = pool().await;
+    key(&pool, 1, "current").await.unwrap();
+    let id = release(&pool, "0.1.1", 1, "ready", true).await.unwrap();
+    let (min_from, definition): (Option<String>, i64) =
+        sqlx::query_as("SELECT min_from,service_definition FROM agent_releases WHERE id=?")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (min_from, definition),
+        (None, 1),
+        "any agent, the first definition"
+    );
+    let set = |min_from: Option<&'static str>, definition: i64| {
+        let pool = pool.clone();
+        let id = id.clone();
+        async move {
+            sqlx::query("UPDATE agent_releases SET min_from=?,service_definition=? WHERE id=?")
+                .bind(min_from)
+                .bind(definition)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .is_ok()
+        }
+    };
+    assert!(set(Some("0.1.0"), 2).await);
+    assert!(set(None, 9_007_199_254_740_991).await);
+    assert!(
+        !set(Some("1.0"), 1).await,
+        "a version has at least five characters"
+    );
+    assert!(!set(Some("0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0"), 1).await);
+    assert!(!set(None, 0).await, "the first definition is 1");
+}

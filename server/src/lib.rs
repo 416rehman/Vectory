@@ -1,5 +1,9 @@
 pub mod access_requests;
 pub mod accounts;
+pub mod agent_release_keys;
+pub mod agent_releases;
+pub mod agent_update_rollouts;
+pub mod agent_updates;
 pub mod api;
 pub mod assignment_removal;
 pub mod audit;
@@ -148,9 +152,10 @@ pub const SIGN_IN_FAILURE_KEYS: usize = 65536;
 /// through. A flood from very many addresses can fill this partition with
 /// its own keys; it evicts only keys of this partition, so traffic here
 /// never evicts a sign-in key.
-const PUBLIC_LIMIT_PREFIXES: [&str; 4] = [
+const PUBLIC_LIMIT_PREFIXES: [&str; 5] = [
     "agent-installer",
     "agent-download",
+    "agent-release-keys",
     "enrollment",
     "invite-preview",
 ];
@@ -242,6 +247,7 @@ impl App {
             || key.starts_with("renew:")
             || key.starts_with("identity:")
             || key.starts_with("wait:")
+            || key.starts_with("agent-release:")
             || key.starts_with("device-audit:");
         let partition = if authenticated_device {
             &self.device_limits

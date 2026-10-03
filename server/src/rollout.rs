@@ -226,21 +226,26 @@ async fn project_all(
 /// Every device as the device page shows it, in list order.
 pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
     let rows = stored(db, stored_sql!("data", " ORDER BY name"), None).await?;
-    Ok(project_all(db, rows)
+    let mut devices: Vec<Value> = project_all(db, rows)
         .await?
         .into_iter()
         .map(|(device, _)| device)
-        .collect())
+        .collect();
+    crate::agent_updates::attach(db, &mut devices).await?;
+    Ok(devices)
 }
 /// One device as the device page shows it. Only its own row and the metadata
 /// it references are read, whatever the size of the fleet.
 pub async fn device(db: &mut SqliteConnection, id: &str) -> Result<Option<Value>> {
     let rows = stored(db, stored_sql!("data", " WHERE id=?"), Some(id.to_owned())).await?;
-    Ok(project_all(db, rows)
+    let mut device: Vec<Value> = project_all(db, rows)
         .await?
         .into_iter()
-        .next()
-        .map(|(device, _)| device))
+        .take(1)
+        .map(|(device, _)| device)
+        .collect();
+    crate::agent_updates::attach(db, &mut device).await?;
+    Ok(device.pop())
 }
 /// The given devices as the device page shows them, in list order.
 pub(crate) async fn devices_by_id(
@@ -2739,6 +2744,9 @@ pub async fn tick(s: &State) -> Result<()> {
         advance(&mut tx, &mut d).await?;
     }
     resolve(&mut tx).await?;
+    // Agent updates have their own rollouts: a failure there never stops this
+    // tick's pipeline work.
+    crate::agent_update_rollouts::tick(s, &mut tx).await;
     tx.commit().await?;
     Ok(())
 }

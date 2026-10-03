@@ -323,6 +323,56 @@ pub fn router(s: State) -> Router {
             "/api/v1/detection",
             get(crate::detection::get).put(crate::detection::put),
         )
+        .route("/api/v1/agent-updates", get(crate::agent_updates::get))
+        .route(
+            "/api/v1/agent-updates/stop",
+            post(crate::agent_updates::stop),
+        )
+        .route(
+            "/api/v1/agent-updates/stop/clear",
+            post(crate::agent_updates::clear),
+        )
+        .route(
+            "/api/v1/agent-release-keys",
+            get(crate::agent_release_keys::get),
+        )
+        .route("/api/v1/agent-releases", get(crate::agent_releases::list))
+        .route(
+            "/api/v1/agent-releases/{id}",
+            get(crate::agent_releases::get),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}/manifest",
+            get(crate::agent_releases::manifest),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts",
+            get(crate::agent_update_rollouts::list).post(crate::agent_update_rollouts::create),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/preview",
+            post(crate::agent_update_rollouts::preview),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}",
+            get(crate::agent_update_rollouts::detail::get),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/targets",
+            get(crate::agent_update_rollouts::detail::targets),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/pause",
+            post(crate::agent_update_rollouts::pause),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/resume",
+            post(crate::agent_update_rollouts::resume),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/cancel",
+            post(crate::agent_update_rollouts::cancel),
+        )
         .route("/api/v1/releases", get(crate::install::list_releases))
         .route(
             "/api/v1/releases/{name}",

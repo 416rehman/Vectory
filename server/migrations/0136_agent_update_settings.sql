@@ -51,3 +51,14 @@ CREATE TABLE agent_update_settings (
  CHECK((stopped_reason IS NULL)=(stopped_at IS NULL))
 );
 INSERT INTO agent_update_settings(id) VALUES(1);
+
+-- What each device last reported about agent updates, as it sent it (the
+-- heartbeat member `agent_update`, validated) and when. A check-in without the
+-- member removes the row: the server never infers a report and never keeps a
+-- stale one. It is kept apart from the device record, which the device
+-- projections copy member by member.
+CREATE TABLE agent_update_reports (
+ device_id TEXT PRIMARY KEY REFERENCES devices(id),
+ report TEXT NOT NULL CHECK(json_valid(report) AND length(report)<=16384),
+ reported_at TEXT NOT NULL
+);
