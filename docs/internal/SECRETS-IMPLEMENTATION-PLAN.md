@@ -29,7 +29,7 @@ Each question has a one-line answer in the ADR and a test below.
 
 **Release gates, all required:** the generator's `--check` and completeness green; the detector fixtures pass in Rust and TypeScript; the native probe green on Linux; the adversarial tests of Steps 3 and 7 green; the independent review finished with its findings resolved; documentation matches behavior.
 
-**A smaller first step.** The detector, the structured refusal and the import dialog (Step 1 fixtures, the detector half of Steps 2 and 5's import and Apply scan) don't depend on the agent and can ship alone. They close authoring findings 4 (the four plaintext cases) and 5 without opening any new place a secret can go.
+**A smaller first step.** The detector, the structured refusal and the import dialog (Step 1 fixtures, the detector half of Step 2, Step 5's import and Apply scan) don't depend on the agent and can ship alone. They close authoring findings 4 (the four plaintext cases) and 5 without opening any new place a secret can go.
 
 ## Wire and storage changes
 
