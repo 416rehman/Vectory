@@ -3,11 +3,15 @@
 // stop and start it, what its units are, and how to give it a small file system.
 // agent-update.mjs asks a host object for all of it and never branches on the
 // operating system, so a new system gets its own object here and the phases don't
-// change. Linux and macOS are built; Windows adds its own when its native proof is.
+// change. Linux and macOS are here, and Windows is in update-host-windows.mjs.
 //
 // A host also may have the members that only its own service manager needs:
 // checkUnits (the "sandbox" phase), whileTrying (what to read from the step while it
-// tries a build) and measureAgentRestart. A phase calls the ones a host has.
+// tries a build), measureAgentRestart, and on Windows the access lists it reads
+// instead of file modes (assertRootOnly, layout and expectedLayout), the room it
+// takes away with a file of allocated space (withLittleRoom), what happens to the
+// step's own service after a commit (afterCommit) and the moment its swap holds no
+// executable (bootGap). A phase calls the ones a host has.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,13 +29,16 @@ import {
   sleep,
   summarize,
   until,
+  windows,
 } from "./lib.mjs";
+import { windowsHost } from "./update-host-windows.mjs";
 
 export function updateHostFor() {
   if (linux) return linuxHost();
   if (macos) return macosHost();
+  if (windows) return windowsHost();
   throw new Error(
-    `The privileged step's native proof is built for Linux and macOS; add a host for ${process.platform} in tests/platform/update-hosts.mjs, with the members linuxHost has.`,
+    `The privileged step's native proof is built for Linux, macOS and Windows; add a host for ${process.platform} in tests/platform/update-hosts.mjs, with the members linuxHost has.`,
   );
 }
 

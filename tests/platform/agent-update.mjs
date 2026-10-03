@@ -5,9 +5,10 @@
 // commits it or takes it back. Each phase is one workflow step and writes an
 // evidence file (VECTORY_PLATFORM_OUTPUT, default artifacts/platforms).
 //
-//   node tests/platform/agent-update.mjs build         agents 0.1.0 to 0.1.7 from copies of
-//                                                      the source, with only the version
-//                                                      constant or one line changed
+//   node tests/platform/agent-update.mjs build         agents 0.1.0 to 0.1.7 (0.1.8 on Windows)
+//                                                      from copies of the source, with only
+//                                                      the version constant or one line changed
+//                                                      (and, on Windows, the release gate open)
 //   node tests/platform/agent-update.mjs enable        a release key made here, updates turned
 //                                                      on with offline custody
 //   node tests/platform/agent-update.mjs install       0.1.0 installed with the consent flags of
@@ -24,6 +25,10 @@
 //   node tests/platform/agent-update.mjs truncated     a store file cut short never installs
 //   node tests/platform/agent-update.mjs interrupt     the step killed while it swaps and while it
 //                                                      tries a build, then run again
+//   node tests/platform/agent-update.mjs boot-gap      (Windows) the step killed between the two
+//                                                      renames of its swap, when the directory
+//                                                      holds no executable, and the services
+//                                                      started in the order a boot may start them
 //   node tests/platform/agent-update.mjs disk-full     a step directory with no room refuses
 //   node tests/platform/agent-update.mjs hostile       the listener taken over by a program that
 //                                                      offers what a host must refuse
@@ -31,11 +36,13 @@
 //                                                      makes a file for updates
 //   node tests/platform/agent-update.mjs collect       logs and the step's files, for the artifact
 //
-// Needs the instance of scripts/preview.sh, the pinned Vector in VECTORY_VECTOR_BIN,
-// passwordless sudo, and what service.mjs leaves behind (the enrolled instance and
+// Needs the instance of scripts/preview.sh (packaging/Start-LocalPreview.ps1 on
+// Windows), the pinned Vector in VECTORY_VECTOR_BIN, passwordless sudo (an elevated
+// shell on Windows), and what service.mjs leaves behind (the enrolled instance and
 // its first administrator). Phases share what they learn through
 // .local/platform/update-context.json. Everything that depends on the operating
-// system is in update-hosts.mjs: Linux (systemd) and macOS (launchd).
+// system is in update-hosts.mjs and update-host-windows.mjs: Linux (systemd), macOS
+// (launchd) and Windows (the Service Control Manager).
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -60,8 +67,8 @@ import {
 } from "./update-hostile.mjs";
 import { updateHostFor } from "./update-hosts.mjs";
 import {
-  BUILDS,
   buildAgent,
+  buildsFor,
   checksumFile,
   fingerprintOf,
   parseKeygen,
@@ -139,7 +146,7 @@ async function signedIn() {
 async function build(evidence) {
   fs.mkdirSync(work, { recursive: true });
   const built = {};
-  for (const spec of BUILDS)
+  for (const spec of buildsFor())
     built[spec.version] = await evidence.step(
       `Build agent ${spec.version} from a copy of the source: ${spec.what}`,
       () => buildAgent(spec, work),
@@ -312,17 +319,73 @@ async function enable(evidence) {
 
 // ---------------------------------------------------------------- install
 
+// Where the pinned Vector goes on a host that doesn't say otherwise (Linux and
+// macOS): a place the service account can run it from.
 const VECTOR = "/usr/local/bin/vector";
 
-function installVector() {
+/** Where this host's Vector is. */
+const vectorOf = (host) => host.paths.vector ?? VECTOR;
+
+/**
+ * What tells setup to make the service account: the accounts of systemd and launchd
+ * are made, and a Windows service has a virtual account of its own.
+ */
+const createUserFlags = () =>
+  adapterFor({}).createUser ? ["--create-user"] : [];
+
+function installVector(host) {
   const source = process.env.VECTORY_VECTOR_BIN;
   assert(source, "Set VECTORY_VECTOR_BIN to the pinned Vector 0.58.0.");
+  if (host.installVector) return host.installVector(source);
   run("mkdir", ["-p", path.dirname(VECTOR)], { elevated: true });
   run("install", ["-m", "0755", source, VECTOR], { elevated: true });
   const version = run(VECTOR, ["--version"]).stdout.trim();
   assert(
     version.startsWith("vector 0.58.0 "),
     `Unexpected Vector at ${VECTOR}: ${version}`,
+  );
+  return VECTOR;
+}
+
+/**
+ * The installed executable is root's alone to change: mode 755 and owned by root where
+ * a file has a mode, SYSTEM's, the Administrators' and TrustedInstaller's where a file
+ * has an access list.
+ */
+function assertExecutableIsRoots(host) {
+  if (host.assertRootOnly) return host.assertRootOnly(host.paths.agent);
+  const stat = host.stat(host.paths.agent);
+  assertEqual(
+    [stat.mode, stat.owner],
+    ["755", "root"],
+    "the executable's mode and owner",
+  );
+}
+
+/**
+ * What the step made is as the product says: the directories and files that are
+ * root's alone, and the ones the agent's account may read. Modes where a file has
+ * them (a Windows file has an owner and an access list: layout).
+ */
+function assertStepFilesArePrivate(host) {
+  if (host.layout)
+    return assertEqual(
+      host.layout(),
+      host.expectedLayout,
+      "the owner and the access lists of what the step made",
+    );
+  const modes = {
+    [host.paths.stepDir]: "755",
+    [host.paths.probe]: "755",
+    [host.paths.private]: "700",
+    [host.paths.policyDir]: "755",
+  };
+  for (const [file, want] of Object.entries(modes))
+    assertEqual(host.stat(file).mode, want, `the mode of ${file}`);
+  assertEqual(
+    host.stat(host.paths.status).mode,
+    "644",
+    "the mode of status.json",
   );
 }
 
@@ -353,10 +416,10 @@ async function setupDevice(
       "--name",
       name,
       "--vector-binary",
-      VECTOR,
+      vectorOf(updateHostFor()),
       "--token-stdin",
       "--json",
-      "--create-user",
+      ...createUserFlags(),
       ...(agentPath ? ["--agent-path", agentPath] : []),
       ...flags,
     ],
@@ -402,9 +465,9 @@ function dryRunSetup(agent, name, flags) {
       "--name",
       name,
       "--vector-binary",
-      VECTOR,
+      vectorOf(updateHostFor()),
       "--json",
-      "--create-user",
+      ...createUserFlags(),
       "--dry-run",
       ...flags,
     ],
@@ -482,7 +545,7 @@ async function install(evidence) {
   );
   await evidence.step(
     "Install the pinned Vector 0.58.0 where the service account can run it",
-    installVector,
+    () => installVector(host),
   );
 
   const deviceName = `ci-update-${Date.now().toString(36)}`;
@@ -542,30 +605,13 @@ async function install(evidence) {
         builds["0.1.0"].sha256,
         "the installed executable",
       );
-      const stat = host.stat(host.paths.agent);
-      assertEqual(
-        [stat.mode, stat.owner],
-        ["755", "root"],
-        "the executable's mode and owner",
-      );
+      assertExecutableIsRoots(host);
     },
   );
   await evidence.step(
     "The step is installed: its directory, its modes, its helper copy and its record",
     () => {
-      const modes = {
-        [host.paths.stepDir]: "755",
-        [host.paths.probe]: "755",
-        [host.paths.private]: "700",
-        [host.paths.policyDir]: "755",
-      };
-      for (const [file, want] of Object.entries(modes))
-        assertEqual(host.stat(file).mode, want, `the mode of ${file}`);
-      assertEqual(
-        host.stat(host.paths.status).mode,
-        "644",
-        "the mode of status.json",
-      );
+      assertStepFilesArePrivate(host);
       assertEqual(
         host.sha256(host.paths.helper),
         builds["0.1.0"].sha256,
@@ -774,9 +820,11 @@ function snapshot(host) {
     previous: host.exists(host.paths.previous)
       ? host.sha256(host.paths.previous)
       : null,
-    beside: host
-      .list(host.paths.installDir)
-      .filter((name) => name.startsWith(".vectory")),
+    beside: host.besideExecutable
+      ? host.besideExecutable()
+      : host
+          .list(host.paths.installDir)
+          .filter((name) => name.startsWith(".vectory")),
     incoming: host.list(path.join(host.paths.updatesDir, "incoming")),
     staging: host.list(host.paths.staging),
     probe: host.list(host.paths.probe),
@@ -1068,6 +1116,10 @@ async function update(evidence) {
     builds["0.1.0"].sha256,
     "the executable before the update",
   );
+  // A step that is one process for as long as its service runs (Windows) is started
+  // again from the new helper copy once a build commits: the process it has now is
+  // the one that goes.
+  const stepPidBefore = host.afterCommit ? host.stepService().PID : null;
   // How long launchd takes to unload the agent while Vector drains, and to load it
   // again, if the host has a way to measure it: before the rollout, so the update
   // starts from an agent that has checked in since.
@@ -1130,14 +1182,9 @@ async function update(evidence) {
       assertEqual(
         host.sha256(host.paths.previous),
         builds["0.1.0"].sha256,
-        "the build kept as .vectory-previous",
+        `the build kept as ${path.basename(host.paths.previous)}`,
       );
-      const stat = host.stat(host.paths.agent);
-      assertEqual(
-        [stat.mode, stat.owner],
-        ["755", "root"],
-        "the executable's mode and owner",
-      );
+      assertExecutableIsRoots(host);
     },
   );
   await evidence.step(
@@ -1179,6 +1226,16 @@ async function update(evidence) {
       );
     },
   );
+  if (host.afterCommit)
+    await evidence.step(
+      "The step's service goes on from the new helper copy: a new process, and the copy that was running is gone",
+      () =>
+        host.afterCommit(evidence, {
+          assert,
+          until,
+          before: { stepPid: stepPidBefore },
+        }),
+    );
   await evidence.step(
     "The server shows the same: the build the device runs and the result it reported",
     async () => {
@@ -1629,6 +1686,207 @@ async function interrupt(evidence) {
   });
 }
 
+// ---------------------------------------------------------------- the gap in a swap of two renames
+
+/**
+ * A swap of two renames has one moment with no executable in the directory: after
+ * the first (the installed executable becomes the previous build) and before the
+ * second (the staged file takes its place). The step is ended in it, which the
+ * moment is too short to do from outside, so a program holds the staged file the way
+ * a virus scanner does and the second rename waits for it, for the five seconds it
+ * is allowed. Then the services are started as a boot may start them: the agent's
+ * first, which has nothing to run, and the step's, whose first run puts the build
+ * that was installed back and starts the agent. (Which of the two the Service Control
+ * Manager starts first at a real boot isn't something a runner that can't be
+ * restarted can show: both orders end the same.)
+ */
+async function bootGap(evidence) {
+  const { keys, device } = loadContext();
+  const host = updateHostFor();
+  if (!host.bootGap)
+    throw new Error(
+      `A ${host.kind} host swaps in one rename: its directory never holds no executable, so there is no gap to end the step in.`,
+    );
+  const gap = host.bootGap;
+  const s = await signedIn();
+  const release = await prepareRelease(evidence, s, "0.1.8");
+  const old = host.sha256(host.paths.agent);
+  const oldVersion = host.versionOf(host.paths.agent).version;
+  let restoreRestarts = null;
+  let holder = null;
+  try {
+    await evidence.step(
+      "The manager is told to wait five minutes before it restarts the step's service, so that ending its process leaves the directory as the step left it",
+      () => {
+        restoreRestarts = gap.pauseRestarts();
+      },
+    );
+    holder = await evidence.step(
+      "A program that holds the staged file as a virus scanner does (open for reading and writing, not for deletion) is waiting for it: the second rename will meet a sharing violation and wait",
+      () => gap.holdStagedFile(),
+    );
+    await startRollout(evidence, s, release, device.deviceId);
+    await evidence.step(
+      "The step is ended between its two renames: the directory holds no executable, and the build that was installed is beside it",
+      async () => {
+        const found = await gap.waitForGap({ timeoutMs: minutes(8) });
+        assert(
+          found,
+          `The directory never held no executable: the swap went through before the hold was in place (held: ${holder.holding()}). Status ${JSON.stringify(host.status())}, journal ${JSON.stringify(host.journal())}.`,
+        );
+        const killed = host.killStep();
+        const atKill = {
+          journal: host.journal(),
+          counters: host.counters(),
+          beside: host.besideExecutable(),
+          held: holder.holding(),
+        };
+        evidence.observe("ended_in_the_gap", { ...found, killed, ...atKill });
+        assert(
+          !host.exists(host.paths.agent),
+          "The executable was back before the step was ended.",
+        );
+        assertEqual(
+          [
+            atKill.journal?.stage,
+            atKill.journal?.swap?.style,
+            atKill.journal?.swap?.previous,
+          ],
+          ["swapping", "two_renames", path.basename(host.paths.previous)],
+          "the journal when the step was ended in the gap",
+        );
+        assertEqual(
+          host.sha256(host.paths.previous),
+          old,
+          "the build beside the gap is the one that was installed",
+        );
+        assertEqual(
+          atKill.counters?.highest_counters?.[keys.team.fingerprint],
+          release.counter,
+          "the floor on disk when the step was ended: it is raised before the service stops",
+        );
+      },
+    );
+    await evidence.step(
+      "The hold is let go of, and both services are stopped: nothing runs the step or the agent",
+      async () => {
+        await holder.release();
+        holder = null;
+        gap.stop(host.units.step);
+        gap.stop(host.units.agent);
+        assertEqual(
+          [gap.query(host.units.step).state, gap.query(host.units.agent).state],
+          ["STOPPED", "STOPPED"],
+          "the two services",
+        );
+        assert(
+          !host.exists(host.paths.agent),
+          "An executable appeared with both services stopped.",
+        );
+      },
+    );
+    await evidence.step(
+      "A boot that starts the agent's service before the step's: it can't start, because the directory holds no executable, and nothing is made of it",
+      () => {
+        const attempt = gap.tryStart(host.units.agent);
+        evidence.observe("agent_started_before_the_step", attempt);
+        assert(
+          attempt.code !== 0 && attempt.state.state !== "RUNNING",
+          `The agent's service started with no executable:\n${JSON.stringify(attempt, null, 2)}`,
+        );
+        assert(
+          !host.exists(host.paths.agent),
+          "Starting the agent's service made an executable.",
+        );
+      },
+    );
+    await evidence.step(
+      "Then the step's service starts, and its first run puts the previous build back, starts the agent and ends the request as interrupted",
+      async () => {
+        gap.start(host.units.step);
+        const settled = await until(
+          "the step is idle and has answered the release",
+          () => {
+            const status = host.status();
+            return (
+              status?.stage === "idle" &&
+              status.last?.release === release.manifestSha &&
+              status
+            );
+          },
+          {
+            timeoutMs: minutes(6),
+            intervalMs: 2000,
+            describe: () =>
+              JSON.stringify(
+                {
+                  status: host.status(),
+                  journal: host.journal(),
+                  step: host.stepService(),
+                  agent: host.agentService(),
+                  beside: host.besideExecutable(),
+                },
+                null,
+                2,
+              ),
+          },
+        );
+        evidence.observe("settled_after_the_gap", {
+          outcome: settled.last.outcome,
+          code: settled.last.code,
+        });
+        assertEqual(
+          host.sha256(host.paths.agent),
+          old,
+          "the executable after the step settled it: the build that was installed",
+        );
+        assertEqual(
+          host.versionOf(host.paths.agent).version,
+          oldVersion,
+          "vectory version of the executable that was put back",
+        );
+        assertEqual(
+          [settled.last.outcome, settled.last.code],
+          ["failed", "INTERRUPTED"],
+          "an update cut short before the new build took the executable's place",
+        );
+        assertEqual(
+          host.besideExecutable(),
+          [],
+          "what the step left beside the executable: the staged file and the previous build are gone",
+        );
+      },
+    );
+    await evidence.step(
+      "The agent's service runs again, the device checks in, and the floor stays where the step raised it",
+      async () => {
+        await until("the service runs", () => adapterFor({}).state().running, {
+          timeoutMs: 120000,
+        });
+        await until(
+          "the device checks in",
+          async () =>
+            checkedIn(
+              await s.api(`/devices/${device.deviceId}`),
+              Date.now() - 120000,
+            ),
+          { timeoutMs: 180000, intervalMs: 5000 },
+        );
+        assertEqual(
+          snapshot(host).floors[keys.team.fingerprint],
+          release.counter,
+          "the floor of the team's key",
+        );
+      },
+    );
+  } finally {
+    // What a failure leaves is put right: the hold, and the manager's own restarts.
+    if (holder) await holder.release().catch(() => {});
+    if (restoreRestarts) restoreRestarts();
+  }
+  saveContext({ released: { ...loadContext().released, "0.1.8": release } });
+}
+
 // ---------------------------------------------------------------- no room
 
 async function diskFull(evidence) {
@@ -1637,9 +1895,18 @@ async function diskFull(evidence) {
   const s = await signedIn();
   const release = await prepareRelease(evidence, s, "0.1.7");
   const sizeMiB = Math.ceil((release.build.size * 1.7) / 2 ** 20);
-  await host.withSmallStepFilesystem(sizeMiB, async () => {
+  // A host that can mount a file system over the step's directory gives it a small one;
+  // one that can't (the path check refuses a mount point on Windows) takes the room
+  // away from the volume it is on.
+  const withLittleRoom = host.withLittleRoom
+    ? (body) => host.withLittleRoom(release.build.size, body)
+    : (body) =>
+        host.withSmallStepFilesystem(sizeMiB, () =>
+          body({ description: `on a ${sizeMiB} MiB file system` }),
+        );
+  await withLittleRoom(async (room) => {
     await evidence.step(
-      `The step's directory is on a ${sizeMiB} MiB file system with less room than two copies of the build`,
+      `The step's directory has less room than two copies of the build (${room.description})`,
       () => {
         const free = host.stepFreeBytes();
         evidence.observe("room", {
@@ -1735,8 +2002,8 @@ async function withHostile(evidence, { stateDir, tried, logName }, body) {
   ));
   await evidence.step(
     "The instance's listener is stopped, and the stand-in takes its port with the instance's TLS chain and manifest signing key",
-    () => {
-      instance.stop();
+    async () => {
+      await instance.stop();
     },
   );
   let listener;
@@ -1749,8 +2016,8 @@ async function withHostile(evidence, { stateDir, tried, logName }, body) {
     return await body(listener);
   } finally {
     await listener?.stop();
-    await evidence.step("The instance is started again", () => {
-      instance.start();
+    await evidence.step("The instance is started again", async () => {
+      await instance.start();
     });
   }
 }
@@ -1912,10 +2179,10 @@ async function noConsent(evidence) {
               "--name",
               "ci-bundle-lie",
               "--vector-binary",
-              VECTOR,
+              vectorOf(host),
               "--token-stdin",
               "--json",
-              "--create-user",
+              ...createUserFlags(),
               "--agent-path",
               host.paths.agent,
               "--updates",
@@ -2082,6 +2349,7 @@ const phases = {
   "no-check-in": noCheckIn,
   truncated,
   interrupt,
+  "boot-gap": bootGap,
   "disk-full": diskFull,
   hostile,
   "no-consent": noConsent,

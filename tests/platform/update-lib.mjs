@@ -58,6 +58,12 @@ export const BUILDS = [
     kind: "good",
     what: "a good build refused for lack of room",
   },
+  {
+    version: "0.1.8",
+    kind: "good",
+    only: "windows",
+    what: "a good build the step is killed in between the two renames of its swap",
+  },
 ];
 
 /**
@@ -149,8 +155,13 @@ export function editsFor(build, read, goos = GOOS) {
     files[SOURCE.updateGate] = openWindowsGate(read(SOURCE.updateGate));
   return files;
 }
+
 const GOARCH = { x64: "amd64", arm64: "arm64" }[process.arch];
 export const platform = { goos: GOOS, goarch: GOARCH };
+
+/** The builds the checks roll out on a platform: those every platform has, and those that are for it alone. */
+export const buildsFor = (goos = GOOS) =>
+  BUILDS.filter((build) => !build.only || build.only === goos);
 
 /** The file name of a build in the catalog and in a manifest. */
 export const buildName = (version, goos = GOOS, goarch = GOARCH) =>
