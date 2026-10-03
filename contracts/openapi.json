@@ -1194,7 +1194,13 @@
                 "false"
               ]
             },
-            "description": "1 or true: rows without device_ids (GroupSummary)."
+            "description": "1 or true: rows without device_ids (GroupSummary).",
+            "examples": {
+              "default": {
+                "value": "1",
+                "x-disabled": true
+              }
+            }
           },
           {
             "name": "include",
@@ -1204,7 +1210,13 @@
                 "members"
               ]
             },
-            "description": "Keep device_ids; cannot combine with slim=1."
+            "description": "Keep device_ids; cannot combine with slim=1.",
+            "examples": {
+              "default": {
+                "value": "members",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -2019,7 +2031,13 @@
                 "groups"
               ]
             },
-            "description": "groups: add the groups the device belongs to."
+            "description": "groups: add the groups the device belongs to.",
+            "examples": {
+              "default": {
+                "value": "groups",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -2340,7 +2358,13 @@
                 "false"
               ]
             },
-            "description": "1 or true: no devices list."
+            "description": "1 or true: no devices list.",
+            "examples": {
+              "default": {
+                "value": "1",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -2881,6 +2905,12 @@
                 "security"
               ],
               "description": "changes hides sign-in and sign-out activity (login, login.*, logout); security shows only sign-in, account, user, MFA, bootstrap and signing-key events. Omitted means every event."
+            },
+            "examples": {
+              "default": {
+                "value": "changes",
+                "x-disabled": true
+              }
             }
           },
           {
@@ -4120,7 +4150,13 @@
                 "desc"
               ]
             },
-            "description": "Optional primary sort direction. Omission preserves updated descending or name ascending."
+            "description": "Optional primary sort direction. Omission preserves updated descending or name ascending.",
+            "examples": {
+              "default": {
+                "value": "asc",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -9457,7 +9493,13 @@
                 "30d"
               ]
             },
-            "description": "Steps: 1 minute up to 6h, 5 minutes for 24h, 30 minutes for 7d, 2 hours for 30d."
+            "description": "Steps: 1 minute up to 6h, 5 minutes for 24h, 30 minutes for 7d, 2 hours for 30d.",
+            "examples": {
+              "default": {
+                "value": "15m",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -10199,7 +10241,13 @@
                 "revoked"
               ]
             },
-            "description": "The status bucket (see DeviceInventoryCounts). Revoked devices are listed only with status=revoked."
+            "description": "The status bucket (see DeviceInventoryCounts). Revoked devices are listed only with status=revoked.",
+            "examples": {
+              "default": {
+                "value": "applied",
+                "x-disabled": true
+              }
+            }
           },
           {
             "name": "view",
@@ -10213,7 +10261,13 @@
                 "no_telemetry"
               ]
             },
-            "description": "failing (the dashboard's Needs attention): failed, rolled back, conflict, verification unknown, not delivering, or held on the previous version. not_on_desired: assigned a version the agent has not verified (an offline or paused device that last verified it counts as on it). offline: offline or never connected. paused: sync paused on the server or the host. no_telemetry: no sample in the last 3 minutes."
+            "description": "failing (the dashboard's Needs attention): failed, rolled back, conflict, verification unknown, not delivering, or held on the previous version. not_on_desired: assigned a version the agent has not verified (an offline or paused device that last verified it counts as on it). offline: offline or never connected. paused: sync paused on the server or the host. no_telemetry: no sample in the last 3 minutes.",
+            "examples": {
+              "default": {
+                "value": "failing",
+                "x-disabled": true
+              }
+            }
           },
           {
             "name": "group",
@@ -10276,7 +10330,13 @@
                 "desc"
               ]
             },
-            "description": "Defaults to desc for last_seen and events_in, otherwise asc."
+            "description": "Defaults to desc for last_seen and events_in, otherwise asc.",
+            "examples": {
+              "default": {
+                "value": "asc",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -10376,7 +10436,13 @@
                 "revoked"
               ]
             },
-            "description": "The status bucket (see DeviceInventoryCounts). Revoked devices are listed only with status=revoked."
+            "description": "The status bucket (see DeviceInventoryCounts). Revoked devices are listed only with status=revoked.",
+            "examples": {
+              "default": {
+                "value": "applied",
+                "x-disabled": true
+              }
+            }
           },
           {
             "name": "view",
@@ -10390,7 +10456,13 @@
                 "no_telemetry"
               ]
             },
-            "description": "failing (the dashboard's Needs attention): failed, rolled back, conflict, verification unknown, not delivering, or held on the previous version. not_on_desired: assigned a version the agent has not verified (an offline or paused device that last verified it counts as on it). offline: offline or never connected. paused: sync paused on the server or the host. no_telemetry: no sample in the last 3 minutes."
+            "description": "failing (the dashboard's Needs attention): failed, rolled back, conflict, verification unknown, not delivering, or held on the previous version. not_on_desired: assigned a version the agent has not verified (an offline or paused device that last verified it counts as on it). offline: offline or never connected. paused: sync paused on the server or the host. no_telemetry: no sample in the last 3 minutes.",
+            "examples": {
+              "default": {
+                "value": "failing",
+                "x-disabled": true
+              }
+            }
           },
           {
             "name": "group",
@@ -10453,7 +10525,13 @@
                 "desc"
               ]
             },
-            "description": "Defaults to desc for last_seen and events_in, otherwise asc."
+            "description": "Defaults to desc for last_seen and events_in, otherwise asc.",
+            "examples": {
+              "default": {
+                "value": "asc",
+                "x-disabled": true
+              }
+            }
           }
         ],
         "responses": {
@@ -14444,6 +14522,12 @@
                 "failed",
                 "gave_up"
               ]
+            },
+            "examples": {
+              "default": {
+                "value": "delivered",
+                "x-disabled": true
+              }
             }
           },
           {

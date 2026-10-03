@@ -74,7 +74,7 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	if info, err := os.Stat(dir); err == nil {
 		detail := fmt.Sprintf("%s (%04o%s)", dir, info.Mode().Perm(), ownerSuffix(info))
 		if info.Mode().Perm()&0077 != 0 {
-			report.add("state", "warn", "State directory", detail+" is readable by other accounts", "Restrict it: chmod 700 "+quoteArg(dir))
+			report.add("state", "warn", "State directory", detail+" is readable by other accounts", "Restrict it: chmod 700 "+ShellQuote(dir))
 		} else {
 			report.add("state", "ok", "State directory", detail, "")
 		}
@@ -82,9 +82,9 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 
 	switch {
 	case report.legacy != nil && report.legacy["binary_integrity"] == false:
-		report.add("vector", "fail", "Vector", "The adopted binary at "+s.VectorBinary+" changed or is missing since adoption.", "Restore it, or stop the agent and approve the new binary: vectory re-adopt --expected-sha256 SHA256")
+		report.add("vector", "fail", "Vector", "The adopted binary at "+s.VectorBinary+" changed or is missing since adoption.", "Restore it, or stop the agent and approve the new binary: "+CommandFor(dir, "vectory re-adopt --expected-sha256 SHA256"))
 	case report.legacyErr != nil && report.legacy != nil && report.legacy["vector_version"] == "":
-		report.add("vector", "fail", "Vector", "Vector at "+s.VectorBinary+" didn't report a "+VectorSeries+" version.", "Install Vector "+VectorSeries+" (https://vector.dev/download/), then approve it with vectory re-adopt.")
+		report.add("vector", "fail", "Vector", "Vector at "+s.VectorBinary+" didn't report a "+VectorSeries+" version.", "Install Vector "+VectorSeries+" (https://vector.dev/download/), then approve it with "+CommandFor(dir, "vectory re-adopt --expected-sha256 SHA256")+".")
 	default:
 		report.add("vector", "ok", "Vector", s.adoptedVectorVersion()+" at "+s.VectorBinary+" (adopted binary unchanged)", "")
 	}
@@ -116,7 +116,7 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 		}
 		switch {
 		case !now.Before(cred.CertificateExpiresAt):
-			report.add("identity", "fail", "Identity", fmt.Sprintf("device %s · credential expired on %s", id, cred.CertificateExpiresAt.Local().Format("Jan 2 2006")), "An administrator can authorize recovery from the device page; then run vectory recover-enrollment.")
+			report.add("identity", "fail", "Identity", fmt.Sprintf("device %s · credential expired on %s", id, cred.CertificateExpiresAt.Local().Format("Jan 2 2006")), "An administrator can authorize recovery from the device page; then run "+CommandFor(dir, "vectory recover-enrollment")+".")
 		case cred.CertificateExpiresAt.Sub(now) < 72*time.Hour:
 			report.add("identity", "warn", "Identity", fmt.Sprintf("device %s · credential expires %s", id, cred.CertificateExpiresAt.Local().Format("Jan 2 15:04")), "It renews automatically while the agent runs and reaches the server.")
 		default:
@@ -167,9 +167,9 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	case foreground:
 		report.add("service", "ok", "Service", "none · the agent is running in the foreground", "")
 	case svc.Manager == "":
-		report.add("service", "warn", "Service", "Not registered, and no service manager was detected.", "Run the agent under your supervisor: vectory run --state-dir "+quoteArg(dir))
+		report.add("service", "warn", "Service", "Not registered, and no service manager was detected.", "Run the agent under your supervisor: vectory run --state-dir "+ShellQuote(dir))
 	default:
-		report.add("service", "warn", "Service", "Not registered, and the agent isn't running.", "Register and start it: sudo vectory setup (or vectory service-install and service-start).")
+		report.add("service", "warn", "Service", "Not registered, and the agent isn't running.", "Register and start it: "+CommandFor(dir, "sudo vectory setup")+" (or "+CommandFor(dir, "vectory service-install")+" and service-start).")
 	}
 
 	if enrolled && stateErr == nil {
@@ -183,14 +183,14 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 			report.add("checkin", "ok", "Check-in", "last check-in "+ago(now, *st.LastHeartbeat), "")
 		}
 		if LocalPaused(dir) {
-			report.add("pause", "warn", "Sync", "Paused on this host.", "Resume when ready: sudo vectory resume --state-dir "+quoteArg(dir))
+			report.add("pause", "warn", "Sync", "Paused on this host.", "Resume when ready: "+CommandFor(dir, "sudo vectory resume"))
 		}
 		if st.Error != nil {
 			status := "warn"
 			if st.ApplyState == "failed" || st.ApplyState == "rolled_back" {
 				status = "fail"
 			}
-			report.add("apply", status, "Last apply", fmt.Sprintf("%s during %s: %s", st.Error.Code, st.Error.Stage, st.Error.Message), applyNextAction(st))
+			report.add("apply", status, "Last apply", fmt.Sprintf("%s during %s: %s", st.Error.Code, st.Error.Stage, st.Error.Message), applyNextAction(dir, st))
 			for _, problem := range problemRows(st.Error.Diagnostics) {
 				report.add("apply", "info", "Problem", problem.Message, problem.Hint)
 			}

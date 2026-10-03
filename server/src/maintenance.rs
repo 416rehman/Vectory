@@ -22,6 +22,57 @@ pub struct GenerationEntry {
     pub expected_sha256: Option<String>,
     pub expected_policy_sha256: String,
 }
+/// The three counters a device's own state holds, with where `vectory status
+/// --json` on the device shows each.
+const COUNTERS: [(&str, &str); 3] = [
+    ("highest_generation", "state.highest_generation"),
+    (
+        "highest_policy_generation",
+        "state.highest_policy_generation",
+    ),
+    ("highest_secret_revision", "state.secret_revision"),
+];
+
+/// A device ID as it appears in a message: bounded, and without characters a
+/// terminal would act on.
+fn shown(id: &str) -> String {
+    id.chars()
+        .take(64)
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
+/// What an unreviewed report still lacks. `generation-recovery-state` leaves
+/// every counter `null` on purpose, so a report that wasn't filled in says
+/// which device and counter it stopped on, and where on the device to read the
+/// value, instead of a parser's complaint about a type.
+pub fn missing_counters(report: &Value) -> Option<String> {
+    let mut gaps = Vec::new();
+    for entry in report.get("devices")?.as_array()? {
+        let id = shown(
+            entry["device_id"]
+                .as_str()
+                .unwrap_or("(without a device_id)"),
+        );
+        for (field, source) in COUNTERS {
+            match entry.get(field) {
+                Some(value) if value.as_u64().is_some() => {}
+                Some(Value::Null) | None => gaps.push((id.clone(), field, source, "has no value")),
+                Some(_) => gaps.push((id.clone(), field, source, "isn't a whole number")),
+            }
+        }
+    }
+    let (id, field, _, problem) = gaps.first()?;
+    let others = gaps.len() - 1;
+    Some(format!(
+        "{field} of device {id} {problem}{}. The exported report leaves every counter empty on purpose. On each device run `sudo vectory status --json` and copy state.highest_generation, state.highest_policy_generation and state.secret_revision into highest_generation, highest_policy_generation and highest_secret_revision.",
+        match others {
+            0 => String::new(),
+            1 => " (1 more counter needs a value too)".to_owned(),
+            n => format!(" ({n} more counters need a value too)"),
+        }
+    ))
+}
 pub async fn generation_recovery_state(s: &State) -> anyhow::Result<Value> {
     let rows=sqlx::query("SELECT id,desired_version_id,desired_generation,policy_generation,policy,data FROM devices WHERE revoked=0 ORDER BY id").fetch_all(&s.pool).await?;
     let mut devices = Vec::new();
@@ -57,7 +108,10 @@ pub async fn recover_generations(
     let mut plan = Vec::new();
     for entry in &report.devices {
         if !seen.insert(&entry.device_id) {
-            anyhow::bail!("Duplicate device in generation report")
+            anyhow::bail!(
+                "Device {} appears more than once in the generation report; list each device once",
+                shown(&entry.device_id)
+            )
         }
         if [
             entry.highest_generation,
@@ -74,7 +128,10 @@ pub async fn recover_generations(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| {
-                anyhow::anyhow!("Generation report contains an unknown or revoked device")
+                anyhow::anyhow!(
+                    "Device {} in the generation report is unknown or revoked; use the IDs that generation-recovery-state lists, and leave out revoked devices",
+                    shown(&entry.device_id)
+                )
             })?;
         let current = row.get::<i64, _>("desired_generation") as u64;
         let current_policy = row.get::<i64, _>("policy_generation") as u64;

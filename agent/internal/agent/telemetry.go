@@ -471,11 +471,11 @@ func ClearMetrics(dir string) error {
 
 func validateMetricsChange(endpoint *string, clear bool) error {
 	if endpoint != nil && clear {
-		return errors.New("metrics URL and explicit clear are mutually exclusive")
+		return inputError("metrics URL and explicit clear are mutually exclusive")
 	}
 	if endpoint != nil {
 		if _, err := checkMetricsURL(*endpoint); err != nil {
-			return err
+			return inputError(safeText(*endpoint, 120) + " can't be the metrics endpoint: " + strings.TrimPrefix(err.Error(), "metrics endpoint "))
 		}
 	}
 	return nil

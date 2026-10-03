@@ -115,10 +115,11 @@ func TestMetricsEndpointCLIInvalidRequestsPreserveSettings(t *testing.T) {
 				{[]string{"unexpected", "--clear-metrics-url"}, 2},
 				{[]string{"--clear-metrics-url=invalid"}, 2},
 				{[]string{"--metrics-url"}, 2},
-				{[]string{"--metrics-url="}, 1},
-				{[]string{"--metrics-url=http://localhost:9800/metrics"}, 1},
-				{[]string{"--metrics-url=http://127.0.0.1:0/metrics"}, 1},
-				{[]string{"--metrics-url=http://127.0.0.1:65536/metrics"}, 1},
+				{[]string{"--metrics-url="}, 2},
+				{[]string{"--metrics-url=https://127.0.0.1:9800/metrics"}, 2},
+				{[]string{"--metrics-url=http://localhost:9800/metrics"}, 2},
+				{[]string{"--metrics-url=http://127.0.0.1:0/metrics"}, 2},
+				{[]string{"--metrics-url=http://127.0.0.1:65536/metrics"}, 2},
 			}
 			if command == "configure-metrics" {
 				cases = append(cases, struct {

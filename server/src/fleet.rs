@@ -1013,7 +1013,9 @@ fn legacy_options(
     for (key, value) in query(raw, parsed)? {
         if let Some(known) = known.iter().copied().find(|known| *known == key) {
             if options.insert(known, value).is_some() {
-                return Err(ApiError::invalid("Invalid query parameters"));
+                return Err(ApiError::invalid(format!(
+                    "Invalid query parameters: {known} is given more than once"
+                )));
             }
         }
     }

@@ -81,7 +81,7 @@ pub(crate) async fn authorize_in(
             .unwrap_or("");
         let expected: String = row.get("csrf");
         if !bool::from(actual.as_bytes().ct_eq(expected.as_bytes())) {
-            return Err(ApiError::forbidden());
+            return Err(ApiError::csrf());
         }
         if h.get("sec-fetch-site")
             .and_then(|v| v.to_str().ok())

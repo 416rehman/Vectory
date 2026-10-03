@@ -89,7 +89,34 @@ pub(crate) fn query<T>(
     std::str::from_utf8(&decoded).map_err(|_| ApiError::invalid("Invalid query parameters"))?;
     parsed
         .map(|Query(value)| value)
-        .map_err(|_| ApiError::invalid("Invalid query parameters"))
+        .map_err(|rejection| rejected_parameter(&rejection.to_string()))
+}
+
+/// The refusal of a query serde could not read. When the parser names the
+/// parameter (one this request doesn't take, or one given twice), the answer
+/// names it too: the name only, bounded and limited to what a name holds, never
+/// a value.
+fn rejected_parameter(detail: &str) -> ApiError {
+    let named = |marker: &str| -> Option<String> {
+        let name = detail.split_once(marker)?.1.split('`').next()?;
+        (!name.is_empty()
+            && name.len() <= 40
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')))
+        .then(|| name.to_owned())
+    };
+    if let Some(name) = named("unknown field `") {
+        return ApiError::invalid(format!(
+            "Invalid query parameters: {name} isn't a parameter of this request"
+        ));
+    }
+    if let Some(name) = named("duplicate field `") {
+        return ApiError::invalid(format!(
+            "Invalid query parameters: {name} is given more than once"
+        ));
+    }
+    ApiError::invalid("Invalid query parameters")
 }
 
 const JOINS: &str = " LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id') LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')";

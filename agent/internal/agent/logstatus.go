@@ -54,12 +54,12 @@ func (p *DeliveryProblem) Summary() string {
 	return text + " · see vectory logs"
 }
 
-// Next is what to check about it.
-func (p *DeliveryProblem) Next() string {
+// Next is what to check about it, on the agent installed at dir.
+func (p *DeliveryProblem) Next(dir string) string {
 	if p.Destination != "" {
 		return "Check that " + p.Destination + " is reachable from this host."
 	}
-	return "Check that " + p.ComponentID + "'s destination is reachable from this host; `vectory logs` shows each failure."
+	return "Check that " + p.ComponentID + "'s destination is reachable from this host; `" + CommandFor(dir, "vectory logs") + "` shows each failure."
 }
 
 // recentDeliveryProblem reads the tail of the local Vector log and returns

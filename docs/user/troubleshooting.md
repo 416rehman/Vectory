@@ -27,7 +27,7 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 | `The server's certificates don't match the pinned CA`, with `expected` and `received` fingerprints and the first byte that differs | Compare both with the fingerprint on **Add device** and copy the command again. If it still doesn't match, this address may lead to a different server: don't continue. |
 | Unreadable or invalid CA file | Copy the correct public PEM to a stable path the agent can read, then retry with `--ca-file PATH`. |
 | `that isn't a whole enrollment token` | The pasted token isn't 64 characters, so it was never sent. Copy it again with **Copy token** on **Add device**. |
-| `ENROLLMENT_FAILED` (401) | The server refused the token or name. Ask an administrator to check the token's expiry, uses, name prefix and revocation in **Add device**. A token can't take over a name that belongs to another device. |
+| `The server refused this enrollment (HTTP 401).` (`ENROLLMENT_REFUSED` with `--json`) | The server refused the token or name, and doesn't say which. Ask an administrator to check the token's expiry, uses, name prefix and revocation in **Add device**, then run the command again; a new token is fine. A token can't take over a name that belongs to another device. |
 | Already enrolled | The device already has an identity. Look it up in **Devices**. Re-enroll only through [identity recovery](agents.md#recover-a-device-identity). |
 | Interrupted | Run the same command again with the same server, name and token. The agent reuses its pending request, so nothing is created twice. |
 | `Vector 0.58.x isn't installed here` | Setup looked on `PATH` and in the usual places and found no Vector 0.58. Install it, or pass `--vector-binary PATH`; **Add device → Advanced → Vector binary** puts the path into the command you copy. |
@@ -119,7 +119,7 @@ Open the device and read its issue: it names the stage and the reason.
 
 | Issue code | What happened | Fix |
 | --- | --- | --- |
-| `VALIDATION_FAILED` | Vector rejected the configuration on the device, its tests failed, or `vector validate` didn't finish in time (the finding `VECTOR_TIMEOUT`: the version is never treated as valid). | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
+| `VALIDATION_FAILED` | Vector rejected the configuration on the device, its tests failed, `vector validate` didn't finish in time (the finding `VECTOR_TIMEOUT`: the version is never treated as valid), or the adopted Vector binary changed (the finding `VECTOR_BINARY_UNAVAILABLE`: Vector never ran). | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. For a changed binary, see [The adopted Vector binary changed](#the-adopted-vector-binary-changed). |
 | `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The device page reads **Apply failed because this host's restricted mode doesn't allow it** (**local policy** on a full-mode device), and the reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. Some findings read differently, because no allowance can lift them: an `api` block is never allowed in restricted mode (**Apply failed because restricted mode refuses an api block**, `LOCAL_API_DENIED`), nor is an AWS credentials file (`CREDENTIALS_FILE_DENIED`), AWS credentials the host supplies (`AMBIENT_CREDENTIALS_DENIED`) or a VRL call that passes a file to `parse_groks` or `parse_etld` (`DYNAMIC_CAPABILITY_DENIED`, which says the step reads a file with that function and names its argument), and a component ID that is a path is refused in both modes (**Apply failed because a component ID names a path**, `INVALID_COMPONENT_ID`). The deployment's failure reasons and the issue say the same. | Have the host operator run the command the fix names, with the agent stopped, such as `vectory allow --network 127.0.0.1:9`, or switch the device to full mode. The dashboard can't grant it. For those findings: remove the `api` block, the credentials file or the file argument of the VRL call, give an AWS sink explicit access keys as device secrets, or deploy to a full-mode device, and rename a component whose ID is a path along with the inputs that name it. `vectory status` on the device shows the same problem and fix, and the deploy review writes the commands for each host. |
 | `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, its file can't be read or its value was refused, or it sits in a field that can't hold a secret. The diagnostic names the step, the field and the secret. | Bind the name, or fix the secret file's permissions, then start the agent: its next check-in applies the version. The device page's **Device secrets** card shows which names are bound. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
@@ -152,6 +152,7 @@ The issue, the device page and `sudo vectory status --json` (under `configuratio
 | `DOWNLOAD_TOO_LARGE` | Nothing was applied. Publish a smaller version. |
 | `ARTIFACT_MISMATCH` | Nothing was applied. The agent tries again at its next check-in. If it keeps failing, something between the server and this device may be altering downloads. |
 | `VECTOR_TIMEOUT` | Vector kept running the previous configuration. A destination whose health check never answers is the usual cause: check them from this device, then choose Retry application. |
+| `VECTOR_BINARY_UNAVAILABLE` | Vector never ran: the binary the agent approved is missing, unreadable or changed, as after an operating-system package upgrade. Restore it, or stop the agent and approve the new one with `vectory re-adopt`, then choose Retry application. See [The adopted Vector binary changed](#the-adopted-vector-binary-changed). |
 
 The device page's **Recent Vector errors** shows what Vector logged since it last started or reloaded a configuration, so errors of a version it no longer runs don't appear there.
 
@@ -297,7 +298,9 @@ These checks need metrics: see [Enable real metrics](telemetry.md#enable-real-me
 
 ## The adopted Vector binary changed
 
-The agent refuses to run a Vector binary whose SHA-256 changed since adoption. If you replaced Vector on purpose, [approve the new binary](agents.md#replace-the-vector-binary). If you didn't, find out why before doing anything else, and restore a trusted binary.
+The agent refuses to run a Vector binary whose SHA-256 changed since adoption. A version deployed meanwhile fails as `VALIDATION_FAILED` with the finding `VECTOR_BINARY_UNAVAILABLE`, and `sudo vectory status` and `sudo vectory doctor` say the binary changed or is missing. Vector never ran that version.
+
+If you replaced Vector on purpose, [approve the new binary](agents.md#replace-the-vector-binary). If you didn't, find out why before doing anything else, and restore a trusted binary. Then choose **Retry application** on the device page, or run `sudo vectory retry`.
 
 ## A command on the device is refused
 

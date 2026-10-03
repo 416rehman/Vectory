@@ -40,6 +40,13 @@ func vectorRelease(reported string) (release, series string, ok bool) {
 	return match[0], match[1] + "." + match[2], true
 }
 
+// vectorPrerelease reports whether a Vector version names a pre-release, such
+// as 0.58.1-rc.1: whatever its numbers, it isn't a release the agent knows.
+func vectorPrerelease(reported string) bool {
+	words := strings.Fields(reported)
+	return len(words) > 0 && strings.Contains(strings.TrimPrefix(words[0], "v"), "-")
+}
+
 // SupportedVectorVersion reports whether a Vector version is a patch release
 // of the supported minor version.
 func SupportedVectorVersion(version string) bool {

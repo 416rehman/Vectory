@@ -228,16 +228,29 @@ func (l *vectorLog) note(title string, output []byte) {
 }
 
 // NoteLocally records a host operator's change in the agent's local log, so
-// `vectory logs` shows who changed what and when: a local audit trail. It
-// appends to a log the agent already created and never creates one, which
-// would give the file to this account instead of the service's.
+// `vectory logs` shows who changed what and when: a local audit trail. Where
+// Vector has not run yet there is no log, so it creates one: private, and
+// owned by whoever owns the state directory, so the service account that
+// writes Vector's own lines later can still append to it. A file it could not
+// hand over that way is removed again, never left for root alone.
 func NoteLocally(dir, title string) {
 	path := filepath.Join(dir, vectorLogName)
 	if SafePath(path) != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	switch {
+	case err == nil:
+		if ownedLikeParent(path) != nil {
+			_ = f.Close()
+			_ = os.Remove(path)
+			return
+		}
+	case os.IsExist(err):
+		if f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0); err != nil {
+			return
+		}
+	default:
 		return
 	}
 	defer f.Close()

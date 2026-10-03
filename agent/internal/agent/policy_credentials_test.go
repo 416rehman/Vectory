@@ -328,7 +328,7 @@ func TestTheAWSCredentialRefusalsPointAtDeviceSecretsAndFullMode(t *testing.T) {
 		"AMBIENT_CREDENTIALS_DENIED": "capability denied: ambient AWS credentials",
 	} {
 		refused := State{LastGoodSHA256: "a", Error: &Issue{Code: "CAPABILITY_DENIED", Diagnostics: []Diagnostic{{Code: code, Severity: "error"}}}}
-		next := applyNextAction(refused)
+		next := applyNextAction("", refused)
 		if strings.Contains(next, "Allow what the problem names") || !strings.Contains(next, "device secrets") || !strings.Contains(next, "full mode") || !strings.HasSuffix(next, "Vector keeps running the last working configuration.") {
 			t.Errorf("%s: %q", code, next)
 		}

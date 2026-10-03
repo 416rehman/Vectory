@@ -911,6 +911,33 @@ async fn restored_generations_require_explicit_review_and_atomic_fencing() {
         serde_json::from_value::<GenerationReport>(report.clone()).is_err(),
         "Missing agent high-water counters must fail closed"
     );
+    // The export is unreviewed on purpose: the message names the device and the
+    // counter, how many gaps remain, and where on the device to read the value.
+    let first = report["devices"][0]["device_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let gap =
+        vectory_server::maintenance::missing_counters(&report).expect("every counter is null");
+    assert!(
+        gap.starts_with(&format!(
+            "highest_generation of device {first} has no value (5 more counters need a value too)."
+        )),
+        "{gap}"
+    );
+    assert!(
+        gap.contains("sudo vectory status --json") && gap.contains("state.secret_revision"),
+        "{gap}"
+    );
+    report["devices"][0]["highest_generation"] = json!(8);
+    report["devices"][0]["highest_policy_generation"] = json!("6");
+    let gap = vectory_server::maintenance::missing_counters(&report).unwrap();
+    assert!(
+        gap.starts_with(&format!(
+            "highest_policy_generation of device {first} isn't a whole number"
+        )),
+        "{gap}"
+    );
     for entry in report["devices"].as_array_mut().unwrap() {
         entry["highest_generation"] = json!(8);
         entry["highest_policy_generation"] = json!(6);
@@ -921,12 +948,28 @@ async fn restored_generations_require_explicit_review_and_atomic_fencing() {
         .unwrap();
     assert_eq!(preview["applied"], false);
     assert_eq!(preview["devices"][0]["generation"], 9);
+    assert!(vectory_server::maintenance::missing_counters(&report).is_none());
     let mut wrong = report.clone();
     wrong["devices"][1]["device_id"] = json!("unknown");
+    let refusal = recover_generations(&s, serde_json::from_value(wrong).unwrap(), true)
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(
-        recover_generations(&s, serde_json::from_value(wrong).unwrap(), true)
-            .await
-            .is_err()
+        refusal.starts_with("Device unknown in the generation report is unknown or revoked"),
+        "{refusal}"
+    );
+    let mut twice = report.clone();
+    twice["devices"][1]["device_id"] = twice["devices"][0]["device_id"].clone();
+    let refusal = recover_generations(&s, serde_json::from_value(twice).unwrap(), true)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.starts_with(&format!(
+            "Device {first} appears more than once in the generation report"
+        )),
+        "{refusal}"
     );
     let mut wrong = report.clone();
     wrong["devices"][0]["expected_sha256"] = json!("0".repeat(64));

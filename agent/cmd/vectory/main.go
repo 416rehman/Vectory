@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -52,7 +54,7 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprint(stdout, "Usage:  vectory help [command]\n\nShow the list of commands, or the flags and examples of one command.\n")
 				return exitOK
 			case "version":
-				fmt.Fprint(stdout, "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n")
+				fmt.Fprint(stdout, versionUsage)
 				return exitOK
 			}
 			cmd := findCommand(args[1])
@@ -67,15 +69,14 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 		printGeneralHelp(stdout)
 		return exitOK
 	case "version", "-v", "-version", "--version":
-		if len(args) > 1 && (args[1] == "--json" || args[1] == "-json") {
-			writeJSON(stdout, map[string]string{"version": agent.Version, "vector_version": agent.VectorVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
-		} else {
-			fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorSeries, runtime.Version(), runtime.GOOS, runtime.GOARCH)
-		}
-		return exitOK
+		return versionCommand(args[1:], stdout, stderr)
 	}
 	name, rest := args[0], args[1:]
 	if strings.HasPrefix(name, "-") {
+		if corrected := misplacedCommand(args); corrected != "" {
+			fmt.Fprintf(stderr, "vectory: put the command first: %s\n", corrected)
+			return exitUsage
+		}
 		// Compatibility form: vectory -ip <server> -id <name> -token <token>.
 		name, rest = "enroll", args
 	}
@@ -84,6 +85,57 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 		return unknownCommand(stderr, name)
 	}
 	return execute(cmd, rest, stdout, stderr)
+}
+
+const versionUsage = "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n"
+
+// versionCommand prints the version. Like every command it takes flags and no
+// other arguments; --state-dir is accepted and has no effect.
+func versionCommand(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	asJSON := fs.Bool("json", false, "")
+	fs.String("state-dir", "", "")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, versionUsage)
+			return exitOK
+		}
+		fmt.Fprintf(stderr, "vectory version: %s\nRun 'vectory help version' for usage.\n", flagError(err))
+		return exitUsage
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "vectory: version accepts flags only; unexpected positional arguments")
+		return exitUsage
+	}
+	if *asJSON {
+		writeJSON(stdout, map[string]string{"version": agent.Version, "vector_version": agent.VectorVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
+	} else {
+		fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorSeries, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	}
+	return exitOK
+}
+
+// misplacedCommand answers `vectory --json status`: flags came before the
+// command, so the compatibility form would take them for an enrollment. It
+// returns the command line with the command first, or "" when the arguments
+// are not that mistake.
+func misplacedCommand(args []string) string {
+	enroll := findCommand("enroll")
+	probe := newCLI(enroll, io.Discard, io.Discard)
+	enroll.define(probe)
+	if probe.fs.Parse(args) != nil || probe.fs.NArg() == 0 {
+		return ""
+	}
+	command := findCommand(probe.fs.Arg(0))
+	if command == nil || command.hidden {
+		return ""
+	}
+	words := []string{"vectory", command.name}
+	for _, word := range append(append([]string{}, args[:len(args)-probe.fs.NArg()]...), probe.fs.Args()[1:]...) {
+		words = append(words, agent.ShellQuote(word))
+	}
+	return strings.Join(words, " ")
 }
 
 func unknownCommand(stderr io.Writer, name string) int {
@@ -124,6 +176,16 @@ func execute(cmd *command, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if c.state != nil {
+		if flagSupplied(c.fs, "state-dir") {
+			switch {
+			case strings.TrimSpace(*c.state) == "":
+				fmt.Fprintf(stderr, "vectory %s: --state-dir needs a path. Give the agent's state directory in full, or leave the flag out to use %s.\n", cmd.name, agent.DefaultPaths().StateDir)
+				return exitUsage
+			case !filepath.IsAbs(*c.state):
+				fmt.Fprintf(stderr, "vectory %s: --state-dir must be an absolute path, and %s isn't. Write the whole path, such as %s.\n", cmd.name, agent.ShellQuote(*c.state), agent.DefaultPaths().StateDir)
+				return exitUsage
+			}
+		}
 		resolved, ok := c.resolvePath("state-dir", *c.state)
 		if !ok {
 			return exitUsage
@@ -147,6 +209,16 @@ func (c *cli) resolvePath(flagName, value string) (string, bool) {
 	return resolved.Path, true
 }
 
+// wholeNumbers says what a flag that takes a count accepts.
+var wholeNumbers = map[string]string{
+	"lines":                     "from 1 to 100000",
+	"graceful-shutdown-seconds": "of seconds from 5 to 300",
+}
+
+// invalidNumber is the flag package's refusal of a value that isn't a number:
+// invalid value "abc" for flag -lines: parse error.
+var invalidNumber = regexp.MustCompile(`^invalid value (".*") for flag -([a-z-]+): parse error$`)
+
 func flagError(err error) string {
 	message := err.Error()
 	switch {
@@ -154,6 +226,9 @@ func flagError(err error) string {
 		return "unknown flag -" + strings.TrimPrefix(message, "flag provided but not defined: ")
 	case strings.HasPrefix(message, "flag needs an argument: "):
 		return "-" + strings.TrimPrefix(message, "flag needs an argument: ") + " needs a value"
+	}
+	if match := invalidNumber.FindStringSubmatch(message); match != nil {
+		return "--" + match[2] + " needs a whole number " + strings.TrimSpace(wholeNumbers[match[2]]) + ", and " + match[1] + " isn't one"
 	}
 	return message
 }
@@ -181,7 +256,13 @@ func writeJSON(w io.Writer, v any) {
 	_ = enc.Encode(v)
 }
 
-func (c *cli) output(v any) { writeJSON(c.stdout, v) }
+func (c *cli) output(v any) {
+	if c.oneLine {
+		_ = json.NewEncoder(c.stdout).Encode(v)
+		return
+	}
+	writeJSON(c.stdout, v)
+}
 
 // fail prints err for people (stderr) or scripts (a JSON document on stdout).
 func (c *cli) fail(err error) int {
@@ -202,6 +283,10 @@ func (c *cli) fail(err error) int {
 			message += ". " + full.Fix("run the command again")
 		}
 		fmt.Fprintln(c.stderr, "vectory:", agent.IndentLines(message, len("vectory: ")))
+	}
+	// A value that can't work on any host is a usage error, like an unknown flag.
+	if agent.IsInputError(err) {
+		return exitUsage
 	}
 	return exitFailed
 }

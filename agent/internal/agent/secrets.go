@@ -350,10 +350,13 @@ func validateSecretFiles(bindings map[string]string) error {
 	}
 	for name, path := range bindings {
 		if !secretName.MatchString(name) {
-			return errors.New("invalid local secret binding name")
+			return errors.New(safeText(name, 80) + " isn't a secret name: start with a letter, then use letters, digits, \"_\", \".\" or \"-\", up to 64 characters (a pipeline writes it as vectory-secret:NAME)")
 		}
 		if !utf8.ValidString(path) || strings.ContainsRune(path, 0) || adoptionLocalPath(path) != nil {
-			return errors.New("local secret file must use a valid UTF-8 absolute local path without NUL")
+			if path == "" {
+				return errors.New("the file for " + name + " is empty: bind each name to the absolute path of a file, such as /etc/vectory/db-password")
+			}
+			return errors.New("the file for " + name + " must be an absolute local path, and " + safeText(path, 120) + " isn't one: bind each name to a file such as /etc/vectory/db-password")
 		}
 		if _, err := readLocalSecret(path); err != nil {
 			return err

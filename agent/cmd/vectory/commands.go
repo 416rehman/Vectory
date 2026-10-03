@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -191,6 +192,12 @@ func defineRun(name string) func(c *cli) func() int {
 				err = agent.Run(ctx, dir, *once, report)
 			}
 			if err != nil {
+				// A second agent on one state directory is refused; this isn't a
+				// maintenance command waiting for the first to stop.
+				var held *agent.LockHeldError
+				if errors.As(err, &held) {
+					err = errors.New(held.AlreadyRunning())
+				}
 				return c.fail(err)
 			}
 			return exitOK
@@ -234,7 +241,8 @@ func defineServiceControl(action string) func(c *cli) func() int {
 			}
 			switch action {
 			case "start":
-				fmt.Fprintf(c.stdout, "Started %s.\nCheck it: sudo vectory status\n", agent.ServiceName)
+				// The service runs for the state directory it was registered with.
+				fmt.Fprintf(c.stdout, "Started %s.\nCheck it: %s\n", agent.ServiceName, agent.CommandFor(agent.ServiceStatus(context.Background()).StateDir, "sudo vectory status"))
 			case "stop":
 				fmt.Fprintf(c.stdout, "Stopped %s. Its Vector is stopped too; the configuration is kept.\n", agent.ServiceName)
 			default:
@@ -277,7 +285,7 @@ func defineInstall(c *cli) func() int {
 				var resolved agent.ResolvedPath
 				if resolved, err = agent.ResolveExecutablePath(*binary); err == nil {
 					if resolved.Resolved {
-						fmt.Fprintf(c.stderr, "Adopting %s (%s is a symbolic link). After upgrading Vector, approve the new binary with vectory re-adopt.\n", resolved.Path, *binary)
+						fmt.Fprintf(c.stderr, "Adopting %s (%s is a symbolic link). After upgrading Vector, approve the new binary with %s.\n", resolved.Path, *binary, agent.CommandFor(*c.state, "vectory re-adopt"))
 					}
 					*binary = resolved.Path
 					opts.VectorBinary = binary
@@ -482,7 +490,7 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			if recover {
 				verb = "Recovered"
 			}
-			fmt.Fprintf(c.stdout, "%s as %s (device %s) with %s.\nNext: start the agent with %s, or run it as a service with sudo vectory setup.\n", verb, settings.Name, shortID(credentials.DeviceID), settings.Server, agent.RunCommandFor(dir))
+			fmt.Fprintf(c.stdout, "%s as %s (device %s) with %s.\nNext: start the agent with %s, or run it as a service with %s.\n", verb, settings.Name, shortID(credentials.DeviceID), settings.Server, agent.RunCommandFor(dir), agent.CommandFor(dir, "sudo vectory setup"))
 			return exitOK
 		}
 	}
@@ -507,7 +515,7 @@ func definePause(pause bool) func(c *cli) func() int {
 			if *c.json {
 				c.output(map[string]string{"status": "ok", "command": name})
 			} else if pause {
-				fmt.Fprintln(c.stdout, "Paused on this host. The current configuration keeps running and the agent keeps checking in; changes from the server wait until you run: sudo vectory resume")
+				fmt.Fprintln(c.stdout, "Paused on this host. The current configuration keeps running and the agent keeps checking in; changes from the server wait until you run: "+agent.CommandFor(*c.state, "sudo vectory resume"))
 			} else {
 				fmt.Fprintln(c.stdout, "Resumed. At its next check-in the agent applies the latest configuration from the server, replacing local edits to the managed file. A pause set from the dashboard still applies.")
 			}
@@ -516,14 +524,22 @@ func definePause(pause bool) func(c *cli) func() int {
 	}
 }
 
+// maxLogLines bounds --lines: two rotated log files hold far fewer.
+const maxLogLines = 100000
+
 func defineLogs(c *cli) func() int {
 	c.StateDir()
 	follow := c.Bool("follow", "Keep printing new lines until interrupted (also -f)")
 	c.fs.BoolVar(follow, "f", false, "Shorthand for --follow")
-	lines := c.Int("lines", 100, "N", "Number of recent lines to print")
+	lines := c.Int("lines", 100, "N", "Number of recent lines to print, 1 to 100000")
 	raw := c.Bool("raw", "Print the log file's lines unchanged (they can hold terminal escape sequences)")
 	c.JSON("Print one JSON object per line")
+	c.oneLine = true
 	return func() int {
+		if *lines < 1 || *lines > maxLogLines {
+			fmt.Fprintf(c.stderr, "vectory logs: --lines needs a whole number from 1 to %d, and %d isn't one\n", maxLogLines, *lines)
+			return exitUsage
+		}
 		// A mistyped --state-dir is "no agent here", not "no Vector log yet".
 		if err := agent.CheckInstalled(*c.state); err != nil {
 			return c.fail(err)
@@ -554,7 +570,7 @@ func defineRetry(c *cli) func() int {
 			if *c.json {
 				c.output(map[string]any{"status": "ok", "command": "retry", "nothing_failed": true})
 			} else {
-				fmt.Fprintln(c.stdout, "Nothing to retry: no version has failed on this host. `vectory status` shows what it runs.")
+				fmt.Fprintln(c.stdout, "Nothing to retry: no version has failed on this host. `"+agent.CommandFor(*c.state, "vectory status")+"` shows what it runs.")
 			}
 			return exitOK
 		}
@@ -569,7 +585,7 @@ func defineRetry(c *cli) func() int {
 			if *c.json {
 				c.output(map[string]any{"status": "ok", "command": "retry", "queued": true, "agent_pid": held.Owner.PID})
 			} else {
-				fmt.Fprintf(c.stdout, "Retry queued. The running agent (pid %d) tries the failed version again within a few seconds; `vectory logs` and the device page show the result.\n", held.Owner.PID)
+				fmt.Fprintf(c.stdout, "Retry queued. The running agent (pid %d) tries the failed version again within a few seconds; `%s` and the device page show the result.\n", held.Owner.PID, agent.CommandFor(*c.state, "vectory logs"))
 			}
 			return exitOK
 		case err != nil:
@@ -636,7 +652,7 @@ func defineAllow(c *cli) func() int {
 			agent.NoteLocally(dir, "Host operator allowed "+agent.DescribeAllowances(added)+" (vectory allow)")
 		}
 		if *c.json {
-			c.output(map[string]any{"status": "ok", "command": "allow", "changed": changed, "added": added, "allowances": after.CapabilityPolicy})
+			c.output(map[string]any{"status": "ok", "command": "allow", "changed": changed, "added": allowanceLists(added), "allowances": allowanceLists(after.CapabilityPolicy)})
 			return exitOK
 		}
 		if changed {
@@ -652,6 +668,25 @@ func defineAllow(c *cli) func() int {
 		}
 		return exitOK
 	}
+}
+
+// allowanceLists is a policy for --json with only the lists that hold entries:
+// an empty list is absent, not null.
+func allowanceLists(p agent.CapabilityPolicy) map[string]any {
+	out := map[string]any{}
+	if len(p.AllowedFileRoots) > 0 {
+		out["allowed_file_roots"] = p.AllowedFileRoots
+	}
+	if len(p.AllowedNetworkHosts) > 0 {
+		out["allowed_network_hosts"] = p.AllowedNetworkHosts
+	}
+	if len(p.AllowedListenAddresses) > 0 {
+		out["allowed_listen_addresses"] = p.AllowedListenAddresses
+	}
+	if p.FullVectorConfig {
+		out["full_vector_config"] = true
+	}
+	return out
 }
 
 // newEntries lists what after has that before hadn't, in order.
@@ -708,7 +743,14 @@ func defineConfigureSecrets(c *cli) func() int {
 		if *c.json {
 			c.output(map[string]string{"status": "ok", "command": "configure-secrets"})
 		} else {
-			fmt.Fprintf(c.stdout, "Saved %d secret-file bindings. Start the agent to use them; Vector applies them with the next verified configuration.\n", len(*bindings))
+			switch len(*bindings) {
+			case 0:
+				fmt.Fprintln(c.stdout, "Removed all secret-file bindings. Start the agent to apply this; Vector uses it with the next verified configuration.")
+			case 1:
+				fmt.Fprintln(c.stdout, "Saved 1 secret-file binding. Start the agent to use it; Vector applies it with the next verified configuration.")
+			default:
+				fmt.Fprintf(c.stdout, "Saved %d secret-file bindings. Start the agent to use them; Vector applies them with the next verified configuration.\n", len(*bindings))
+			}
 		}
 		return exitOK
 	}
@@ -746,13 +788,23 @@ func defineUnenroll(c *cli) func() int {
 	c.StateDir()
 	c.JSON("Print one JSON document")
 	return func() int {
+		_, _, identityErr := agent.ReadIdentity(*c.state)
+		hadCredentials := identityErr == nil
+		pending, _ := agent.ReadPendingEnrollment(*c.state)
 		if err := agent.Unenroll(*c.state); err != nil {
 			return c.fail(err)
 		}
 		if *c.json {
-			c.output(map[string]string{"status": "ok", "command": "unenroll"})
-		} else {
+			c.output(map[string]any{"status": "ok", "command": "unenroll", "credentials_removed": hadCredentials})
+			return exitOK
+		}
+		switch {
+		case hadCredentials:
 			fmt.Fprintln(c.stdout, "Local credentials removed. Also revoke this device in the dashboard: the server can't be told from here.")
+		case pending != nil:
+			fmt.Fprintln(c.stdout, "This host has no credentials: it never finished enrolling. The unfinished enrollment is cleared.")
+		default:
+			fmt.Fprintln(c.stdout, "This host has no credentials: it isn't enrolled, so there was nothing to remove.")
 		}
 		return exitOK
 	}
@@ -764,16 +816,25 @@ func defineUninstall(c *cli) func() int {
 	c.JSON("Print one JSON document")
 	return func() int {
 		dir := *c.state
-		if *purge {
-			if !c.supplied("state-dir") {
-				fmt.Fprintln(c.stderr, "vectory: uninstall --purge requires an explicit --state-dir")
-				return exitUsage
+		if *purge && !c.supplied("state-dir") {
+			fmt.Fprintln(c.stderr, "vectory: uninstall --purge requires an explicit --state-dir")
+			return exitUsage
+		}
+		// A purge that was interrupted is run again, and finds nothing left.
+		if _, err := os.Lstat(dir); os.IsNotExist(err) {
+			if *c.json {
+				c.output(map[string]any{"status": "ok", "command": "uninstall", "removed": false})
+			} else {
+				fmt.Fprintf(c.stdout, "Nothing to remove: %s doesn't exist.\n", dir)
 			}
+			return exitOK
+		}
+		if *purge {
 			if err := agent.PurgeState(dir); err != nil {
 				return c.fail(err)
 			}
 			if *c.json {
-				c.output(map[string]string{"status": "ok", "command": "uninstall"})
+				c.output(map[string]any{"status": "ok", "command": "uninstall", "removed": true})
 			} else {
 				fmt.Fprintf(c.stdout, "Deleted %s. Vector and the managed configuration were left in place.\n", dir)
 			}
@@ -785,9 +846,9 @@ func defineUninstall(c *cli) func() int {
 		}
 		unlock()
 		if *c.json {
-			c.output(map[string]string{"status": "ok", "command": "uninstall"})
+			c.output(map[string]any{"status": "ok", "command": "uninstall", "removed": false})
 		} else {
-			fmt.Fprintf(c.stdout, "Nothing was deleted. State and identity stay in %s for a reinstall.\nTo remove the agent: sudo vectory service-uninstall, remove the binary, then vectory uninstall --purge --state-dir %s\n", dir, filepath.Clean(dir))
+			fmt.Fprintf(c.stdout, "Nothing was deleted. State and identity stay in %s for a reinstall.\nTo remove the agent: sudo vectory service-uninstall, remove the binary, then vectory uninstall --purge --state-dir %s\n", dir, agent.ShellQuote(filepath.Clean(dir)))
 		}
 		return exitOK
 	}

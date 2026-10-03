@@ -747,6 +747,42 @@ async fn inventory_parameters_fail_closed_and_need_a_session() {
     ] {
         refused(&f.app, &f.admin, uri).await;
     }
+    // A refusal names the parameter the parser rejected, the name only: never a
+    // value, and nothing that isn't a plain name.
+    for (uri, says) in [
+        (
+            "/api/v1/devices/inventory?stauts=failed-secret-value",
+            "Invalid query parameters: stauts isn't a parameter of this request",
+        ),
+        (
+            "/api/v1/devices/inventory?page=1&page=2",
+            "Invalid query parameters: page is given more than once",
+        ),
+        (
+            "/api/v1/devices/inventory/ids?pages=2",
+            "Invalid query parameters: pages isn't a parameter of this request",
+        ),
+        (
+            "/api/v1/overview?slim=1&slim=1",
+            "Invalid query parameters: slim is given more than once",
+        ),
+        (
+            "/api/v1/devices/inventory?q=%zz",
+            "Invalid query parameters",
+        ),
+        (
+            "/api/v1/devices/inventory?%3Cscript%3E=1",
+            "Invalid query parameters",
+        ),
+        (
+            "/api/v1/devices/inventory?aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=1",
+            "Invalid query parameters",
+        ),
+    ] {
+        let refusal = refused(&f.app, &f.admin, uri).await;
+        assert_eq!(refusal["error"]["message"], says, "{uri}");
+        assert!(!refusal.to_string().contains("secret-value"), "{uri}");
+    }
     let long = format!("/api/v1/devices/inventory?q={}", "x".repeat(101));
     refused(&f.app, &f.admin, &long).await;
     get(

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,16 +104,25 @@ func TestUnknownCommandsAndFlagsSuggestAndExitTwo(t *testing.T) {
 	}
 }
 
-func TestRelativeStateDirectoriesAreResolved(t *testing.T) {
-	root := t.TempDir()
-	wd, _ := os.Getwd()
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
+// --state-dir names the agent's state in full: a relative path would mean
+// whatever directory the command happens to run in.
+func TestStateDirectoryMustBeAnAbsolutePath(t *testing.T) {
+	for _, args := range [][]string{{"status", "--state-dir", "relative/state"}, {"logs", "--state-dir=./state"}} {
+		code, stdout, stderr := invoke(args...)
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "--state-dir must be an absolute path") || !strings.Contains(stderr, "isn't") {
+			t.Fatal("a relative state directory was accepted", args, code, stdout, stderr)
+		}
 	}
-	defer os.Chdir(wd)
-	code, _, stderr := invoke("status", "--state-dir", "relative/state")
-	if code != 1 || !strings.Contains(stderr, filepath.Join(root, "relative", "state")) || strings.Contains(stderr, "must be absolute") {
-		t.Fatal("relative state directory was not resolved", code, stderr)
+	for _, args := range [][]string{{"status", "--state-dir="}, {"doctor", "--state-dir", " "}} {
+		code, _, stderr := invoke(args...)
+		if code != 2 || !strings.Contains(stderr, "--state-dir needs a path") || !strings.Contains(stderr, "leave the flag out") {
+			t.Fatal("an empty state directory wasn't explained", args, code, stderr)
+		}
+	}
+	// An absolute path is used as given, even where nothing is installed.
+	missing := filepath.Join(t.TempDir(), "missing")
+	if code, _, stderr := invoke("status", "--state-dir", missing); code != 1 || !strings.Contains(stderr, "No agent is installed at "+missing) {
+		t.Fatal(code, stderr)
 	}
 }
 
