@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,6 +191,17 @@ func TestTheStepServiceTellsTheManagerWhatItIsDoingAndStopsWhenAsked(t *testing.
 	if running.State != svc.Running || running.Accepts&svc.AcceptStop == 0 || running.Accepts&svc.AcceptShutdown == 0 {
 		t.Fatalf("the second status is %+v, want Running that accepts stop and shutdown", running)
 	}
+	// The first run is made as the service starts, and a run that ends because the
+	// service was told to stop isn't a failure and says nothing: wait until the run
+	// has said what it has to, in the step's log, before the service is stopped.
+	logPath := filepath.Join(paths.Private, updateStepLogFile)
+	if !becomes(15*time.Second, func() bool {
+		log, err := os.ReadFile(logPath)
+		return err == nil && strings.Contains(string(log), errUpdateStepUnavailable.Error())
+	}) {
+		log, err := os.ReadFile(logPath)
+		t.Fatalf("the first run said nothing in the step's log: %q, %v", log, err)
+	}
 	requests <- svc.ChangeRequest{Cmd: svc.Interrogate, CurrentStatus: svc.Status{State: svc.Running, ProcessId: 77}}
 	if s := next("an interrogation"); s.State != svc.Running || s.ProcessId != 77 {
 		t.Errorf("the answer to an interrogation is %+v", s)
@@ -208,7 +220,7 @@ func TestTheStepServiceTellsTheManagerWhatItIsDoingAndStopsWhenAsked(t *testing.
 	}
 	// What the run said went to the step's log, which the person who looks for the
 	// reason an update didn't happen reads.
-	log, err := os.ReadFile(filepath.Join(paths.Private, updateStepLogFile))
+	log, err := os.ReadFile(logPath)
 	if err != nil || !strings.Contains(string(log), "update step: ") || !strings.Contains(string(log), errUpdateStepUnavailable.Error()) {
 		t.Errorf("the step's log is %q, %v", log, err)
 	}
@@ -484,7 +496,7 @@ func TestInstallUnitsStartsTheStepServiceAndRemoveUnitsStopsAndDeletesIt(t *test
 		return err == nil && status.State == svc.Running
 	}) {
 		status, err := queryService(name)
-		t.Fatalf("the step's service isn't running after InstallUnits: %+v, %v", status, err)
+		t.Fatalf("the step's service isn't running after InstallUnits: %+v, %v\nits log: %s\nwhat the Service Control Manager recorded:\n%s", status, err, stepLogText(paths), serviceManagerEvents())
 	}
 	if pid == 0 {
 		t.Error("the running service has no process")
@@ -494,7 +506,7 @@ func TestInstallUnitsStartsTheStepServiceAndRemoveUnitsStopsAndDeletesIt(t *test
 		log, err := os.ReadFile(filepath.Join(paths.Private, updateStepLogFile))
 		return err == nil && strings.Contains(string(log), errUpdateStepUnavailable.Error())
 	}) {
-		t.Error("the service didn't run the step: its log says nothing")
+		t.Errorf("the service didn't run the step: its log says %q", stepLogText(paths))
 	}
 
 	// Installing again is a restart of the same registration, not an error.
@@ -536,4 +548,27 @@ func TestTheAgentServiceIsReadByTheHostThatHasNone(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Code != "NO_SERVICE" {
 		t.Errorf("Registered: %v, want a NO_SERVICE refusal", err)
 	}
+}
+
+// stepLogText is what the step has written to its log so far, or what kept it from
+// being read.
+func stepLogText(paths UpdatePaths) string {
+	log, err := os.ReadFile(filepath.Join(paths.Private, updateStepLogFile))
+	if err != nil {
+		return err.Error()
+	}
+	return string(log)
+}
+
+// serviceManagerEvents is the newest events the Service Control Manager recorded, for
+// the message of a test that waited for a service that never came up.
+func serviceManagerEvents() string {
+	out, err := exec.Command("wevtutil.exe", "qe", "System", "/q:*[System[Provider[@Name='Service Control Manager']]]", "/c:6", "/rd:true", "/f:text").CombinedOutput()
+	if err != nil {
+		return err.Error() + "\n" + string(out)
+	}
+	if len(out) > 4000 {
+		out = out[:4000]
+	}
+	return string(out)
 }

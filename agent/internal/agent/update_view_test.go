@@ -500,8 +500,11 @@ func TestTheViewSaysTheStepIsSettlingAnUpdateOnlyOnceItHasBegunToSwap(t *testing
 	if (UpdateView{}).StepIsSettlingAnUpdate() {
 		t.Error("a host whose step never wrote a status has no update to settle")
 	}
-	words := UpdateBeingSettledError("/var/lib/vectory-agent-other").Error()
-	for _, want := range []string{"an update that already began is being settled by the background update step", "usually within a minute or two", "sudo vectory update status --state-dir /var/lib/vectory-agent-other"} {
+	dir := "/var/lib/vectory-agent-other"
+	words := UpdateBeingSettledError(dir).Error()
+	// The command is the one the system's own words give: an administrator's shell on
+	// Windows has no sudo.
+	for _, want := range []string{"an update that already began is being settled by the background update step", "usually within a minute or two", AdminCommandFor(dir, "vectory update status")} {
 		if !strings.Contains(words, want) {
 			t.Errorf("%q doesn't say %q", words, want)
 		}

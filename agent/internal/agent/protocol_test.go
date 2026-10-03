@@ -14,6 +14,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	runAsChildProgram()
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
 		os.Exit(VectorHostMain(os.Args[2:]))
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,9 @@ import (
 // launchd keeps the step's standard error in a file and never shortens it; the step
 // does, so that a host that waits for someone to apply an update doesn't fill a disk.
 func TestTheStepsLogIsStartedAgainOnlyWhenItIsLongerThanItsLimit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a file opened for appending can't be shortened on Windows, and nothing keeps the step's log that way there: the step's own service starts its log again when it opens it")
+	}
 	open := func(size int) (*os.File, string) {
 		path := filepath.Join(t.TempDir(), "step.log")
 		if err := os.WriteFile(path, []byte(strings.Repeat("x", size)), 0o600); err != nil {

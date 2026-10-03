@@ -26,7 +26,12 @@ const stagedBuildName = ".vectory-update-7"
 // fails, and a service the Service Control Manager can start. Each is a copy of the
 // test binary under a name that says what it does. The copy decides from its own name
 // and its arguments alone, because the step starts a build with a clean environment.
-func init() {
+//
+// TestMain calls this before anything else, and not an init function: the Service
+// Control Manager calls back into the program on a thread of its own, and the runtime
+// lets such a call run only after the program's initialization has ended, which it
+// never would if the service ran from an init function.
+func runAsChildProgram() {
 	switch strings.ToLower(filepath.Base(os.Args[0])) {
 	case "vectory.exe", stagedBuildName:
 		switch {
