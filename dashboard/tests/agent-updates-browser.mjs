@@ -1004,7 +1004,7 @@ try {
       });
       await expect(
         waiting.getByText(
-          `release.json.sig holds a signature by key ${teamFingerprint.slice(0, 16)}, the current key. The server verifies it.`,
+          `release.json.sig names key ${teamFingerprint.slice(0, 16)}, the current key, as its signer. The server verifies the signature when you upload it.`,
         ),
       ).toBeVisible();
       await waiting.getByRole("button", { name: "Upload signature" }).click();

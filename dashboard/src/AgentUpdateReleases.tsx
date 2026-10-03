@@ -238,7 +238,7 @@ function SigningPanel({
         <FileKey size={16} aria-hidden="true" /> Waiting for your signature
       </h4>
       <p>
-        This release is signed with a key you keep offline
+        This release waits for a signature by the key you keep offline
         {current ? (
           <>
             , the one starting <KeyShortId value={current.fingerprint} />
@@ -350,8 +350,8 @@ function SigningPanel({
                       role="status"
                     >
                       {file.read.namesCurrent
-                        ? `${file.name} holds a signature by key ${shortKeyId(current!.fingerprint)}, the current key. The server verifies it.`
-                        : `None of its signatures is by the current key${current ? ` (${shortKeyId(current.fingerprint)})` : ""}, so the server will refuse it.`}
+                        ? `${file.name} names key ${shortKeyId(current!.fingerprint)}, the current key, as its signer. The server verifies the signature when you upload it.`
+                        : `None of its signatures names the current key${current ? ` (${shortKeyId(current.fingerprint)})` : ""}, so the server will refuse it.`}
                     </p>
                   )}
                   {note && <p className="control-muted">{note}</p>}
