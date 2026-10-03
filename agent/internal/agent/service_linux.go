@@ -222,6 +222,11 @@ func ServiceControl(action string) error {
 	case "stop":
 		return systemctl("stop", ServiceName)
 	case "uninstall":
+		// The update step goes first, and is refused while it is trying a build: the
+		// agent's service must not be removed under it.
+		if err := RemoveUpdateHelper(); err != nil {
+			return err
+		}
 		if err := systemctl("disable", "--now", ServiceName); err != nil {
 			return err
 		}
