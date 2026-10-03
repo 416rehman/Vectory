@@ -37,9 +37,16 @@ jobs:
   # the service is restarted, killed and stopped, and the packaged unit
   # (packaging/systemd/vectory.service, only ExecStart adjusted) takes over and
   # is read from inside its own mount namespace.
+  #
+  # After those phases, the privileged update step on the same instance
+  # (tests/platform/agent-update.mjs): agents built from copies of the source, a
+  # release key made here, updates turned on with offline custody, a host installed
+  # with the consent flags, and each failure row of the step on the real service,
+  # under its sandboxed unit; then a stand-in for the agent listener that offers what
+  # a host must refuse. A phase runs only when the phases it builds on passed.
   linux-service:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 210
     env:
       VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
       VECTORY_PREVIEW_AGENT_TARGETS: linux/amd64
@@ -60,7 +67,7 @@ jobs:
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
       - name: Check the platform helpers against the text the tools print
         timeout-minutes: 10
-        run: node --test tests/platform/lib.test.mjs
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs
       - name: Build the dashboard the instance serves
         timeout-minutes: 20
         run: |
@@ -130,19 +137,84 @@ jobs:
         if: ${{ !cancelled() && steps.packaged.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs apply strict
+      # Agent updates. The builds are the product's source with a version constant
+      # changed in a copy (two have one more line changed); nothing in the product is a
+      # hook. The host is returned to a clean state first, so these phases don't depend on
+      # what the phases above left, only on the instance and its administrator.
+      - name: Build the agents the update checks roll out, from copies of the source
+        id: update-build
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs build
+      - name: Make a release key and turn agent updates on with offline custody
+        id: update-enable
+        if: ${{ !cancelled() && steps.update-build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs enable
+      - name: Install agent 0.1.0 with the consent flags of Add device, and apply a pipeline
+        id: update-install
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs install
+      - name: Read the update step's units and run it once under them
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs sandbox
+      - name: Update the agent from 0.1.0 to 0.1.1 through a rollout
+        id: update-update
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs update
+      - name: Roll out a build that never starts, and offer it again
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs start-failure
+      - name: Roll out a build that never checks in
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-check-in
+      - name: Roll out a build whose store file is cut short
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs truncated
+      - name: Kill the update step while it swaps and while it tries a build
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs interrupt
+      - name: Roll out a build to a host whose update step has no room
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs disk-full
+      # The listener is taken over: the instance is stopped and a small program answers
+      # the real agent with the instance's own TLS chain and manifest signing key.
+      - name: Offer the host what it must refuse, from a stand-in for the agent listener
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 60
+        run: node tests/platform/agent-update.mjs hostile
+      - name: Install a host without the consent flags, and offer it a good release
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-consent
       - name: Collect the service's logs and the instance's logs
         if: always()
         timeout-minutes: 10
         run: |
           set +e
           node tests/platform/service.mjs collect
+          node tests/platform/agent-update.mjs collect
           mkdir -p "$VECTORY_PLATFORM_OUTPUT/logs"
           # What a failed run needs, in the log itself (the artifact holds the rest).
           echo "::group::The service's journal"
           sudo journalctl -u vectory --no-pager -n 150
           echo "::endgroup::"
+          echo "::group::The update step's journal"
+          sudo journalctl -u vectory-update.service -u vectory-update.timer --no-pager -n 150
+          echo "::endgroup::"
           echo "::group::The folders the service writes"
           sudo ls -la /etc/vectory /etc/vectory/managed /var/lib/vectory-agent /var/lib/vector
+          echo "::endgroup::"
+          echo "::group::What the update step keeps"
+          sudo ls -laR /var/lib/vectory-update /etc/vectory/updates
           echo "::endgroup::"
           scripts/preview.sh stop
           cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log "$VECTORY_PLATFORM_OUTPUT/logs/"
