@@ -202,9 +202,14 @@ export default function DevicePicker({
           meta: [details(device), extra?.cell(device)],
         })}
         empty={
-          query
-            ? "No devices match your search."
-            : "No enrolled devices to choose from."
+          query ? (
+            "No devices match your search."
+          ) : (
+            <>
+              No enrolled devices to choose from.{" "}
+              <a href="#/enrollment">Add device</a>
+            </>
+          )
         }
       />
       <div className="device-picker-actions">

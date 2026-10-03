@@ -5,6 +5,7 @@ import {
   diagnoseConfigurationSource,
   assertValidPipelineSource,
   detectConfigurationFormat,
+  diagnosticCounts,
   sourceErrorMessage,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
@@ -384,6 +385,16 @@ describe("sourceErrorMessage", () => {
     expect(sourceErrorMessage(json, failureOf(json, "json"))).toMatch(
       /^Line 3:\d+: \S/,
     );
+  });
+
+  it("counts a source's errors and warnings, singular for one", () => {
+    const error = { severity: "error" as const },
+      warning = { severity: "warning" as const };
+    expect(diagnosticCounts([error])).toBe("1 error · 0 warnings");
+    expect(diagnosticCounts([error, error, warning])).toBe(
+      "2 errors · 1 warning",
+    );
+    expect(diagnosticCounts([warning, warning])).toBe("0 errors · 2 warnings");
   });
 
   it("never returns an empty message", () => {

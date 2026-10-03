@@ -28,6 +28,7 @@ const render = (props: Partial<ComponentProps<typeof PublishReview>> = {}) =>
   renderToStaticMarkup(
     createElement(PublishReview, {
       config,
+      variables: [],
       published,
       reach: null,
       status: "passed",
@@ -58,6 +59,38 @@ const notRun: PipelineTest = {
   not_run: true,
   message: "Vector did not run this test.",
 };
+
+describe("the publish review's changes", () => {
+  const same = {
+    ...published,
+    config: structuredClone(config),
+    variables: [],
+  } as unknown as Version;
+  const region = {
+    name: "region",
+    path: "/sources/demo/format",
+    type: "string" as const,
+  };
+
+  it("says there is nothing to publish when nothing differs", () => {
+    expect(render({ published: same })).toContain(
+      "No configuration changes since v1.",
+    );
+  });
+
+  it("names a change to the variables alone instead of saying nothing changed", () => {
+    const html = render({ published: same, variables: [region] });
+    expect(html).toContain("Variables: region added");
+    expect(html).not.toContain("No configuration changes");
+    const declared = { ...same, variables: [region] } as unknown as Version;
+    expect(render({ published: declared, variables: [] })).toContain(
+      "Variables: region removed",
+    );
+    expect(render({ published: declared, variables: [region] })).toContain(
+      "No configuration changes since v1.",
+    );
+  });
+});
 
 describe("the publish review's tests", () => {
   it("shows nothing for a pipeline without tests", () => {

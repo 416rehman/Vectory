@@ -458,7 +458,10 @@ export default function PipelineSettings({
           ? { "docs::syntax_override": "vrl_program" }
           : {}),
         ...(field.type === "array"
-          ? { "vectory::entry_label": key === "include" ? "path" : "item" }
+          ? {
+              "vectory::entry_label":
+                key === "include" || key === "exclude" ? "path" : "item",
+            }
           : {}),
       },
     };

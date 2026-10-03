@@ -51,6 +51,7 @@ import {
 import {
   JSONValueEditor,
   ScalarValueEditor,
+  PENDING_REFUSAL,
   PendingFieldsContext,
   ignorePending,
   usePendingField,
@@ -214,6 +215,11 @@ function MapEntry({
     [name, setName] = useState(entryKey),
     [error, setError] = useState("");
   usePendingField(renaming && name !== entryKey);
+  // Once nothing is unapplied, the refusal to rename until then is over.
+  useEffect(() => {
+    if (!scope.pending)
+      setError((shown) => (shown.startsWith(PENDING_REFUSAL) ? "" : shown));
+  }, [scope.pending]);
   return (
     <div className="schema-map-entry">
       {renaming && (
@@ -762,6 +768,13 @@ function SchemaField({
       !!stagedChoice && same(configuredValue, stagedChoice.baseline),
     value = staging ? undefined : configuredValue;
   usePendingField(staging);
+  // Once nothing is unapplied, a refusal to act until then is over.
+  useEffect(() => {
+    if (!scope.pending && !staging)
+      setChoiceError((shown) =>
+        shown.startsWith(PENDING_REFUSAL) ? "" : shown,
+      );
+  }, [scope.pending, staging]);
   const model = fieldModel(name, schema, root, value, {
     required,
     present: value !== undefined,
@@ -2022,7 +2035,11 @@ function ObjectFields({
           editable={editable}
           depth={depth}
           sectionIcon={sectionIcon}
-          required={required.includes(key)}
+          // A section with a page of its own is always shown, but nothing
+          // makes it a required setting.
+          required={
+            required.includes(key) && !fields[key]._metadata?.["vectory::page"]
+          }
           requiredReason={
             [
               ...(resolved["x-vectory-required-reasons"]?.[key] || []),

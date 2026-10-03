@@ -381,6 +381,12 @@ try {
       ),
     ).toBeVisible();
     await input.fill("14");
+    // Applying what was pending ends the refusal; it doesn't linger in red.
+    await expect(
+      page.getByText(
+        "Apply or discard pending field changes before changing this field.",
+      ),
+    ).toHaveCount(0);
     await fieldAction("Set Count to null");
     expect(await stored()).toBe(null);
     await fieldAction("Enter Count value");
@@ -874,6 +880,11 @@ try {
       ),
     ).toBeVisible();
     await limit.fill("30");
+    await expect(
+      page.getByText(
+        "Apply or discard pending field changes before changing formats.",
+      ),
+    ).toHaveCount(0);
     await fieldAction("Remove max length");
     await mode.selectOption({ label: "UDP" });
     expect((await stored()).mode).toBe("udp");
@@ -1227,6 +1238,41 @@ try {
     await page.keyboard.press("Escape");
     await expect(popup).toHaveCount(0);
     await expect(help).toBeFocused();
+  });
+  await test("general settings offer expire_metrics_secs, not the option Vector replaced, unless the draft still sets it", async () => {
+    const dialog = page.getByRole("dialog", {
+      name: "Pipeline settings",
+      exact: true,
+    });
+    const offered = async (config) => {
+      await fixture({ mode: "globals", value: config });
+      await dialog
+        .getByRole("button", { name: "Add field", exact: true })
+        .last()
+        .click();
+      await page
+        .getByLabel("Find optional fields", { exact: true })
+        .fill("expire");
+      const titles = await page
+        .locator(".schema-field-picker-results button strong")
+        .allInnerTexts();
+      await page.keyboard.press("Escape");
+      return titles;
+    };
+    const bare = { sources: {}, transforms: {}, sinks: {} };
+    const titles = await offered(bare);
+    expect(titles).toContain("Expire Metrics Secs");
+    expect(titles).not.toContain("Expire Metrics");
+    // A draft that still sets it keeps seeing it: its value is not dropped.
+    await fixture({
+      mode: "globals",
+      value: { ...bare, expire_metrics: { secs: 60, nsecs: 0 } },
+    });
+    await expect(
+      dialog.locator(".schema-record-label strong", {
+        hasText: /^Expire Metrics$/,
+      }),
+    ).toHaveCount(1);
   });
   await test("global API and secret records keep attached actions and fit narrow settings", async () => {
     const config = {

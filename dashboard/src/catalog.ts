@@ -91,6 +91,12 @@ const curatedCatalog: Component[] = [
         required: true,
         hint: "One path per line, such as /var/log/app/*.log. Paths must be allowed on the device.",
       },
+      {
+        key: "exclude",
+        label: "Excluded paths",
+        type: "array",
+        hint: "Files to skip among the included paths, such as /var/log/app/debug.log.",
+      },
     ],
   },
   {
@@ -1181,11 +1187,20 @@ export function pipelineIssues(
               : [];
         for (const key of keys) {
           const reference = component.auth?.[key];
-          if (typeof reference !== "string" || !reference.trim())
+          if (typeof reference !== "string" || !reference.trim()) {
+            // Say it once: this names what to enter, which the schema's bare
+            // "Enter auth.token." for the same setting does not, and the
+            // setting's path keeps the jump to it.
+            const bare = `${id}: Enter auth.${key}.`;
+            const repeated = issues.findIndex(
+              (issue) => issue.id === id && issue.message === bare,
+            );
+            if (repeated >= 0) issues.splice(repeated, 1);
             issues.push({
               id,
-              message: `${id}: enter a valid ${key === "user" ? "username" : key} secret reference in Authentication.`,
+              message: `${id}.auth.${key}: enter a valid ${key === "user" ? "username" : key} secret reference in Authentication.`,
             });
+          }
         }
       }
     }

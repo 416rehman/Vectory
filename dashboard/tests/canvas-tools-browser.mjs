@@ -915,6 +915,17 @@ try {
       );
       await status.getByRole("button", { name: "Add monitoring" }).click();
       await expect(node("vectory_internal_metrics")).toBeVisible();
+      // Asking again changes nothing, and says why.
+      await page.locator(".editor-tools-menu > summary").click();
+      await page
+        .locator(".editor-tools-menu")
+        .getByRole("button", { name: "Add monitoring", exact: true })
+        .click();
+      await expect(page.locator(".toast")).toContainText(
+        "This pipeline already exports Vector's internal metrics.",
+      );
+      await expect(node("vectory_metrics_exporter")).toHaveCount(1);
+      await expect(node("vectory_metrics_exporter_2")).toHaveCount(0);
     },
   );
 

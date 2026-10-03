@@ -101,6 +101,39 @@ describe("pipeline node configuration summaries", () => {
     ).toBeUndefined();
   });
 
+  it("reads an OpenTelemetry sink's URL and encoding from its protocol", () => {
+    expect(
+      componentSummary(
+        {
+          type: "opentelemetry",
+          protocol: {
+            type: "http",
+            uri: "http://collector.internal:4318/v1/logs",
+            method: "post",
+            encoding: { codec: "json" },
+          },
+        },
+        "sinks",
+      ),
+    ).toEqual({
+      primary: "http://collector.internal:4318/v1/logs",
+      secondary: "POST · JSON encoding",
+    });
+    expect(
+      componentSummary(
+        { type: "opentelemetry", protocol: { type: "http" } },
+        "sinks",
+      ),
+    ).toEqual({ primary: "Set an OTLP endpoint", secondary: undefined });
+    // A top-level uri is not an option of this sink; the card doesn't claim it.
+    expect(
+      componentSummary(
+        { type: "opentelemetry", uri: "http://collector.internal:4318" },
+        "sinks",
+      ).primary,
+    ).toBe("Set an OTLP endpoint");
+  });
+
   it("keeps broker addresses intact and shows topics and consumer groups", () => {
     expect(
       componentSummary(

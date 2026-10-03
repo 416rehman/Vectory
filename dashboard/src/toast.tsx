@@ -16,7 +16,7 @@ export type ToastAction =
   | { label: string; href: string; onClick?: never };
 export type ToastOptions = {
   action?: ToastAction;
-  /** Milliseconds before an automatic dismissal; errors persist by default. */
+  /** Milliseconds before an automatic dismissal; see "How long a message stays". */
   duration?: number | null;
   /**
    * What the message is about. A newer message on the same topic replaces the
@@ -43,29 +43,48 @@ export type ToastItem = {
   action?: ToastAction;
   duration: number | null;
   topic?: string;
+  /** The page an error is about; it leaves when the person does. */
+  page?: string;
 };
 
+/*
+ * How long a message stays.
+ * - A confirmation or a note goes after five seconds.
+ * - An error that reports a failed action on a page, such as an import that
+ *   failed, is about that page. It goes when the person leaves the page, and
+ *   after thirty seconds if they stay: a screen reader has announced it at
+ *   once, and it can't sit over a later page or dialog for good.
+ * - An error that offers an action stays until it is dismissed, because it
+ *   asks for something.
+ * Hovering over a message or focusing it holds it.
+ */
 const MAX_TOASTS = 3;
 const DEFAULT_DURATION = 5000;
+const ERROR_DURATION = 30000;
 let items: ToastItem[] = [];
 let nextId = 1;
+let currentPage = "";
 const listeners = new Set<() => void>();
 const emit = () => {
   for (const listener of listeners) listener();
 };
 function show(tone: ToastTone, message: string, options: ToastOptions = {}) {
+  const pageError = tone === "error" && !options.action;
   const item: ToastItem = {
     id: nextId++,
     tone,
     message,
     action: options.action,
     topic: options.topic,
+    page: pageError ? currentPage : undefined,
     duration:
       options.duration !== undefined
         ? options.duration
-        : tone === "error"
-          ? null
-          : DEFAULT_DURATION,
+        : tone !== "error"
+          ? DEFAULT_DURATION
+          : pageError
+            ? ERROR_DURATION
+            : null,
   };
   // Replace an identical visible message, or an earlier one on the same
   // topic, instead of stacking duplicates.
@@ -81,14 +100,19 @@ function show(tone: ToastTone, message: string, options: ToastOptions = {}) {
   return item.id;
 }
 /**
- * Keep at most three. The oldest message that dismisses itself goes first,
- * so a persistent error is not pushed out by newer confirmations.
+ * Keep at most three. The oldest confirmation goes first, then the oldest
+ * error that dismisses itself, so an error is not pushed out by newer
+ * confirmations and one that asks for something is the last to go.
  */
 function evict(list: ToastItem[]) {
+  const worth = (item: ToastItem) =>
+    item.duration === null ? 2 : item.tone === "error" ? 1 : 0;
   const next = [...list];
   while (next.length > MAX_TOASTS) {
-    const passing = next.findIndex((item) => item.duration !== null);
-    next.splice(passing >= 0 && passing < next.length - 1 ? passing : 0, 1);
+    let drop = 0;
+    for (let index = 1; index < next.length - 1; index++)
+      if (worth(next[index]) < worth(next[drop])) drop = index;
+    next.splice(drop, 1);
   }
   return next;
 }
@@ -101,6 +125,17 @@ export const toast = {
     show("info", message, options),
   dismiss(id: number) {
     const next = items.filter((item) => item.id !== id);
+    if (next.length === items.length) return;
+    items = next;
+    emit();
+  },
+  /**
+   * The person is now on `page`. Errors about the page they left go with it;
+   * errors raised from here on are about this one.
+   */
+  leavePage(page: string) {
+    currentPage = page;
+    const next = items.filter((item) => !item.page || item.page === page);
     if (next.length === items.length) return;
     items = next;
     emit();

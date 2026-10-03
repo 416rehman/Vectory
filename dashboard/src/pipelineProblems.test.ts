@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { APIError } from "./api";
+import { pipelineIssues } from "./catalog";
 import { cleanSummary } from "./ProblemsPanel";
 import {
   applyFix,
@@ -365,6 +366,42 @@ describe("pipeline problems", () => {
       message: "Must be at least 1.",
     });
     expect(local[1]).toMatchObject({ field: "source", code: "missing_field" });
+  });
+
+  it("jumps to the credential a bearer or basic strategy still needs", () => {
+    const sink = {
+      sinks: {
+        out: { type: "http", inputs: ["in"], auth: { strategy: "bearer" } },
+      },
+    };
+    const issue = pipelineIssues({
+      sources: { in: { type: "demo_logs", format: "json" } },
+      sinks: {
+        out: {
+          type: "http",
+          inputs: ["in"],
+          uri: "https://logs.example.test",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer" },
+        },
+      },
+    }).filter((item) => item.id === "out");
+    expect(issue).toHaveLength(1);
+    const [problem] = localProblems(
+      issue.map((item) => ({
+        severity: "error" as const,
+        message: item.message,
+        componentId: item.id,
+      })),
+      new Map(),
+      [],
+      sink,
+    );
+    expect(problem).toMatchObject({
+      component: "out",
+      field: "auth.token",
+      message: "Enter a valid token secret reference in Authentication.",
+    });
   });
 
   it("lets a local settings finding stand in for Vector's, but never hides VRL or unknown options", () => {

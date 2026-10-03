@@ -24,6 +24,7 @@ await mkdir(output, { recursive: true });
 const sourceFiles = [
   "dashboard/src/Editor.tsx",
   "dashboard/src/PublishReview.tsx",
+  "dashboard/src/publishReviewModel.ts",
   "dashboard/src/PipelineTestResults.tsx",
   "dashboard/src/PipelineGlobals.tsx",
   "dashboard/src/publishTests.ts",
@@ -615,6 +616,51 @@ try {
     },
   );
 
+  // The published version predates variables, so it carries none.
+  const published = (f) =>
+    f.versions.push(
+      version(f, { request_id: "first", revision: 1, message: "First" }),
+    );
+  const changesRegion = (page) =>
+    reviewDialog(page).getByRole("region", { name: "Changes", exact: true });
+  for (const [width, theme] of [
+    [1200, "light"],
+    [390, "dark"],
+  ])
+    await run(
+      `a change to the variables alone is named in the review at ${width}px, ${theme}, never "No configuration changes" (Axe)`,
+      async () => {
+        const f = state({ names: [] });
+        published(f);
+        f.document.variables = [
+          { name: "region", path: "/sources/demo/format", type: "string" },
+        ];
+        const s = await start(f, {
+          width,
+          height: width < 600 ? 900 : 950,
+          theme,
+        });
+        try {
+          await openReview(s.page);
+          const changes = changesRegion(s.page);
+          await expect(changes).toContainText("Changes since v1");
+          await expect(changes).toContainText("Variables: region added");
+          expect(await changes.innerText()).not.toContain(
+            "No configuration changes",
+          );
+          expect(
+            await s.page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth + 1,
+            ),
+          ).toBe(true);
+          await scan(s.page, "variables-review", width, theme);
+          clean(f);
+        } finally {
+          await s.close();
+        }
+      },
+    );
+
   await run(
     "a test Vector could not build: named, never Checked, Publish anyway beside Open tests",
     async () => {
@@ -708,6 +754,13 @@ try {
         await expect(selected).toContainText("Test 2");
         // The cursor is in it, ready to fix.
         await expect(selected.locator(":focus")).toHaveCount(1);
+        // The section is always shown, but tests are optional: no asterisk.
+        const heading = settings
+          .locator(".schema-record-label")
+          .filter({ has: s.page.locator("strong", { hasText: /^Tests$/ }) })
+          .first();
+        await expect(heading).toBeVisible();
+        await expect(heading.locator(".schema-required")).toHaveCount(0);
         expect(s.f.posts).toHaveLength(0);
         clean(s.f);
       } finally {

@@ -267,17 +267,27 @@ export function componentSummary(
         primary: text(c.dataset) || "Set a dataset",
         secondary: endpoint,
       };
-    case "opentelemetry":
-      return kind === "sources"
-        ? {
-            primary: text(object(c.grpc).address)
-              ? `gRPC ${text(object(c.grpc).address)}`
-              : "Configure the gRPC listener",
-            secondary: text(object(c.http).address)
-              ? `HTTP ${text(object(c.http).address)}`
-              : undefined,
-          }
-        : { primary: endpoint || "Set an OTLP endpoint", secondary: format };
+    case "opentelemetry": {
+      if (kind === "sources")
+        return {
+          primary: text(object(c.grpc).address)
+            ? `gRPC ${text(object(c.grpc).address)}`
+            : "Configure the gRPC listener",
+          secondary: text(object(c.http).address)
+            ? `HTTP ${text(object(c.http).address)}`
+            : undefined,
+        };
+      // The sink's settings are its protocol's: an HTTP sink, so the URL and
+      // the encoding sit under `protocol`.
+      const protocol = object(c.protocol);
+      return {
+        primary: endpointSummary(protocol.uri) || "Set an OTLP endpoint",
+        secondary: join(
+          text(protocol.method)?.toUpperCase(),
+          codec(protocol, kind),
+        ),
+      };
+    }
     case "datadog_agent":
       return {
         primary: address

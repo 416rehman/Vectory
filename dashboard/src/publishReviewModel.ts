@@ -1,5 +1,5 @@
 import { diffLines } from "diff";
-import type { Config } from "./api";
+import type { Config, VariableDeclaration } from "./api";
 
 const SECTIONS = ["sources", "transforms", "sinks", "enrichment_tables"];
 const record = (value: unknown): value is Config =>
@@ -139,12 +139,37 @@ export type ReviewChanges = {
   /** Pipeline-wide options that changed (global options, secrets, provider). */
   settings: string[];
   tests: { before: number; after: number } | null;
+  /** Variables that were added, removed or pointed elsewhere, by name. */
+  variables: string[];
 };
+
+/**
+ * What changed in the variables a pipeline declares, by name: added, removed,
+ * or declared for another setting or type. The same names in another order
+ * still make a different version, so that is said too.
+ */
+export function variableChanges(
+  before: readonly VariableDeclaration[],
+  after: readonly VariableDeclaration[],
+): string[] {
+  const was = new Map(before.map((variable) => [variable.name, variable]));
+  const now = new Map(after.map((variable) => [variable.name, variable]));
+  const words = [
+    ...after.filter((v) => !was.has(v.name)).map((v) => `${v.name} added`),
+    ...before.filter((v) => !now.has(v.name)).map((v) => `${v.name} removed`),
+    ...after
+      .filter((v) => was.has(v.name) && !same(was.get(v.name), v))
+      .map((v) => `${v.name} changed`),
+  ];
+  return words.length || same(before, after) ? words : ["order changed"];
+}
 
 /** What publishing this draft changes compared with a published version. */
 export function reviewChanges(
   before: Config | null,
   after: Config,
+  beforeVariables: readonly VariableDeclaration[] = [],
+  afterVariables: readonly VariableDeclaration[] = [],
 ): ReviewChanges {
   const components: ComponentChange[] = [];
   for (const section of SECTIONS) {
@@ -257,7 +282,12 @@ export function reviewChanges(
   const tests = same(before?.tests, after?.tests)
     ? null
     : { before: count(before?.tests), after: count(after?.tests) };
-  return { components, settings, tests };
+  return {
+    components,
+    settings,
+    tests,
+    variables: variableChanges(beforeVariables, afterVariables),
+  };
 }
 
 export type ChangeGroup =
