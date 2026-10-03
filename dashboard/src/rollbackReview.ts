@@ -112,6 +112,16 @@ export function nothingToRollBackTo(preview: RollbackPreview) {
     (blocker) => blocker.code === "PRIOR_VERSION_UNKNOWN",
   );
 }
+/**
+ * The rollout released no device, so there is nothing to return: the blocker
+ * with the server's sentence, or null.
+ */
+export function nothingReleased(preview: RollbackPreview) {
+  return (
+    preview.blockers.find((blocker) => blocker.code === "NOTHING_RELEASED") ??
+    null
+  );
+}
 /** Devices that ran their local config before this deployment. */
 export function locallyConfigured(preview: RollbackPreview) {
   return preview.eligible_devices.filter(

@@ -298,4 +298,6 @@ A canary that's still running rolls back in the same step: confirming stops the 
 
 Devices that ran their own local configuration before this deployment have nothing to roll back to. For them, **Remove assignment** returns them to that configuration.
 
+A schedule cancelled before it started released nothing, so its page doesn't offer **Roll back**. A review of any deployment that released nothing says **Nothing was released, so there is nothing to roll back.**
+
 After a failed attempt, fix the cause, then use **Retry application** on the device or deploy a corrected version. A device doesn't retry a failed version by itself, so it can't restart Vector in a loop. Retrying one device doesn't restart a canary that stopped; deploy again with the rollout you want.
