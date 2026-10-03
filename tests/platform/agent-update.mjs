@@ -1326,6 +1326,35 @@ async function update(evidence) {
   saveContext({ running: "0.1.1", released: { "0.1.1": release } });
 }
 
+// ---------------------------------------------------------------- the hour's downloads
+
+/**
+ * The server lets a device fetch a build six times an hour, counted in the
+ * instance's memory, and the phases of one job all use one device: the retries of
+ * the phase that serves a cut-off file and the rollouts of the phases after it would
+ * spend the hour before the last of them asks, and the server would answer that it
+ * is busy until the hour passed. A phase that fetches begins on an instance that has
+ * just started, which has counted nothing.
+ */
+async function startOnAFreshInstance(evidence) {
+  const { device } = loadContext();
+  await evidence.step(
+    "The instance is started again, so that the device has its whole hour of build downloads",
+    async () => {
+      await instance.stop();
+      await instance.start();
+      const s = await signedIn();
+      const since = Date.now();
+      await until(
+        "the device checks in with the instance that started again",
+        async () =>
+          checkedIn(await s.api(`/devices/${device.deviceId}`), since),
+        { timeoutMs: minutes(4), intervalMs: 3000 },
+      );
+    },
+  );
+}
+
 // ---------------------------------------------------------------- a build that doesn't start
 
 async function startFailure(evidence) {
@@ -1557,6 +1586,7 @@ async function noCheckIn(evidence) {
 async function truncated(evidence) {
   const { device } = loadContext();
   const host = updateHostFor();
+  await startOnAFreshInstance(evidence);
   const s = await signedIn();
   const release = await prepareRelease(evidence, s, "0.1.4");
   const running = host.sha256(host.paths.agent);
@@ -1742,6 +1772,7 @@ async function interruptOne(evidence, s, version, stage) {
 }
 
 async function interrupt(evidence) {
+  await startOnAFreshInstance(evidence);
   const s = await signedIn();
   const swapping = await interruptOne(evidence, s, "0.1.5", "swapping");
   const trial = await interruptOne(evidence, s, "0.1.6", "trial");
@@ -1956,6 +1987,7 @@ async function bootGap(evidence) {
 async function diskFull(evidence) {
   const { device } = loadContext();
   const host = updateHostFor();
+  await startOnAFreshInstance(evidence);
   const s = await signedIn();
   const release = await prepareRelease(evidence, s, "0.1.7");
   const sizeMiB = Math.ceil((release.build.size * 1.7) / 2 ** 20);
