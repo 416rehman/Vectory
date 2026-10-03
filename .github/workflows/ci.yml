@@ -70,6 +70,11 @@ jobs:
             echo "::error::contracts/ is not what contracts/generate.mjs produces. Run node contracts/generate.mjs and commit the result."
             exit 1
           fi
+      - name: Check the agent update vectors, report bounds and examples are current
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        working-directory: .
+        run: node contracts/fixtures/agent-release/generate.mjs --check
       - name: Check generated Vector catalog, VRL reference and device-secret tables are current
         timeout-minutes: 10
         if: ${{ !cancelled() }}
