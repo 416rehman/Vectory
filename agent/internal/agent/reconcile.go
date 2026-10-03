@@ -493,8 +493,14 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
 		message := "Vector rejected this version on the device"
-		if failure := asVectorFailure(err); failure != nil && failure.Phase == "timeout" {
-			message = "Vector did not finish validating this version in time, so it was not applied"
+		if failure := asVectorFailure(err); failure != nil {
+			switch failure.Phase {
+			case "timeout":
+				message = "Vector did not finish validating this version in time, so it was not applied"
+			case "prepare":
+				// Vector never ran: the failure's own words say why.
+				message = failure.Summary
+			}
 		}
 		return e.failAttemptWith("VALIDATION_FAILED", "validation", message, e.diagnoseFailure(err, data))
 	}

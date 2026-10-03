@@ -184,6 +184,8 @@ The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed
 
 `re-adopt` checks the SHA-256 before running the binary, then validates the current configuration with it. It changes only the approved binary. If validation fails, fix the reported problem or put the previous binary back.
 
+A version deployed while the binary was changed failed without Vector running it (the finding `VECTOR_BINARY_UNAVAILABLE`) and waits for a retry. After the agent runs again, choose **Retry application** on the device page or run `sudo vectory retry`.
+
 If you didn't replace Vector yourself, don't approve the change. Find out why the file changed first.
 
 ## Adopt a Vector that already runs
