@@ -533,10 +533,9 @@ async fn a_device_goes_forward_through_its_states_to_verified_only_by_the_server
         .unwrap();
     assert_eq!(from.as_deref(), Some("0.1.0"), "the version it ran before");
     assert!(verified_at.is_some());
-    // Final: nothing moves it again.
+    // Final: nothing moves it again, and a report that moves nothing adds no
+    // audit row.
     r.old(&device, &r.about("downloading")).await;
-    r.new(&device, &r.result("rolled_back", Some("UNHEALTHY")))
-        .await;
     assert_eq!(r.state(&rollout, &device).await, "verified");
     // One audit row for the device, with what it was told.
     let rows = audits(&r.f, "device.agent_update").await;
@@ -546,6 +545,16 @@ async fn a_device_goes_forward_through_its_states_to_verified_only_by_the_server
     assert_eq!(rows[0]["details"]["rollout_id"], json!(rollout));
     assert_eq!(rows[0]["details"]["from_version"], "0.1.0");
     assert_eq!(rows[0]["details"]["to_version"], "0.1.1");
+    // A rollback it reports afterwards is a result the server records, once,
+    // and the target stays verified.
+    r.new(&device, &r.result("rolled_back", Some("UNHEALTHY")))
+        .await;
+    assert_eq!(r.state(&rollout, &device).await, "verified");
+    let rows = audits(&r.f, "device.agent_update").await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["outcome"], "rolled_back");
+    assert_eq!(rows[1]["details"]["code"], "UNHEALTHY");
+    assert_eq!(rows[1]["details"]["rollout_id"], json!(rollout));
 }
 
 #[tokio::test]

@@ -9,7 +9,10 @@
 //!
 //! Transitions only move forward and are keyed to the rollout's release: a
 //! report for another release changes nothing, and a report that would move a
-//! target to an earlier row of the state table never does.
+//! target to an earlier row of the state table never does. A rollback or a
+//! failure that a host reports after its target ended (the rollout was paused,
+//! cancelled, stopped or failed) is still recorded, once: the device's audit row
+//! and its issue. The target keeps its state.
 use crate::{
     State,
     agent_releases::{self, Release},
@@ -129,13 +132,15 @@ fn rank(state: &str) -> u8 {
 // ---------------------------------------------------------------------------
 // Targets
 
-/// The target a device has that has not ended, with what a transition needs to
-/// know about its rollout and release.
+/// A target of a device, with what a transition needs to know about its rollout
+/// and release.
 pub struct OpenTarget {
     pub rollout_id: String,
     pub device_id: String,
     pub device_name: String,
     pub state: String,
+    /// The code the target ended with, if it has.
+    pub code: Option<String>,
     pub from_version: Option<String>,
     pub boot_id_before: Option<String>,
     pub release_id: String,
@@ -145,7 +150,7 @@ pub struct OpenTarget {
     /// The device's identity was revoked: it never checks in again.
     pub revoked: bool,
 }
-const OPEN_TARGET: &str = "SELECT t.rollout_id,t.device_id,t.device_name,t.state,t.from_version,t.boot_id_before,ro.release_id,rel.version AS release_version,rel.manifest_sha256,d.revoked AS revoked,\
+const OPEN_TARGET: &str = "SELECT t.rollout_id,t.device_id,t.device_name,t.state,t.code,t.from_version,t.boot_id_before,ro.release_id,rel.version AS release_version,rel.manifest_sha256,d.revoked AS revoked,\
     (SELECT a.sha256 FROM agent_release_artifacts a WHERE a.release_id=rel.id AND a.os=json_extract(d.data,'$.os') AND a.arch=json_extract(d.data,'$.arch')) AS artifact_sha256 \
     FROM agent_update_targets t JOIN agent_update_rollouts ro ON ro.id=t.rollout_id JOIN agent_releases rel ON rel.id=ro.release_id JOIN devices d ON d.id=t.device_id";
 fn open_target(row: &sqlx::sqlite::SqliteRow) -> OpenTarget {
@@ -154,6 +159,7 @@ fn open_target(row: &sqlx::sqlite::SqliteRow) -> OpenTarget {
         device_id: row.get("device_id"),
         device_name: row.get("device_name"),
         state: row.get("state"),
+        code: row.get("code"),
         from_version: row.get("from_version"),
         boot_id_before: row.get("boot_id_before"),
         release_id: row.get("release_id"),
@@ -191,6 +197,20 @@ async fn move_target(
     if moved == 0 || !matches!(state, "verified" | "rolled_back" | "failed" | "refused") {
         return Ok(());
     }
+    record(conn, s, actor, target, state, code).await
+}
+
+/// What an update that ended on a device leaves for people: its audit row, and
+/// the issue a rollback or a failure opens (a verified update resolves the open
+/// ones).
+async fn record(
+    conn: &mut SqliteConnection,
+    s: &State,
+    actor: &str,
+    target: &OpenTarget,
+    state: &str,
+    code: Option<&str>,
+) -> Result<()> {
     if crate::device::audit_row_allowed(s, &target.device_id, "device.agent_update", None) {
         let mut details = json!({
             "rollout_id": target.rollout_id,
@@ -246,17 +266,31 @@ async fn move_target(
 
 /// What the target does with a check-in, from the device's report and what the
 /// check-in shows about the build that sent it: the state it moves to, and the
-/// agent's code for a refusal, a failure or a rollback.
+/// agent's code for a refusal, a failure or a rollback. `fresh` says the report
+/// carries a rollback or a failure that the one stored before it did not.
 fn decide(
     target: &OpenTarget,
     report: Option<&Report>,
     restarted: bool,
+    fresh: bool,
 ) -> Option<(&'static str, Option<String>)> {
     // Only a release moves a pending target: a report about the offer of a
     // rollout that was paused (the agent reports a check-in behind) is not
-    // progress of this one.
+    // progress of this one. A host that had begun before it was paused is: its
+    // rollback or its failure, new in this report, counts as it would have if
+    // the rollout had not been paused.
     if target.state == "pending" {
-        return None;
+        return report
+            .and_then(Report::last)
+            .filter(|last| fresh && last["release"] == target.manifest_sha256.as_str())
+            .and_then(|last| {
+                let code = last["code"].as_str().map(str::to_owned);
+                match last["outcome"].as_str() {
+                    Some("rolled_back") => Some(("rolled_back", code)),
+                    Some("failed") => Some(("failed", code)),
+                    _ => None,
+                }
+            });
     }
     let current = rank(&target.state);
     if let Some(last) = report
@@ -326,27 +360,80 @@ fn dropped(target: &OpenTarget, report: &Report) -> Option<(&'static str, Option
     })
 }
 
-/// A check-in of a device that has a target that has not ended: remember what
-/// the previous build reported, and move the target as far as the check-in
-/// proves.
-pub async fn observe(
+/// A rollback or a failure that a device reports as its last result, of a
+/// release whose target for it has ended: the rollout was paused, cancelled,
+/// stopped or failed, or the target was skipped, and a host that had begun
+/// anyway (somebody applied the staged build, or its window opened) went on to
+/// the end. It is recorded as it would have been had the target been open: the
+/// device's audit row and the issue, against the newest rollout that held the
+/// device for the release. The target keeps its state; it never moves back.
+/// A device with no target of the release has nothing to record it against.
+async fn record_late(
     conn: &mut SqliteConnection,
     s: &State,
-    now: &str,
-    build: &Build<'_>,
-    report: Option<&Report>,
+    device: &str,
+    last: &serde_json::Value,
 ) -> Result<()> {
     let sql = format!(
-        "{OPEN_TARGET} WHERE t.device_id=? AND t.state IN ('pending','offered','downloading','staged','waiting_for_host','waiting_for_window','applying','restarted')"
+        "{OPEN_TARGET} WHERE t.device_id=? AND rel.manifest_sha256=? ORDER BY ro.created_at DESC,ro.id DESC LIMIT 1"
     );
     let Some(row) = sqlx::query(&sql)
-        .bind(build.device_id)
+        .bind(device)
+        .bind(last["release"].as_str())
         .fetch_optional(&mut *conn)
         .await?
     else {
         return Ok(());
     };
     let target = open_target(&row);
+    let state = if last["outcome"] == "failed" {
+        "failed"
+    } else {
+        "rolled_back"
+    };
+    let code = last["code"].as_str();
+    // The target that ended as this result says was moved by it when it first
+    // came: what a report found again after the stored ones were removed (updates
+    // were turned off and on) says nothing new.
+    if target.state == state && target.code.as_deref() == code {
+        return Ok(());
+    }
+    record(conn, s, "", &target, state, code).await
+}
+
+/// A check-in of a device: remember what the previous build reported, and move
+/// the target that has not ended as far as the check-in proves. `fresh` says the
+/// report carries a rollback or a failure that the one stored before it did not;
+/// it is recorded whatever became of the device's target of that release.
+pub async fn observe(
+    conn: &mut SqliteConnection,
+    s: &State,
+    now: &str,
+    build: &Build<'_>,
+    report: Option<&Report>,
+    fresh: bool,
+) -> Result<()> {
+    let sql = format!(
+        "{OPEN_TARGET} WHERE t.device_id=? AND t.state IN ('pending','offered','downloading','staged','waiting_for_host','waiting_for_window','applying','restarted')"
+    );
+    let open = sqlx::query(&sql)
+        .bind(build.device_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .map(|row| open_target(&row));
+    // The device's open target of the release takes the result as it moves;
+    // any other target of the release has ended.
+    if fresh
+        && let Some(last) = report.and_then(Report::last)
+        && open
+            .as_ref()
+            .is_none_or(|target| last["release"] != target.manifest_sha256.as_str())
+    {
+        record_late(conn, s, build.device_id, last).await?;
+    }
+    let Some(target) = open else {
+        return Ok(());
+    };
     // The new build: the offered file's digest and version, from a process
     // other than the one the previous build last reported.
     let new_build = target.artifact_sha256.is_some()
@@ -372,7 +459,7 @@ pub async fn observe(
             .boot_id_before
             .as_deref()
             .is_some_and(|before| before != build.boot_id);
-    if let Some((state, code)) = decide(&target, report, restarted) {
+    if let Some((state, code)) = decide(&target, report, restarted, fresh) {
         move_target(conn, s, now, "", &target, state, code.as_deref()).await?;
     }
     Ok(())
