@@ -4,6 +4,7 @@ import {
   assertReviewedRollbackReceipt,
   excludedDetail,
   locallyConfigured,
+  nothingReleased,
   nothingToRollBackTo,
   rollbackStory,
   type RollbackPreview,
@@ -130,6 +131,43 @@ describe("reviewed rollback scope", () => {
       expect(() => assertReviewedRollbackReceipt(review, id(1), wrong)).toThrow(
         /reviewed rollback/,
       );
+  });
+});
+
+describe("a rollout that released nothing", () => {
+  const sentence = "Nothing was released, so there is nothing to roll back.";
+  const nothing = (): RollbackPreview => ({
+    ...preview(),
+    source_status: "cancelled",
+    previous_version_id: null,
+    previous_version_number: null,
+    previous_configuration_id: null,
+    previous_configuration_name: null,
+    eligible_devices: [],
+    excluded_devices: [
+      { device_id: id(5), device_name: "Live device", reason: "not_released" },
+    ],
+    blockers: [{ code: "NOTHING_RELEASED", reason: sentence }],
+    ready: false,
+  });
+  it("is a review the dashboard accepts, in the server's words", () => {
+    const value = RollbackPreviewSchema.parse(nothing());
+    expect(nothingReleased(value)?.reason).toBe(sentence);
+    // It is not the first-deployment case, which offers to remove the assignment.
+    expect(nothingToRollBackTo(value)).toBe(false);
+  });
+  it("is not claimed for another blocker", () => {
+    expect(nothingReleased(preview())).toBeNull();
+    expect(
+      nothingReleased({
+        ...preview(),
+        blockers: [
+          { code: "MIXED_PRIOR_VERSIONS", reason: "Prior versions differ." },
+        ],
+        previous_version_id: null,
+        ready: false,
+      }),
+    ).toBeNull();
   });
 });
 
