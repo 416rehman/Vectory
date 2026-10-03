@@ -1065,7 +1065,7 @@ try {
     await page.getByRole("button", { name: "Stop all updates" }).click();
     const stop = page.getByRole("dialog", { name: "Stop all updates" });
     await expect(stop).toContainText(
-      "Cancels every update rollout and withdraws every offer. Devices already trying a build finish, and a device that already downloaded it may still start within about a minute.",
+      "Cancels every update rollout and withdraws every offer. Devices already trying a build finish, and a device that already downloaded it may still start until its next check-in tells it, usually within a minute.",
     );
     await expect(
       stop.getByRole("button", { name: "Stop all updates" }),

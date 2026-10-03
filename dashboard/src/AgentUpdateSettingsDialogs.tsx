@@ -494,7 +494,7 @@ export function StopAllDialog({
   return (
     <RequestDialog
       title="Stop all updates"
-      description="Cancels every update rollout and withdraws every offer. Devices already trying a build finish, and a device that already downloaded it may still start within about a minute."
+      description="Cancels every update rollout and withdraws every offer. Devices already trying a build finish, and a device that already downloaded it may still start until its next check-in tells it, usually within a minute."
       confirmLabel="Stop all updates"
       tone="danger"
       needsPassword={false}
