@@ -1070,6 +1070,9 @@ try {
     await expect(
       stop.getByRole("button", { name: "Stop all updates" }),
     ).toBeDisabled();
+    await expect(
+      stop.getByRole("link", { name: "What stopping does" }),
+    ).toHaveAttribute("href", "/help/agent-updates/#stop-all-updates");
     await stop.getByLabel("Reason").fill("The 0.1.1 build crashes on arm64");
     await look("devices-stop");
     await stop.getByRole("button", { name: "Stop all updates" }).click();
@@ -1183,6 +1186,9 @@ try {
         await expect(
           choose.getByRole("heading", { name: "Won't update · 3" }),
         ).toBeVisible();
+        await expect(
+          choose.getByRole("link", { name: "How to read this review" }),
+        ).toHaveAttribute("href", "/help/agent-updates/#read-the-review");
         await expect(choose).toContainText(
           "Agent 0.1.1 goes to 2 of 5 devices you chose, a canary of 1 first, then batches of 10.",
         );
@@ -1250,6 +1256,55 @@ try {
         `--update-key-sha256 ${teamFingerprint}`,
       );
       await look("review-commands");
+    },
+  );
+
+  await check(
+    "Review: hosts that pin the current key can't take a release an older key signed, and no command pretends they can",
+    async () => {
+      // The key was rotated after the release was signed: the release names
+      // the old key, the settings the new one, and the host pins the new one.
+      const scenario = richState();
+      scenario.updates.current_key = releaseKey({
+        fingerprint: nextFingerprint,
+        public_key: nextLine,
+      });
+      scenario.preview = previewBody({
+        will_update: [],
+        wont_update: [
+          {
+            code: "KEY_NOT_PINNED",
+            reason:
+              "edge-06 pins no key that reaches the key that signed 0.1.1.",
+            fix: "Run the Upgrade agent command so the host pins the current release key.",
+            devices: [
+              { device_id: id(6), device_name: "edge-06", successors: null },
+            ],
+          },
+        ],
+        warnings: [],
+      });
+      await load({ path: "agent-updates", scenario });
+      await page
+        .getByRole("article", { name: "Agent 0.1.1" })
+        .getByRole("button", { name: "Update devices…" })
+        .click();
+      const dialog = page.getByRole("dialog", { name: "Roll out agent 0.1.1" });
+      await dialog.getByRole("checkbox", { name: /Edge fleet/ }).check();
+      await dialog.getByRole("button", { name: "Review", exact: true }).click();
+      const group = dialog.locator("article", { hasText: "edge-06" });
+      await expect(group).toContainText(
+        "edge-06 pins no key that reaches the key that signed 0.1.1.",
+      );
+      // The server's own fix names a command; here it would change nothing.
+      await expect(group).toContainText(
+        `This release was signed by key ${teamFingerprint.slice(0, 16)}, not the current key ${nextFingerprint.slice(0, 16)}. Withdraw this release and prepare it again`,
+      );
+      await expect(group).not.toContainText(
+        "Run the Upgrade agent command so the host pins the current release key.",
+      );
+      await expect(group.getByText("Commands for the host")).toHaveCount(0);
+      await look("review-older-key");
     },
   );
 
@@ -1363,6 +1418,10 @@ try {
         await expect(
           page.getByRole("link", { name: "Agent updates" }).first(),
         ).toBeVisible();
+        await expect(page.locator("a.page-help-link")).toHaveAttribute(
+          "href",
+          "/help/agent-updates/#watch-a-rollout",
+        );
         // A device is updated only from what it reports after the restart.
         await expect(
           page.getByText(
@@ -1828,6 +1887,9 @@ try {
       await expect(
         revoke.getByRole("button", { name: "Revoke key" }),
       ).toBeDisabled();
+      await expect(
+        revoke.getByRole("link", { name: "If a key is stolen" }),
+      ).toHaveAttribute("href", "/help/agent-updates/#if-a-key-is-stolen");
       await revoke
         .getByLabel("Reason")
         .fill("The laptop that held it was lost");
@@ -2049,6 +2111,7 @@ try {
           text: [
             `Updates stopped on this host: two successors of key ${teamFingerprint.slice(0, 16)} were seen, ${nextFingerprint.slice(0, 16)} and ${finalFingerprint.slice(0, 16)}. Run the Upgrade agent command with the right key.`,
           ],
+          link: ["What a fork means", "if-a-key-is-stolen"],
         },
         {
           name: "paused on the host",
@@ -2064,6 +2127,7 @@ try {
             agent_update: report({ eligibility: "PACKAGE_MANAGED" }),
           },
           text: ["A package manager owns this agent, so it updates it."],
+          link: ["What a host needs", "what-a-host-needs-to-take-an-update"],
         },
         {
           name: "sent no report",
@@ -2091,6 +2155,12 @@ try {
             panel().getByLabel(given.command[0], { exact: true }),
           ).toHaveText(given.command[1]);
         }
+        // Where the page explains what it reports, the link goes to that part.
+        if (given.link)
+          await expect(
+            panel().getByRole("link", { name: given.link[0] }),
+            given.name,
+          ).toHaveAttribute("href", `/help/agent-updates/#${given.link[1]}`);
       }
       // The state a device reports is a state, in words and a badge.
       await load({
@@ -2132,6 +2202,12 @@ try {
         await expect(panel()).toContainText("Staged 0.1.1");
         await expect(panel()).toContainText(
           "Rolled back from 0.1.1: it started but wasn't healthy.",
+        );
+        await expect(
+          panel().getByRole("link", { name: "What a rollback means" }),
+        ).toHaveAttribute(
+          "href",
+          "/help/agent-updates/#when-a-host-rolls-back",
         );
         await look("device-updates", view);
       }
@@ -2189,6 +2265,9 @@ try {
         await expect(dialog).toContainText(
           "Without a choice the command only upgrades the agent. It doesn't change how this host takes updates.",
         );
+        await expect(
+          dialog.getByRole("link", { name: "What a host agrees to" }),
+        ).toHaveAttribute("href", "/help/agent-updates/#what-a-host-agrees-to");
         const withoutChoice = await dialog
           .getByLabel("Upgrade command", { exact: true })
           .innerText();
@@ -2624,6 +2703,9 @@ try {
             exact: false,
           }),
         ).toBeVisible();
+        await expect(
+          page.getByRole("link", { name: "What a host agrees to" }),
+        ).toHaveAttribute("href", "/help/agent-updates/#what-a-host-agrees-to");
         await look("add-device-updates", view);
       }
     },
