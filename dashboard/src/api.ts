@@ -1410,6 +1410,7 @@ export type Audit = {
   target_kind?: string;
   target_exists?: boolean;
   device_id?: string | null;
+  device_name?: string | null;
   issue_revision?: number;
   reason?: string;
   outcome: string;
@@ -1439,6 +1440,9 @@ export const AuditSummarySchema = z.object({
   ]),
   target_name: z.string().nullable(),
   device_id: z.string().nullable(),
+  // The current name of device_id; older servers omit it, and it is null
+  // when no device has that ID.
+  device_name: z.string().nullable().optional(),
   outcome: z.string(),
   created_at: z.string().nullable(),
   request_id: z.string().nullable(),
