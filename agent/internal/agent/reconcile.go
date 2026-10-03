@@ -356,11 +356,14 @@ func (e *Engine) poll(ctx context.Context) error {
 //     refuses them doesn't get for the rest of this process.
 //
 // A report the server keeps refusing then costs one more request on each
-// check-in, and the first time a report is left out the log says so (Notice).
-// A refusal that leaving all of them out doesn't end is a failed check-in.
+// check-in, and the first time a report is left out of a check-in that goes
+// through, the log says so (Notice). The agent can't tell which of the reports
+// left out in one step the server refused, so it names all it left out, not the
+// culprit. A refusal that leaving all of them out doesn't end is a failed
+// check-in.
 func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, error) {
 	announcementsDropped := false
-	// What the last step left out: said once the check-in goes through.
+	// What the check-in that goes through lacks: said once it has.
 	var left []string
 	for {
 		b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", h)
@@ -377,15 +380,15 @@ func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, err
 		if h.ValidationResult != nil {
 			e.dropValidationResult()
 			h.ValidationResult = nil
-			left = []string{reportCheckResult}
+			left = append(left, reportCheckResult)
 		} else if kinds := h.withoutLogReports(); len(kinds) > 0 {
-			left = kinds
+			left = append(left, kinds...)
 		} else if kinds := h.withoutOtherReports(); len(kinds) > 0 {
-			left = kinds
+			left = append(left, kinds...)
 		} else if h.AgentFeatures != nil || h.Readiness != nil {
 			h.AgentFeatures, h.Readiness = nil, nil
 			announcementsDropped = true
-			left = []string{reportAnnouncements}
+			left = append(left, reportAnnouncements)
 		} else {
 			return nil, h.Nonce, err
 		}
@@ -400,8 +403,8 @@ func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, err
 // The kinds of report exchange leaves out of a check-in the server refused, as
 // the log names them.
 const (
-	reportCheckResult   = "check result"
-	reportAnnouncements = "check announcements"
+	reportCheckResult   = "Check on devices result"
+	reportAnnouncements = "Check on devices announcement"
 	reportLogSummary    = "Vector log summary"
 	reportDiagnostics   = "diagnostics"
 	reportHostRuntime   = "host runtime settings"
