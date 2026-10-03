@@ -32,7 +32,7 @@ func rustBuiltArtifacts() []ReleaseArtifact {
 	return []ReleaseArtifact{
 		{OS: "linux", Arch: "amd64", Format: "executable", File: "vectory-1.12.345-linux-amd64", Size: 15204352, SHA256: "4206fd2a4cefdeff00f444007d1346ec2ca0d60edf58c0392d5f15a0f275981f"},
 		{OS: "linux", Arch: "arm64", Format: "executable", File: "vectory-1.12.345-linux-arm64", Size: 1, SHA256: strings.Repeat("0", 64)},
-		{OS: "darwin", Arch: "arm64", Format: "executable", File: "vectory-1.12.345-darwin-arm64", Size: releaseBuildLimit, SHA256: strings.Repeat("f", 64)},
+		{OS: "darwin", Arch: "arm64", Format: "executable", File: "vectory-1.12.345-darwin-arm64", Size: MaxAgentBuild, SHA256: strings.Repeat("f", 64)},
 		{OS: "windows", Arch: "amd64", Format: "executable", File: "vectory-1.12.345-windows-amd64.exe", Size: 15892480, SHA256: "25043433d22cf8f6f5ffb531abb6a0b0fe0952af2bb946586b5868b4bdf4e201"},
 	}
 }
