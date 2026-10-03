@@ -448,7 +448,7 @@ fn describe(code: &str, release: &Release, track_hint: bool) -> (String, Option<
             None,
         ),
         "AGENT_TOO_OLD" => (
-            format!("These agents don't report agent updates, or are older than {version} can be installed from. They can't take it."),
+            format!("These agents don't report agent updates, or are older than the oldest agent that can update to {version}. They can't take it."),
             Some("Run the Upgrade agent command once; it installs an agent that takes updates."),
         ),
         "PACKAGE_MANAGED" => (

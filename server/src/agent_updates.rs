@@ -778,12 +778,13 @@ pub async fn view(s: &State, conn: &mut SqliteConnection) -> Result<Value> {
     )
     .fetch_one(&mut *conn)
     .await?;
-    let (fleet, catalog) = if setting.enabled {
+    let (fleet, frozen, catalog) = if setting.enabled {
         let (fleet, counts) = fleet(conn).await?;
+        let frozen = frozen_devices(conn).await?;
         let catalog = catalog(s, conn, &counts).await?;
-        (fleet, json!(catalog))
+        (fleet, frozen, json!(catalog))
     } else {
-        (Value::Null, Value::Null)
+        (Value::Null, Value::Null, Value::Null)
     };
     Ok(json!({
         "enabled": setting.enabled,
@@ -793,8 +794,36 @@ pub async fn view(s: &State, conn: &mut SqliteConnection) -> Result<Value> {
         "stopped": setting.stopped.map(|stop| json!({"reason":stop.reason,"by_name":stop.by_name,"at":stop.at})),
         "active_rollouts": active,
         "fleet": fleet,
+        "frozen_devices": frozen,
         "catalog": catalog,
     }))
+}
+
+/// The most hosts the settings read names as frozen.
+const FROZEN_LISTED: i64 = 20;
+/// The hosts frozen on a fork of the rollover chain until they are pinned
+/// again: the non-revoked devices whose latest report carries a
+/// `rollover_conflict`, how many there are and the first 20 by name.
+async fn frozen_devices(conn: &mut SqliteConnection) -> Result<Value> {
+    const WHERE: &str = "FROM agent_update_reports r JOIN devices d ON d.id=r.device_id WHERE d.revoked=0 AND json_type(r.report,'$.rollover_conflict')='object'";
+    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) {WHERE}"))
+        .fetch_one(&mut *conn)
+        .await?;
+    let rows: Vec<(String, String, String)> = sqlx::query_as(&format!(
+        "SELECT d.id,substr(d.name,1,240),json_extract(r.report,'$.rollover_conflict') {WHERE} ORDER BY d.name COLLATE NOCASE,d.id LIMIT ?"
+    ))
+    .bind(FROZEN_LISTED)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for (device_id, device_name, conflict) in rows {
+        items.push(json!({
+            "device_id": device_id,
+            "device_name": device_name,
+            "rollover_conflict": db::parse(&conflict)?,
+        }));
+    }
+    Ok(json!({"total": total, "items": items}))
 }
 
 /// How a device takes updates, as `fleet.levels` counts it and the inventory
