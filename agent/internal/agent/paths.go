@@ -57,14 +57,14 @@ func defaultPathsFor(goos, programData, programFiles string) Paths {
 
 // legacyStateDirs are the default state directories of earlier development
 // builds. Status and setup point at them instead of silently creating a second
-// installation next to (or inside) an existing one.
+// installation next to (or inside) an existing one. Windows has none: the earlier
+// default there was %ProgramData%\Vectory itself, which any account can make, so a
+// settings.json planted in it would pass for an installation and have setup keep
+// the device's state in a folder that account owns (state_root.go).
 func legacyStateDirs(goos, programData string) []string {
 	switch goos {
 	case "windows":
-		if programData == "" {
-			programData = `C:\ProgramData`
-		}
-		return []string{strings.TrimRight(programData, `\/`) + `\Vectory`}
+		return nil
 	case "darwin":
 		return []string{"/Library/Application Support/Vectory"}
 	default:

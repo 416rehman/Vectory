@@ -442,21 +442,31 @@ func TestAStateDirectoryOutsideTheUpdateRootNeedsNoneOfIt(t *testing.T) {
 	}
 }
 
-// An earlier layout kept the agent's state in %ProgramData%\Vectory itself, which is
-// private to the account that owns it, and is left alone.
-func TestAnUpdateRootThatIsAnInstalledStateDirectoryIsLeftAlone(t *testing.T) {
+// A file an account plants in an update root it owns exempts nothing: it doesn't make
+// the root an installation setup adopts, and the agent's state directory is refused
+// as it is when the folder holds nothing.
+func TestAFileAnAccountPlantsInAnUpdateRootItOwnsExemptsNothing(t *testing.T) {
 	programData := programDataWhereNoOneIsRoot(t)
 	root := makeSquattedRoot(t, programData)
 	writeText(t, filepath.Join(root, "settings.json"), "{}")
-	before := readDescriptor(t, root)
-	if err := PrivateDir(filepath.Join(root, "validation")); err != nil {
-		t.Fatal(err)
+	if legacy := LegacyInstallation(); legacy != "" {
+		t.Errorf("an earlier installation was found at %s", legacy)
 	}
-	if err := stateRootProblem(filepath.Join(root, "validation"), true); err != nil {
-		t.Errorf("setup's first look at a state directory that is the update root: %v", err)
+	before := readDescriptor(t, root)
+	owner := accountName(currentUserSID(t))
+	state := filepath.Join(root, "agent")
+	var refusal *stateRootError
+	if err := PrivateDir(state); !errors.As(err, &refusal) || refusal.Path != root || refusal.Owner != owner {
+		t.Errorf("the state directory in a root that holds a planted settings.json: %v, want a refusal of %s that names %s", err, root, owner)
+	}
+	if err := stateRootProblem(state, true); !errors.As(err, &refusal) || refusal.Owner != owner {
+		t.Errorf("setup's first look at it: %v, want a refusal that names %s", err, owner)
+	}
+	if _, err := os.Lstat(state); err == nil {
+		t.Error("the state directory was made in a folder another account owns")
 	}
 	if after := readDescriptor(t, root); after.owner != before.owner || after.protected != before.protected || len(after.entries) != len(before.entries) {
-		t.Errorf("an installed state directory was changed: %+v, then %+v", before, after)
+		t.Errorf("the directory another account owns was changed: %+v, then %+v", before, after)
 	}
 }
 

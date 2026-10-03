@@ -137,11 +137,11 @@ func closeRoot(path, sddl string) (stateRootAction, string, error) {
 // stateRootFor is the update root, when the state path (the agent's state directory,
 // its managed configuration, or something below one of them) is kept in it in the
 // sense of stateRootKept. A custom --state-dir elsewhere is not, and neither is a
-// state directory that is the root itself, which an earlier layout used.
+// state directory that is the root itself.
 func stateRootFor(path string) (string, bool) {
 	path = filepath.Clean(path)
 	root, ok := updateRootFor(path)
-	if !ok || !stateRootKept(path, root, Installed(root)) {
+	if !ok || !stateRootKept(path, root) {
 		return "", false
 	}
 	return root, true
