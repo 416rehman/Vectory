@@ -5,7 +5,9 @@ import {
   quote,
   shortDigest,
   unlessUnquotable,
+  updateArguments,
   type HostOS,
+  type UpdateConsent,
 } from "./enrollmentCommands";
 
 export function agentUpgradeRelease(
@@ -82,10 +84,13 @@ export function runningBuild(
  * register a service the host didn't have. Null where it doesn't apply:
  * Windows, a server without the installer, no verified download, or a state
  * directory the device reports that no command can carry (control characters).
+ * With `updates`, the command also carries the host's consent to agent updates
+ * (see UpdateConsent); without it, the command is exactly what it was.
  */
 export function upgradeCommand(
   install: AgentInstall,
   device: Pick<Device, "os" | "state_dir" | "service_manager">,
+  updates?: UpdateConsent,
 ): string | null {
   if (device.os !== "linux" && device.os !== "darwin") return null;
   const os: HostOS = device.os;
@@ -94,6 +99,7 @@ export function upgradeCommand(
     if (device.state_dir && device.state_dir !== platformDefaults(os).stateDir)
       args.push("--state-dir", quote(device.state_dir, os));
     if (device.service_manager === "none") args.push("--service", "none");
+    args.push(...updateArguments(updates, os));
     return installerRun(install, { os }, [], args);
   });
 }

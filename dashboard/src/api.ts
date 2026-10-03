@@ -38,6 +38,11 @@ import {
   type TelemetrySample,
   type VectorLogSummary,
 } from "./runtimeModel";
+import {
+  agentUpdateResponseSchema,
+  DeviceAgentUpdateSchema,
+  type DeviceAgentUpdate,
+} from "./agentUpdateModel";
 
 export class APIError extends Error {
   constructor(
@@ -104,8 +109,29 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
       match = route.match(/^\/device-validations\/([^/]+)$/);
       resource = "device check";
     }
+    if (!match) {
+      match = route.match(/^\/agent-releases\/([^/]+)$/);
+      resource = "agent release details";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-update-rollouts\/([^/]+)$/);
+      resource = "update rollout details";
+    }
   } else if (method === "POST") {
     match = route.match(/^\/devices\/([^/]+)\/retry$/);
+    if (!match) {
+      match = route.match(
+        /^\/agent-update-rollouts\/([^/]+)\/(?:pause|resume|cancel)$/,
+      );
+      resource = "update rollout";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-releases\/([^/]+)\/withdraw$/);
+      resource = "agent release";
+    }
+  } else if (method === "PUT") {
+    match = route.match(/^\/agent-releases\/([^/]+)\/signature$/);
+    resource = "agent release";
   }
   if (!match) return;
   let expected: string | undefined;
@@ -718,6 +744,11 @@ export type Device = {
   agent_sha256?: string;
   /** The agent's state directory on the host, from the latest check-in. */
   state_dir?: string;
+  /**
+   * What the agent last reported about updates, while updates are on and it
+   * sent a report. Absent means "Not reported", never "off".
+   */
+  agent_update?: DeviceAgentUpdate | null;
 };
 /**
  * Whether the device's agent holds a wait right now, so a change reaches it
@@ -1841,6 +1872,7 @@ export const DeviceSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .nullable()
       .optional(),
+    agent_update: DeviceAgentUpdateSchema.nullish(),
   })
   .passthrough();
 const artifactDigest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -2393,6 +2425,8 @@ export type OverviewFleet = z.infer<typeof OverviewFleetSchema>;
 function responseSchema(path: string, method: string): z.ZodType | undefined {
   const slim = /(?:^|&)slim=(?:1|true)(?:&|$)/.test(path.split("?")[1] || "");
   path = path.split("?")[0];
+  const update = agentUpdateResponseSchema(path, method);
+  if (update) return update;
   if (method === "GET") {
     if (path === "/devices/inventory") return DeviceInventoryPageSchema;
     if (path === "/devices/inventory/ids") return DeviceInventoryIdsSchema;
