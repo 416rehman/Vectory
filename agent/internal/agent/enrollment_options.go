@@ -113,7 +113,7 @@ func enrollmentFailure(err error, recovering bool) error {
 	unsent := " Nothing was sent to the server, so you can change the address, name or token and run the command again."
 	maybeSent := " The server may have received the request: run the same command again to finish (keep the server and name; a new token is fine)."
 	if recovering {
-		unsent = " Nothing was sent to the server, so you can run the command again, with a new token if you like."
+		unsent = " Nothing was sent to the server this time, so run the command again."
 		maybeSent = " The server may have received the request: run the same command again with the same token to finish."
 	}
 	switch {
