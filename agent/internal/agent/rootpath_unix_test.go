@@ -575,7 +575,7 @@ func TestEnsureRootOwnedDirMakesTheDirectoriesItNeeds(t *testing.T) {
 	mkdirMode(t, filepath.Join(root, "existing"), 0o750)
 
 	made := filepath.Join(root, "existing", "x", "y", "z")
-	r, err := ensureRootOwnedDir(made)
+	r, err := ensureRootOwnedDir(made, rootReadable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestEnsureRootOwnedDirMakesTheDirectoriesItNeeds(t *testing.T) {
 
 	// Nothing is made below a directory that isn't root's alone.
 	mkdirMode(t, filepath.Join(root, "loose"), 0o775)
-	_, err = ensureRootOwnedDir(filepath.Join(root, "loose", "new", "dir"))
+	_, err = ensureRootOwnedDir(filepath.Join(root, "loose", "new", "dir"), rootReadable)
 	if refusal := refusedAs(t, err); refusal.Detail != filepath.Join(root, "loose")+" is writable by its group (mode 0775)" {
 		t.Errorf("below a loose directory: %q", refusal.Detail)
 	}
@@ -602,16 +602,32 @@ func TestEnsureRootOwnedDirMakesTheDirectoriesItNeeds(t *testing.T) {
 		t.Errorf("a directory was made below a loose one: %v", err)
 	}
 	// An existing directory is found again, not made again.
-	again, err := ensureRootOwnedDir(made)
+	again, err := ensureRootOwnedDir(made, rootReadable)
 	if err != nil {
 		t.Fatal(err)
 	}
 	again.Close()
 	// A file in the way is refused.
 	writeMode(t, filepath.Join(root, "afile"), "x", 0o644)
-	_, err = ensureRootOwnedDir(filepath.Join(root, "afile", "dir"))
+	_, err = ensureRootOwnedDir(filepath.Join(root, "afile", "dir"), rootReadable)
 	if refusal := refusedAs(t, err); !strings.Contains(refusal.Detail, "isn't a directory") {
 		t.Errorf("below a file: %q", refusal.Detail)
+	}
+}
+
+func TestEnsureRootOwnedDirMakesAPrivateLeafAndReadableParents(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	root := ownTree(t)
+	r, err := ensureRootOwnedDir(filepath.Join(root, "state", "private"), rootPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	for dir, want := range map[string]os.FileMode{"state": 0o755, "state/private": 0o700} {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v, %v; want %04o", dir, info, err, want)
+		}
 	}
 }
 

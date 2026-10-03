@@ -167,15 +167,15 @@ func openFlags(want rootOwnedKind) int {
 }
 
 // openComponent opens one component of the path relative to the directory
-// already held. With create, a missing directory is made and set to 0755
-// through its own descriptor, so that a umask never narrows a directory the
-// agent must read.
-func openComponent(dirfd int, name, path string, want rootOwnedKind, create bool) (int, error) {
+// already held. With a nonzero makeMode, a missing directory is made and set to
+// that mode through its own descriptor, so that a umask never narrows a
+// directory the agent must read.
+func openComponent(dirfd int, name, path string, want rootOwnedKind, makeMode os.FileMode) (int, error) {
 	flags := openFlags(want)
 	fd, err := openRetry(dirfd, name, flags, 0)
 	created := false
-	if err == unix.ENOENT && create && want == rootOwnedDirectory {
-		switch mkErr := unix.Mkdirat(dirfd, name, 0o755); mkErr {
+	if err == unix.ENOENT && makeMode != 0 && want == rootOwnedDirectory {
+		switch mkErr := unix.Mkdirat(dirfd, name, uint32(makeMode)); mkErr {
 		case nil:
 			created = true
 		case unix.EEXIST:
@@ -188,7 +188,7 @@ func openComponent(dirfd int, name, path string, want rootOwnedKind, create bool
 		return -1, classifyOpenFailure(dirfd, name, path, want, err)
 	}
 	if created {
-		if err := unix.Fchmod(fd, 0o755); err != nil {
+		if err := unix.Fchmod(fd, uint32(makeMode)); err != nil {
 			_ = unix.Close(fd)
 			return -1, &fs.PathError{Op: "chmod", Path: path, Err: err}
 		}
@@ -208,8 +208,8 @@ func checkAbsolutePath(path string) error {
 // O_DIRECTORY, the file without waiting for a writer), and judged from its own
 // handle: root's, and not writable by its group or by everyone. The previous
 // handle is closed once the next is open, except that the directory holding the
-// file stays open beside it. With create, missing directories are made.
-func walkOwned(path string, kind rootOwnedKind, trust ownerTrust, create bool) (*rootOwned, error) {
+// file stays open beside it. With a createSpec, missing directories are made.
+func walkOwned(path string, kind rootOwnedKind, trust ownerTrust, create *createSpec) (*rootOwned, error) {
 	if err := checkAbsolutePath(path); err != nil {
 		return nil, err
 	}
@@ -239,7 +239,11 @@ func walkOwned(path string, kind rootOwnedKind, trust ownerTrust, create bool) (
 		if last && kind == rootOwnedFile {
 			want = rootOwnedFile
 		}
-		child, err := openComponent(dirfd, name, next, want, create)
+		var makeMode os.FileMode
+		if create != nil {
+			makeMode = create.mode(last)
+		}
+		child, err := openComponent(dirfd, name, next, want, makeMode)
 		if err == nil {
 			err = judge(child, next, want, trust)
 			if err != nil {
@@ -286,14 +290,24 @@ type rootOwned struct {
 // component and says why; a component that is missing is the system's own
 // not-exist error, so a caller can tell the two apart.
 func openRootOwned(path string, kind rootOwnedKind) (*rootOwned, error) {
-	return walkOwned(path, kind, rootOwnedTrust, false)
+	return walkOwned(path, kind, rootOwnedTrust, nil)
 }
 
-// ensureRootOwnedDir is openRootOwned for a directory, which it makes (0755)
-// with any missing directory above it. A directory that exists is judged, never
-// changed.
-func ensureRootOwnedDir(path string) (*rootOwned, error) {
-	return walkOwned(path, rootOwnedDirectory, rootOwnedTrust, true)
+// mode is the mode of a made directory: the one at the end of the path has the
+// access leaf names (0700 for rootPrivate, otherwise 0755), and the ones above
+// it are 0755, so that whoever must reach the end of the path can.
+func (c createSpec) mode(last bool) os.FileMode {
+	if last && c.leaf == rootPrivate {
+		return 0o700
+	}
+	return 0o755
+}
+
+// ensureRootOwnedDir is openRootOwned for a directory, which it makes with any
+// missing directory above it: the last with the access leaf names, the others
+// readable by everyone. A directory that exists is judged, never changed.
+func ensureRootOwnedDir(path string, leaf rootFilePerm) (*rootOwned, error) {
+	return walkOwned(path, rootOwnedDirectory, rootOwnedTrust, &createSpec{leaf: leaf})
 }
 
 // openPlainFile opens a regular file without following a link in any component
@@ -302,7 +316,7 @@ func ensureRootOwnedDir(path string) (*rootOwned, error) {
 // step reads what the service account wrote this way, and copies it before it
 // believes any of it.
 func openPlainFile(path string) (*os.File, error) {
-	r, err := walkOwned(path, rootOwnedFile, ownerTrust{unjudged: true}, false)
+	r, err := walkOwned(path, rootOwnedFile, ownerTrust{unjudged: true}, nil)
 	if err != nil {
 		return nil, err
 	}
