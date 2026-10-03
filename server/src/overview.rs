@@ -239,6 +239,9 @@ struct Group<'a> {
     state: Option<&'a str>,
     devices: Vec<&'a Value>,
     since: Option<String>,
+    /// What the group says is the matter, when its devices do not report one
+    /// each (agent updates: the agent's most common code).
+    reason: Option<String>,
 }
 
 /// The first open data-plane issue of a device that verifiably runs the
@@ -346,6 +349,7 @@ async fn attention(
             state: Some(state),
             devices: list,
             since: None,
+            reason: None,
         });
     }
     for (version_id, list) in degraded {
@@ -362,6 +366,7 @@ async fn attention(
             state: Some("degraded"),
             devices: list,
             since,
+            reason: None,
         });
     }
     for (version_id, list) in held {
@@ -372,6 +377,7 @@ async fn attention(
             state: Some("held"),
             devices: list,
             since: None,
+            reason: None,
         });
     }
     for (version_id, list) in unknown {
@@ -382,6 +388,7 @@ async fn attention(
             state: Some("verification_unknown"),
             devices: list,
             since: None,
+            reason: None,
         });
     }
     // Released more than STUCK_AFTER_MINUTES ago and still not applied.
@@ -433,6 +440,48 @@ async fn attention(
                 state: Some("applying"),
                 devices: list,
                 since,
+                reason: None,
+            });
+        }
+    }
+    // Agent updates that rolled back or failed on a device: each device is in
+    // the group of its latest open issue, and only while updates are on.
+    let open = crate::agent_updates::open_failures(conn).await?;
+    if !open.is_empty() {
+        let mut ended: BTreeMap<&'static str, Vec<(&Value, &crate::agent_updates::Open)>> =
+            BTreeMap::new();
+        for device in devices {
+            if let Some(failure) = open.get(text(device, "id")) {
+                ended
+                    .entry(failure.state)
+                    .or_default()
+                    .push((*device, failure));
+            }
+        }
+        for (state, list) in ended {
+            let mut codes: BTreeMap<&str, usize> = BTreeMap::new();
+            for (_, failure) in &list {
+                if let Some(code) = failure.code.as_deref() {
+                    *codes.entry(code).or_default() += 1;
+                }
+            }
+            // The most common code; the first in alphabetical order wins a tie.
+            let reason = codes
+                .iter()
+                .fold(None::<(&str, usize)>, |best, (code, count)| match best {
+                    Some((_, most)) if most >= *count => best,
+                    _ => Some((*code, *count)),
+                })
+                .map(|(code, _)| code.to_owned());
+            let since = list.iter().map(|(_, failure)| failure.since.as_str()).min();
+            groups.push(Group {
+                cause: "agent_update",
+                severity: "warning",
+                version_id: None,
+                state: Some(state),
+                since: since.map(str::to_owned),
+                devices: list.into_iter().map(|(device, _)| device).collect(),
+                reason,
             });
         }
     }
@@ -450,6 +499,7 @@ async fn attention(
             state: None,
             devices: offline,
             since,
+            reason: None,
         });
     }
     if !paused.is_empty() {
@@ -460,6 +510,7 @@ async fn attention(
             state: None,
             devices: paused,
             since: None,
+            reason: None,
         });
     }
     if !unmanaged.is_empty() {
@@ -470,6 +521,7 @@ async fn attention(
             state: None,
             devices: unmanaged,
             since: None,
+            reason: None,
         });
     }
     // The rollout a failing group's devices share, and whether it can be rolled
@@ -521,7 +573,7 @@ async fn attention(
                 "configuration_name": version["configuration_name"],
                 "state": group.state,
                 "since": group.since,
-                "reason": if matches!(group.cause, "failed" | "held") { reason(&group.devices) } else { None },
+                "reason": if matches!(group.cause, "failed" | "held") { reason(&group.devices) } else { group.reason.clone() },
                 "rollback_available": deployment.as_ref().is_some_and(|id| available.contains(id)),
                 "deployment_id": deployment,
             });

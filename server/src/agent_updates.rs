@@ -797,6 +797,74 @@ pub async fn view(s: &State, conn: &mut SqliteConnection) -> Result<Value> {
     }))
 }
 
+/// How a device takes updates, as `fleet.levels` counts it and the inventory
+/// filters it, in the order the dashboard lists them.
+pub const LEVELS: [&str; 5] = ["automatic", "ask", "off", "cannot_update", "not_reported"];
+/// Puts a device (`d`, left-joined to its latest report `r`) at one of the
+/// levels: no report at all is `not_reported`, an eligibility other than
+/// `eligible` is `cannot_update`, then the host's own consent.
+const LEVEL_SQL: &str = "CASE WHEN r.device_id IS NULL THEN 'not_reported' WHEN json_extract(r.report,'$.eligibility')<>'eligible' THEN 'cannot_update' WHEN json_extract(r.report,'$.consent')='off' THEN 'off' WHEN json_extract(r.report,'$.consent')='ask' THEN 'ask' ELSE 'automatic' END";
+
+/// The non-revoked devices at `level`, from their latest reports.
+pub(crate) async fn devices_at(
+    conn: &mut SqliteConnection,
+    level: &str,
+) -> Result<BTreeSet<String>> {
+    Ok(sqlx::query_scalar::<_, String>(&format!(
+        "SELECT d.id FROM devices d LEFT JOIN agent_update_reports r ON r.device_id=d.id WHERE d.revoked=0 AND {LEVEL_SQL}=?"
+    ))
+    .bind(level)
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .collect())
+}
+
+/// The latest update of a device that ended badly and has an issue still open.
+pub(crate) struct Open {
+    /// `rolled_back` or `failed`.
+    pub state: &'static str,
+    /// The agent's code (or `NO_REPORT`).
+    pub code: Option<String>,
+    /// When it happened.
+    pub since: String,
+}
+/// The devices with an open `AGENT_UPDATE_ROLLED_BACK` or `AGENT_UPDATE_FAILED`
+/// issue, each once, by its latest one. Nothing while updates are off: the
+/// issues stay open, and the Overview does not mention them.
+pub(crate) async fn open_failures(conn: &mut SqliteConnection) -> Result<HashMap<String, Open>> {
+    if !enabled(conn).await? {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT json_extract(data,'$.device_id'),json_extract(data,'$.code'),json_extract(data,'$.update_code'),json_extract(data,'$.last_seen') FROM records WHERE kind='issue' AND json_extract(data,'$.stage')='agent_update' AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND json_extract(data,'$.code') IN ('AGENT_UPDATE_ROLLED_BACK','AGENT_UPDATE_FAILED')",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut latest: HashMap<String, Open> = HashMap::new();
+    for (device, code, update_code, seen) in rows {
+        let state = if code == "AGENT_UPDATE_FAILED" {
+            "failed"
+        } else {
+            "rolled_back"
+        };
+        let found = Open {
+            state,
+            code: update_code,
+            since: seen.unwrap_or_default(),
+        };
+        // The later one wins; at the same second the one that sorts last does,
+        // so the pick never depends on the order the rows came in.
+        let newer = latest
+            .get(&device)
+            .is_none_or(|have| (&found.since, found.state) > (&have.since, have.state));
+        if newer {
+            latest.insert(device, found);
+        }
+    }
+    Ok(latest)
+}
+
 /// The agent versions the fleet reports, newest first, and how each device
 /// takes updates. Every non-revoked device is in exactly one level.
 async fn fleet(conn: &mut SqliteConnection) -> Result<(Value, BTreeMap<[u64; 3], i64>)> {
@@ -834,16 +902,10 @@ async fn fleet(conn: &mut SqliteConnection) -> Result<(Value, BTreeMap<[u64; 3],
     if unknown > 0 {
         listed.push(json!({"version":"unknown","devices":unknown}));
     }
-    let mut levels = BTreeMap::from([
-        ("automatic", 0),
-        ("ask", 0),
-        ("off", 0),
-        ("cannot_update", 0),
-        ("not_reported", 0),
-    ]);
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT CASE WHEN r.device_id IS NULL THEN 'not_reported' WHEN json_extract(r.report,'$.eligibility')<>'eligible' THEN 'cannot_update' WHEN json_extract(r.report,'$.consent')='off' THEN 'off' WHEN json_extract(r.report,'$.consent')='ask' THEN 'ask' ELSE 'automatic' END AS level,count(*) FROM devices d LEFT JOIN agent_update_reports r ON r.device_id=d.id WHERE d.revoked=0 GROUP BY level",
-    )
+    let mut levels: BTreeMap<&str, i64> = LEVELS.iter().map(|level| (*level, 0)).collect();
+    let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
+        "SELECT {LEVEL_SQL} AS level,count(*) FROM devices d LEFT JOIN agent_update_reports r ON r.device_id=d.id WHERE d.revoked=0 GROUP BY level"
+    ))
     .fetch_all(&mut *conn)
     .await?;
     for (level, devices) in rows {

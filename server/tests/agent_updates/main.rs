@@ -6,6 +6,7 @@
 mod audit;
 mod download;
 mod engine;
+mod fleet;
 mod keys;
 mod notify;
 mod releases;
