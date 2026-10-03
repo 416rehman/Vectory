@@ -264,6 +264,8 @@ Use recovery when a device's credentials are lost or can no longer renew. It cre
 
 4. **In the dashboard:** find the new device identity, add it back to its groups and deploy its pipeline. Recovery keeps the files on the host but not groups or assignments.
 
+The old identity stays in **Devices → Status → Revoked**, in rollout results and in the audit log, under the name the device had and with a **Retired identity** badge. Its record keeps its history; the new identity has the name now.
+
 Delete any downloaded token file afterwards. If creating the token was interrupted, see [If a request is interrupted](interrupted-requests.md).
 
 ## Remove the agent

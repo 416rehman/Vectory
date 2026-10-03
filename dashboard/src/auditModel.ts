@@ -1,3 +1,4 @@
+import { deviceLabel } from "./deviceName";
 import { statusLabel } from "./status";
 /** Changes hide sign-ins; security shows only sign-in, account and key events. */
 export type AuditScope = "changes" | "security" | "all";
@@ -441,7 +442,9 @@ export function deviceResultsSummary(items: GroupableEvent[]) {
   });
   const names = [
     ...new Set(
-      [...latest.values()].map((item) => item.target_name || "a device"),
+      [...latest.values()].map((item) =>
+        item.target_name ? deviceLabel(item.target_name) : "a device",
+      ),
     ),
   ];
   const shown = names.slice(0, 2);
@@ -462,7 +465,7 @@ export function deviceResultsSummary(items: GroupableEvent[]) {
   const only = latest.size === 1 ? [...latest.values()][0] : null;
   return {
     title: only
-      ? `${only.target_name || "A device"} · ${auditOutcomeLabel(only.outcome).toLowerCase()}`
+      ? `${only.target_name ? deviceLabel(only.target_name) : "A device"} · ${auditOutcomeLabel(only.outcome).toLowerCase()}`
       : latest.size === items.length
         ? `${items.length} device results`
         : `${items.length} results for ${latest.size} devices`,

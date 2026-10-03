@@ -85,6 +85,8 @@ import {
   type DeploymentQuery,
   type DeploymentSort,
 } from "./deploymentRouting";
+import { deviceDisplay } from "./deviceName";
+import { RetiredName } from "./RetiredBadge";
 import {
   deploymentLifecycle,
   describeDeployment,
@@ -829,27 +831,34 @@ function DeviceResults({
   useEffect(() => {
     if (correcting) onQuery({ page: lastPage });
   }, [correcting, lastPage, onQuery]);
-  /** The device's name, opening its page; the table cell and phone card share it. */
-  const deviceLink = (t: DeploymentTarget) => (
-    <a
-      className="control-row-title"
-      href={`#/devices/${encodeURIComponent(t.device_id)}`}
-      onClick={(event) => {
-        if (
-          event.button === 0 &&
-          !event.ctrlKey &&
-          !event.metaKey &&
-          !event.shiftKey &&
-          !event.altKey
-        ) {
-          event.preventDefault();
-          navigate(`devices/${encodeURIComponent(t.device_id)}`);
-        }
-      }}
-    >
-      {t.device_name || t.device_id}
-    </a>
-  );
+  /**
+   * The device's name, opening its page, with a badge when the record is a
+   * retired identity; the table cell and phone card share it.
+   */
+  const deviceLink = (t: DeploymentTarget) => {
+    const shown = t.device_name ? deviceDisplay(t.device_name) : null;
+    const link = (
+      <a
+        className="control-row-title"
+        href={`#/devices/${encodeURIComponent(t.device_id)}`}
+        onClick={(event) => {
+          if (
+            event.button === 0 &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            !event.altKey
+          ) {
+            event.preventDefault();
+            navigate(`devices/${encodeURIComponent(t.device_id)}`);
+          }
+        }}
+      >
+        {shown?.name || t.device_id}
+      </a>
+    );
+    return shown?.retired ? <RetiredName>{link}</RetiredName> : link;
+  };
   const states = [
     ...new Set([
       ...targetFilterStates,

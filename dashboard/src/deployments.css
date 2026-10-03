@@ -543,7 +543,8 @@ a.rollout-fix-link {
   }
   /* A short name keeps the state beside it; a name too long for that takes
      the row and the state drops under it, never off the card. */
-  .rollout-card-title > a {
+  .rollout-card-title > a,
+  .rollout-card-title > .retired-name {
     flex: 1 1 auto;
     min-width: 0;
     overflow-wrap: anywhere;

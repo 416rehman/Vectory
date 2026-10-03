@@ -145,9 +145,13 @@ async function load(name, props = {}, seed = {}) {
     refreshProposed: 3,
     refreshBlockers: [],
     history: [],
+    devices,
     ...seed,
   };
-  const replies = fleetReplies({ devices, groups: () => state.groups });
+  const replies = fleetReplies({
+    devices: state.devices,
+    groups: () => state.groups,
+  });
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url());
@@ -170,7 +174,7 @@ async function load(name, props = {}, seed = {}) {
         });
       if (await fulfillFleetRead(replies, route)) return;
       // Add device still lists the fleet once to know which devices are new.
-      if (path === "/devices") return reply(devices);
+      if (path === "/devices") return reply(state.devices);
       if (path === "/groups") return reply(state.groups);
       if (path === "/policies") return reply(policies);
       if (path === "/tokens") return reply(tokens);
@@ -317,7 +321,7 @@ async function load(name, props = {}, seed = {}) {
       });
     throw Error(`Unexpected synthetic request ${method} ${path}`);
   });
-  await page.goto(origin + "/__fleet-tables");
+  await page.goto(origin + "/__fleet-tables" + (seed.hash || ""));
   await page.waitForFunction(() => window.ready);
   await page.evaluate(({ name, props }) => window.mount(name, props), {
     name,
@@ -677,6 +681,61 @@ try {
           exact: true,
         }),
       ).toHaveCount(0);
+      expect(state.writes).toEqual([]);
+    },
+  );
+  await check(
+    "a retired identity in the Devices list keeps the device's own name and carries a badge",
+    async () => {
+      // What a recovery stores: the old record keeps its name with its own
+      // id appended, so the new identity can take the name.
+      const retired = {
+        ...devices[1],
+        id: id(500),
+        name: `edge-nyc-01#retired-${id(500)}`,
+        status: "revoked",
+      };
+      for (const width of [1280, 390])
+        for (const theme of ["light", "dark"]) {
+          await load(
+            "devices",
+            {},
+            {
+              devices: [devices[0], retired],
+              hash: "#/devices?status=revoked",
+            },
+          );
+          await page.setViewportSize({ width, height: 900 });
+          await page.evaluate(
+            (t) => (document.documentElement.dataset.theme = t),
+            theme,
+          );
+          const list =
+            width < 640
+              ? page.getByRole("list", { name: "Devices", exact: true })
+              : rows("Devices");
+          await expect(
+            list.getByRole("link", { name: "edge-nyc-01", exact: true }),
+          ).toBeVisible();
+          await expect(list).toContainText("Retired identity");
+          await expect(list).not.toContainText("#retired-");
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const audit = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            theme,
+            view: `retired-identity-${width}`,
+            violations: audit.violations.map((v) => v.id),
+          });
+          expect(audit.violations).toEqual([]);
+          await page.screenshot({
+            path: resolve(output, `devices-retired-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
       expect(state.writes).toEqual([]);
     },
   );

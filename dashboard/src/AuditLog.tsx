@@ -63,6 +63,8 @@ import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import DocLink from "./DocLink";
 import { describeAgent, refusal } from "./enrollmentActivity";
 import { auditOutcomes } from "./status";
+import { deviceDisplay } from "./deviceName";
+import { RetiredName } from "./RetiredBadge";
 
 const emptyPage: AuditHistoryPage = {
   items: [],
@@ -87,7 +89,9 @@ function ResourceLink({
   navigate: Navigate;
 }) {
   const route = auditResourceRoute(kind, id);
-  return route ? (
+  // A device that a recovery replaced shows the name it had, and says so.
+  const shown = deviceDisplay(name);
+  const label = route ? (
     <a
       href={`#/${route}`}
       onClick={(event) => {
@@ -103,11 +107,12 @@ function ResourceLink({
         navigate(route);
       }}
     >
-      {name}
+      {shown.name}
     </a>
   ) : (
-    <span>{name}</span>
+    <span>{shown.name}</span>
   );
+  return shown.retired ? <RetiredName>{label}</RetiredName> : label;
 }
 
 function Result({ outcome }: { outcome: string }) {
@@ -176,6 +181,12 @@ function targetLabel(
   if (kind && item.target_id && isAuditId(item.target_id))
     return `${kind} ${item.target_id.slice(0, 8)}`;
   return item.target;
+}
+
+/** A target's name in a line of details, with a badge when it is a retired identity. */
+function TargetName({ label }: { label: string }) {
+  const shown = deviceDisplay(label);
+  return shown.retired ? <RetiredName>{shown.name}</RetiredName> : shown.name;
 }
 
 const scopeHints: Record<AuditScope, string> = {
@@ -788,7 +799,7 @@ export function AuditLog({
               title: eventLink(item),
               status: <Result outcome={item.outcome} />,
               meta: [
-                targetLabel(item),
+                <TargetName key="target" label={targetLabel(item)} />,
                 actorLabel(item) === targetLabel(item)
                   ? null
                   : actorLabel(item),

@@ -219,6 +219,28 @@ describe("readable audit rows", () => {
         last: "verified_applied",
       });
   });
+  it("names a retired identity by the name it had, in words, wherever a badge has no room", () => {
+    const stored = `edge-nyc-01#retired-${id.toLowerCase()}`;
+    const [row] = groupDeviceResults([
+      event("2", "device.apply_state", "verified_applied", stored),
+      event("1", "device.apply_state", "desired", stored),
+    ]);
+    expect(row.kind).toBe("results");
+    expect(
+      deviceResultsSummary(row.kind === "results" ? row.items : []),
+    ).toMatchObject({
+      title: "edge-nyc-01 (retired identity) · applied",
+      devices: "2 results",
+    });
+    const several = deviceResultsSummary([
+      event("3", "device.apply_state", "verified_applied", stored),
+      event("4", "device.apply_state", "verified_applied", "edge-nyc-02"),
+    ]);
+    expect(several.devices).toBe(
+      "edge-nyc-01 (retired identity) and edge-nyc-02",
+    );
+    expect(JSON.stringify(several)).not.toContain("#retired-");
+  });
   it("reports one device's last state, not a count of every step it took", () => {
     // A device that waited, applied, was released again and rolled back: the
     // run reads as its last state; the steps are behind the row's disclosure.
