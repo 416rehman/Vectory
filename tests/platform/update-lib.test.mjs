@@ -21,6 +21,7 @@ import {
   shortId,
   writeMirror,
   crashAtRun,
+  openWindowsGate,
 } from "./update-lib.mjs";
 import { root } from "./lib.mjs";
 import os from "node:os";
@@ -77,23 +78,65 @@ test("every build's edits apply to the product's source exactly where they are m
 
 test("the crash is where the service runs and not where the probe does", () => {
   const edited = crashAtRun(read("agent/internal/agent/reconcile.go"));
-  // The unit runs `vectory run`, which calls agent.Run; `vectory version --json`,
-  // which the privileged step's probe runs, never does.
+  // Every way of running the agent goes through runWith: the unit's `vectory run`
+  // (agent.Run) and the Windows service (agent.RunWindowsService). `vectory version
+  // --json`, which the privileged step's probe runs, never does.
   assert.ok(
     edited.includes(
-      'func Run(ctx context.Context, dir string, once bool, report func(string)) error {\n\tpanic("this build is broken on purpose")\n',
+      'func runWith(ctx context.Context, dir string, options runOptions, report func(string)) error {\n\tpanic("this build is broken on purpose")\n',
     ),
   );
+  const reconcile = read("agent/internal/agent/reconcile.go");
+  for (const entry of [
+    "func Run(ctx context.Context, dir string, once bool, report func(string)) error {\n\treturn runWith(",
+    "func RunContinuous(ctx context.Context, dir string, noWake, verbose bool, report func(string)) error {\n\treturn runWith(",
+    "func RunWindowsService(ctx context.Context, dir string, report func(string)) error {\n\treturn runWith(",
+  ])
+    assert.ok(reconcile.includes(entry), `${entry.split("{")[0]} must call runWith`);
   const commands = read("agent/cmd/vectory/commands.go");
   assert.match(commands, /agent\.Run\(ctx, dir, \*once, report\)/);
+  const service = read("agent/cmd/vectory/service_windows.go");
+  assert.match(service, /agent\.RunWindowsService\(ctx, h\.dir, h\.report\)/);
   const main = read("agent/cmd/vectory/main.go");
   assert.doesNotMatch(
     main.slice(
       main.indexOf("func versionCommand"),
       main.indexOf("func misplacedCommand"),
     ),
-    /agent\.Run\(/,
+    /agent\.Run/,
   );
+});
+
+test("the Windows step's release gate is opened in a copy, and only there", () => {
+  const host = read("agent/internal/agent/update_host_windows.go");
+  assert.equal(host.split("const windowsUpdatesInRelease = ").length - 1, 1);
+  const opened = openWindowsGate(host);
+  assert.ok(opened.includes("const windowsUpdatesInRelease = true\n"));
+  assert.equal(opened.includes("const windowsUpdatesInRelease = false"), false);
+  assert.equal(
+    opened.split("\n").filter((line, i) => line !== host.split("\n")[i]).length,
+    host.includes("const windowsUpdatesInRelease = true\n") ? 0 : 1,
+    "one line changed",
+  );
+  // Opened already, it is left as it is; the proof still builds after the product opens it.
+  assert.equal(openWindowsGate(opened), opened);
+  assert.throws(() => openWindowsGate("package agent\n"), /found none/);
+
+  for (const build of BUILDS) {
+    const onWindows = editsFor(build, read, "windows");
+    assert.ok(
+      onWindows["agent/internal/agent/update_host_windows.go"].includes(
+        "const windowsUpdatesInRelease = true\n",
+      ),
+      `${build.version} is built with the gate open on Windows`,
+    );
+    for (const goos of ["linux", "darwin"])
+      assert.equal(
+        editsFor(build, read, goos)["agent/internal/agent/update_host_windows.go"],
+        undefined,
+        `${build.version} on ${goos} doesn't touch the Windows host`,
+      );
+  }
 });
 
 test("the heartbeat's path is the one the agent posts to", () => {

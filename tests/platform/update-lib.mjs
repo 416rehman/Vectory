@@ -13,13 +13,20 @@ import { root, run, sha256File } from "./lib.mjs";
  * its version constant changed in a copy; two have one more line changed in the
  * copy, never a hook in the product:
  *
- *   0.1.2  agent.Run panics first. `version --json` still answers, so the privileged
- *          step's probe passes and the build is swapped in; the service then dies
- *          at every start, which the manager restarts until the step gives up
- *          (START_FAILED). A build whose main exits first would fail the probe
- *          (PROBE_FAILED), before anything is stopped.
+ *   0.1.2  the agent's run panics first (runWith, which every way of running the
+ *          agent goes through: the unit's `vectory run`, the Windows service). `version
+ *          --json` still answers, so the privileged step's probe passes and the build
+ *          is swapped in; the service then dies at every start, which the manager
+ *          restarts until the step gives up (START_FAILED). A build whose main exits
+ *          first would fail the probe (PROBE_FAILED), before anything is stopped.
  *   0.1.3  the heartbeat goes to a path the server doesn't have: the service starts
  *          and runs, and never checks in (NO_CHECK_IN).
+ *
+ * On Windows every build, the first included, has one more word changed in its
+ * copy: the release gate of the Windows step (windowsUpdatesInRelease) is open. The
+ * gate is closed in the product until the proof these builds are for is green at the
+ * cut, so the proof opens it in the copy and the product opens it in the commit
+ * that cites the green run: the step that is proven is the step that ships.
  */
 export const BUILDS = [
   { version: "0.1.0", kind: "source", what: "the source as it is" },
@@ -69,6 +76,7 @@ export function replaceOnce(text, from, to, what) {
 export const SOURCE = {
   version: "agent/internal/agent/types.go",
   reconcile: "agent/internal/agent/reconcile.go",
+  windowsHost: "agent/internal/agent/update_host_windows.go",
 };
 
 export function setVersion(source, version) {
@@ -80,12 +88,36 @@ export function setVersion(source, version) {
   );
 }
 
+const RUN_WITH =
+  "func runWith(ctx context.Context, dir string, options runOptions, report func(string)) error {\n";
+
+/**
+ * The agent's run panics before it does anything. runWith is where every way of
+ * running the agent goes: Run (the unit's `vectory run`), RunContinuous and
+ * RunWindowsService; `vectory version --json`, which the step's probe runs, never
+ * reaches it.
+ */
 export function crashAtRun(source) {
   return replaceOnce(
     source,
-    "func Run(ctx context.Context, dir string, once bool, report func(string)) error {\n",
-    'func Run(ctx context.Context, dir string, once bool, report func(string)) error {\n\tpanic("this build is broken on purpose")\n',
-    "agent.Run",
+    RUN_WITH,
+    `${RUN_WITH}\tpanic("this build is broken on purpose")\n`,
+    "agent.runWith",
+  );
+}
+
+/**
+ * Opens the release gate of the Windows step in a copy of the source. A source
+ * whose gate is already open is left as it is, so that the proof still builds after
+ * the product opened it.
+ */
+export function openWindowsGate(source) {
+  if (source.includes("const windowsUpdatesInRelease = true\n")) return source;
+  return replaceOnce(
+    source,
+    "const windowsUpdatesInRelease = false\n",
+    "const windowsUpdatesInRelease = true\n",
+    "The Windows release gate",
   );
 }
 
@@ -98,8 +130,12 @@ export function moveHeartbeat(source) {
   );
 }
 
+const GOOS = { linux: "linux", darwin: "darwin", win32: "windows" }[
+  process.platform
+];
+
 /** The sources of the copy for one build: the files to write, relative to the repository. */
-export function editsFor(build, read) {
+export function editsFor(build, read, goos = GOOS) {
   const files = {
     [SOURCE.version]: setVersion(read(SOURCE.version), build.version),
   };
@@ -107,12 +143,10 @@ export function editsFor(build, read) {
     files[SOURCE.reconcile] = crashAtRun(read(SOURCE.reconcile));
   if (build.kind === "silent")
     files[SOURCE.reconcile] = moveHeartbeat(read(SOURCE.reconcile));
+  if (goos === "windows")
+    files[SOURCE.windowsHost] = openWindowsGate(read(SOURCE.windowsHost));
   return files;
 }
-
-const GOOS = { linux: "linux", darwin: "darwin", win32: "windows" }[
-  process.platform
-];
 const GOARCH = { x64: "amd64", arm64: "arm64" }[process.arch];
 export const platform = { goos: GOOS, goarch: GOARCH };
 
