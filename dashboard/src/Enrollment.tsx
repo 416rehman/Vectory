@@ -38,6 +38,13 @@ import {
 } from "./ui";
 import TabLabel from "./TabLabel";
 import DocLink from "./DocLink";
+import { UpdateConsentFields } from "./UpdateConsentFields";
+import {
+  emptyConsent,
+  readConsent,
+  type ConsentForm,
+} from "./agentUpdateConsent";
+import { useAgentUpdates } from "./useAgentUpdates";
 import {
   ModeCards,
   SecurityReceipt,
@@ -356,6 +363,11 @@ export function Enrollment({
   const details = useResource<unknown>("/agent-install", null);
   const tokens = useResource<Token[]>("/tokens", []);
   const devices = useResource<Device[]>("/devices", []);
+  // Agent updates: while they are on, how this host takes them is a step of
+  // its own and its consent goes in the command. While they are off the step
+  // doesn't exist and the command is what it always was.
+  const agentUpdates = useAgentUpdates();
+  const [consent, setConsent] = useState<ConsentForm>(emptyConsent);
   const savedRequests = useTokenRequests(user.id).operations;
   const parsed = useMemo(
     () =>
@@ -433,6 +445,11 @@ export function Enrollment({
   }, [baseline, devices.loading, devices.error, devices.data]);
 
   const defaults = platformDefaults(os);
+  const updatesOn = agentUpdates.on;
+  const updateRead = readConsent(
+    consent,
+    agentUpdates.updates?.current_key?.fingerprint ?? null,
+  );
   const choices: SetupChoices = {
     os,
     mode: mode || "restricted",
@@ -444,6 +461,7 @@ export function Enrollment({
     managedConfig,
     capabilityPolicy,
     vectorBinary,
+    updates: updatesOn ? updateRead.consent : undefined,
     trust: trust || undefined,
     caFile,
     installDir: os === "windows" ? "" : directoryPath(installDir),
@@ -528,7 +546,10 @@ export function Enrollment({
     usesValid &&
     hoursValid &&
     baseline !== null &&
-    !devices.error;
+    !devices.error &&
+    // With updates on, nothing is chosen for the host: how it takes them is
+    // chosen first, even if that is Off.
+    (!updatesOn || (updateRead.chosen && !updateRead.problem));
 
   const current =
     command && secret?.record.id === command.tokenId ? secret : null;
@@ -581,7 +602,11 @@ export function Enrollment({
       setError(
         !mode
           ? "Choose Restricted or Full Vector first."
-          : "Check the highlighted settings under Advanced.",
+          : updatesOn && !updateRead.chosen
+            ? "Choose how this host takes agent updates first."
+            : updatesOn && updateRead.problem
+              ? updateRead.problem
+              : "Check the highlighted settings under Advanced.",
       );
       return;
     }
@@ -1147,11 +1172,42 @@ export function Enrollment({
           </details>
         </section>
 
+        {updatesOn && (
+          <section
+            className="control-card enroll-step"
+            aria-labelledby="enroll-updates"
+          >
+            <h2 id="enroll-updates">2. Agent updates</h2>
+            <p className="control-muted">
+              The host agrees to updates when you run the command, and only
+              then. Nothing about it changes later unless someone runs a command
+              on it again.
+            </p>
+            <UpdateConsentFields
+              value={consent}
+              onChange={(patch) =>
+                setConsent((previous) => ({ ...previous, ...patch }))
+              }
+              read={updateRead}
+              signingKey={agentUpdates.updates?.current_key ?? null}
+              disabled={busy}
+              name="enroll-update-level"
+            />
+            <DocLink
+              topic="agent-updates"
+              section="what-a-host-agrees-to"
+              className="doc-term-link update-doc"
+            >
+              What a host agrees to
+            </DocLink>
+          </section>
+        )}
+
         <section
           className="control-card enroll-step"
           aria-labelledby="enroll-run"
         >
-          <h2 id="enroll-run">2. Run this on the host</h2>
+          <h2 id="enroll-run">{updatesOn ? 3 : 2}. Run this on the host</h2>
           {details.loading && !install ? (
             <p className="control-muted" role="status">
               <Spinner /> Loading install details…
@@ -1208,15 +1264,19 @@ export function Enrollment({
                   <span className="control-muted" role="status">
                     {!mode
                       ? "Choose Restricted or Full Vector first."
-                      : devices.error
-                        ? "The device list must load before a command is created."
-                        : baseline === null
-                          ? "Checking existing device names…"
-                          : existing
-                            ? "Choose another device name."
-                            : trustChoice === "file" && !caFile.trim()
-                              ? "Enter where the CA certificate is on the host, under Advanced."
-                              : "Check the highlighted settings under Advanced."}
+                      : updatesOn && !updateRead.chosen
+                        ? "Choose how this host takes agent updates first."
+                        : updatesOn && updateRead.problem
+                          ? updateRead.problem
+                          : devices.error
+                            ? "The device list must load before a command is created."
+                            : baseline === null
+                              ? "Checking existing device names…"
+                              : existing
+                                ? "Choose another device name."
+                                : trustChoice === "file" && !caFile.trim()
+                                  ? "Enter where the CA certificate is on the host, under Advanced."
+                                  : "Check the highlighted settings under Advanced."}
                   </span>
                 )}
                 {ready && blocked && !busy && operate && (
@@ -1454,7 +1514,7 @@ export function Enrollment({
           className="control-card enroll-step"
           aria-labelledby="enroll-watch"
         >
-          <h2 id="enroll-watch">3. Watch it connect</h2>
+          <h2 id="enroll-watch">{updatesOn ? 4 : 3}. Watch it connect</h2>
           {!command ? (
             <>
               {notes.length > 0 && (

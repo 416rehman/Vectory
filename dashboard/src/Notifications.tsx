@@ -67,6 +67,7 @@ import {
   thresholdUnit,
   thresholdValues,
   timeZones,
+  updateFilterNotes,
   validateDraft,
   detectionFields,
   type Attempt,
@@ -987,6 +988,14 @@ function ChannelDialog({
                   onChange={(ids) => set("groupIds", ids)}
                 />
               </div>
+              {updateFilterNotes(draft.events, {
+                pipelines: draft.pipelineIds.length,
+                groups: draft.groupIds.length,
+              }).map((note) => (
+                <p key={note} className="notifications-callout" role="note">
+                  {note}
+                </p>
+              ))}
             </section>
             <section aria-labelledby="notification-quiet">
               <h3 id="notification-quiet">Quiet hours</h3>

@@ -44,6 +44,7 @@ The `release` verbs keep no agent state, so they take neither flag.
 | [`configure-secrets`](#configure-secrets) | Map `vectory-secret:NAME` references to local files. | Yes |
 | [`re-adopt`](#re-adopt) | Approve a Vector binary you replaced on purpose. | Yes |
 | [`recover-enrollment`](#recover-enrollment) | Replace a lost identity with an administrator's recovery token. | Yes |
+| [`update`](#update) | Show a host's update choices and what it is doing, apply a staged build, pause or resume updates. | No |
 | [`service-install`, `service-start`, `service-stop`, `service-uninstall`](#service-commands) | Manage the agent's operating-system service. | Varies |
 | [`unenroll`](#unenroll) | Delete this host's credentials. | Yes |
 | [`uninstall`](#uninstall) | Delete the agent's state with `--purge`. | Yes |
@@ -53,6 +54,8 @@ The `release` verbs keep no agent state, so they take neither flag.
 ## setup
 
 Install, enroll, register the service and wait for the first check-in, in one resumable step. The **Add device** installer runs it for you.
+
+<!-- verify-after-merge: the `--updates`, `--update-key-sha256`, `--update-track` and `--update-window` flags of `vectory setup`, from the agent's update step -->
 
 ```sh
 sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>
@@ -77,6 +80,10 @@ Copy the whole command from **Add device** rather than typing it: it carries you
 | `--adopt-existing` | Adopt the Vector that ran here as it is, although it loaded several files, a directory, includes or configuration chosen by an environment variable. The agent manages only its one JSON file; the others stay where they are, backed up. Can't be combined with `--keep-existing-vector`. |
 | `--dry-run` | Check everything and show the plan without changing anything. |
 | `--no-wake` | Check in on schedule only: turn wake-ups off (see [run](#run)). Saved as a local setting; `--no-wake=false` turns them back on. |
+| `--updates LEVEL` | How this host takes [agent updates](agent-updates.md): `auto`, `ask` or `off`. Without it, setup leaves what the host has. `auto` and `ask` need `--update-key-sha256`. |
+| `--update-key-sha256 HEX` | The fingerprint of the release key to pin: the whole 64 hexadecimal characters of the SHA-256 of the key's bytes, never a shortened form. Setup reads the keys from the server, and pins the one whose fingerprint it computes to be this. Run again with another fingerprint to re-pin: that replaces the pinned keys and keeps the host's counter floors. |
+| `--update-track TRACK` | The releases this host takes: `patch` (the default) or `minor`. `major` isn't a track. |
+| `--update-window SPEC` | When an update may start, such as `Mon-Fri 02:00-04:00` or `Sat,Sun 01:00-03:00 UTC`. Repeat the flag for up to seven windows. Times are the host's own unless `UTC` follows. Without it, any time. |
 | `--json` | Print the result as JSON for scripts. |
 
 If the server's certificates don't match the pin, `setup` stops before sending anything and prints both fingerprints in full, one above the other, with the first byte that differs:
@@ -340,6 +347,30 @@ sudo vectory recover-enrollment
 | `--json` | Print the result as JSON. |
 
 A request the server refused, or that never left this host, doesn't hold back the next token: run the command again with a new one. A request that may have reached the server does, because it may have issued the new identity: run the command again with the same token.
+
+## update
+
+The host's side of [agent updates](agent-updates.md). It reads and changes only what this host decides: its update choices, and the build it is about to install. Run it as an administrator of the host (an elevated PowerShell on Windows).
+
+<!-- verify-after-merge: the `vectory update` verbs, flags and output, from the agent's update command -->
+
+```sh
+sudo vectory update status
+sudo vectory update apply
+sudo vectory update pause
+sudo vectory update resume
+```
+
+| Verb | What it does |
+| --- | --- |
+| `status` | Shows the host's consent, the releases it takes, its windows, the keys it pins (each by its short ID, the first 16 characters of its fingerprint), what it is doing now and the result of its last update. |
+| `apply` | Installs the build a host set to **Ask on the host** has staged. See below. |
+| `pause` | Keeps the host's choices and stops every download and install until `resume`. |
+| `resume` | Clears that pause. |
+
+`apply` checks one thing first. The agent writes a small health file after each check-in. `apply` reads it, and stops when it says the dashboard withdrew the offer, or when the agent last checked in more than five minutes ago. `--force` applies anyway, after it asks you to confirm on a terminal. The file is written by the agent's own account, so the check is advice: it can warn you that an offer is gone, and it can't prove an offer is still good. What authorizes an install is the signed release, the pinned key and the host's own choices, which the update step verifies itself.
+
+A host's level, releases, windows and pinned keys change only when someone runs `setup` again on it: the **Upgrade agent** command carries them. Nothing the server sends changes them.
 
 ## Service commands
 

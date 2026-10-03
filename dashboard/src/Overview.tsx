@@ -8,6 +8,7 @@ import {
   CircleMinus,
   CircleX,
   LoaderCircle,
+  PackageX,
   Pause,
   Plus,
   Rocket,
@@ -29,6 +30,7 @@ import {
   type Version,
 } from "./api";
 import { metricsExporter } from "./metricsExporter";
+import { agentUpdateRow } from "./agentUpdateAttention";
 import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
@@ -107,7 +109,9 @@ export type AttentionGroup = {
     | "stuck"
     | "offline"
     | "paused"
-    | "unmanaged";
+    | "unmanaged"
+    /** Devices whose agent update rolled back or failed (not a pipeline). */
+    | "agent_update";
   severity: "danger" | "warning" | "neutral";
   count: number;
   device_ids: string[];
@@ -860,6 +864,7 @@ const severityIcons: Record<AttentionGroup["cause"], LucideIcon> = {
   offline: WifiOff,
   paused: Pause,
   unmanaged: CircleMinus,
+  agent_update: PackageX,
 };
 function pipelineName(group: {
   configuration_name: string | null;
@@ -938,6 +943,10 @@ function attentionCopy(group: AttentionGroup, now: number) {
         title: `${devices} without a pipeline`,
         detail: unmanagedDetail(group.count, group.adopted ?? 0),
       };
+    case "agent_update": {
+      const { title, detail } = agentUpdateRow(group);
+      return { title, detail };
+    }
   }
 }
 const causeBucket: Partial<Record<AttentionGroup["cause"], HealthBucket>> = {
@@ -1104,6 +1113,9 @@ function AttentionItem({
     group.count === 1 && rollout?.released === 1
       ? group.device_names[0] || null
       : null;
+  // An agent update isn't a rollout of a pipeline: its row points at the
+  // device, or at the issues the devices share, and keeps the code for support.
+  const update = group.cause === "agent_update" ? agentUpdateRow(group) : null;
   return (
     <li className="overview-attention-item" data-severity={group.severity}>
       <span className="overview-attention-icon" aria-hidden="true">
@@ -1111,12 +1123,19 @@ function AttentionItem({
       </span>
       <div className="overview-attention-copy">
         <p className="overview-attention-title">{title}</p>
-        {group.reason && group.cause !== "degraded" && (
+        {group.reason && group.cause !== "degraded" && !update && (
           <p className="overview-attention-reason" title={group.reason}>
             {group.reason}
           </p>
         )}
-        {detail && <p className="overview-attention-detail">{detail}</p>}
+        {detail && (
+          <p
+            className="overview-attention-detail"
+            title={update?.code ?? undefined}
+          >
+            {detail}
+          </p>
+        )}
         {group.cause === "degraded" && group.fix && (
           <p className="overview-attention-fix">
             <strong>Fix</strong> {group.fix}
@@ -1149,7 +1168,11 @@ function AttentionItem({
             {only ? `Roll back ${only}` : "Roll back"}
           </a>
         )}
-        {group.cause === "unmanaged" && roleAllows(user, "operate") ? (
+        {update ? (
+          <a className="button secondary compact" href={update.href}>
+            {update.action}
+          </a>
+        ) : group.cause === "unmanaged" && roleAllows(user, "operate") ? (
           <a className="button secondary compact" href="#/configurations">
             Deploy a pipeline
           </a>
@@ -1174,6 +1197,11 @@ function AttentionItem({
               Open pipeline
             </a>
           )}
+        {update && (
+          <a className="overview-inline-link" href="#/agent-updates">
+            Agent updates
+          </a>
+        )}
         {group.cause === "offline" && (
           <DocLink
             topic="troubleshooting"

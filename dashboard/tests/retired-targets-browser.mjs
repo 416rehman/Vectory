@@ -3,6 +3,7 @@ import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
 import { nothingOffered } from "./fleet-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -265,6 +266,8 @@ async function start(
         page_size: Number(query.page_size || 12),
       });
     if (path === "/agent/releases") return respond([]);
+    // Agent updates are off, so the device page asks once and shows nothing.
+    if (path === "/agent-updates") return respond(updatesOff());
     f.errors.push("Unexpected GET " + path);
     return route.fulfill({
       status: 404,

@@ -3,6 +3,7 @@ import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
 import { nothingOffered } from "./fleet-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -186,6 +187,8 @@ async function load({
         });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic device context" });
+      // Agent updates are off here, so the page is what it was without them.
+      if (path === "/agent-updates") return reply(updatesOff());
       if (path === `/devices/${id(1)}`) {
         current.reads++;
         const snapshot = structuredClone(current.device);
