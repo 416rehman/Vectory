@@ -9,6 +9,7 @@ import {
   hostFixCommand,
   levelLine,
   nameProblem,
+  olderKeyAdvice,
   previewRequest,
   reviewSentence,
   rolloutSettings,
@@ -320,5 +321,33 @@ describe("the command that fixes a device that won't update", () => {
     );
     expect(forkText(pair, "f".repeat(64))).toMatch(/signs with neither/);
     expect(forkText(pair, null)).toMatch(/signs with neither/);
+  });
+});
+
+describe("hosts that pin no key reaching the signer of an older release", () => {
+  it("says a release is the fix, not a command, when an older key signed it", () => {
+    const advice = olderKeyAdvice(
+      "KEY_NOT_PINNED",
+      teamFingerprint,
+      nextFingerprint,
+    )!;
+    expect(advice.signer).toBe(teamFingerprint.slice(0, 16));
+    expect(advice.current).toBe(nextFingerprint.slice(0, 16));
+    expect(advice.fix).toMatch(/Withdraw this release and prepare it again/);
+    expect(advice.fix).toMatch(/Pinning the current key/);
+  });
+
+  it("is silent when the current key signed it, when either key is unknown, and for any other reason", () => {
+    expect(
+      olderKeyAdvice("KEY_NOT_PINNED", nextFingerprint, nextFingerprint),
+    ).toBeNull();
+    expect(olderKeyAdvice("KEY_NOT_PINNED", null, nextFingerprint)).toBeNull();
+    expect(olderKeyAdvice("KEY_NOT_PINNED", teamFingerprint, null)).toBeNull();
+    for (const code of [
+      "UPDATES_OFF",
+      "AGENT_TOO_OLD",
+      "KEY_ROLLOVER_CONFLICT",
+    ])
+      expect(olderKeyAdvice(code, teamFingerprint, nextFingerprint)).toBeNull();
   });
 });

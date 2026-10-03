@@ -24,6 +24,7 @@ import {
 import { readKeyLine, shortKeyId } from "./releaseKey";
 import { ChoiceCards } from "./ChoiceCards";
 import { Fingerprint, KeyShortId } from "./AgentUpdateParts";
+import DocLink from "./DocLink";
 import RequestDialog from "./RequestDialog";
 import { Field } from "./ui";
 
@@ -449,7 +450,10 @@ export function RevokeDialog({
             offer them end, and the key leaves the bundle hosts read.{" "}
             {target.devices_pinning > 0
               ? `${target.devices_pinning} ${target.devices_pinning === 1 ? "host pins" : "hosts pin"} it: they keep running, and accept no new build until you run their Upgrade agent command with a key they should trust.`
-              : "No host that reported pins it."}
+              : "No host that reported pins it."}{" "}
+            <DocLink topic="agent-updates" section="if-a-key-is-stolen">
+              If a key is stolen
+            </DocLink>
           </p>
           {target.state === "current" && (
             <p className="control-note update-warning" role="note">
@@ -517,7 +521,10 @@ export function StopAllDialog({
           <p className="modal-copy">
             {opened.active_rollouts === 0
               ? "No update rollout is running now. Stopping also refuses new ones until an administrator clears the stop."
-              : `${opened.active_rollouts} update ${opened.active_rollouts === 1 ? "rollout is" : "rollouts are"} running. Stopping cancels ${opened.active_rollouts === 1 ? "it" : "them"} and refuses new ones until an administrator clears the stop.`}
+              : `${opened.active_rollouts} update ${opened.active_rollouts === 1 ? "rollout is" : "rollouts are"} running. Stopping cancels ${opened.active_rollouts === 1 ? "it" : "them"} and refuses new ones until an administrator clears the stop.`}{" "}
+            <DocLink topic="agent-updates" section="stop-all-updates">
+              What stopping does
+            </DocLink>
           </p>
           <Field
             label="Reason"

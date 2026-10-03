@@ -167,10 +167,11 @@
   color: var(--ink);
   font-weight: 650;
 }
+/* Sixteen characters that mean one key: never broken across two lines. */
 .update-short-id {
   font-size: 12.5px;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 /* The public key field of the turn-on dialog and what it shows. */
@@ -917,6 +918,9 @@
 .update-upgrade-step h3 {
   margin: 0;
   font-size: 14px;
+}
+.update-upgrade-step > .update-doc {
+  justify-self: start;
 }
 .update-upgrade-opted details > summary {
   cursor: pointer;

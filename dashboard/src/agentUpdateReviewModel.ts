@@ -234,6 +234,28 @@ export const groupNeedsChoice = (group: Pick<ReviewGroup, "code">) =>
   needsConsentChoice(group.code);
 
 /**
+ * Hosts that pin no key reaching the release's signer, when the signer is not
+ * the key this server signs with now. A host follows keys forward only, so
+ * pinning the current key does not let it take a release an older key signed:
+ * what fixes it is a release the current key signs. This says so, in place of a
+ * command that would change nothing. It is null when the signer is current,
+ * unknown, or the group is about something else.
+ */
+export function olderKeyAdvice(
+  code: string,
+  signer: string | null,
+  currentKey: string | null,
+): { signer: string; current: string; fix: string } | null {
+  if (code !== "KEY_NOT_PINNED" || !signer || !currentKey) return null;
+  if (signer === currentKey) return null;
+  return {
+    signer: shortKeyId(signer),
+    current: shortKeyId(currentKey),
+    fix: "Withdraw this release and prepare it again: the current key then signs it. Pinning the current key on the host doesn't let it take this one.",
+  };
+}
+
+/**
  * The fork a host is frozen on, for the review: the two successors it saw, as
  * short IDs, and which of them is the key this server signs with, when one is.
  */

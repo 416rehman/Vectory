@@ -301,6 +301,7 @@ export default function UpdateRolloutPage({
             title={title}
             documentTitle={`${title} · Agent ${detail.release.version}`}
             headingRef={heading}
+            help={{ topic: "agent-updates", section: "watch-a-rollout" }}
             breadcrumb={[
               {
                 label: "Agent updates",

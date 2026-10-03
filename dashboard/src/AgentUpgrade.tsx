@@ -374,6 +374,13 @@ export default function AgentUpgrade({
                             updates.
                           </p>
                         )}
+                        <DocLink
+                          topic="agent-updates"
+                          section="what-a-host-agrees-to"
+                          className="doc-term-link update-doc"
+                        >
+                          What a host agrees to
+                        </DocLink>
                       </>
                     )}
                   </section>

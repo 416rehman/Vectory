@@ -15,6 +15,7 @@ import { codeText } from "./agentUpdateCodes";
 import { updateVerbCommand } from "./agentUpdateCommands";
 import { windowsText } from "./updateWindow";
 import { CommandBlock } from "./CommandBlock";
+import DocLink from "./DocLink";
 import { shortDigest } from "./enrollmentCommands";
 import { StatusBadge, TimeAgo } from "./ui";
 import { useAgentUpdates } from "./useAgentUpdates";
@@ -96,6 +97,17 @@ export default function DeviceAgentUpdates({ device }: { device: Device }) {
             {report.last.outcome !== "committed" && (
               <small className="update-fact-note">
                 <TimeAgo value={report.last.at} />
+                {report.last.outcome === "rolled_back" && (
+                  <>
+                    {" · "}
+                    <DocLink
+                      topic="agent-updates"
+                      section="when-a-host-rolls-back"
+                    >
+                      What a rollback means
+                    </DocLink>
+                  </>
+                )}
               </small>
             )}
           </Row>
@@ -110,7 +122,10 @@ export default function DeviceAgentUpdates({ device }: { device: Device }) {
       )}
       {fork && (
         <p className="update-device-note" data-tone="danger" role="note">
-          {fork}
+          {fork}{" "}
+          <DocLink topic="agent-updates" section="if-a-key-is-stolen">
+            What a fork means
+          </DocLink>
         </p>
       )}
       {report?.paused && (
@@ -131,7 +146,13 @@ export default function DeviceAgentUpdates({ device }: { device: Device }) {
       {eligibility && (
         <p className="update-device-note" data-tone="warning" role="note">
           {eligibility.reason}
-          {eligibility.fix ? ` ${eligibility.fix}` : ""}
+          {eligibility.fix ? ` ${eligibility.fix}` : ""}{" "}
+          <DocLink
+            topic="agent-updates"
+            section="what-a-host-needs-to-take-an-update"
+          >
+            What a host needs
+          </DocLink>
         </p>
       )}
       {report && (

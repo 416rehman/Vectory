@@ -30,7 +30,7 @@ export function useDeviceDetails(ids: readonly string[], enabled: boolean) {
     const controller = new AbortController();
     setState((old) => ({ ...old, loading: true }));
     let next = 0;
-    const worker = async () => {
+    const readNext = async () => {
       while (next < wanted.length && !controller.signal.aborted) {
         const id = wanted[next++];
         try {
@@ -53,7 +53,7 @@ export function useDeviceDetails(ids: readonly string[], enabled: boolean) {
       }
     };
     void Promise.all(
-      Array.from({ length: Math.min(CONCURRENT, wanted.length) }, worker),
+      Array.from({ length: Math.min(CONCURRENT, wanted.length) }, readNext),
     ).then(() => {
       if (!controller.signal.aborted)
         setState((old) => ({ ...old, loading: false }));
