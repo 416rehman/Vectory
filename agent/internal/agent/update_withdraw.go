@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,6 +15,12 @@ import (
 // the agent staged is deleted, and the privileged step is removed. It is refused
 // while the step applies or tries a build, because taking the step away then could
 // leave a build that was never proven in place of the one that was.
+//
+// What the agent staged is deleted by root, from a directory the service account
+// owns, so root deletes only through a path the service account can't change: the
+// directory that holds the state directory must pass the root-owned path check.
+// Where it doesn't, the withdrawal still takes the consent and the step away, and
+// says that the staged files were left, which is for a person to delete.
 
 // UpdateWithdrawal is what withdrawing consent changed.
 type UpdateWithdrawal struct {
@@ -21,10 +29,43 @@ type UpdateWithdrawal struct {
 	PolicyOff bool
 	// Discarded: the agent's directory of staged builds and requests was deleted.
 	Discarded bool
+	// StagedLeft is set when that directory is there and was not deleted, because
+	// the directory above the state directory could not be trusted with a delete
+	// by root.
+	StagedLeft *UpdateLeft
 	// StepRemoved: the privileged step was removed.
 	StepRemoved bool
 	// KeysKept is how many pinned keys the policy keeps.
 	KeysKept int
+}
+
+// UpdateLeft says that the agent's staged files were left where they are, and why:
+// root won't delete through a path that an account other than root can change.
+type UpdateLeft struct {
+	// Path is the directory of the agent's staged builds, requests and health
+	// records.
+	Path string
+	// Code is UNTRUSTED_LOCATION, as for every refusal of the path check.
+	Code string
+	// Detail is what the path check found: the component that failed and why.
+	Detail string
+}
+
+// Message says in words that the files were left, for a person to delete.
+func (l UpdateLeft) Message() string {
+	root := updateRootWord()
+	return "The staged files in " + l.Path + " were not deleted: the directory above the agent's state isn't owned by " + root + ", so " + root + " won't delete through it. Delete them yourself."
+}
+
+// MarshalJSON writes what --json says about files that were left: where they are,
+// the code and what the path check found, and the sentence a person reads.
+func (l UpdateLeft) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Path    string `json:"path"`
+		Code    string `json:"code"`
+		Detail  string `json:"detail"`
+		Message string `json:"message"`
+	}{l.Path, l.Code, l.Detail, l.Message()})
 }
 
 // Nothing reports whether there was nothing to withdraw.
@@ -134,11 +175,11 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 	}
 	done.KeysKept = len(policy.Keys)
 	if dir != "" {
-		discarded, err := removeUpdateExchange(UpdateExchangeFor(dir).Dir)
+		discarded, left, err := removeUpdateExchange(dir)
 		if err != nil {
 			return done, err
 		}
-		done.Discarded = discarded
+		done.Discarded, done.StagedLeft = discarded, left
 	}
 	if _, err := os.Lstat(paths.StepDir); err == nil {
 		if err := removeStep(); err != nil {
@@ -150,18 +191,54 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 }
 
 // removeUpdateExchange deletes the agent's directory of staged builds, requests
-// and health records, and reports whether it was there. A link in its place is
-// removed, never followed.
-func removeUpdateExchange(path string) (bool, error) {
+// and health records (<state>/updates), as root, and reports whether it was there
+// and was deleted. A link in its place is removed, never followed.
+//
+// os.RemoveAll finds the directory that holds the one it deletes by its name, and
+// follows a link on the way. The state directory belongs to the service account,
+// and where the directory that holds it can also be changed by that account (a
+// state directory under a path that isn't root's), the account could put a link
+// in the state directory's place and have root delete what the link names. So
+// root deletes only when every component down to the directory that holds the
+// state directory passes the root-owned path check: opened by handle, root's, and
+// not writable by its group or by everyone (on Windows, by the rule of that
+// check). Nothing but root can then change that path, and what is below it is
+// removed without following a link. Where the check refuses, nothing is deleted
+// and the answer says so: the staged files were left, for a person to delete. A
+// state directory or a directory above it that isn't there holds nothing to
+// delete, and is no refusal.
+func removeUpdateExchange(state string) (deleted bool, left *UpdateLeft, err error) {
+	path := UpdateExchangeFor(state).Dir
+	// The check comes first, so that nothing that leads to a delete is decided on a
+	// path that wasn't judged.
+	problem := stateHolderProblem(state)
 	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return false, nil
+	switch {
+	case os.IsNotExist(err):
+		return false, nil, nil
+	case err != nil:
+		return false, nil, err
+	case problem != nil && notExist(problem):
+		return false, nil, nil
+	case problem != nil:
+		return false, &UpdateLeft{Path: path, Code: codeUntrustedLocation, Detail: untrustedDetail(problem)}, nil
+	case info.IsDir():
+		return true, nil, os.RemoveAll(path)
 	}
+	return true, nil, os.Remove(path)
+}
+
+// stateHolderProblem is why root may not delete through the directory that holds
+// the state directory, or nil when it may: the path check of that directory, which
+// is judged as a whole path from the root of the file system.
+func stateHolderProblem(state string) error {
+	holder, err := filepath.Abs(filepath.Dir(state))
 	if err != nil {
-		return false, err
+		return err
 	}
-	if info.IsDir() {
-		return true, os.RemoveAll(path)
+	held, err := openRootOwned(holder, rootOwnedDirectory)
+	if err != nil {
+		return err
 	}
-	return true, os.Remove(path)
+	return held.Close()
 }

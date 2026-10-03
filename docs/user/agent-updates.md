@@ -84,7 +84,7 @@ sudo sh "$dir/vectory-install.sh" \
   --update-window 'Mon-Fri 02:00-04:00'
 ```
 
-The host's choices live in a file only root can write, `/etc/vectory/updates/policy.json` on Linux. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again.
+The host's choices live in a file only root can write, `/etc/vectory/updates/policy.json` on Linux. Nothing the server sends can change them, and nothing changes them later unless someone runs a command on that host again. That command keeps what the host chose: with no update flag it changes nothing about updates, and to change one thing it carries only that thing, such as the key to pin or the releases to take. The host applies it to what it already agreed to, so a command never has to state the host's choices again. See [Change what a host agreed to](cli.md#change-what-a-host-agreed-to).
 
 ### A host that was installed without consent
 
@@ -94,7 +94,7 @@ A host you added before you turned updates on has agreed to nothing, and so has 
 1. On the device's page, choose **Upgrade agent**. Under **Agent updates**, choose **Automatic (recommended)**, **Ask on the host** or **Off**.
 2. Run the command it shows on the host. Without a choice the command only upgrades the agent and changes nothing about updates.
 
-A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**.
+A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**. Its **Upgrade agent** command carries no update choice: running it upgrades the agent and leaves what the host agreed to as it is. When something about updates needs fixing on that host, such as the key it pins or the releases it takes, the command carries only that fix.
 
 ### What a host needs to take an update
 
@@ -168,7 +168,7 @@ Nothing starts until you choose **Start update rollout**, and the server checks 
 The review lists every device you chose exactly once:
 
 - **Will update · N:** the devices that will take the build, with how each takes it (**Automatic** or **Ask on the host**) and when it can start. The canary is chosen for you, among devices that take updates by themselves, or by you with **Canary devices**. The canary's result is what its devices report, so name canary devices your team trusts.
-- **Won't update · N:** each device that won't, grouped by the first reason that applies, with the fix. For a reason a command fixes, **Commands for the host** gives the **Upgrade agent** command for that host, with only the change the fix needs, such as the key to pin. The host keeps what it already allows. For a host that has no consent to keep, you choose how it should take updates first.
+- **Won't update · N:** each device that won't, grouped by the first reason that applies, with the fix. For a reason a command fixes, **Commands for the host** gives the **Upgrade agent** command for that host, with only the flag that fixes it: `--update-key-sha256` with this server's current key to re-pin, `--update-track minor` for the track. The host applies it to what it already agreed to and keeps the level, the windows and any pause as they are. For a host that has no consent to keep, you choose how it should take updates first.
 - **Worth knowing:** devices that will update but may be slow: offline now, waiting for someone on the host, waiting for a window or paused on the host.
 
 | Group | Means |
@@ -178,7 +178,7 @@ The review lists every device you chose exactly once:
 | **Doesn't pin this release's key** (`KEY_NOT_PINNED`) | No key it pins reaches the release's signer. Run **Upgrade agent** with the current key. If a key that is no longer current signed the release, the review says so: a host follows keys forward only, so withdraw the release and prepare it again, and the current key signs it. |
 | **Tried this release and rolled back** (`RELEASE_ALREADY_TRIED`) | It takes the next release, never this one again. |
 | **Already tried a newer release** (`COUNTER_REPLAYED`) | This release's counter is at or below one the host tried. Prepare a new release. |
-| **Outside the host's track** (`VERSION_NOT_ON_TRACK`) | It takes patch releases only. Run **Upgrade agent** with **Minor releases too**. |
+| **Outside the host's track** (`VERSION_NOT_ON_TRACK`) | It takes patch releases only. Run **Upgrade agent** with **Minor releases too**: the command carries only the track, and the host keeps its level and its windows. |
 | **Already on this version** (`ALREADY_RUNNING`), **Runs a newer version** (`DOWNGRADE_REFUSED`) | Nothing to do. An update never goes backward. |
 | **Frozen on a key fork** (`KEY_ROLLOVER_CONFLICT`) | It saw two successors of its key and accepts no update. Run **Upgrade agent** with the right key. See [If a key is stolen](#if-a-key-is-stolen). |
 | **Installed by a package manager**, **No service keeps the agent running**, **Install path others can write**, **Install directory is read-only**, **Update step isn't running**, **Service definition is older than this release needs**, **Not in this release** | The host can't take an update. See [What a host needs to take an update](#what-a-host-needs-to-take-an-update). |
@@ -274,7 +274,7 @@ Revoking a key stops this server from offering anything it signed. It doesn't un
 <!-- steps -->
 1. **Stop all updates**, so nothing signed by the stolen key goes out meanwhile.
 2. Revoke the stolen key, then set a new one with **Set a release key…**.
-3. Run each affected host's **Upgrade agent** command, which now pins the new key. **Settings → Agent updates** lists the hosts that pin the revoked key, and the review gives each one's command. This step stays manual, host by host.
+3. Run each affected host's **Upgrade agent** command, which now pins the new key. It re-pins and changes nothing else: the host keeps its level, its track, its windows and any pause. **Settings → Agent updates** lists the hosts that pin the revoked key, and the review gives each one's command. This step stays manual, host by host.
 
 A thief who holds the key before you roll it over can sign a statement of their own from it. A host that sees two successors of one key stops accepting updates and reports `KEY_ROLLOVER_CONFLICT`. **Settings → Agent updates** lists them as hosts frozen on a fork, and each one needs its **Upgrade agent** command with the key you trust.
 
@@ -293,9 +293,11 @@ sudo vectory update off
 - `status` shows the policy, the keys the host pins, what it is doing and the result of its last update.
 - `apply` installs a build a host set to **Ask on the host** has staged. Before it does, it reads what the agent last reported and stops if the offer was withdrawn or the agent hasn't checked in for five minutes. That check is advice: the file it reads is written by the agent, so it can warn you but can't prove an offer is still good. `--force` applies anyway, after you confirm on a terminal.
 - `pause` keeps the host's choices and stops every download and install until `resume`.
-- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried.
+- `off` withdraws the host's consent: the policy says off, the build the agent staged is deleted and the update step is removed. The pinned key stays, so the **Upgrade agent** command with updates on turns them on again. It's refused while a build is being tried. Where the directory above the agent's state directory could be changed by another account, it deletes nothing and tells you the staged files are yours to delete; see [Agent CLI](cli.md#update-off).
 
 Every verb but `status` needs root. See [Agent CLI](cli.md#update) for what each prints.
+
+To change one thing a host agreed to, run `setup` on it with only that flag and no `--updates`: `--update-key-sha256` re-pins, `--update-track` changes the releases it takes, and `--update-window` replaces its windows. It keeps the rest, including a pause, and refuses a host that agreed to nothing. See [Change what a host agreed to](cli.md#change-what-a-host-agreed-to).
 
 ## Turn off agent updates
 
