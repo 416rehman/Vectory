@@ -96,13 +96,10 @@ A host you added before you turned updates on has agreed to nothing, and so has 
 
 A host that already takes updates shows **This device takes updates from the dashboard** in the same dialog, with **Roll out to this device**. Its **Upgrade agent** command carries no update choice: running it upgrades the agent and leaves what the host agreed to as it is. When something about updates needs fixing on that host, such as the key it pins or the releases it takes, the command carries only that fix.
 
-<!-- verify-after-merge: that a Windows host takes updates in this release (windowsUpdatesInRelease is true in update_gate.go), and that the dashboard still writes no Upgrade agent command for Windows (upgradeCommand in dashboard/src/enrollmentCommands.ts returns none for it, and canOptIn in dashboard/src/AgentUpgrade.tsx follows updatesInRelease); if it now does, say so here -->
 The dashboard writes the **Upgrade agent** command for Linux and macOS hosts. For a Windows host, **Add device** carries the choice about updates when you add it. A Windows host added before agrees with `setup`, run in an elevated PowerShell on the host with the flags of the command above, and the same command with one flag changes one thing it agreed to. See [Agent updates in setup](cli.md#agent-updates-in-setup).
 
 ### What a host needs to take an update
 
-<!-- verify-after-merge: that a Mac takes updates in this release (the macos job of platforms.yml is green and macosUpdatesInRelease is true), and that setup's refusal for a Mac names the access list entry -->
-<!-- verify-after-merge: that a Windows host takes updates in this release (the windows job of platforms.yml is green, agent-update.mjs phases included, and windowsUpdatesInRelease is true in update_gate.go), and that the Windows advice in the table below matches what the first run printed -->
 Even with consent, a host takes an update only where it is safe to replace the agent. The dashboard shows what a host can't do, in words, on its page and in the review:
 
 | The host says | What to do |
@@ -331,7 +328,7 @@ In **Settings → Agent updates**, choose **Turn off…** and enter your passwor
 
 - **No major track.** A host takes patch releases, or minor releases too. A new major version needs an upgrade by hand.
 - **Custody is fixed while updates are on.** To change who holds the key, turn updates off and on again. Hosts pinned to the old key then need their **Upgrade agent** command.
-- **A release names only the platforms in this server's catalog.** A host whose platform isn't in it is listed as **Not in this release**: update it by hand. That is what macOS and Windows hosts do when their builds aren't in the release.
+- **A release names only the platforms in this server's catalog.** A host whose platform isn't in it is listed as **Not in this release**: update it by hand.
 - **Updates only move forward.** A host never takes an older build. Going back is its own automatic rollback, or an upgrade by hand.
 - **A rollout targets the devices the review found.** A device that joins a group afterwards isn't added, and a device is in at most one unfinished update rollout.
 - **At most 200 update rollouts are active or paused at once.** The server reads every active one every two seconds, so the 201st is refused (`UPDATE_ROLLOUT_LIMIT`) until you cancel one or one finishes. A rollout takes up to 10,000 devices, so this is no limit on the fleet.

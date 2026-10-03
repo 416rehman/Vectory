@@ -26,7 +26,7 @@ func closeUpdateGate(t *testing.T) {
 	t.Cleanup(func() { updateGateOverride, updateHostOverride = oldGate, oldHost })
 }
 
-func TestTheGateShipsLinuxAndMacOSAsTheirLinesSayAndNoOtherSystem(t *testing.T) {
+func TestTheGateShipsTheSystemsItsLinesSayAndNoOtherSystem(t *testing.T) {
 	for goos, want := range map[string]bool{
 		"linux": linuxUpdatesInRelease, "darwin": macosUpdatesInRelease, "windows": windowsUpdatesInRelease,
 		"freebsd": false, "openbsd": false, "plan9": false, "": false,

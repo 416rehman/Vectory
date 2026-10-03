@@ -9,7 +9,7 @@ import type { HostOS } from "./enrollmentCommands";
 export const updatesInRelease: Record<HostOS, boolean> = {
   linux: true,
   darwin: true,
-  windows: false,
+  windows: true,
 };
 
 export const systemName: Record<HostOS, string> = {

@@ -377,6 +377,7 @@ async function load({
   path = "agent-updates-settings",
   scenario = onState(),
   devices = fleetDevices,
+  closed = [],
 } = {}) {
   if (context) await context.close();
   // The requests a check reads are the ones its own page made.
@@ -480,6 +481,24 @@ async function load({
       },
     });
   });
+  // The page of a build that ships no updates on some systems: the module that
+  // lists them, with those systems closed in this copy only. Every system is open in
+  // this repository, so this is how a page's words for a closed one are judged.
+  if (closed.length)
+    await context.route("**/src/agentUpdatePlatforms.ts*", async (route) => {
+      const response = await route.fetch();
+      let body = await response.text();
+      for (const system of closed) {
+        const closing = body.replace(
+          new RegExp(`(\\b${system}:\\s*)true\\b`),
+          "$1false",
+        );
+        if (closing === body)
+          unexpected.push(`${system} isn't open in agentUpdatePlatforms.ts`);
+        body = closing;
+      }
+      return route.fulfill({ response, body });
+    });
   page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror", (error) => errors.push(error.message));
@@ -2825,10 +2844,65 @@ try {
     },
   );
 
+  // This server has no Windows build, so a Windows host gets the setup command for
+  // an agent copied there; the quoting is the same as for the download.
+  const windowsSetupCommand = async () => {
+    await page
+      .getByRole("button", { name: "Create setup command", exact: true })
+      .click();
+    const command = page.getByLabel("Setup command", { exact: true }).first();
+    await expect(command).toBeVisible();
+    return command.innerText();
+  };
+
   await check(
-    "Add device: for a system whose updates aren't in the release the step says so, and the command has no update flags",
+    "Add device: Windows takes the same choice, and its command carries it for PowerShell",
     async () => {
       await load({ path: "enrollment", scenario: onState() });
+      await page.getByRole("radio", { name: "Windows", exact: true }).check();
+      await expect(
+        page.getByRole("heading", { name: "2. Agent updates" }),
+      ).toBeVisible();
+      await expect(levelCards()).toBeVisible();
+      await expect(
+        page.getByText("Agent updates aren't in this release", {
+          exact: false,
+        }),
+      ).toHaveCount(0);
+      await page.getByRole("radio", { name: /^Restricted/ }).check();
+      await expect(
+        page.getByRole("button", {
+          name: "Create setup command",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      await expect(
+        page.getByText("Choose how this host takes agent updates first."),
+      ).toBeVisible();
+      await levelCards()
+        .getByRole("radio", { name: /^Automatic \(recommended\)/ })
+        .check();
+      await page
+        .getByLabel("Update windows (optional)")
+        .fill("Mon-Fri 02:00-04:00");
+      const command = await windowsSetupCommand();
+      expect(command).toContain(".\\vectory.exe setup");
+      expect(command).toContain("--updates auto");
+      expect(command).toContain(`--update-key-sha256 ${teamFingerprint}`);
+      expect(command).toContain("--update-track patch");
+      expect(command).toContain("--update-window 'Mon-Fri 02:00-04:00'");
+      expect(command).not.toContain("sudo");
+    },
+  );
+
+  await check(
+    "Add device: for a system a build doesn't ship updates on, the step says so, and the command has no update flags",
+    async () => {
+      await load({
+        path: "enrollment",
+        scenario: onState(),
+        closed: ["windows"],
+      });
       await page.getByRole("radio", { name: "Windows", exact: true }).check();
       await expect(
         page.getByRole("heading", { name: "2. Agent updates" }),
@@ -2850,6 +2924,10 @@ try {
       await expect(
         page.getByText("Choose how this host takes agent updates first."),
       ).toBeVisible();
+      await page.getByRole("radio", { name: "Windows", exact: true }).check();
+      const command = await windowsSetupCommand();
+      expect(command).toContain(".\\vectory.exe setup");
+      expect(command).not.toMatch(/--update/);
     },
   );
 

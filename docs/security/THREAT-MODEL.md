@@ -187,7 +187,7 @@ Decisions for agent updates:
 - A device is updated only when the server saw it: a check-in after the restart that carries the new build's SHA-256 and version, a new process identity and the step's committed result. A download, a staged file or a swap is never reported as an update, and what the agent writes for people, such as the freshness `vectory update apply` shows, is advice and never authority.
 - There is no remote downgrade, no remote rollback command and no remote command channel of any kind, and Vector is never updated remotely. Revoking a key on the server stops distributing what it signed; changing what a host trusts is always a local act or a statement signed by a key the host already pins.
 - The privileged step's formats are fixed within a `service_definition` generation, so any committed build of that generation can finish or undo what another started. An update never rewrites a unit, plist or service definition; a release that needs a new one reaches hosts only through the Upgrade agent command.
-- An operating system ships updates only with its own green native proof on a real service; otherwise its hosts report `PLATFORM_NOT_IN_RELEASE` and update by hand, and setup refuses `--updates` there.
+- An operating system ships updates only with its own green native proof on a real service, and Linux, macOS and Windows each have one in this release. A build that doesn't ship an operating system reports `PLATFORM_NOT_IN_RELEASE` for its hosts, who update by hand, and its setup refuses `--updates` there.
 
 ## Consequential decisions
 

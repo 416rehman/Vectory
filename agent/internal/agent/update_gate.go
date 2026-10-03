@@ -13,15 +13,16 @@ package agent
 //
 // Closing an operating system is one line below: set its constant to false.
 //
-// Windows is closed until the windows job of .github/workflows/platforms.yml is green
-// at the cut. That job builds every agent it uses with this line changed to true in a
-// copy of the source (openWindowsGate in tests/platform/update-lib.mjs), so it proves
-// the step as it ships; opening Windows for the release is changing this line, in the
-// commit that cites the green run.
+// All three ship: the linux-service, macos and windows jobs of
+// .github/workflows/platforms.yml ran every phase of the step green on a real service
+// of each kind. The windows job builds every agent it uses with the Windows line
+// changed to true in a copy of the source (openWindowsGate in
+// tests/platform/update-lib.mjs), and leaves a source that has it open as it is, so
+// what it proved is the step as it ships.
 const (
 	linuxUpdatesInRelease   = true
 	macosUpdatesInRelease   = true
-	windowsUpdatesInRelease = false
+	windowsUpdatesInRelease = true
 )
 
 // updateGateOverride replaces the table below. It is a seam like updateHostOverride:
