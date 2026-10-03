@@ -69,6 +69,15 @@ type consentFixture struct {
 	// installFails and eligibility let a test change what the fake step says.
 	installFails error
 	eligibility  string
+	// registered is what the fake service manager registered: the service for an
+	// executable, a state directory and an account, once setup has registered it. The
+	// fake step reads it as the real one reads the registered service.
+	registered    bool
+	registeredFor [3]string
+	// consentAtRegistration is the level the policy file said when the service was
+	// registered: the policy is in place before the service exists, so before its first
+	// check-in.
+	consentAtRegistration string
 }
 
 // serviceAccountForTests is an unprivileged account the service step can name:
@@ -161,12 +170,28 @@ func newConsentFixture(t *testing.T) *consentFixture {
 			if executable != f.agent {
 				t.Errorf("the step was given %q, and the agent is at %q", executable, f.agent)
 			}
+			if err := f.serviceProblem(dir, executable); err != nil {
+				return err
+			}
 			f.events = append(f.events, "install-step")
 			return f.installFails
 		},
 		removeUpdates: func() error { f.events = append(f.events, "remove-step"); return nil },
 	}
 	return f
+}
+
+// serviceProblem is what the real step says of the service the manager registered:
+// it refuses a host with none (NO_SERVICE), and one whose service runs another
+// executable or another state directory.
+func (f *consentFixture) serviceProblem(dir, executable string) error {
+	switch {
+	case !f.registered:
+		return newUpdateRefusal("NO_SERVICE", "no agent service is registered (%s doesn't exist)", "/etc/systemd/system/vectory.service")
+	case f.registeredFor[0] != executable || f.registeredFor[1] != dir:
+		return newUpdateRefusal("NO_SERVICE", "the registered service doesn't run %s for %s", executable, dir)
+	}
+	return nil
 }
 
 // consent sets the update flags a command carries.
@@ -181,10 +206,22 @@ func (f *consentFixture) consent(level string, keys ...ReleaseKey) {
 func (f *consentFixture) run() (SetupResult, error) {
 	f.t.Helper()
 	ops := f.manager.ops()
-	control := ops.control
+	control, install := ops.control, ops.install
 	ops.control = func(action string) error {
 		f.events = append(f.events, "service-"+action)
 		return control(action)
+	}
+	ops.install = func(exe, dir, account string) (ServiceRegistration, error) {
+		f.consentAtRegistration = ""
+		if policy, err := ReadUpdatePolicy(); err == nil {
+			f.consentAtRegistration = policy.Consent
+		}
+		registration, err := install(exe, dir, account)
+		if err == nil {
+			f.events = append(f.events, "service-register")
+			f.registered, f.registeredFor = true, [3]string{exe, dir, account}
+		}
+		return registration, err
 	}
 	return setupWith(context.Background(), f.options, ops, f.host)
 }
@@ -216,7 +253,11 @@ func (f *consentFixture) untouched() {
 
 func lastStep(result SetupResult) SetupStep { return result.Steps[len(result.Steps)-1] }
 
-func TestSetupTurnsUpdatesOnAfterEnrollmentAndBeforeTheServiceStarts(t *testing.T) {
+// On a fresh install setup writes the policy first, so that consent is in place
+// before the service exists and before its first check-in. It installs the
+// privileged step once the service is registered, which the step needs, and before
+// the service starts, so that its first run already has the step.
+func TestSetupTurnsUpdatesOnAfterEnrollmentWithTheStepInstalledOnceTheServiceIsRegistered(t *testing.T) {
 	f := newConsentFixture(t)
 	f.consent(UpdateConsentAuto, f.key)
 	f.options.UpdateWindows = []string{"Mon-Fri 02:00-04:00"}
@@ -224,8 +265,11 @@ func TestSetupTurnsUpdatesOnAfterEnrollmentAndBeforeTheServiceStarts(t *testing.
 	if err != nil || !result.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(result))
 	}
-	if strings.Join(f.events, ",") != "eligibility,install-step,service-start" {
+	if strings.Join(f.events, ",") != "eligibility,service-register,install-step,service-start" {
 		t.Fatalf("the order of what setup asked for: %v", f.events)
+	}
+	if f.consentAtRegistration != UpdateConsentAuto {
+		t.Fatalf("the policy said %q when the service was registered; consent has to be in place before the service exists", f.consentAtRegistration)
 	}
 	step := lastUpdatesStep(t, result)
 	if want := "automatic · patch releases · Mon–Fri 02:00–04:00 · key " + f.key.ShortID() + " (pinned)"; step.Detail != want || step.Status != "ok" || step.Label != "Updates" {
@@ -627,7 +671,7 @@ func TestSetupWithoutUpdateFlagsTouchesNothingOfUpdates(t *testing.T) {
 		t.Fatalf("updates were mentioned: %d key requests, %+v", f.server.keyRequests.Load(), result.Steps)
 	}
 	for _, event := range f.events {
-		if event != "service-start" {
+		if event != "service-register" && event != "service-start" {
 			t.Fatalf("setup reached for %q", event)
 		}
 	}
@@ -737,7 +781,8 @@ func TestSetupKeepsWhenAKeyThatStaysWasPinned(t *testing.T) {
 	}
 }
 
-// A failure after enrollment says what was saved and what wasn't.
+// A failure to install the step, which comes after the service is registered, says
+// what was saved and what wasn't, and stops before the service is started.
 func TestSetupSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t *testing.T) {
 	f := newConsentFixture(t)
 	f.consent(UpdateConsentAuto, f.key)
@@ -747,8 +792,11 @@ func TestSetupSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t *testing.T) {
 	if !errors.As(err, &failed) || failed.Step.ID != "updates" || result.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(result))
 	}
-	if want := "The agent is installed and enrolled and the update policy is saved, but the update step couldn't be installed (Systemd refused the unit). Until it is, this host takes no update."; failed.Step.Detail != want {
+	if want := "The agent is installed and enrolled, the update policy is saved and the service is registered, but the update step couldn't be installed (Systemd refused the unit). Setup stopped before it started or restarted the service. Until the step is installed, this host takes no update."; failed.Step.Detail != want {
 		t.Fatalf("%q", failed.Step.Detail)
+	}
+	if !f.registered || strings.Contains(strings.Join(f.events, ","), "service-start") {
+		t.Fatalf("the service is registered and not started: %v", f.events)
 	}
 	if failed.Step.Fix != "Fix the cause, then run the same command again; setup resumes where it stopped." {
 		t.Fatalf("%q", failed.Step.Fix)
@@ -762,8 +810,55 @@ func TestSetupSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t *testing.T) {
 	}
 	f.installFails = nil
 	f.options.Token = func() (string, error) { t.Fatal("asked for a token again"); return "", nil }
+	f.events = nil
 	if again, err := f.run(); err != nil || !again.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(again))
+	}
+	// It resumes: the step is installed, and then the service starts.
+	if got := strings.Join(f.events, ","); got != "eligibility,service-register,install-step,service-start" {
+		t.Fatalf("%s", got)
+	}
+}
+
+// A service that can't be registered leaves the policy saved and the step not
+// installed, and says so; the step waits for the service, so nothing asks for it
+// first. Run again once the service can be registered, setup finishes.
+func TestSetupSaysSoWhenTheServiceCantBeRegisteredForTheUpdateStep(t *testing.T) {
+	f := newConsentFixture(t)
+	f.consent(UpdateConsentAuto, f.key)
+	f.manager.fail = map[string]error{"install": errors.New("systemctl daemon-reload failed")}
+	result, err := f.run()
+	var failed *SetupError
+	if !errors.As(err, &failed) || failed.Step.ID != "service" || result.OK {
+		t.Fatalf("%v\n%s", err, serviceDetail(result))
+	}
+	if got := lastUpdatesStep(t, result); got.Status != "warn" || got.Detail != "The update policy is saved, but the update step isn't installed: it can only be installed once the service is registered. Run the same command again when the service is fixed; setup resumes where it stopped." {
+		t.Fatalf("%+v", got)
+	}
+	if f.stepInstalls() != 0 || f.registered || result.Updates != nil {
+		t.Fatalf("%v %v", f.events, result.Updates)
+	}
+	if policy, err := ReadUpdatePolicy(); err != nil || policy.Consent != UpdateConsentAuto {
+		t.Fatalf("the policy: %+v %v", policy, err)
+	}
+	f.manager.fail = nil
+	f.options.Token = func() (string, error) { t.Fatal("asked for a token again"); return "", nil }
+	f.events = nil
+	if again, err := f.run(); err != nil || !again.OK || strings.Join(f.events, ",") != "eligibility,service-register,install-step,service-start" {
+		t.Fatalf("%v %v\n%s", err, f.events, serviceDetail(again))
+	}
+}
+
+// The fake step answers as the real one does when no service is registered, so
+// that a setup that asks for the step first can't pass.
+func TestTheFakeStepRefusesAHostWhoseServiceIsNotRegistered(t *testing.T) {
+	f := newConsentFixture(t)
+	if err := f.serviceProblem(f.dir, f.agent); err == nil || err.Error() != "NO_SERVICE: no agent service is registered (/etc/systemd/system/vectory.service doesn't exist)" {
+		t.Fatalf("%v", err)
+	}
+	f.registered, f.registeredFor = true, [3]string{"/usr/local/bin/other", f.dir, "nobody"}
+	if err := f.serviceProblem(f.dir, f.agent); err == nil || !strings.HasPrefix(err.Error(), "NO_SERVICE: the registered service doesn't run ") {
+		t.Fatalf("%v", err)
 	}
 }
 

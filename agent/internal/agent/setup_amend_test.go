@@ -158,6 +158,11 @@ func TestSetupWithATrackAloneChangesOnlyTheTrack(t *testing.T) {
 			if f.stepInstalls() != 1 {
 				t.Fatalf("%v", f.events)
 			}
+			// The service is already registered here, and the step is installed before the
+			// service is restarted, so no restart can race it.
+			if got := strings.Join(f.events, ","); got != "eligibility,service-register,install-step,service-restart" {
+				t.Fatalf("%s", got)
+			}
 		})
 	}
 }
@@ -627,8 +632,11 @@ func TestSetupWithUpdateFlagsSaysWhatWasSavedWhenTheUpdateStepCantBeInstalled(t 
 	if !errors.As(err, &failed) || failed.Step.ID != "updates" || result.OK {
 		t.Fatalf("%v\n%s", err, serviceDetail(result))
 	}
-	if want := "The agent is installed and enrolled and the update policy is saved, but the update step couldn't be installed (Systemd refused the unit). Until it is, this host takes no update."; failed.Step.Detail != want {
+	if want := "The agent is installed and enrolled, the update policy is saved and the service is registered, but the update step couldn't be installed (Systemd refused the unit). Setup stopped before it started or restarted the service. Until the step is installed, this host takes no update."; failed.Step.Detail != want {
 		t.Fatalf("%q", failed.Step.Detail)
+	}
+	if strings.Contains(strings.Join(f.events, ","), "service-restart") {
+		t.Fatalf("the service was restarted although its step wasn't installed: %v", f.events)
 	}
 	if failed.Step.Fix != "Fix the cause, then run the same command again; setup resumes where it stopped." {
 		t.Fatalf("%q", failed.Step.Fix)
