@@ -90,6 +90,16 @@ func trustTree(t *testing.T, root string) {
 	t.Cleanup(func() { rootOwnedTrust = old })
 }
 
+// requireRootOwnedWriter skips a test that makes what only SYSTEM and the
+// Administrators may use, when the test doesn't run elevated: its own account
+// would be locked out of the directories it makes.
+func requireRootOwnedWriter(t *testing.T) {
+	t.Helper()
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("what root makes is closed to everyone but SYSTEM and the Administrators, so this test runs elevated")
+	}
+}
+
 func mkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -316,9 +326,7 @@ func TestOpenRootOwnedHeldDirectoryCannotBeRenamedOrReplaced(t *testing.T) {
 }
 
 func TestRootOwnedWriteFileMakesFilesOnlyRootChanges(t *testing.T) {
-	if !windows.GetCurrentProcessToken().IsElevated() {
-		t.Skip("what root makes is closed to everyone but SYSTEM and the Administrators, so this test runs elevated")
-	}
+	requireRootOwnedWriter(t)
 	tree := ownTree(t)
 	dir, err := ensureRootOwnedDir(filepath.Join(tree, "updates"), rootReadable)
 	if err != nil {
