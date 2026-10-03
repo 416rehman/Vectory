@@ -324,3 +324,603 @@
 [data-segment="update-failed"] {
   --rollout-mark: var(--rollout-failed);
 }
+
+/* ---------- Devices, Agent updates ---------- */
+
+/* The fleet: versions on one side, how hosts take updates on the other. */
+.update-fleet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: 28px;
+  margin-top: 22px;
+}
+.update-fleet > div {
+  min-width: 0;
+}
+.update-fleet h3 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.update-versions,
+.update-levels {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.update-versions > li {
+  min-width: 0;
+}
+.update-versions a,
+.update-version-static {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+}
+.update-versions a:hover,
+.update-levels a:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+.update-versions strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.update-versions span {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.update-version-static {
+  background: var(--surface-sunken);
+}
+.update-levels {
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+}
+.update-levels a {
+  display: grid;
+  gap: 2px;
+  min-height: 74px;
+  align-content: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+}
+.update-levels strong {
+  font-size: 24px;
+  line-height: 1.1;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.update-levels span {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+@media (max-width: 860px) {
+  .update-fleet {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+  }
+}
+
+/* The newer builds this server holds. */
+.update-catalog {
+  display: grid;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.update-catalog > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+.update-catalog > li + li {
+  border-top: 1px solid var(--line);
+}
+.update-catalog > li > div:first-child {
+  min-width: 0;
+}
+.update-catalog strong {
+  display: block;
+  font-size: 14px;
+}
+.update-catalog small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.update-catalog-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+}
+.update-catalog-state small {
+  margin: 0;
+}
+@media (max-width: 639px) {
+  .update-catalog > li {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .update-catalog-state {
+    justify-content: flex-start;
+  }
+}
+
+/* Releases, each a card; one waiting for a signature carries its steps. */
+.update-releases {
+  display: grid;
+  gap: 14px;
+}
+.update-release {
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.update-release[data-state="awaiting_signature"] {
+  border-left: 3px solid var(--mark-warning);
+}
+.update-release[data-state="withdrawn"],
+.update-release[data-state="expired"] {
+  background: var(--surface-sunken);
+}
+.update-release > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.update-release > header > div {
+  min-width: 0;
+}
+.update-release h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.update-release header p {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+.update-release-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px 24px;
+  margin: 16px 0 0;
+}
+.update-release-facts > div {
+  min-width: 0;
+}
+.update-release-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.update-release-facts dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.update-release-rollouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.update-release > .update-actions {
+  margin-top: 16px;
+}
+
+/* Waiting for your signature: four steps, the last of them the upload. */
+.update-sign {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+  background: var(--warning-bg);
+}
+.update-sign h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  color: var(--warning-text);
+  font-size: 14px;
+}
+.update-sign > p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.update-sign-steps {
+  display: grid;
+  gap: 18px;
+  margin: 16px 0 0;
+  padding: 0 0 0 20px;
+}
+.update-sign-steps > li {
+  min-width: 0;
+  padding-left: 4px;
+}
+.update-sign-steps > li::marker {
+  color: var(--warning-text);
+  font-weight: 650;
+}
+.update-sign-steps > li > strong {
+  display: block;
+  font-size: 13.5px;
+}
+.update-sign-steps > li > p {
+  margin: 3px 0 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.update-sign-steps > li > small {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.update-sign-steps code {
+  font-size: 12px;
+}
+.update-sign-upload {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.update-sign-upload .field {
+  margin: 0;
+}
+.update-sign-upload .update-actions {
+  margin-top: 0;
+}
+.update-file-ok {
+  margin: 0;
+  color: var(--success-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* A command to run on a host. */
+.update-command {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 8px 0;
+}
+.update-command-heading {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.update-command-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 12px 12px 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.update-command-body pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+.update-command-body pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+}
+.update-command-body pre:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.update-command-body .button,
+.update-command-body button {
+  flex-shrink: 0;
+}
+
+/* The rollouts table keeps its bar narrow. */
+.update-rollout-table .deployment-devices-cell {
+  min-width: 190px;
+}
+
+/* ---------- The review dialog ---------- */
+
+.update-review-body {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.update-review-sentence {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-lg);
+  background: var(--info-bg);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.update-review-heading {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.update-canary-note {
+  margin: 10px 0 14px;
+}
+.update-canary-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-full);
+  background: var(--info-bg);
+  color: var(--info-text);
+  font-size: 11.5px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+.update-wont-groups {
+  display: grid;
+  gap: 12px;
+}
+.update-wont {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mark-warning);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.update-wont[data-code="KEY_ROLLOVER_CONFLICT"],
+.update-wont[data-code="DEVICE_REVOKED"] {
+  border-left-color: var(--mark-danger);
+}
+.update-wont > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.update-wont > header strong {
+  font-size: 13.5px;
+}
+.update-wont p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.update-fix strong {
+  color: var(--text);
+}
+.update-wont-names {
+  color: var(--muted);
+}
+.update-fork {
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+}
+.update-fixes {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.update-fixes > summary {
+  cursor: pointer;
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.update-fixes-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  min-width: 0;
+}
+.update-fixes-body > p {
+  margin: 0;
+}
+.update-fixes-body .control-note {
+  margin: 0;
+}
+.update-warnings {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.update-warnings li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.update-warnings span {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- How a host takes updates: the shared fields ---------- */
+
+.update-consent {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.update-consent > * {
+  margin-block: 0;
+}
+.update-track {
+  margin: 0;
+}
+.update-window-field {
+  display: grid;
+  gap: 6px;
+}
+.update-window-field > label {
+  font-size: 13px;
+  font-weight: 550;
+}
+.update-window-field textarea {
+  min-height: 62px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.update-window-field textarea[aria-invalid="true"] {
+  border-color: var(--mark-danger);
+}
+.update-window-field small {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.update-window-field small.update-field-error {
+  color: var(--danger-text);
+}
+.update-pins {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mark-info);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.update-pins strong {
+  font-size: 13.5px;
+}
+.update-pins span {
+  color: var(--muted);
+}
+
+/* ---------- The device page, and the Upgrade agent dialog ---------- */
+
+.update-fact-note {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.update-device-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mark-info);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.update-device-note[data-tone="warning"] {
+  border-color: var(--warning-border);
+  border-left-color: var(--mark-warning);
+  background: var(--warning-bg);
+}
+.update-device-note[data-tone="danger"] {
+  border-color: var(--danger-border);
+  border-left-color: var(--mark-danger);
+  background: var(--danger-bg);
+}
+.update-reported {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.update-upgrade-opted,
+.update-upgrade-step {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 0 20px;
+}
+.update-upgrade-opted > *,
+.update-upgrade-step > * {
+  margin-block: 0;
+}
+.update-upgrade-opted {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+.update-upgrade-opted h3,
+.update-upgrade-step h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.update-upgrade-opted details > summary {
+  cursor: pointer;
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---------- The rollout page ---------- */
+
+.update-timing {
+  margin: 12px 0 0;
+}
+.update-rollout .rollout-summary-head p {
+  overflow-wrap: anywhere;
+}

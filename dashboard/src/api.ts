@@ -1486,6 +1486,9 @@ export const AuditSummarySchema = z.object({
     "issue",
     "signing_key",
     "server",
+    "agent_release_key",
+    "agent_release",
+    "agent_update_rollout",
     "unknown",
   ]),
   target_name: z.string().nullable(),
@@ -1498,6 +1501,8 @@ export const AuditSummarySchema = z.object({
   request_id: z.string().nullable(),
 });
 const auditNumber = z.number().int().nonnegative();
+const soft = <T extends z.ZodType>(schema: T) =>
+  schema.optional().catch(undefined);
 export const AuditDetailsSchema = z.object({
   reason: z.string().optional(),
   previous_group_revision: auditNumber.max(Number.MAX_SAFE_INTEGER).optional(),
@@ -1540,6 +1545,29 @@ export const AuditDetailsSchema = z.object({
     .string()
     .refine((value) => Array.from(value).length <= 500)
     .optional(),
+  // Agent updates: versions, digests, counters, fingerprints and codes, never
+  // key material. The event view only displays them, so one that doesn't fit
+  // its shape is left out instead of hiding the event.
+  custody: soft(z.enum(["server", "offline"])),
+  fingerprint: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  from_fingerprint: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  source: soft(z.enum(["server", "upload"])),
+  version: soft(z.string().max(64)),
+  counter: soft(z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)),
+  manifest_sha256: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  release_id: soft(z.string().max(128)),
+  rollout_id: soft(z.string().max(128)),
+  stage: soft(z.string().max(32)),
+  gate_state: soft(z.string().max(32)),
+  released_count: soft(auditNumber),
+  verified_count: soft(auditNumber),
+  withdrawn_releases: soft(auditNumber),
+  cancelled_rollouts: soft(auditNumber),
+  from_version: soft(z.string().max(128)),
+  to_version: soft(z.string().max(64)),
+  code: soft(z.string().max(64)),
+  state: soft(z.string().max(32)),
+  device_ids: soft(z.array(z.string().max(128)).max(100)),
 });
 export const AuditDetailSchema = AuditSummarySchema.extend({
   details: AuditDetailsSchema,

@@ -4,7 +4,6 @@
 // the restart; a download, a staged file or a swap is never an update.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft,
   Ban,
   CircleCheck,
   Clock,
@@ -614,7 +613,6 @@ export default function UpdateRolloutPage({
           </div>
         </Modal>
       )}
-      <Back onBack={back} />
     </div>
   );
 }
@@ -629,14 +627,6 @@ function canaryNames(detail: UpdateRolloutDetail) {
   return names.length <= 2
     ? names.join(" and ")
     : `${names.slice(0, 2).join(", ")} and ${canary.size - 2} more`;
-}
-
-function Back({ onBack }: { onBack(): void }) {
-  return (
-    <button type="button" className="rollout-back update-back" onClick={onBack}>
-      <ArrowLeft size={15} aria-hidden="true" /> Agent updates
-    </button>
-  );
 }
 
 /* ---------- Stages as lanes ---------- */
