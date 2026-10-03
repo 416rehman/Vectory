@@ -41,7 +41,13 @@ export type StatusDomain =
   | "audit"
   | "gate"
   | "stage"
-  | "telemetry";
+  | "telemetry"
+  | "updateTarget"
+  | "updateHost"
+  | "updateStage"
+  | "updateRollout"
+  | "updateRelease"
+  | "releaseKey";
 
 const entry = (
   label: string,
@@ -457,6 +463,234 @@ export const telemetryStates = {
   ),
 } satisfies Record<string, StatusEntry>;
 
+/**
+ * Agent updates. A device is "Updated" only when the server saw the new build
+ * check in after its restart and the host reported it healthy; a download, a
+ * staged file or a swap is never an update.
+ */
+export const updateTargetStates = {
+  pending: entry(
+    "Pending",
+    "neutral",
+    "clock",
+    "Waits for its stage to be released.",
+  ),
+  offered: entry(
+    "Offered",
+    "info",
+    "clock",
+    "The offer reaches it at its next check-in.",
+  ),
+  downloading: entry(
+    "Downloading",
+    "info",
+    "progress",
+    "The agent is downloading the build and checking it.",
+  ),
+  staged: entry(
+    "Staged",
+    "info",
+    "progress",
+    "The build is downloaded and checked. It isn't installed yet.",
+  ),
+  waiting_for_host: entry(
+    "Waiting for the host",
+    "info",
+    "clock",
+    "Staged. Someone on the host runs vectory update apply.",
+  ),
+  waiting_for_window: entry(
+    "Waiting for its window",
+    "info",
+    "calendar",
+    "Staged. It installs when its update window opens.",
+  ),
+  applying: entry(
+    "Applying",
+    "info",
+    "progress",
+    "The host is swapping in the new build.",
+  ),
+  restarted: entry(
+    "Trying the new build",
+    "info",
+    "progress",
+    "The new build checked in. The host is checking its health.",
+  ),
+  verified: entry(
+    "Updated",
+    "success",
+    "check",
+    "The new build checked in after the restart, and the host reported it healthy.",
+  ),
+  rolled_back: entry(
+    "Rolled back",
+    "danger",
+    "undo",
+    "The host took the new build back and won't try this release again.",
+  ),
+  refused: entry(
+    "Refused",
+    "warning",
+    "ban",
+    "The host's own rules refused this release.",
+  ),
+  failed: entry(
+    "Failed",
+    "danger",
+    "x",
+    "The update failed, or the device stopped reporting after it began.",
+  ),
+  cancelled: entry(
+    "Cancelled",
+    "neutral",
+    "x",
+    "Cancelled before it started applying.",
+  ),
+  skipped: entry(
+    "Skipped",
+    "neutral",
+    "minus",
+    "It never became ready before the rollout ended.",
+  ),
+  // Verified on the new build, but an open delivery issue says it isn't delivering.
+  degraded: entry(
+    "Not delivering",
+    "warning",
+    "alert",
+    "Updated, but the device isn't delivering. An open delivery issue says why.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
+/** What a device's last report says it is doing about an update. */
+export const updateHostStates = {
+  idle: entry("Idle", "neutral", "minus", "No update is in progress."),
+  downloading: updateTargetStates.downloading,
+  staged: updateTargetStates.staged,
+  waiting_for_host: updateTargetStates.waiting_for_host,
+  waiting_for_window: updateTargetStates.waiting_for_window,
+  applying: updateTargetStates.applying,
+  trial: updateTargetStates.restarted,
+  refused: updateTargetStates.refused,
+  failed: entry(
+    "Failed",
+    "danger",
+    "x",
+    "The update failed before anything was installed.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
+export const updateStageStates = {
+  queued: entry("Queued", "neutral", "clock", "Waits for the stage before it."),
+  in_progress: entry(
+    "Updating",
+    "info",
+    "progress",
+    "Devices in this stage are taking the update.",
+  ),
+  observing: entry(
+    "Observing",
+    "info",
+    "eye",
+    "Every device is done. The rollout watches them before it goes on.",
+  ),
+  passed: entry(
+    "Passed",
+    "success",
+    "check",
+    "This stage finished and its observation passed.",
+  ),
+  failed: entry("Failed", "danger", "x", "The rollout stopped in this stage."),
+  stopped: entry(
+    "Not released",
+    "neutral",
+    "minus",
+    "The rollout ended before this stage.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
+export const updateRolloutStatuses = {
+  active: entry(
+    "In progress",
+    "info",
+    "progress",
+    "Offering the build to devices and waiting for them to update.",
+  ),
+  paused: entry(
+    "Paused",
+    "warning",
+    "pause",
+    "No device is offered the build until the rollout resumes.",
+  ),
+  completed: entry(
+    "Completed",
+    "success",
+    "check",
+    "Every device that was offered the build has finished.",
+  ),
+  cancelled: entry(
+    "Cancelled",
+    "neutral",
+    "x",
+    "No more devices are offered the build. Devices applying it finish.",
+  ),
+  failed: entry(
+    "Failed",
+    "danger",
+    "x",
+    "Failures reached the rollout's threshold.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
+export const updateReleaseStates = {
+  awaiting_signature: entry(
+    "Waiting for your signature",
+    "warning",
+    "clock",
+    "Sign the manifest with your key, then upload the signature.",
+  ),
+  ready: entry(
+    "Ready",
+    "success",
+    "check",
+    "Signed. Operators and administrators can start an update rollout.",
+  ),
+  withdrawn: entry(
+    "Withdrawn",
+    "neutral",
+    "ban",
+    "No device is offered it. Its record stays.",
+  ),
+  // Derived: a ready release whose expiry has passed.
+  expired: entry(
+    "Expired",
+    "neutral",
+    "calendar-x",
+    "Hosts refuse it now. Prepare a new release.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
+export const releaseKeyStates = {
+  current: entry(
+    "Current",
+    "success",
+    "check",
+    "New releases are signed with it, and new hosts pin it.",
+  ),
+  retired: entry(
+    "Retired",
+    "neutral",
+    "minus",
+    "A rollover replaced it. Hosts that still pin it follow the chain.",
+  ),
+  revoked: entry(
+    "Revoked",
+    "danger",
+    "ban",
+    "Nothing it signed is offered. Hosts that pin it need the Upgrade agent command.",
+  ),
+} satisfies Record<string, StatusEntry>;
+
 export const statusDomains: Record<
   StatusDomain,
   Record<string, StatusEntry>
@@ -471,6 +705,12 @@ export const statusDomains: Record<
   gate: gateStates,
   stage: stageStates,
   telemetry: telemetryStates,
+  updateTarget: updateTargetStates,
+  updateHost: updateHostStates,
+  updateStage: updateStageStates,
+  updateRollout: updateRolloutStatuses,
+  updateRelease: updateReleaseStates,
+  releaseKey: releaseKeyStates,
 };
 
 export function humanizeState(value: string) {
