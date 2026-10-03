@@ -15,8 +15,8 @@ Pick the role the person's work needs:
 | --- | --- |
 | **Viewer** | View devices, pipelines, deployments and activity; export the audit log. |
 | **Editor** | Viewer access, plus create, edit, check and organize pipeline drafts. Cannot publish or deploy. |
-| **Operator** | Viewer access, plus publish and deploy, and manage schedules, groups, agent settings, enrollment tokens and device access. Cannot edit drafts. |
-| **Administrator** | Everything, including managing people and recovering device identities. |
+| **Operator** | Viewer access, plus publish and deploy, and manage schedules, groups, agent settings, enrollment tokens and device access. Review, start, pause and cancel [agent update](agent-updates.md) rollouts, and stop all updates. Cannot edit drafts. |
+| **Administrator** | Everything, including managing people and recovering device identities. Turn agent updates on, hold or change the release key, and prepare and sign releases. |
 
 Editor and Operator are separate jobs, not levels. Someone who both builds and ships pipelines needs Administrator.
 
@@ -81,7 +81,7 @@ docker compose cp server:/var/lib/vectory/backup-2026-09-29 /srv/backups/
 
 Use a new folder name for each backup.
 
-- Keep backups encrypted and access-restricted, off the server: they contain the server's private keys.
+- Keep backups encrypted and access-restricted, off the server: they contain the server's private keys. With [agent updates](agent-updates.md) on and **This server signs** chosen, that includes the release key: whoever holds the backup can approve builds that hosts install as root. A key kept offline is never in a backup.
 - Back up your TLS files, `deploy/.env` and any agent download mirror separately.
 - Avoid rotating signing keys or upgrading while a backup runs. For the strongest guarantee, stop the server first.
 - The backup's manifest lists file hashes. It detects damage; it isn't a signature.
@@ -108,6 +108,8 @@ An old backup also restores old decisions: accounts that were disabled, old role
 
 > [!CAUTION]
 > Never delete a device's state, lower its counters or re-enroll it to make it accept an older server. Devices refuse older configurations on purpose.
+
+If you rotated or rolled over the release key after the backup was made, hosts can pin a newer key than the restored server knows. The review lists them as **This host doesn't pin the key that signed this release** until you run their **Upgrade agent** command with the key the restored server signs with. See [Agent updates](agent-updates.md#rotate-or-replace-the-release-key).
 
 ## Upgrade the server
 
@@ -163,6 +165,7 @@ A load test on 2026-09-30 ran a release build on a shared Linux virtual machine 
 - Select an event for its details, including the reason and request ID when recorded. **Event link** copies a link to it.
 - Names show each person's and resource's current name; the recorded ID is what the event refers to. An issue reads as its title on its device, and a device recovery as completed by the token that authorized it.
 - A run of device results from a rollout shares one row. For one device the row reads its last state, such as **edge-nyc-02 · rolled back**, and counts its steps (**12 results**); for several devices it reads, for example, **4 results for 2 devices**, with each device's last state counted. Select the row to read every step in order.
+- [Agent updates](agent-updates.md) record who turned them on or off, stopped them, rotated, rolled over or revoked a key, prepared, signed or withdrew a release, and started, paused, resumed or cancelled a rollout. Filter the **Event** column by **Agent updates**, **Release keys**, **Agent releases** or **Agent update rollouts**. Each device's result (updated, rolled back, failed or refused) is **Device agent update**, at most four rows a minute per device. Details hold versions, counters, digests, fingerprints and codes, never key material.
 
 To export:
 

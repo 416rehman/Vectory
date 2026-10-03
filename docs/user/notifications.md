@@ -87,10 +87,11 @@ Every message is one JSON object. Slack reads `text` and `blocks`; other receive
 | Field | Holds |
 | --- | --- |
 | `event.id` | The same for every attempt and every channel that sends this event. Use it to drop duplicates. |
-| `event.type` | `issue.opened`, `issue.resolved`, `rollout.failed`, `rollout.rolled_back`, `canary.paused`, `device.offline`, `device.recovered`, `test` or `digest`. |
+| `event.type` | `issue.opened`, `issue.resolved`, `rollout.failed`, `rollout.rolled_back`, `canary.paused`, `agent_update.failed`, `agent_update.rolled_back`, `agent_update.stopped`, `agent_update.key_changed`, `device.offline`, `device.recovered`, `test` or `digest`. |
 | `event.severity` | `error` or `warning`; `info` for a test. |
 | `event.recovery` | `true` for `issue.resolved` and `device.recovered`. |
 | `event.device`, `event.pipeline`, `event.deployment`, `event.issue` | What the event is about, or `null`. |
+| `event.agent_update` | Only on the four `agent_update.*` events: `release_version`, `rollout` (`id` and `name`), `code` (the agent's code for a rollback) and `key` (the short ID of the key that became current). Each can be `null`. |
 | `event.restored` | Only on `rollout.rolled_back`: the pipeline version the rollback restored, as `id`, `name` and `version_number`. It can belong to another pipeline than `event.pipeline`. |
 | `event.test` | `true` only for a message sent with **Send test**. |
 | `event.url` | The page in Vectory, or `null` without `VECTORY_PUBLIC_URL`. |
@@ -143,13 +144,19 @@ Each channel has its own events and filters, so one channel can page on-call for
 | **Rollout failed** | A rollout stopped: too many devices failed, a canary stopped delivering, or its scheduled start was blocked. |
 | **Rollout rolled back** | Someone rolled a deployment back. |
 | **Canary paused** | A canary waits because devices that applied it stopped delivering events. |
+| **An agent update rollout stopped** | An [agent update](agent-updates.md) rollout reached its failure threshold: too many devices rolled back or failed, or an updated device stopped delivering. This is an error. |
+| **A device rolled back an agent update** | A device took its previous agent build back. The message says which build and why. |
+| **All agent updates were stopped** | Someone used **Stop all updates**. |
+| **The release key changed** | Agent updates were turned on or off, or a release key was rotated, rolled over or revoked. That decides which key new hosts pin. |
 | **Device offline** | A device missed three check-ins and has been silent for the minutes you choose (15 by default, 5 to 1,440). |
 | **Device back online** | A device you were told about checks in twice again. |
 
-A new channel starts with every event except **Rollout rolled back** and **Canary paused**. Turn them on for the channels that should send them.
+A new channel starts with every event except **Rollout rolled back**, **Canary paused** and the four events of agent updates. Turn them on for the channels that should send them.
 
-- **Severity:** **Errors only** sends issues with error severity and failed rollouts. Everything else is a warning.
+- **Severity:** **Errors only** sends issues with error severity, failed rollouts and agent update rollouts that stopped. Everything else is a warning.
 - **Pipelines** and **Groups:** send only events about these. A rollout matches the groups it targets and the groups of its devices.
+
+The events of agent updates aren't about a pipeline, so a **Pipelines** filter matches none of them. A **Groups** filter matches **A device rolled back an agent update** by its device, and **An agent update rollout stopped** by the groups its rollout targets or its devices belong to. **All agent updates were stopped** and **The release key changed** are about the whole server, so only a channel with no **Pipelines** or **Groups** filter sends them. The channel's dialog says so when a filter would keep out an event you chose.
 
 Each event goes out once per channel. A device that drops out again before its second check-in stays in the same outage, so it doesn't send a second **Device offline**. A new channel sends events from the moment you save it; it doesn't announce devices that were already offline. After the server starts, no offline alert goes out for five minutes, so devices can reconnect: one that checks in during that time is never reported. Silence is counted from a device's last check-in. A device already silent for the channel's minutes when the five minutes end is reported then, and any other when its own minutes pass.
 
