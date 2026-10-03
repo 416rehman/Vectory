@@ -13,6 +13,7 @@ import {
   pipelineFixable,
   pickupText,
   progressSegments,
+  releasedNothing,
   releasePlan,
   requestRollbackReview,
   rolloutProgress,
@@ -31,6 +32,84 @@ const base = {
   replaced_by: [],
   failure_reason: null,
 };
+
+describe("a schedule cancelled before it started has nothing to roll back", () => {
+  const scheduled_at = "2026-10-01T12:00:00Z";
+  it("released nothing when every device still waits", () => {
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at,
+        target_count: 3,
+        state_counts: { pending: 3 },
+      }),
+    ).toBe(true);
+    // Devices that left the schedule don't count; the ones that remain wait.
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at,
+        target_count: 3,
+        state_counts: { pending: 2, removed: 1 },
+      }),
+    ).toBe(true);
+  });
+  it("is not a schedule that released a device, or one that can still release", () => {
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at,
+        target_count: 3,
+        state_counts: { pending: 2, verified_applied: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at,
+        target_count: 3,
+        state_counts: { pending: 1, rolled_back: 2 },
+      }),
+    ).toBe(false);
+    for (const status of ["scheduled", "active", "paused", "failed"])
+      expect(
+        releasedNothing({
+          status,
+          scheduled_at,
+          target_count: 2,
+          state_counts: { pending: 2 },
+        }),
+      ).toBe(false);
+  });
+  it("is not claimed for a deployment that was never scheduled", () => {
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at: null,
+        target_count: 2,
+        state_counts: { pending: 2 },
+      }),
+    ).toBe(false);
+  });
+  it("is not claimed when there is no device to count", () => {
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at,
+        target_count: 2,
+        state_counts: { removed: 2 },
+      }),
+    ).toBe(false);
+    expect(
+      releasedNothing({
+        status: "cancelled",
+        scheduled_at,
+        target_count: 0,
+        state_counts: {},
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("rollout status keeps outcome separate from assignment changes", () => {
   it("labels a rolled-back completed rollout as rolled back, never cancelled", () => {

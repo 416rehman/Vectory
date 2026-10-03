@@ -98,6 +98,7 @@ import {
   pipelineFixable,
   pickupText,
   progressSegments,
+  releasedNothing,
   rolloutProgress,
   takeRollbackReview,
   statusFilters,
@@ -1695,11 +1696,14 @@ function RolloutPage({
     "cancelled",
     "failed",
   ].includes(status);
+  // A schedule cancelled before its start released nothing: there is no
+  // previous version to return to, so the menu doesn't offer it.
   const canRollBack =
     operate &&
     !!deployment?.version_id &&
     candidate &&
-    !deployment?.rolled_back_by;
+    !deployment?.rolled_back_by &&
+    !releasedNothing(deployment);
   const rollbackUnavailable = deployment?.rollback_available === false;
   const unavailableReason =
     (deployment?.target_count || 0) -
@@ -2671,7 +2675,9 @@ function ActionDialog({
               ? "Don't wait for this stage to finish. The release is recorded as early."
               : action === "pause"
                 ? "Stop releasing to more devices. Devices that already received it keep it."
-                : "Stop releasing to more devices. Devices that already received it keep it. Rollback is separate."
+                : deployment?.status === "scheduled"
+                  ? "Nothing has been released. The schedule never starts, and no device changes."
+                  : "Stop releasing to more devices. Devices that already received it keep it. Rollback is separate."
       }
     >
       <div className="modal-body">

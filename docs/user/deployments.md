@@ -257,7 +257,7 @@ A rollout's **Stop rollout** menu (**Roll back or remove** once it finished) hol
 | --- | --- |
 | **Pause** | Stops releasing to more devices; resume later. Devices already updated keep the version. |
 | **Cancel** | Stops releasing for good. Devices already updated keep the version. A schedule cancelled before it starts never starts. |
-| **Roll back** | Returns the devices it released to their previous version. See [Roll back deliberately](#roll-back-deliberately). |
+| **Roll back** | Returns the devices it released to their previous version. A schedule cancelled before it started released nothing, so it doesn't offer it. See [Roll back deliberately](#roll-back-deliberately). |
 | **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
 | **Pause configuration sync** (agent settings) | Devices keep their current configuration and stop applying new versions. |
 | `vectory pause` on a device | The same, set by the host. Only the host can clear it. |

@@ -220,12 +220,17 @@ function preview() {
   if (state.previewFault === "status") value.source_status = "active";
   return value;
 }
-async function load({ width = 899, theme = "light", role = "admin" } = {}) {
+async function load({
+  width = 899,
+  theme = "light",
+  role = "admin",
+  status = "scheduled",
+} = {}) {
   if (context) await context.close();
   state = {
     actor: id(90),
     role,
-    status: "scheduled",
+    status,
     members: [1, 2],
     savedMembers: [1],
     resource: "configuration",
@@ -936,6 +941,69 @@ try {
         state.holds.shift()();
         await expect(review()).toHaveCount(0);
         expect(state.commits).toHaveLength(0);
+      },
+    );
+    await check(
+      "Cancelling a schedule says nothing was released, and a schedule cancelled before it started offers no rollback",
+      async () => {
+        for (const width of [899, 390])
+          for (const theme of ["light", "dark"]) {
+            await load({ width, theme });
+            await details()
+              .getByRole("button", { name: "Cancel schedule", exact: true })
+              .click();
+            const cancel = page.getByRole("dialog", {
+              name: "Cancel schedule",
+              exact: true,
+            });
+            await expect(cancel).toContainText(
+              "Nothing has been released. The schedule never starts, and no device changes.",
+            );
+            await expect(cancel).not.toContainText("already received it");
+            await expect(cancel).not.toContainText("Rollback");
+            const scan = await new AxeBuilder({ page })
+              .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+              .analyze();
+            expect(scan.violations).toEqual([]);
+            accessibility.push({
+              width,
+              theme,
+              view: "cancel schedule",
+              violations: scan.violations,
+            });
+            expect(
+              await page.evaluate(() => document.documentElement.scrollWidth),
+            ).toBeLessThanOrEqual(width);
+            await page.screenshot({
+              path: resolve(output, `schedule-cancel-${width}-${theme}.png`),
+            });
+            await cancel
+              .getByRole("button", { name: "Keep current state", exact: true })
+              .click();
+            await expect(cancel).toHaveCount(0);
+
+            await load({ width, theme, status: "cancelled" });
+            await expect(
+              details().getByRole("button", {
+                name: "Remove assignment",
+                exact: true,
+              }),
+            ).toBeVisible();
+            await expect(
+              details().getByRole("button", { name: /^Roll back/ }),
+            ).toHaveCount(0);
+            await expect(
+              details().getByRole("button", {
+                name: /^(Stop rollout|Roll back or remove)$/,
+              }),
+            ).toHaveCount(0);
+            expect(
+              await page.evaluate(() => document.documentElement.scrollWidth),
+            ).toBeLessThanOrEqual(width);
+            await page.screenshot({
+              path: resolve(output, `schedule-cancelled-${width}-${theme}.png`),
+            });
+          }
       },
     );
     await check(
