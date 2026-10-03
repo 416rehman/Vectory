@@ -61,6 +61,7 @@ func newOfferRig(t *testing.T) *offerRig {
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		t.Skip("a release names builds for amd64 and arm64")
 	}
+	requireRootOwnedWriter(t) // the host's policy and the step's status are root's to write
 	d := newCheckDevice(t)
 	rig := &offerRig{checkDevice: d, t: t, paths: useUpdateRoots(t)}
 	rig.private = testPrivateKey(t, 1)

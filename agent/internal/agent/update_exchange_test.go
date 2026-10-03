@@ -18,6 +18,7 @@ const memberRefusedLine = "The server refused a check-in; the agent sent it agai
 // withAgentUpdate has the server list the feature and the agent know it does.
 func withAgentUpdate(t *testing.T, d *checkDevice) {
 	t.Helper()
+	requireRootOwnedWriter(t) // a test that sets the policy makes what only root may use
 	useUpdateRoots(t)
 	features := []string{featureValidation, featureAgentUpdate}
 	d.plane.with(func(m *Manifest) { m.Features = features })

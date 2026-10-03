@@ -438,6 +438,8 @@ func (e *Engine) agentUpdateReport() *AgentUpdateReport {
 	return &report
 }
 
+// buildAgentUpdateReport is the member the facts add up to, whether or not the
+// server would accept it: agentUpdateReport checks that.
 func (e *Engine) buildAgentUpdateReport(facts updateFacts) AgentUpdateReport {
 	policy := facts.policy
 	report := AgentUpdateReport{

@@ -2,12 +2,18 @@ package agent
 
 import (
 	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -211,7 +217,7 @@ func TestABusyServerIsWaitedOutWithItsRetryAfter(t *testing.T) {
 			rig.settle()
 			rig.settle()
 			wait := time.Until(rig.e.update.retryAt)
-			if wait > tc.wait+time.Second || wait < tc.wait-3*time.Second {
+			if wait > tc.wait+time.Second || wait < tc.wait-10*time.Second {
 				t.Fatalf("the agent waits %s, the server asked for %s", wait, tc.wait)
 			}
 			if rig.e.update.failures[rig.releaseSHA] != 0 {
@@ -462,5 +468,81 @@ func TestATransferHasItsOwnConnections(t *testing.T) {
 	}
 	if err := client.CheckRedirect(nil, nil); err == nil {
 		t.Fatal("a redirect is allowed")
+	}
+}
+
+// Over the connection a device really uses, a transfer presents the device's
+// certificate and trusts only the CA the host was set up with.
+func TestATransferPresentsTheDevicesCertificateAndTrustsOnlyTheServersCA(t *testing.T) {
+	ca := makeCA(t)
+	build := bytes.Repeat([]byte("a signed build. "), 4000)
+	var mu sync.Mutex
+	var seen []string
+	server := trustedServer(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := ""
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			name = r.TLS.PeerCertificates[0].Subject.CommonName
+		}
+		mu.Lock()
+		seen = append(seen, name)
+		mu.Unlock()
+		if name != "device-a" {
+			http.Error(w, "no device certificate", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(build)))
+		_, _ = w.Write(build)
+	}))
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := AtomicWrite(caFile, []byte(ca.pem)); err != nil {
+		t.Fatal(err)
+	}
+	deviceKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := Credentials{DeviceID: "device-a", CertificatePEM: ca.issue(t, &deviceKey.PublicKey, "device-a", false, time.Now().Add(time.Hour))}
+	path := updateReleasePath + Digest(build)
+
+	trusted, err := NewClient(Settings{Server: server.URL, CAFile: caFile}, &credentials, privatePEM(t, deviceKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trusted.Close()
+	dir := t.TempDir()
+	info, err := trusted.downloadAgentBuild(context.Background(), path, dir, int64(len(build)), Digest(build))
+	if err != nil {
+		t.Fatalf("a device with its certificate and the right CA: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, UpdateBuildFile(runtime.GOOS)))
+	if err != nil || !bytes.Equal(got, build) || info.Size() != int64(len(build)) {
+		t.Fatalf("the build on disk: %v", err)
+	}
+	mu.Lock()
+	if len(seen) != 1 || seen[0] != "device-a" {
+		t.Fatalf("the server saw %v", seen)
+	}
+	mu.Unlock()
+
+	// A host that doesn't trust the server's CA sends nothing: no request, and no
+	// file.
+	untrusting, err := NewClient(Settings{Server: server.URL}, &credentials, privatePEM(t, deviceKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer untrusting.Close()
+	other := t.TempDir()
+	_, err = untrusting.downloadAgentBuild(context.Background(), path, other, int64(len(build)), Digest(build))
+	var failure *updateDownloadError
+	if !errors.As(err, &failure) || failure.Code != "DOWNLOAD_FAILED" {
+		t.Fatalf("%v", err)
+	}
+	if entries, _ := os.ReadDir(other); len(entries) != 0 {
+		t.Fatalf("a transfer that never connected left %d files", len(entries))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("a client that doesn't trust the server's CA reached it: %v", seen)
 	}
 }

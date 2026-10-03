@@ -242,6 +242,49 @@ func TestEveryRefusalHappensBeforeAnyDownloadAndStagesNothing(t *testing.T) {
 	}
 }
 
+// A release signed by the successor of a pinned key is taken when the offer carries
+// the statement that hands the key over, and the statement goes to the step with
+// the rest of the offer. The host's pins are the step's to change, after the
+// build proved itself.
+func TestAReleaseSignedByTheSuccessorOfAPinnedKeyIsStagedWithItsStatement(t *testing.T) {
+	rig := newOfferRig(t)
+	successor := testPrivateKey(t, 7)
+	successorKey := testPublicKey(t, successor, "team-next")
+	envelope, err := SignRollover(rig.private, successorKey, time.Now().UTC().Truncate(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildReleaseManifest(rig.defaultRelease())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatures, err := BuildReleaseSignatures([]ReleaseSignature{releaseSignatureBy(successorKey, successor.SignRelease(manifest))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without the statement, the successor's key is nobody the host knows.
+	rig.offer(manifest, signatures, nil)
+	rig.poll()
+	rig.poll()
+	if beat := rig.beat(); beat["code"] != "KEY_NOT_PINNED" || rig.requests() != 0 {
+		t.Fatalf("%v", beat)
+	}
+	rig.offer(manifest, signatures, []RolloverEnvelope{envelope})
+	rig.stageIt()
+	rollovers, err := ReadUpdateRollovers(rig.stagedFile(UpdateRolloversFile))
+	if err != nil || len(rollovers) != 1 || rollovers[0] != envelope {
+		t.Fatalf("the statement didn't go to the step: %v %v", rollovers, err)
+	}
+	// The agent changes no pin: that is the step's, and only after a commit.
+	policy, err := ReadUpdatePolicy()
+	if err != nil || !slices.Equal(policy.Fingerprints(), []string{rig.public.Fingerprint()}) {
+		t.Fatalf("the pins are %v (%v)", policy.Fingerprints(), err)
+	}
+	if beat := rig.beat(); beat["keys"].([]any)[0] != rig.public.Fingerprint() {
+		t.Fatalf("the host reports %v", beat["keys"])
+	}
+}
+
 // A release that already runs here is no news: a host that just installed it still
 // sees it offered until the server has seen the new build check in.
 func TestAReleaseTheHostAlreadyRunsIsRefusedWithoutAWord(t *testing.T) {

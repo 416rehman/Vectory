@@ -12,6 +12,7 @@ import (
 // updates stand, from the view `vectory update status` prints.
 
 func TestStatusShowsWhatTheHostConsentedTo(t *testing.T) {
+	requireRootOwnedWriter(t)
 	withLocalZone(t, time.UTC)
 	_, dir := enrolledInstallation(t)
 	useUpdateRoots(t)
@@ -207,6 +208,7 @@ func TestDoctorChecksWhatAnUpdateNeeds(t *testing.T) {
 // The doctor of an installed host includes the update checks, and a host with a
 // policy this agent can't trust fails them.
 func TestTheDoctorIncludesTheUpdateChecks(t *testing.T) {
+	requireRootOwnedWriter(t)
 	_, dir := enrolledInstallation(t)
 	paths := useUpdateRoots(t)
 	if err := WriteUpdatePolicy(viewPolicy(t, UpdateConsentAsk)); err != nil {

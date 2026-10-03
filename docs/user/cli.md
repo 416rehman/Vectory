@@ -482,7 +482,7 @@ Staged       0.1.1 (14.5 MB) · offered 01:58
 | **Staged** | The build the agent staged for the update step, and when it was offered. |
 | **Last result** | How the last update ended, such as `rolled back from 0.1.1 at 02:19: it didn't check in within 5 minutes; this host won't try 0.1.1 again`. |
 
-With `--json`, `status` prints one document: `consent`, `paused`, `local_pause`, `track`, `windows`, `window_open`, `next_window_at`, `keys` (each with `fingerprint`, `short_id`, `name` and `pinned_at`), `policy_problem`, `eligibility`, `step`, `staged`, `in_progress`, `last`, `rollover_conflict` and `line`, the text `vectory status` shows. Every member is present, `null` where nothing applies.
+With `--json`, `status` prints one document: `state_dir`, `consent`, `paused`, `local_pause`, `track`, `windows`, `window_open`, `next_window_at`, `keys` (each with `fingerprint`, `short_id`, `name` and `pinned_at`), `policy_problem`, `eligibility`, `step`, `staged`, `in_progress`, `last`, `rollover_conflict` and `line`, the text `vectory status` shows. Every member is present, `null` where nothing applies.
 
 ### update apply
 
