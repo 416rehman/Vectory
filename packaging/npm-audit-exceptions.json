@@ -1,0 +1,9 @@
+[
+  {
+    "directory": "help-center",
+    "advisory": "GHSA-ch52-4w7c-c8xp",
+    "package": "http-cache-semantics",
+    "reason": "Astro's build tooling uses http-cache-semantics only to cache remote images that it downloads while the help center is built (astro/dist/assets/build/remote.js). It calls storable() and timeToLive(), not the request matching (satisfiesWithoutRevalidation, evaluateRequest) that holds the max-stale flaw, and the help center uses no remote image. Every release of the package is affected and none is patched: 4.2.0 is the latest, and astro 7.3.5, also the latest, requires ^4.2.0. Nothing that ships contains the package. help-center/scripts/build.mjs writes static pages and copies them to dashboard/dist/help (lines 81 to 85). deploy/Dockerfile installs the help center's packages only in its dashboard build stage (line 7), and its runtime stage (line 44: debian:bookworm-slim, no Node and no node_modules) copies only dashboard/dist from that stage (line 52).",
+    "expires": "2026-12-31"
+  }
+]
