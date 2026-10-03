@@ -46,24 +46,23 @@ func TestTheUpdateRootIsWhereTheAgentKeepsItsOwnDirectories(t *testing.T) {
 
 func TestWhichStatePathsAreKeptInTheUpdateRoot(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		path        string
-		rootIsState bool
-		kept        bool
+		name string
+		path string
+		kept bool
 	}{
-		{"the default state directory", stateRootPath + `\agent`, false, true},
-		{"the directory of the default managed configuration", stateRootPath + `\managed`, false, true},
-		{"a directory below the state directory", stateRootPath + `\agent\updates\incoming\x`, false, true},
-		{"the same path spelled in other letters", `c:\programdata\VECTORY\Agent`, false, true},
-		{"a custom state directory elsewhere on the drive", `C:\Agent\state`, false, false},
-		{"a custom state directory in ProgramData but not in the update root", `C:\ProgramData\Acme\agent`, false, false},
-		{"a folder whose name only starts like the update root's", `C:\ProgramData\VectoryState\agent`, false, false},
-		{"another drive's ProgramData", `D:\ProgramData\Vectory\agent`, false, false},
-		{"a person's own folder", `C:\Users\alice\AppData\Local\Vectory\agent`, false, false},
-		{"the update root itself, as the state directory", stateRootPath, false, false},
-		{"something below a root that is itself an installed agent's state directory", stateRootPath + `\validation`, true, false},
+		{"the default state directory", stateRootPath + `\agent`, true},
+		{"the directory of the default managed configuration", stateRootPath + `\managed`, true},
+		{"a directory below the state directory", stateRootPath + `\agent\updates\incoming\x`, true},
+		{"the same path spelled in other letters", `c:\programdata\VECTORY\Agent`, true},
+		{"something directly below the root, whatever else is in the root", stateRootPath + `\validation`, true},
+		{"a custom state directory elsewhere on the drive", `C:\Agent\state`, false},
+		{"a custom state directory in ProgramData but not in the update root", `C:\ProgramData\Acme\agent`, false},
+		{"a folder whose name only starts like the update root's", `C:\ProgramData\VectoryState\agent`, false},
+		{"another drive's ProgramData", `D:\ProgramData\Vectory\agent`, false},
+		{"a person's own folder", `C:\Users\alice\AppData\Local\Vectory\agent`, false},
+		{"the update root itself, as the state directory", stateRootPath, false},
 	} {
-		if got := stateRootKept(tc.path, stateRootPath, tc.rootIsState); got != tc.kept {
+		if got := stateRootKept(tc.path, stateRootPath); got != tc.kept {
 			t.Errorf("%s: kept in the update root is %v, want %v", tc.name, got, tc.kept)
 		}
 	}

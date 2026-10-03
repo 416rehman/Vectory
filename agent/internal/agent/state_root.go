@@ -46,12 +46,12 @@ func underWindowsRoot(path, root string) bool {
 }
 
 // stateRootKept says whether a state path is kept in the update root in the sense of
-// the rule above: it is below the root, and the root isn't itself an installed
-// agent's state directory. An earlier layout kept the state in %ProgramData%\Vectory
-// itself, and that directory is private to the account that owns it, not a place
-// other directories are made in; a state directory that is the root is the same.
-func stateRootKept(path, root string, rootIsState bool) bool {
-	return !rootIsState && !strings.EqualFold(path, root) && underWindowsRoot(path, root)
+// the rule above: it is below the root. Nothing in the root can exempt it, a file an
+// account plants there least of all: any account can make the folder before setup
+// does, and the folder's owner could then make any answer true. The root itself is
+// not kept in it, and no earlier layout is adopted there (legacyStateDirs).
+func stateRootKept(path, root string) bool {
+	return !strings.EqualFold(path, root) && underWindowsRoot(path, root)
 }
 
 // rootVerdict is what a directory that holds the agent's own directories is, judged

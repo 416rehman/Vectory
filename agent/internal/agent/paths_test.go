@@ -36,6 +36,19 @@ func TestDefaultPathsKeepStateManagedConfigAndServerApart(t *testing.T) {
 	}
 }
 
+// ProgramData lets any account make %ProgramData%\Vectory, so a settings.json in it
+// proves nothing about an installation: setup adopts no earlier layout there.
+func TestWindowsHasNoEarlierDefaultToAdopt(t *testing.T) {
+	if got := legacyStateDirs("windows", ""); len(got) != 0 {
+		t.Errorf("Windows has earlier defaults: %v", got)
+	}
+	for _, goos := range []string{"linux", "darwin"} {
+		if len(legacyStateDirs(goos, "")) == 0 {
+			t.Errorf("%s lost its earlier default", goos)
+		}
+	}
+}
+
 func TestResolveOperatorPathCanonicalizesTrustedLinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows keeps refusing reparse points instead of resolving them")
