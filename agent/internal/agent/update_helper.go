@@ -413,7 +413,12 @@ func inspectHost(host updateHost, stateDir, running string) hostFacts {
 	}
 	// A flag that forbids replacing the executable is found here, before anything is
 	// raised or stopped, and not by a swap that fails after the service has stopped and
-	// the release's counter is spent.
+	// the release's counter is spent. The flags are read when a run starts, and not again
+	// just before the swap: setting one takes root (CAP_LINUX_IMMUTABLE on Linux; on a Mac
+	// the superuser, or the owner, who is root for every file the path check accepts), so
+	// a flag that appears in between was put there by root, and no account the step
+	// distrusts can do it. A swap that meets one fails before the executable is replaced
+	// and is settled like any other failed swap.
 	if why := install.Immutable(); why != "" {
 		return fail("READ_ONLY", "%s", why)
 	}

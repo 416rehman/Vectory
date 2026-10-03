@@ -1,26 +1,46 @@
-system/io.vectory.agent = {
+system/io.vectory.update = {
 	active count = 0
-	path = /Library/LaunchDaemons/io.vectory.agent.plist
+	path = /Library/LaunchDaemons/io.vectory.update.plist
 	type = LaunchDaemon
 	state = not running
 
-	program = /usr/local/bin/vectory
+	program = /Library/Application Support/Vectory/update-state/private/helper/vectory
 	arguments = {
-		/usr/local/bin/vectory
-		run
+		/Library/Application Support/Vectory/update-state/private/helper/vectory
+		update-helper
 		--state-dir
 		/Library/Application Support/Vectory/agent
 	}
 
-	domain = system
-	username = _vectory
-	minimum runtime = 10
-	exit timeout = 330
-	runs = 0
-	last exit code = (never exited)
-	immediate reason = inefficient
-	forks = 0
-	execs = 0
+	stdout path = /dev/null
+	stderr path = /Library/Application Support/Vectory/update-state/private/step.log
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
 
-	properties = keepalive | runatload | inferred program
+	environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+		XPC_SERVICE_NAME => io.vectory.update
+	}
+
+	domain = system
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 13
+	last exit code = 0
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	run interval = 30 seconds
+	probabilistic guard malloc policy = {
+		activation rate = 1/1000
+		sample rate = 1/0
+	}
+
+	properties = runatload | inferred program | system service | tle system
 }

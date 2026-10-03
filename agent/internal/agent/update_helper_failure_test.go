@@ -109,6 +109,43 @@ func TestAServiceThatWontStopLeavesTheOldBuildInPlaceAndTheRequestEndsAsInterrup
 	f.requireOldBuildRunning(before.executable)
 }
 
+// A stop that fails is followed by a start of the old build, and the start ends the request
+// only when the service manager shows the service started: a stop that failed and a start
+// that can't be shown leave the request open, as a start that fails does anywhere. The run
+// ends with an error, the journal stays where it was, the floor stays raised, and each next
+// run tries again, until the manager shows the old build running and the request ends as
+// interrupted, with the result of a build that ran.
+func TestAServiceThatWontStopAndCannotBeShownStartedKeepsTheRequestOpenUntilItIsShownRunning(t *testing.T) {
+	f := newStepFixture(t)
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+	oldDigest := f.executableDigest()
+	f.host.cfg.StopFails = true
+	f.host.cfg.StartFails = 3
+
+	for run := 1; run <= 3; run++ {
+		err := f.run()
+		if err == nil || !strings.Contains(err.Error(), "couldn't start the agent service") || !strings.Contains(err.Error(), "the next run of the update step starts the service again") {
+			t.Fatalf("run %d, which couldn't stop the service and couldn't show it started, ended with: %v", run, err)
+		}
+		if journal, found := f.journal(); !found || journal.Stage != UpdateStageSwapping {
+			t.Fatalf("the journal after run %d: %+v (found %v)", run, journal, found)
+		}
+		if last := f.status().Last; last != nil && last.Release == release.manifestSHA() {
+			t.Fatalf("the request was answered after run %d: %+v", run, last)
+		}
+		if got := f.counters().HighestCounters[f.public.Fingerprint()]; got != release.counter {
+			t.Errorf("the floor is %d after an attempt of counter %d", got, release.counter)
+		}
+		f.clock.advance(30 * time.Second)
+	}
+
+	f.mustRun()
+
+	f.requireAnswered(release, UpdateOutcomeFailed, "INTERRUPTED")
+	f.requireOldBuildRunning(oldDigest)
+}
+
 func TestASwapTheFileSystemRefusesLeavesTheOldBuildRunningAndSaysWhy(t *testing.T) {
 	for name, c := range map[string]struct{ fails, outcome, code string }{
 		"for a reason the system gives":     {"rename: input/output error", UpdateOutcomeFailed, "INTERRUPTED"},

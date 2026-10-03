@@ -55,9 +55,11 @@ func (i *unixInstall) ReadOnly() bool {
 	return err == nil && statfsReadOnly(st)
 }
 
-// Immutable looks at the flags of the executable and of the directory that holds it,
-// through the handles (update_flags.go): a flag that forbids replacing the executable,
-// or adding and removing files beside it, is found before the service stops.
+// Immutable looks at the flags of everything the swap changes, through the handles
+// (update_flags.go), so that a flag that would stop it is found before the service stops:
+// the executable, the directory that holds it, and the two names the swap renames over or
+// removes, the build an earlier update kept (.vectory-previous) and the link it makes
+// first (.vectory-previous.new). A name that isn't there has no flag to find.
 func (i *unixInstall) Immutable() string {
 	var found []string
 	if words := immutableWords(i.path, "replace it", fileFlagsOf(i.held.file)); words != "" {
@@ -66,7 +68,25 @@ func (i *unixInstall) Immutable() string {
 	if words := immutableWords(filepath.Dir(i.path), "add or remove files in it", fileFlagsOf(i.held.dir)); words != "" {
 		found = append(found, words)
 	}
+	for _, name := range []string{updatePreviousName, updatePreviousName + ".new"} {
+		if words := i.entryFlags(name, "replace it"); words != "" {
+			found = append(found, words)
+		}
+	}
 	return strings.Join(found, " ")
+}
+
+// entryFlags names the flags of a file of the install directory that stop the swap, in
+// the sentence immutableWords makes, or "" when it has none, isn't there, or can't be
+// opened as a file the path check trusts (the swap then meets it as it always did, and
+// before anything is replaced).
+func (i *unixInstall) entryFlags(name, effect string) string {
+	file, err := i.held.OpenAt(name)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	return immutableWords(filepath.Join(filepath.Dir(i.path), name), effect, fileFlagsOf(file))
 }
 
 func (i *unixInstall) FreeSpace() (uint64, error) {

@@ -119,6 +119,16 @@ type updateHost interface {
 	// started, whatever it is doing. A start that fails or can't be shown is an error,
 	// which the step reads as "start again at the next run": it never ends a request
 	// on one.
+	//
+	// A service that is still on its way out is not one that started. A stop that gave
+	// up leaves it listed for a while: launchd lists a job it is removing as running,
+	// with the process it had, and the Service Control Manager says stop pending;
+	// systemd holds a start back until the stop is done. A start that finds only that
+	// waits for it to end within its own bound, and is an error if it doesn't. So a
+	// request whose stop failed ends on a start only when the manager shows the service
+	// started, whatever it is doing (after the stop, or never stopped, which is the old
+	// build running), and otherwise stays open as a failed start does: the journal stays
+	// where it was, the run ends with an error and the next run tries again.
 	ServiceState(ctx context.Context) (updateServiceState, error)
 	StopService(ctx context.Context) error
 	StartService(ctx context.Context) error
@@ -182,6 +192,17 @@ type serviceReloader interface {
 	ReloadService(ctx context.Context) (reloaded bool, err error)
 }
 
+// agentLocator is implemented by every host that can say which executable the agent's
+// service runs without being told the agent's state directory, which the removal of the
+// step (service-uninstall) isn't. The removal reads it to see whether a rollback that
+// waits for a start has already put the previous build back.
+type agentLocator interface {
+	// AgentExecutable is the absolute path of the executable the agent's service is
+	// registered to run, read from the registration the way Registered reads it, or an
+	// error when there is none or it isn't the one setup writes.
+	AgentExecutable() (string, error)
+}
+
 // updateInstall is the install directory and the executable in it, checked once
 // and held. The swap is made relative to the held directory, so that no component
 // of the path can change between the check and the use.
@@ -197,9 +218,11 @@ type updateInstall interface {
 	// ReadOnly says that the file system is mounted read-only.
 	ReadOnly() bool
 	// Immutable says, in words that name the flag, why the file system won't let the
-	// step replace the executable although it is writable: the executable or its
-	// directory has a flag that forbids it (the immutable or append-only attribute of
-	// a Linux file system, uchg or schg on macOS). It is "" when neither has one.
+	// step replace the executable although it is writable: the executable, its
+	// directory, or a name the swap renames over or removes (the build an earlier update
+	// kept, and the link the swap makes first) has a flag that forbids it (the immutable
+	// or append-only attribute of a Linux file system, uchg or schg on macOS). It is ""
+	// when none has one.
 	Immutable() string
 	// FreeSpace is how many bytes the step may still write in the directory.
 	FreeSpace() (uint64, error)

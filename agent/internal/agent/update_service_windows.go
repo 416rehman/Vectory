@@ -114,6 +114,29 @@ func (h *windowsUpdateHost) Registered(stateDir string) (registeredService, erro
 	return registeredFromConfig(cfg, stateDir)
 }
 
+// AgentExecutable is the executable the registration of the agent's service runs.
+func (h *windowsUpdateHost) AgentExecutable() (string, error) {
+	service, err := openService(ServiceName, serviceQueryRights)
+	if err != nil {
+		return "", err
+	}
+	defer service.Close()
+	cfg, err := service.Config()
+	if err != nil {
+		return "", err
+	}
+	executable, directory, err := agentServiceCommand(cfg.BinaryPathName)
+	if err != nil {
+		return "", err
+	}
+	if err := checkServiceConfig(cfg, executable, directory); err != nil {
+		return "", err
+	}
+	return executable, nil
+}
+
+var _ agentLocator = (*windowsUpdateHost)(nil)
+
 // observeStatus is what the Service Control Manager reports, as the step's watch
 // reads it.
 func observeStatus(status svc.Status) observedService {
@@ -161,18 +184,55 @@ func (h *windowsUpdateHost) StopService(ctx context.Context) error {
 	return stopServiceContext(ctx, service)
 }
 
+// windowsStartBound is how long a start of the agent's service waits for a stop that is
+// still going on to end.
+const windowsStartBound = 60 * time.Second
+
+// waitForStopToEnd waits while the service is stop pending, for at most limit. The Service
+// Control Manager answers a start of a service that is still stopping that it is already
+// running, which startService reads as a start; the service then stops, and nothing starts
+// it again, because a stop that was asked for isn't a failure the manager recovers from.
+func waitForStopToEnd(ctx context.Context, service *mgr.Service, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	for {
+		status, err := service.Query()
+		if err != nil {
+			return err
+		}
+		if status.State != svc.StopPending {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the %s service is still stopping after %s, so it can't be started", service.Name, humanDuration(limit))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
 // StartService starts the agent service, and begins the count of its restarts at
-// the process that runs it.
+// the process that runs it. A service that is still stopping (a stop that gave up leaves
+// it so) is waited for, within windowsStartBound, and is an error if it doesn't end: it
+// is not one that started.
 func (h *windowsUpdateHost) StartService(ctx context.Context) error {
 	service, err := openService(ServiceName, serviceControlRights)
 	if err != nil {
 		return err
 	}
 	defer service.Close()
+	if err := waitForStopToEnd(ctx, service, windowsStartBound); err != nil {
+		return err
+	}
 	if err := startService(service); err != nil {
 		return err
 	}
 	if status, err := service.Query(); err == nil {
+		if status.State == svc.StopPending {
+			return fmt.Errorf("the %s service began to stop as it was started, so it hasn't started", ServiceName)
+		}
 		h.mu.Lock()
 		h.watch.begin(status.ProcessId)
 		h.mu.Unlock()

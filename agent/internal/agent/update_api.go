@@ -136,8 +136,19 @@ func openStepForInstall(host updateHost, paths UpdatePaths) (*rootOwned, func(),
 }
 
 // errUpdateInProgress is why the step's files can't be replaced or removed now: the
-// step is applying or trying an update, and ends by a time it knows.
+// step is applying, trying or taking back an update. A trial ends by a time the journal
+// knows. A rollback has none to name: it is over when the previous build is in place,
+// started and has been watched, and the deadline it carries is set again each time it has
+// passed while the step still can't start the build, so a time taken from it would move on
+// for ever. An update that has swapped is held the same way, by a stop or a start the
+// service manager won't make.
 func errUpdateInProgress(journal updateJournal) error {
+	switch journal.Stage {
+	case UpdateStageRollingBack:
+		return errors.New(rollbackBusyWords)
+	case UpdateStageSwapping:
+		return errors.New(swapBusyWords)
+	}
 	if journal.Deadline.IsZero() || !currentUpdateClock().Now().Before(journal.Deadline) {
 		return errors.New("an update is being applied or was interrupted, and the update step hasn't settled it yet; try again in a few minutes")
 	}
@@ -248,7 +259,7 @@ func removeStepUnits(host updateHost, paths UpdatePaths) error {
 	var journal *updateJournal
 	if private != nil {
 		defer private.Close()
-		release, err := host.Lock(private)
+		release, err := lockStepForRemoval(host, private)
 		if errors.Is(err, errUpdateStepBusy) {
 			return errors.New("the update step is working now; try again in a minute")
 		}
@@ -262,12 +273,118 @@ func removeStepUnits(host updateHost, paths UpdatePaths) error {
 		}
 		if ok {
 			if found.active() && found.Stage != UpdateStagePreparing {
-				return errUpdateInProgress(found)
+				ended, err := endRollbackWaitingForAStart(host, paths, &found)
+				if err != nil {
+					return err
+				}
+				if !ended {
+					return errUpdateInProgress(found)
+				}
 			}
 			journal = &found
 		}
 	}
 	return removeUnits(host, journal)
+}
+
+const (
+	// removalLockWait is how long the removal of the step waits for a run of the step to end
+	// when the step is trying to start the previous build of a rollback. On a Mac such a run
+	// lasts most of a minute (a start that launchd refuses is tried again for
+	// launchdStartBound) and the timer starts the next one on its own 30-second beat, so a
+	// removal that tried the step's lock once would find it held most of the time.
+	removalLockWait = 90 * time.Second
+	removalLockPoll = 250 * time.Millisecond
+)
+
+// lockStepForRemoval takes the step's lock, which the removal needs so that no run is under
+// way. A run that is under way holds it, and a removal that finds it held says so. Where the
+// journal says rolling_back and the previous build is in place but isn't running, so that
+// only its start is missing, the run is the step's try at that start, and the next one comes
+// soon after: the removal waits for the lock, up to removalLockWait, instead of leaving it to
+// chance whether the person's next try finds it free. A run of any other kind isn't waited
+// for: a trial's watch, a swap, and the watch of a previous build that did start (its
+// service runs) last minutes, and the removal says at once that the step is working.
+func lockStepForRemoval(host updateHost, private *rootOwned) (func(), error) {
+	release, err := host.Lock(private)
+	if !errors.Is(err, errUpdateStepBusy) {
+		return release, err
+	}
+	journal, found, readErr := readUpdateJournal(private)
+	if readErr != nil || !found || !rollbackWaitsForAStart(host, journal) {
+		return nil, err
+	}
+	if state, stateErr := host.ServiceState(context.Background()); stateErr == nil && state.running() {
+		return nil, err
+	}
+	clock := currentUpdateClock()
+	deadline := clock.Now().Add(removalLockWait)
+	for clock.Now().Before(deadline) {
+		if sleepErr := clock.Sleep(context.Background(), removalLockPoll); sleepErr != nil {
+			return nil, sleepErr
+		}
+		if release, err = host.Lock(private); !errors.Is(err, errUpdateStepBusy) {
+			return release, err
+		}
+	}
+	return nil, err
+}
+
+// rollbackWaitsForAStart says whether the step's journal is a rollback that has put the
+// previous build back and has only its start to make: the executable the agent's service
+// runs is the build the journal says the update came from. A rollback whose executable is
+// anything else is mid-way, and so is one whose executable can't be read.
+func rollbackWaitsForAStart(host updateHost, journal updateJournal) bool {
+	if journal.Stage != UpdateStageRollingBack || journal.From == nil {
+		return false
+	}
+	locator, ok := host.(agentLocator)
+	if !ok {
+		return false
+	}
+	executable, err := locator.AgentExecutable()
+	if err != nil {
+		return false
+	}
+	install, _ := host.OpenInstall(executable)
+	if install == nil {
+		return false
+	}
+	defer install.Close()
+	digest, present, err := install.Digest(install.Name())
+	return err == nil && present && digest == journal.From.SHA256
+}
+
+// endRollbackWaitingForAStart ends a rollback that has put the previous build back and
+// waits for its start, for the removal of the step, which holds the step's lock. The step
+// tries the start again every 30 seconds for as long as it takes, and a service that can
+// never start (its job disabled, its definition removed, its unit masked) would keep
+// whoever removes the step, or turns updates off, waiting for ever. The request ends as the
+// step ends an update that was interrupted after the swap, and as only the step's own
+// journal and status say it: rolled back, INTERRUPTED, and the floors stay raised, so the
+// release is never tried again here. It reports whether it ended it: a rollback that hasn't
+// put the previous build back isn't ended, because the step's next run still has the
+// previous build to put in place, and the host would be left on one that was never proven.
+func endRollbackWaitingForAStart(host updateHost, paths UpdatePaths, journal *updateJournal) (bool, error) {
+	if !rollbackWaitsForAStart(host, *journal) {
+		return false, nil
+	}
+	step := newUpdateStep(host, "", stepTimer, nil)
+	step.paths = paths
+	step.logf = func(string, ...any) {}
+	if err := step.openDirectories(); err != nil {
+		step.closeAll()
+		return false, err
+	}
+	defer step.closeAll()
+	if err := step.load(); err != nil {
+		return false, err
+	}
+	step.eligibility = UpdateEligible
+	if status, err := ReadUpdateStatus(); err == nil && status.Eligibility != "" {
+		step.eligibility = status.Eligibility
+	}
+	return true, step.endRolledBack(journal, "INTERRUPTED")
 }
 
 // removeTree removes a directory and everything in it. On Windows a file that was

@@ -637,12 +637,15 @@ func (s *updateStep) openWatchWindow(j *updateJournal) {
 // healthy within five minutes, the step records ROLLBACK_UNHEALTHY and stops there: it
 // leaves what is installed in place and never alternates between builds.
 //
-// A start that fails, or that the service manager doesn't show (its service is gone
-// after the loads again that a watch makes), is not that: nothing shows the previous
-// build is unhealthy, only that it isn't running. The step returns the error and leaves
-// the journal saying rolling_back, so that the next run starts the previous build
-// again, 30 seconds later, and keeps on until it can. The request ends only with a
-// result about a build that ran.
+// A stop that fails is not that either. The build that is being taken back may still be
+// running, and nothing shows that the previous build, which isn't in place and was never
+// started, is anything: putting its file back and starting "it" would end the request on
+// the process of the build that was taken back. A start that fails, or that the service
+// manager doesn't show (its service is gone after the loads again that a watch makes),
+// is the same. The step returns the error and leaves the journal saying rolling_back, so
+// that the next run stops what is there, puts the previous build back if it isn't, starts
+// it and watches it, 30 seconds later, and keeps on until it can. The request ends only
+// with a result about a build that ran.
 func (s *updateStep) continueRollback(ctx context.Context, j *updateJournal) error {
 	if s.install == nil {
 		return errors.New("the install directory can't be opened, so the rollback can't continue: " + s.eligibility)
@@ -659,7 +662,8 @@ func (s *updateStep) continueRollback(ctx context.Context, j *updateJournal) err
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		s.logf("couldn't stop the service: %v", err)
+		s.status(j)
+		return fmt.Errorf("couldn't stop the agent service: %w. The update stays rolling back, and the next run of the update step stops it again and puts the previous build back", err)
 	}
 	faultPoint("rollback:stopped")
 	digest, present, err := s.install.Digest(s.install.Name())

@@ -77,21 +77,36 @@ func newTestMacOSHost(t *testing.T) (*macosUpdateHost, *launchctlRecorder, *[]ti
 	daemons := filepath.Join(root, "Library", "LaunchDaemons")
 	mkdirMode(t, daemons, 0o755)
 	recorder := &launchctlRecorder{clock: time.Date(2026, 10, 5, 2, 0, 0, 0, time.UTC)}
+	var slept []time.Duration
+	host := testMacOSHostOver(recorder, &slept, daemons, filepath.Join(root, "receipts", "com.vectory.agent.bom"))
+	return host, recorder, &slept
+}
+
+// testMacOSHostOver is the macOS host over a launchctl recorder, with nothing in its memory.
+func testMacOSHostOver(recorder *launchctlRecorder, slept *[]time.Duration, daemons, receipt string) *macosUpdateHost {
 	host := newMacOSUpdateHost(recorder.run)
 	host.daemonDir = daemons
-	host.receipt = filepath.Join(root, "receipts", "com.vectory.agent.bom")
+	host.receipt = receipt
 	host.agent = host.job("", recorder.run)
 	host.step = host.job(updateLaunchdLabel, recorder.run)
 	host.alive = func(int) bool { return false }
-	var slept []time.Duration
 	for _, job := range []*launchdJob{&host.agent, &host.step} {
 		job.now = func() time.Time { return recorder.clock }
 		job.sleep = func(d time.Duration) {
-			slept = append(slept, d)
+			*slept = append(*slept, d)
 			recorder.clock = recorder.clock.Add(d)
 		}
 	}
-	return host, recorder, &slept
+	return host
+}
+
+// nextRunOf is the host as the next run of the step has it: the update step is a new
+// process every 30 seconds, and what the one before kept in memory is gone. The launchctl,
+// the files and the clock are the same.
+func nextRunOf(previous *macosUpdateHost, recorder *launchctlRecorder, slept *[]time.Duration) *macosUpdateHost {
+	next := testMacOSHostOver(recorder, slept, previous.daemonDir, previous.receipt)
+	next.alive = previous.alive
+	return next
 }
 
 func macTestUnitSpec() updateUnitSpec {
@@ -411,6 +426,16 @@ func TestRemovingTheStepUnloadsItFirstSaysWhereTheInstallDirectoryWasAndLeavesNo
 
 // ---------------------------------------------------------------- the agent's job
 
+// The prints in testdata/update are launchd's own words. launchctl-print-running.txt is what
+// launchd printed on a Mac for the agent's job, started at load and never exited, and
+// launchctl-print-not-running.txt is what it printed for the step's own job between two of
+// its runs (loaded, not running, last exit code 0, run interval 30 seconds, runs 13); the
+// block of probabilistic guard malloc settings inside each is why only the lines directly
+// inside the job's braces count. Neither run printed a job that was restarted or one waiting
+// out its throttle, so launchctl-print-restarted.txt and launchctl-print-waiting.txt are the
+// agent's real text with only the lines that depend on that state changed: runs, pid, last
+// exit code, active count and state, and the reason, which launchd gave only for the job
+// it started when it was loaded.
 func TestTheServiceStateIsWhatLaunchctlPrintsAndNothingIsGuessed(t *testing.T) {
 	host, recorder, _ := newTestMacOSHost(t)
 	const print = "print system/io.vectory.agent"
@@ -420,10 +445,10 @@ func TestTheServiceStateIsWhatLaunchctlPrintsAndNothingIsGuessed(t *testing.T) {
 		want    updateServiceState
 		wantErr bool
 	}{
-		"running":                            {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, updateServiceState{State: "active", Restarts: 0, PID: 4242}, false},
-		"restarted twice":                    {launchctlResult{stdout: readTestdata(t, "launchctl-print-restarted.txt")}, updateServiceState{State: "active", Restarts: 2, PID: 4399}, false},
+		"running":                            {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, updateServiceState{State: "active", Restarts: 0, PID: realAgentPID}, false},
+		"restarted twice":                    {launchctlResult{stdout: readTestdata(t, "launchctl-print-restarted.txt")}, updateServiceState{State: "active", Restarts: 2, PID: 34455}, false},
 		"waiting to start again":             {launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")}, updateServiceState{State: "activating", Restarts: 1}, false},
-		"loaded and not running":             {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, updateServiceState{State: "activating", Restarts: 0}, false},
+		"loaded and not running":             {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, updateServiceState{State: "activating", Restarts: 12}, false},
 		"not loaded":                         {notLoaded, updateServiceState{State: "inactive", Unloaded: true}, false},
 		"not loaded, by its text alone":      {launchctlResult{status: 1, stderr: `Could not find service "io.vectory.agent" in domain for system`}, updateServiceState{State: "inactive", Unloaded: true}, false},
 		"only the job's own lines count":     {launchctlResult{stdout: nested}, updateServiceState{State: "active", Restarts: 1, PID: 11}, false},
@@ -470,10 +495,11 @@ func TestTheServiceStateCarriesWhatLaunchdSaidForTheStepsLog(t *testing.T) {
 		result launchctlResult
 		want   string
 	}{
-		"a job that ended with a code": {launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")}, `launchd says the job is "waiting" with pid 0, 2 run(s), last exit code 2`},
-		"a job that never exited":      {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, `last exit code (never exited)`},
-		"a job with no exit code":      {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, `with pid 4242, 1 run(s), last exit code -, immediate reason inefficient`},
-		"a job launchd doesn't know":   {notLoaded, `launchd doesn't know the job (launchctl print exited 113: Could not find service`},
+		"a job that ended with a code":                    {launchctlResult{stdout: readTestdata(t, "launchctl-print-waiting.txt")}, `launchd says the job is "spawn scheduled" with pid 0, 2 run(s), last exit code 2, immediate reason -`},
+		"a job that never exited":                         {launchctlResult{stdout: readTestdata(t, "launchctl-print-running.txt")}, `launchd says the job is "running" with pid 34373, 1 run(s), last exit code (never exited), immediate reason speculative`},
+		"a job that runs on an interval and ended with 0": {launchctlResult{stdout: readTestdata(t, "launchctl-print-not-running.txt")}, `launchd says the job is "not running" with pid 0, 13 run(s), last exit code 0, immediate reason -`},
+		"a job whose print has no exit code":              {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n\truns = 1\n\tpid = 5\n}\n"}, `with pid 5, 1 run(s), last exit code -, immediate reason -`},
+		"a job launchd doesn't know":                      {notLoaded, `launchd doesn't know the job (launchctl print exited 113: Could not find service`},
 	} {
 		recorder.answer(print, c.result)
 		got, err := host.ServiceState(context.Background())
@@ -508,6 +534,10 @@ func TestAJobThatLaunchdKeepsStartingCountsItsRestartsFromItsRuns(t *testing.T) 
 	}
 }
 
+// realAgentPID is the process of the agent's job in launchctl-print-running.txt, which is
+// what launchd printed for it on a Mac.
+const realAgentPID = 34373
+
 // listed is what print says of a job launchd lists as running with a process.
 func listed(t *testing.T) launchctlResult {
 	t.Helper()
@@ -520,7 +550,7 @@ func listed(t *testing.T) launchctlResult {
 func TestStoppingTheAgentJobWaitsForLaunchdToRemoveItAndForItsProcessToBeGone(t *testing.T) {
 	host, recorder, slept := newTestMacOSHost(t)
 	// The job is listed for the looks that come before the bootout and for two more after
-	// it, and then it is gone; its process, pid 4242 in the listing, is there for three
+	// it, and then it is gone; its process, realAgentPID in the listing, is there for three
 	// looks more.
 	recorder.answer("print system/io.vectory.agent", listed(t), listed(t), listed(t), listed(t), notLoaded)
 	var looked []int
@@ -541,7 +571,7 @@ func TestStoppingTheAgentJobWaitsForLaunchdToRemoveItAndForItsProcessToBeGone(t 
 	}
 	// Two pauses between the looks at the listing that still found the job, then three
 	// that found the process, each a quarter of a second after the one before.
-	if len(looked) != 4 || looked[0] != 4242 {
+	if len(looked) != 4 || looked[0] != realAgentPID {
 		t.Errorf("the process was looked for as %v", looked)
 	}
 	if want := 2 + 3; len(*slept) != want {
@@ -566,7 +596,7 @@ func TestStoppingTheAgentJobGivesUpWhenItsProcessOutlastsTheStopLimit(t *testing
 	recorder.answer("print system/io.vectory.agent", listed(t), listed(t), notLoaded)
 	host.alive = func(int) bool { return true }
 	err := host.StopService(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "process 4242 is still there") {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("process %d is still there", realAgentPID)) {
 		t.Fatalf("a process that never went: %v", err)
 	}
 	total := time.Duration(0)
@@ -593,6 +623,254 @@ func TestStoppingTheAgentJobGivesUpWhenItsProcessOutlastsTheStopLimit(t *testing
 	host.alive = func(int) bool { cancel(); return true }
 	if err := host.StopService(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("a stop of a stopped step: %v", err)
+	}
+}
+
+// listingOf is what print says of a job launchd lists as running with the process pid, or
+// as loaded with none when pid is 0.
+func listingOf(pid int) launchctlResult {
+	if pid == 0 {
+		return launchctlResult{stdout: "system/io.vectory.agent = {\n\tactive count = 0\n\tstate = not running\n\truns = 1\n\tlast exit code = 0\n}\n"}
+	}
+	return launchctlResult{stdout: fmt.Sprintf("system/io.vectory.agent = {\n\tactive count = 1\n\tstate = running\n\truns = 1\n\tpid = %d\n}\n", pid)}
+}
+
+// makeThePrivateDirectory makes the step's private directory, where a run of the step keeps
+// what a later one reads: a run always has it.
+func makeThePrivateDirectory(t *testing.T) {
+	t.Helper()
+	mkdirMode(t, UpdateLocations().Private, 0o700)
+}
+
+// leavingRecord is what the step kept of the job it told launchd to remove, or "" when it
+// kept nothing.
+func leavingRecord(t *testing.T, host *macosUpdateHost) string {
+	t.Helper()
+	data, err := os.ReadFile(host.leavingPath())
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// launchd goes on listing a job as running while it removes it, and nothing in the listing
+// tells that job from one that was started. A stop that gives up leaves such a job, and the
+// step is a new process at its next run: the process of the job it told launchd to remove is
+// kept in a file until `print` says there is no such job, and a start never takes a listing
+// of that process, or of no process, for a start. It waits for launchd within its minute and
+// says what it found when launchd isn't done.
+func TestAStopThatGivesUpLeavesTheDepartingJobRememberedForTheNextRunAndAListingOfItIsNotAStart(t *testing.T) {
+	const print = "print system/io.vectory.agent"
+	host, recorder, slept := newTestMacOSHost(t)
+	makeThePrivateDirectory(t)
+	agent := writeAgentDefinition(t, host, "/usr/local/bin/vectory", "/Library/Application Support/Vectory/agent", "_vectory")
+
+	// launchd takes the bootout in hand and lists the job as running for as long as the stop
+	// waits.
+	recorder.answer(print, listingOf(4242))
+	err := host.StopService(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "still stopping after 6 min") {
+		t.Fatalf("a stop launchd never finished: %v", err)
+	}
+	if got := leavingRecord(t, host); got != "4242\n" {
+		t.Fatalf("what the step kept of the job it told to leave: %q", got)
+	}
+
+	// The next run is a new process. Its start finds the job listed, with that process.
+	next := nextRunOf(host, recorder, slept)
+	recorder.calls, *slept = nil, nil
+	err = next.StartService(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "launchd doesn't show the agent's job after 60 s") || !strings.Contains(err.Error(), "it lists only the job it was told to remove, of the process 4242") {
+		t.Fatalf("a start that found only the job that was told to leave: %v", err)
+	}
+	if changes := recorder.changes(); len(changes) != 0 {
+		t.Errorf("launchd was asked %v while it removed the job", changes)
+	}
+	total := time.Duration(0)
+	for _, d := range *slept {
+		total += d
+	}
+	if total < launchdStartBound || total > launchdStartBound+launchdUnloadPoll {
+		t.Errorf("the start waited %s of its %s", total, launchdStartBound)
+	}
+	if got := leavingRecord(t, next); got != "4242\n" {
+		t.Errorf("the record after a start that found the job still leaving: %q", got)
+	}
+
+	// launchd finishes, and the start after that bootstraps the definition and is done when
+	// launchd lists the job that was made.
+	last := nextRunOf(next, recorder, slept)
+	recorder.calls = nil
+	recorder.answer(print, listingOf(4242), listingOf(4242), notLoaded, listingOf(4300))
+	if err := last.StartService(context.Background()); err != nil {
+		t.Fatalf("the start after launchd finished: %v", err)
+	}
+	if got := strings.Join(recorder.changes(), "|"); got != "bootstrap system "+agent {
+		t.Errorf("launchd was asked %q", got)
+	}
+	if got := leavingRecord(t, last); got != "" {
+		t.Errorf("the record is still there after launchd was seen to be done: %q", got)
+	}
+}
+
+// A listing of another process is a job that was started since, and a listing of the same
+// process or of none is the job that is leaving.
+func TestAListingIsTheJobThatWasToldToLeaveOnlyWhenItHasThatProcessOrNone(t *testing.T) {
+	const print = "print system/io.vectory.agent"
+	for name, c := range map[string]struct {
+		listing   launchctlResult
+		departing bool
+	}{
+		"the same process":             {listingOf(4242), true},
+		"no process":                   {listingOf(0), true},
+		"another process":              {listingOf(4300), false},
+		"a listing that can't be read": {launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n}\n"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			host, recorder, _ := newTestMacOSHost(t)
+			makeThePrivateDirectory(t)
+			host.rememberLeaving(4242)
+			recorder.answer(print, c.listing)
+			err := host.StartService(context.Background())
+			if c.departing != (err != nil) {
+				t.Errorf("a start that found %s: %v", name, err)
+			}
+			if !c.departing && leavingRecord(t, host) != "" {
+				t.Errorf("a job that was started since leaves the record: %q", leavingRecord(t, host))
+			}
+		})
+	}
+
+	// With nothing kept, any listing is a start, as it always was.
+	host, recorder, _ := newTestMacOSHost(t)
+	recorder.answer(print, listingOf(4242))
+	if err := host.StartService(context.Background()); err != nil {
+		t.Errorf("a listing when the step told launchd to remove nothing: %v", err)
+	}
+	// A record that isn't a process ID is no record: only the step writes it, in a
+	// directory only root can enter.
+	for _, text := range []string{"", "x\n", "-1\n", "4242 4243\n", strings.Repeat("9", 40)} {
+		host, recorder, _ := newTestMacOSHost(t)
+		makeThePrivateDirectory(t)
+		if err := os.WriteFile(host.leavingPath(), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		recorder.answer(print, listingOf(4242))
+		if err := host.StartService(context.Background()); err != nil {
+			t.Errorf("a record of %q was taken for a job that is leaving: %v", text, err)
+		}
+	}
+}
+
+// What the step keeps is for a bootout that launchd took in hand. A stop that worked leaves
+// nothing, and so does one launchd refused: the job it was asked to remove is what it was,
+// and a start that finds it listed finds the agent. A bootout that launchd answered "no such
+// process" or didn't answer, with the job still listed, may be a removal under way (a
+// person's bootout began a moment earlier), and keeps it.
+func TestTheStepKeepsTheDepartingJobOnlyForABootoutLaunchdTookInHand(t *testing.T) {
+	const print, bootout = "print system/io.vectory.agent", "bootout system/io.vectory.agent"
+	refused := launchctlResult{status: 5, stderr: "Boot-out failed: 5: Input/output error"}
+	for name, c := range map[string]struct {
+		bootout launchctlResult
+		prints  []launchctlResult
+		stopped bool
+		kept    string
+	}{
+		"a stop that worked":                      {launchctlResult{}, []launchctlResult{listingOf(4242), listingOf(4242), listingOf(4242), notLoaded}, true, ""},
+		"a bootout launchd refused":               {refused, []launchctlResult{listingOf(4242)}, false, ""},
+		"a bootout answered with no such process": {launchctlResult{status: launchctlNoSuchProcess, stderr: "Boot-out failed: 3: No such process"}, []launchctlResult{listingOf(4242)}, false, "4242\n"},
+		"a bootout that was killed":               {launchctlResult{status: -1}, []launchctlResult{listingOf(4242)}, false, "4242\n"},
+		"a bootout that kept removing the job":    {launchctlResult{status: launchctlInProgress, stderr: "Boot-out failed: 36: Operation now in progress"}, []launchctlResult{listingOf(4242)}, false, "4242\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			host, recorder, _ := newTestMacOSHost(t)
+			makeThePrivateDirectory(t)
+			recorder.answer(bootout, c.bootout)
+			recorder.answer(print, c.prints...)
+			err := host.StopService(context.Background())
+			if (err == nil) != c.stopped {
+				t.Fatalf("the stop: %v", err)
+			}
+			if got := leavingRecord(t, host); got != c.kept {
+				t.Errorf("the step kept %q, want %q", got, c.kept)
+			}
+		})
+	}
+}
+
+// The start of a job the step told launchd to remove is no start while launchd lists only
+// that job, and a request ends on it only when launchd was seen to be done: the reproduction
+// of a stop that gives up while launchd takes longer than the stop waits for.
+func TestAStopThatGivesUpWhileLaunchdStillRemovesTheJobLeavesTheRequestOpenInEveryRunUntilLaunchdIsDone(t *testing.T) {
+	f := newStepFixture(t)
+	machine, _ := f.useLaunchd()
+	// launchd lists the departing job for 2000 looks, a quarter of a second apart: longer
+	// than the six minutes the stop waits for it and than the minute the start waits after.
+	machine.removalPrints = 2000
+	release := f.newRelease("0.1.1", "good", releaseOptions{})
+	f.stage(release)
+	oldDigest := f.executableDigest()
+
+	var closedAt int
+	for run := 1; run <= 8 && closedAt == 0; run++ {
+		if run > 1 {
+			f.clock.advance(30 * time.Second)
+			f.anotherStepProcess(machine)
+		}
+		err := f.run()
+		journal, found := f.journal()
+		open := found && journal.active()
+		switch {
+		case machine.removing > 0:
+			// launchd still lists the job the step told it to remove: nothing may have ended.
+			if err == nil || !open || journal.Stage != UpdateStageSwapping {
+				t.Fatalf("run %d: launchd is still removing the agent's job, and the run ended %v with the journal %+v (found %v)", run, err, journal, found)
+			}
+			if f.executableDigest() != oldDigest {
+				t.Fatalf("run %d: the executable changed", run)
+			}
+			if last := f.status().Last; last != nil && last.Release == release.manifestSHA() {
+				t.Fatalf("run %d: the request was answered with %+v", run, last)
+			}
+		case open:
+			t.Fatalf("run %d: launchd is done with the job, and the request is still open after a run that ended %v", run, err)
+		default:
+			closedAt = run
+		}
+	}
+	if closedAt == 0 {
+		t.Fatal("the request never ended")
+	}
+	if closedAt < 3 {
+		t.Errorf("the request ended at run %d, before launchd was done with the job it was told to remove", closedAt)
+	}
+	f.requireAnswered(release, UpdateOutcomeFailed, "INTERRUPTED")
+	if service := f.service(); service.State != "active" || service.Version != "0.1.0" {
+		t.Errorf("the agent's service when the request ended: %+v", service)
+	}
+	if !machine.loaded {
+		t.Error("launchd has no job for the agent: nothing loaded it after it finished removing the old one")
+	}
+	if got := f.executableDigest(); got != oldDigest {
+		t.Errorf("the executable is %s", got)
+	}
+	bootouts, bootstraps := 0, 0
+	for _, change := range machine.changes() {
+		switch {
+		case strings.HasPrefix(change, "bootout "):
+			bootouts++
+		case strings.HasPrefix(change, "bootstrap "):
+			bootstraps++
+		}
+	}
+	if bootouts != 1 || bootstraps != 1 {
+		t.Errorf("launchd was asked %v: one bootout, then one bootstrap once the job was gone", machine.changes())
+	}
+	if _, err := os.Stat(filepath.Join(f.paths.Private, updateLeavingFile)); !os.IsNotExist(err) {
+		t.Errorf("the record of the job that was told to leave is still there: %v", err)
 	}
 }
 

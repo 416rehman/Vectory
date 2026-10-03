@@ -349,6 +349,68 @@ func TestARollbackWhoseStartFailsLeavesTheJournalRollingBackAndEachRunStartsTheP
 	}
 }
 
+// A rollback whose stop fails has put nothing back and started nothing. The build that
+// is being taken back may still be running, and the previous build, which isn't in place
+// and never ran, says nothing: ending the request there would record a rollback to a
+// build that doesn't run, with the words "didn't report healthy within 5 minutes of its
+// start" about a build nobody started, while the build that was taken back keeps
+// running. The run ends with an error, the journal says rolling_back, the files of the
+// request stay, and the next run that can stop the service puts the previous build back,
+// starts it and ends the request with the result of a build that ran.
+func TestARollbackWhoseStopFailsStaysOpenWhileTheBuildBeingTakenBackRunsAndTheNextRunFinishesIt(t *testing.T) {
+	f := newStepFixture(t)
+	oldDigest := f.executableDigest()
+	release := f.newRelease("0.1.3", "silent", releaseOptions{})
+	f.stage(release)
+	updateFault = func(point string) {
+		if point == "rolling_back" {
+			f.host.cfg.StopFails = true
+		}
+	}
+
+	// Two hours of runs while the service won't stop: well past the five minutes a
+	// rollback is watched for.
+	for i := 0; i < 240; i++ {
+		err := f.run()
+		if err == nil || !strings.Contains(err.Error(), "couldn't stop the agent service") || !strings.Contains(err.Error(), "the next run of the update step stops it again") {
+			t.Fatalf("run %d, which couldn't stop the service, ended with: %v", i+1, err)
+		}
+		f.clock.advance(30 * time.Second)
+	}
+
+	journal, found := f.journal()
+	if !found || journal.Stage != UpdateStageRollingBack || journal.Code != "NO_CHECK_IN" {
+		t.Fatalf("the journal of a rollback that couldn't stop the build it takes back: %+v (found %v)", journal, found)
+	}
+	if got := f.executableDigest(); got != release.buildSHA() {
+		t.Errorf("the executable is %s: the previous build was put over a build that still runs", got)
+	}
+	if service := f.service(); service.Version != "0.1.3" || service.State != "active" {
+		t.Errorf("the service: %+v", service)
+	}
+	if status := f.status(); status.Stage != UpdateStageRollingBack || (status.Last != nil && status.Last.Release == release.manifestSHA()) {
+		t.Errorf("the status says the request is over: stage %s, last %+v", status.Stage, status.Last)
+	}
+	if f.stagingEmpty() {
+		t.Error("the staging directory was emptied before the request ended")
+	}
+	if history := strings.Join(f.service().History, ","); history != "start 0.1.0,stop,start 0.1.3" {
+		t.Errorf("the service was touched while it couldn't be stopped: %s", history)
+	}
+
+	f.host.cfg.StopFails = false
+	f.mustRun()
+
+	f.requireTakenBack(oldDigest, release, "NO_CHECK_IN")
+	service := f.service()
+	if service.Version != "0.1.0" || service.State != "active" {
+		t.Errorf("the host after the rollback: %+v", service)
+	}
+	if history := strings.Join(service.History, ","); history != "start 0.1.0,stop,start 0.1.3,stop,start 0.1.0" {
+		t.Errorf("the service's history: %s", history)
+	}
+}
+
 // A rollback whose start keeps failing never turns into the end of the request by
 // itself, however long it lasts: the step has nothing but the next run to offer, and
 // it offers it for as long as it takes.
