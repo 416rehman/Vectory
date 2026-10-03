@@ -117,6 +117,73 @@ func createExclusively(path string, perm rootFilePerm) (*os.File, error) {
 	}
 }
 
+// openLogIn opens the log called name in a held directory, to add to. It is opened the
+// way the step's other files are opened: named inside the directory the step holds,
+// made with the access list of a private file of the step's when it isn't there (a
+// process that can't make the Administrators the owner of what it makes, because it is
+// not elevated, makes it with what the directory gives), and judged by its handle and
+// never by its path. A link is opened as itself and refused, and so is anything that
+// isn't a plain file on a disk, a file reached through another name, and a file whose
+// owner or access list isn't root's. A refusal leaves the file as it was.
+//
+// The handle can write data and not only append, because a handle that can only
+// append can't be made shorter, and a log longer than its limit starts again by being
+// shortened through the handle that was judged (stepLogStartsAgain). Its position is
+// the end when it is returned, and nothing else writes to it: it is shared with readers
+// only.
+func openLogIn(dir *rootOwned, name string) (*os.File, error) {
+	if err := checkEntryName(name); err != nil {
+		return nil, err
+	}
+	path := dir.entryPath(name)
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	attributes, err := securityAttributes(windowsSDDL(rootPrivate, false, ServiceName))
+	if err != nil {
+		return nil, err
+	}
+	open := func(attributes *windows.SecurityAttributes) (windows.Handle, error) {
+		return windows.CreateFile(pointer, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ, attributes, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	}
+	handle, err := open(attributes)
+	if errors.Is(err, windows.ERROR_INVALID_OWNER) {
+		handle, err = open(nil)
+	}
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
+	}
+	fail := func(err error) (*os.File, error) {
+		_ = windows.CloseHandle(handle)
+		return nil, err
+	}
+	if err := checkHandle(handle, path, rootOwnedFile); err != nil {
+		return fail(err)
+	}
+	if dir.trust.judged(path) {
+		if err := judgeHandle(handle, path, windowsObject, dir.trust); err != nil {
+			return fail(err)
+		}
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fail(&fs.PathError{Op: "stat", Path: path, Err: err})
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if stepLogStartsAgain(int64(info.FileSizeHigh)<<32 | int64(info.FileSizeLow)) {
+		if err := file.Truncate(0); err != nil {
+			_ = file.Close()
+			return nil, &fs.PathError{Op: "truncate", Path: path, Err: err}
+		}
+	}
+	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		_ = file.Close()
+		return nil, &fs.PathError{Op: "seek", Path: path, Err: err}
+	}
+	return file, nil
+}
+
 // readOnlyVolume marks an error that says the volume is read-only, so that the
 // step (which is the same on every platform) can tell READ_ONLY from any other
 // failure to write beside the executable.
