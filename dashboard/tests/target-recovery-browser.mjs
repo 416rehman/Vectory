@@ -227,6 +227,7 @@ async function load({
     correlationSupported: true,
     outcomeOverride: null,
     standing: null,
+    validationDevices: [],
   };
   const current = state;
   const groups = () => [
@@ -267,6 +268,25 @@ async function load({
     requests.push({ method, path, query: url.search });
     const reply = (json, status = 200) => route.fulfill({ status, json });
     if (method === "GET") {
+      if (path === `/device-validations/${id(70)}`)
+        return reply({
+          id: id(70),
+          state: "complete",
+          created_at: created,
+          expires_at: created,
+          truncated: false,
+          run_tests: false,
+          devices: current.validationDevices.map((device) => ({
+            id: device.id,
+            name: device.name,
+            state: "passed",
+            valid: true,
+            diagnostics: [],
+            tests: [],
+            secrets_missing: [],
+            updated_at: created,
+          })),
+        });
       if (path.startsWith("/deployments/requests/")) {
         const requestId = path.split("/").pop();
         current.lookups.push({ actor: current.actor, requestId });
@@ -350,6 +370,8 @@ async function load({
           page_size: Number(url.searchParams.get("page_size")),
           kind: "versions",
         });
+      if (path === `/versions/${id(71)}` && current.heldVersion)
+        return reply(current.heldVersion);
       if (path === `/versions/${version.id}`) return reply(version);
       if (path === "/deployments/history")
         return reply({
@@ -393,6 +415,8 @@ async function load({
       if (path === `/deployments/${id(40)}/targets`)
         return reply({ items: [], total: 0, page: 1, page_size: 12 });
     }
+    if (method === "POST" && path === "/deployments/binding-suggestions")
+      return reply({ devices: {} });
     if (method === "POST" && path === "/deployments/preview") {
       const body = req.postDataJSON();
       current.previews.push(body);
@@ -406,6 +430,10 @@ async function load({
             : []),
         ].filter((key) => !body.selector.exclude_ids.includes(key)),
       );
+      if (body.device_validation)
+        current.validationDevices = current.devices.filter((device) =>
+          selected.has(device.id),
+        );
       // Another pipeline the first device follows at the same priority: a
       // conflict, unless the request replaces it.
       if (current.standing) {
@@ -459,6 +487,28 @@ async function load({
       }
       return reply({
         devices: current.devices.filter((d) => selected.has(d.id)),
+        // Synthetic rendered-artifact receipts for the selected fixture values.
+        ...(body.variable_bindings
+          ? {
+              artifact_previews: current.devices
+                .filter((device) => selected.has(device.id))
+                .map((device) => {
+                  const bytes = JSON.stringify({
+                    version_id: body.version_id,
+                    variable_bindings: body.variable_bindings,
+                    device_id: device.id,
+                  });
+                  return {
+                    device_id: device.id,
+                    sha256: createHash("sha256").update(bytes).digest("hex"),
+                    size: Buffer.byteLength(bytes),
+                  };
+                }),
+            }
+          : {}),
+        ...(body.device_validation
+          ? { validation_id: id(70), validation_truncated: false }
+          : {}),
         ...(!current.legacyPreview
           ? {
               create_idempotency: true,
@@ -1719,6 +1769,402 @@ try {
         path: resolve(output, "host-approval-commands-375.png"),
         animations: "disabled",
       });
+    },
+  );
+  await check(
+    "Per-device listener values produce distinct host commands and never the base listener",
+    async () => {
+      await load({
+        kind: "version",
+        width: 700,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: {
+                incoming: { type: "http_server", address: "0.0.0.0:8000" },
+              },
+              sinks: {
+                out: {
+                  type: "console",
+                  inputs: ["incoming"],
+                  target: "stderr",
+                },
+              },
+            },
+            variables: [
+              {
+                name: "listener",
+                path: "/sources/incoming/address",
+                type: "string",
+              },
+            ],
+          },
+        },
+        devices: [
+          device(1, { configuration_mode: "restricted" }),
+          device(2, { configuration_mode: "restricted" }),
+        ],
+      });
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await expect(dialog()).toContainText(
+        "Enter valid values for every declared variable before host approval commands can be calculated.",
+      );
+      await expect(
+        dialog().getByText("Commands for the host", { exact: true }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("textbox", { name: "listener for Synthetic alpha" })
+        .fill("0.0.0.0:1514");
+      await page
+        .getByRole("textbox", { name: "listener for Synthetic beta" })
+        .fill("0.0.0.0:2514");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(table()).toBeVisible();
+      await expect(dialog()).toContainText(
+        "Each device's destinations, listeners and paths below reflect the version rendered for that host.",
+      );
+      const alpha = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic alpha" });
+      const beta = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic beta" });
+      await expect(alpha.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:1514",
+      );
+      await expect(beta.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:2514",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      const command = (name) =>
+        dialog().getByLabel(`Host approval commands, On ${name}`, {
+          exact: true,
+        });
+      await expect(command("Synthetic alpha")).toContainText(
+        "--listener 0.0.0.0:1514",
+      );
+      await expect(command("Synthetic beta")).toContainText(
+        "--listener 0.0.0.0:2514",
+      );
+      await expect(dialog()).not.toContainText("0.0.0.0:8000");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (value) => (document.documentElement.dataset.theme = value),
+          theme,
+        );
+        for (const width of [700, 390]) {
+          await page.setViewportSize({ width, height: 920 });
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          expect(
+            await alpha
+              .locator(".target-outcome")
+              .evaluate(
+                (element) => element.scrollWidth <= element.clientWidth + 1,
+              ),
+          ).toBe(true);
+          await alpha.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(
+              output,
+              `per-device-approval-rows-${width}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+          await command("Synthetic alpha").scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(
+              output,
+              `per-device-approval-commands-${width}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+        }
+      }
+      await dialog()
+        .getByRole("button", { name: "Check on devices", exact: true })
+        .click();
+      await expect(dialog().getByText("Passes here")).toHaveCount(2);
+      await expect(
+        dialog().getByText("Commands for the host", { exact: true }),
+      ).toHaveCount(0);
+      await dialog()
+        .getByRole("button", { name: "Back to selection", exact: true })
+        .click();
+      await page
+        .getByRole("textbox", { name: "listener for Synthetic alpha" })
+        .fill("0.0.0.0:3514");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(alpha.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:3514",
+      );
+      await expect(beta.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:2514",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      await expect(command("Synthetic alpha")).toContainText(
+        "--listener 0.0.0.0:3514",
+      );
+    },
+  );
+  await check(
+    "Windows and Unix devices get their own rendered file-root commands",
+    async () => {
+      await load({
+        kind: "version",
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: { logs: { type: "file", data_dir: "/var/log/base" } },
+              sinks: {
+                out: {
+                  type: "console",
+                  inputs: ["logs"],
+                  target: "stderr",
+                },
+              },
+            },
+            variables: [
+              {
+                name: "log_dir",
+                path: "/sources/logs/data_dir",
+                type: "string",
+              },
+            ],
+          },
+        },
+        devices: [
+          device(1, {
+            os: "windows",
+            configuration_mode: "restricted",
+            state_dir: "C:\\ProgramData\\Vectory\\agent",
+            service_manager: "windows",
+          }),
+          device(2, {
+            os: "linux",
+            configuration_mode: "restricted",
+            state_dir: "/var/lib/vectory-agent",
+            service_manager: "systemd",
+          }),
+        ],
+      });
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await page
+        .getByRole("textbox", { name: "log_dir for Synthetic alpha" })
+        .fill("C:\\VectorData\\logs\\");
+      await page
+        .getByRole("textbox", { name: "log_dir for Synthetic beta" })
+        .fill("/var/log/app");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      const windows = dialog().getByLabel(
+        "Host approval commands, On Synthetic alpha",
+      );
+      const unix = dialog().getByLabel(
+        "Host approval commands, On Synthetic beta",
+      );
+      await expect(windows).toContainText("--file-root 'C:\\VectorData\\logs'");
+      await expect(windows).not.toContainText("/var/log/");
+      await expect(unix).toContainText("--file-root /var/log/app");
+      await expect(unix).not.toContainText("C:\\VectorData");
+      await expect(dialog()).not.toContainText("/var/log/base");
+    },
+  );
+  await check(
+    "Mixed-OS file roots never use a Unix running-version proof for Windows",
+    async () => {
+      const mixedConfig = {
+        sources: {
+          linux_logs: { type: "file", data_dir: "/var/log/app" },
+          windows_logs: { type: "file", data_dir: "C:\\VectorData\\logs" },
+        },
+        sinks: {
+          out: {
+            type: "console",
+            inputs: ["linux_logs", "windows_logs"],
+            target: "stderr",
+          },
+        },
+      };
+      const running_version = {
+        id: id(71),
+        number: 1,
+        configuration_id: pipeline.id,
+        configuration_name: pipeline.name,
+      };
+      await load({
+        kind: "version",
+        extra: { version: { ...version, config: mixedConfig } },
+        devices: [
+          device(1, {
+            os: "linux",
+            configuration_mode: "restricted",
+            running_version,
+          }),
+          device(2, {
+            os: "windows",
+            configuration_mode: "restricted",
+            running_version,
+            state_dir: "C:\\ProgramData\\Vectory\\agent",
+            service_manager: "windows",
+          }),
+        ],
+      });
+      state.heldVersion = {
+        ...version,
+        ...running_version,
+        config: mixedConfig,
+      };
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(dialog()).toContainText(
+        "Each device's destinations, listeners and paths below reflect the version rendered for that host.",
+      );
+      await expect(dialog()).not.toContainText("already runs a version");
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic alpha" }),
+      ).toContainText("files under /var/log/app");
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic beta" }),
+      ).toContainText("files under C:\\VectorData\\logs");
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      await expect(
+        dialog().getByLabel("Host approval commands, On Synthetic beta"),
+      ).toContainText("--file-root 'C:\\VectorData\\logs'");
+    },
+  );
+  await check(
+    "Rendered Full mode blockers suppress host allowance commands for blocked devices",
+    async () => {
+      await load({
+        kind: "version",
+        width: 390,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: {
+                incoming: { type: "http_server", address: "0.0.0.0:8000" },
+              },
+              sinks: {
+                out: {
+                  type: "console",
+                  inputs: ["incoming"],
+                  target: "stderr",
+                },
+              },
+            },
+            variables: [
+              { name: "target", path: "/sinks/out/target", type: "string" },
+            ],
+          },
+        },
+        devices: [
+          device(1, { configuration_mode: "restricted" }),
+          device(2, { configuration_mode: "restricted" }),
+        ],
+      });
+      state.blockers = [
+        {
+          code: "FULL_VECTOR_MODE_REQUIRED",
+          reason:
+            "The rendered console target requires Full Vector mode on Synthetic alpha.",
+          resource: "configuration",
+          device_ids: [id(1)],
+        },
+      ];
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await page
+        .getByRole("textbox", { name: "target for Synthetic alpha" })
+        .fill("stdout");
+      await page
+        .getByRole("textbox", { name: "target for Synthetic beta" })
+        .fill("stderr");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic alpha" }),
+      ).toContainText("Blocked: Full Vector mode required");
+      await expect(dialog()).toContainText(
+        "The rendered console target requires Full Vector mode on Synthetic alpha.",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      await expect(
+        dialog().getByLabel("Host approval commands, On Synthetic alpha"),
+      ).toHaveCount(0);
+      await expect(
+        dialog().getByLabel("Host approval commands, On Synthetic beta"),
+      ).toContainText("--listener 0.0.0.0:8000");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (value) => (document.documentElement.dataset.theme = value),
+          theme,
+        );
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBeLessThanOrEqual(390);
+        await dialog()
+          .getByLabel("Host approval commands, On Synthetic beta")
+          .scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: resolve(output, `rendered-full-blocker-390-${theme}.png`),
+          animations: "disabled",
+        });
+        await dialog()
+          .getByText(
+            "The rendered console target requires Full Vector mode on Synthetic alpha.",
+          )
+          .scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: resolve(
+            output,
+            `rendered-full-blocker-detail-390-${theme}.png`,
+          ),
+          animations: "disabled",
+        });
+      }
     },
   );
   await check(

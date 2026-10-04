@@ -4,6 +4,7 @@ import type { Config } from "./api";
 import { Button } from "./ui";
 import type { ConfigurationFormat } from "./configurationSource";
 import { pipelineTemplates } from "./pipelineTemplates";
+import { findPlainCredential } from "./credentialFields";
 import "./pipeline-templates.css";
 
 export type StartImport = {
@@ -37,6 +38,20 @@ export async function readStartText(
     if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
       throw Error("Configurations must be 1 MiB or smaller.");
     const config = assertValidPipelineSource(text, format);
+    const credential = findPlainCredential(config);
+    if (credential) {
+      const outboundLocation =
+        /(?:^|\.)(?:uri|endpoint|endpoints|headers)(?:\.|$)/i.test(
+          credential.path,
+        );
+      throw Error(
+        credential.kind === "scan_limit"
+          ? `Configuration is nested too deeply at ${credential.path} to check for credentials. Simplify it before importing.`
+          : credential.kind === "unsupported_reference"
+            ? `${credential.path} uses a device secret outside a supported credential field. This preview does not support device secrets in headers or URLs. Use a native Vector secret or environment reference on a full-mode device, or remove this value.`
+            : `${credential.path} looks like a plaintext credential. ${outboundLocation ? "This preview does not support device secrets in headers or URLs; remove the credential or use a native reference on a full-mode device." : "Replace it with a supported secret reference before importing."}`,
+      );
+    }
     const steps = count(config);
     return {
       name,
@@ -44,7 +59,13 @@ export async function readStartText(
       summary: `${steps} ${steps === 1 ? "step" : "steps"}, checked locally. Vector checks it in the editor.`,
     };
   } catch (error) {
-    return { name, error: sourceErrorMessage(text, error) };
+    const message = sourceErrorMessage(text, error);
+    return {
+      name,
+      error: message.includes("Only credential fields can hold a device secret")
+        ? `${message} This preview does not support device secrets in headers or URLs. Use a native Vector secret or environment reference on a full-mode device, or remove this value.`
+        : message,
+    };
   }
 }
 
@@ -56,7 +77,16 @@ export async function readStartImport(file: File): Promise<StartImport> {
     if (file.size > MAX_CONFIGURATION_BYTES)
       throw Error("Configuration files must be 1 MiB or smaller.");
     const format = detectConfigurationFormat(file.name);
-    return await readStartText(file.name, await file.text(), format);
+    const bytes = await file.arrayBuffer();
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw Error(
+        "The file is not valid UTF-8. Save it as UTF-8 and try again.",
+      );
+    }
+    return await readStartText(file.name, text, format);
   } catch (error) {
     return {
       name: file.name,

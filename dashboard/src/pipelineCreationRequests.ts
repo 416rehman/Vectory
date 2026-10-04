@@ -1,8 +1,38 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { assertExactNumbers } from "./configurationNumbers";
+import { APIError } from "./api";
+
+// A response from the creation POST with one of these rejection codes means
+// the server refused the request before recording it. Transport failures,
+// malformed responses and recovery-lookup failures remain uncertain.
+export function isDefinitivePipelineCreationRejection(
+  failure: unknown,
+  sent: boolean,
+): failure is APIError {
+  return (
+    sent &&
+    failure instanceof APIError &&
+    failure.serverRejection &&
+    [400, 403, 413, 422].includes(failure.status) &&
+    [
+      "INVALID_INPUT",
+      "FORBIDDEN",
+      "PAYLOAD_TOO_LARGE",
+      "VALIDATION_FAILED",
+    ].includes(failure.code)
+  );
+}
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
+/** The server limits the saved pipeline name by UTF-8 bytes, not input characters. */
+export function pipelineNameError(name: string): string {
+  const savedName = name.trim();
+  if (!savedName) return "Enter a pipeline name to create a draft.";
+  if (bytes(savedName) > 120)
+    return "This name is too long. Shorten it to fit within 120 UTF-8 bytes.";
+  return "";
+}
 export function pipelineCopyName(name: string) {
   let prefix = "";
   for (const point of name) {

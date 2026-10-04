@@ -11,7 +11,12 @@ import net from "node:net";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
 const focus = process.env.VECTORY_PIPELINE_CODE_CHECK_FOCUS || "";
-if (focus && !["before", "after"].includes(focus))
+if (
+  focus &&
+  !["before", "after", "auto-code", "settings-overlap", "candidate-attribution"].includes(
+    focus,
+  )
+)
   throw new Error("Unknown code-check focus");
 const output = resolve(
   repository,
@@ -112,6 +117,7 @@ async function load({
   height = 1000,
   published = false,
   collapsed = true,
+  autoCheck = false,
   document = baseDocument(),
 } = {}) {
   // Closing an old isolated context cannot affect the synthetic persisted fixture.
@@ -137,11 +143,17 @@ async function load({
     reducedMotion: "reduce",
   });
   contexts.push(context);
-  await context.addInitScript((collapsed) => {
-    localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
-    localStorage.setItem("vectory-theme", "light");
-    localStorage.setItem("vectory.editor.auto-check", "off");
-  }, collapsed);
+  await context.addInitScript(
+    ({ collapsed, autoCheck }) => {
+      localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
+      localStorage.setItem("vectory-theme", "light");
+      localStorage.setItem(
+        "vectory.editor.auto-check",
+        autoCheck ? "on" : "off",
+      );
+    },
+    { collapsed, autoCheck },
+  );
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -267,6 +279,9 @@ async function load({
         warnings: [],
         vector_validated: false,
         deferred: true,
+        ...(current.validationDiagnostics
+          ? { diagnostics: current.validationDiagnostics }
+          : {}),
       });
     }
     unexpected.push(`${method} ${path}`);
@@ -332,8 +347,8 @@ async function runCheck(expected) {
   await state(expected);
   await showTip();
 }
-async function check(name, run, focused = false) {
-  if (Boolean(focus) !== focused) return;
+async function check(name, run, focused = []) {
+  if (focused.length ? !focused.includes(focus) : !!focus) return;
   const started = Date.now();
   await run();
   results.push({ name, passed: true, milliseconds: Date.now() - started });
@@ -427,6 +442,64 @@ try {
       expect(fixture.validations).toHaveLength(3);
       await expect(tip().locator(".problems-item")).not.toHaveCount(0);
     },
+  );
+
+  await check(
+    "Vector findings for unapplied Code candidates retain candidate-only component attribution",
+    async () => {
+      await load();
+      await button("Code").click();
+      await page.getByLabel("Format", { exact: true }).selectOption("json");
+      const candidate = structuredClone(baseDocument().config);
+      candidate.transforms.candidate_only = {
+        type: "remap",
+        inputs: ["seed"],
+        source: ".message = 1",
+      };
+      const candidateText = JSON.stringify(candidate, null, 2);
+      await code().fill(candidateText);
+      fixture.validationValid = false;
+      fixture.validationDiagnostics = [
+        {
+          severity: "error",
+          section: "transforms",
+          component: "candidate_only",
+          field: "source",
+          code: "synthetic_candidate_error",
+          message: "Synthetic candidate-only Vector error",
+        },
+      ];
+      await runCheck("problems");
+      expect(fixture.validations.at(-1).config).toEqual(candidate);
+      const finding = tip()
+        .locator(".problems-group")
+        .filter({ has: page.getByText("candidate_only", { exact: true }) });
+      await expect(finding.locator(".problems-group-header")).toContainText(
+        "candidate_only",
+      );
+      const item = finding.getByRole("button", {
+        name: /Synthetic candidate-only Vector error/,
+      });
+      await item.click();
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const anchor = window.getSelection()?.anchorNode;
+            const element =
+              anchor instanceof Element ? anchor : anchor?.parentElement;
+            return element?.closest(".cm-line")?.textContent || "";
+          }),
+        )
+        .toContain("candidate_only");
+      candidate.transforms.candidate_only.source = ".message = 2";
+      await code().fill(JSON.stringify(candidate, null, 2));
+      await expect(checkButton()).toHaveAttribute(
+        "title",
+        "Changed since the last check.",
+      );
+      await expect(item.locator("..")).toHaveAttribute("data-stale", "true");
+    },
+    ["", "candidate-attribution"],
   );
 
   await check(
@@ -540,6 +613,8 @@ try {
         ).toBeVisible();
         expect(fixture.saveAttempts).toHaveLength(0);
         await button("Apply code changes").click();
+        expect(fixture.saveAttempts).toHaveLength(0);
+        await button("Save").click();
         await expect.poll(() => fixture.saveAttempts.length).toBe(1);
         expect(
           fixture.document.config.sinks.discard_copy.buffer.max_size,
@@ -548,9 +623,115 @@ try {
         await expect(button("Graph")).toHaveAttribute("aria-pressed", "true");
       }
     },
-    true,
+    ["before", "after"],
   );
-  expect(results).toHaveLength(focus ? 1 : 4);
+  await check(
+    "Unapplied Code changes cannot silently overwrite newer Pipeline settings edits",
+    async () => {
+      await load();
+      await button("Code").click();
+      await page.getByLabel("Format", { exact: true }).selectOption("json");
+      const edited = baseDocument().config;
+      edited.transforms.sample.rate = 20;
+      await code().fill(JSON.stringify(edited));
+      await expect(page.locator(".editor-code-footer")).toContainText(
+        "Code changes have not been applied to the draft",
+      );
+      await runCheck("partial");
+      await expect(tip()).toContainText(
+        "This check reviewed unapplied Code edits. Apply code changes to update the draft.",
+      );
+      await button("Pipeline settings").click();
+      const settings = page.getByRole("dialog", { name: "Pipeline settings" });
+      await expect(settings).toBeVisible();
+      await expect(settings).toContainText(
+        "Apply or discard your Code changes before editing Pipeline settings.",
+      );
+      await expect(
+        settings.getByRole("button", { name: "Add field" }),
+      ).toHaveCount(0);
+      await settings.getByRole("button", { name: "Done" }).click();
+      await page.locator(".editor-tools-menu > summary").click();
+      await page.getByRole("button", { name: "Add monitoring" }).click();
+      await expect(
+        page.getByText(
+          "Apply or discard your Code changes before adding monitoring.",
+        ),
+      ).toBeVisible();
+      await button("Apply code changes").click();
+      await state("partial");
+      await expect(tip()).not.toContainText(
+        "This check reviewed unapplied Code edits",
+      );
+      const nextCode = structuredClone(edited);
+      nextCode.transforms.sample.rate = 30;
+      await code().fill(JSON.stringify(nextCode));
+      await page.locator(".editor-tools-menu > summary").click();
+      await page.getByRole("button", { name: "Undo last change" }).click();
+      await expect(
+        page.getByText(
+          "Apply or discard your Code changes before undoing draft changes.",
+        ),
+      ).toBeVisible();
+      await button("Discard code changes").click();
+      await expect
+        .poll(async () => JSON.parse(await code().textContent()))
+        .toMatchObject({ transforms: { sample: { rate: 20 } } });
+      await button("Pipeline settings").click();
+      await settings.getByRole("button", { name: "Add field" }).click();
+      await page
+        .getByLabel("Find optional fields", { exact: true })
+        .fill("data_dir");
+      await page
+        .locator(".schema-field-picker-results button")
+        .filter({ hasText: "Data Dir" })
+        .click();
+      await settings
+        .getByLabel("Data Directory", { exact: true })
+        .fill("/var/lib/vector");
+      await settings.getByRole("button", { name: "Done" }).click();
+      await state("stale");
+      await expect
+        .poll(async () => JSON.parse(await code().textContent()))
+        .toMatchObject({
+          data_dir: "/var/lib/vector",
+          transforms: { sample: { rate: 20 } },
+        });
+      await button("Save").click();
+      await expect.poll(() => fixture.document.config).toMatchObject({
+        data_dir: "/var/lib/vector",
+        transforms: { sample: { rate: 20 } },
+      });
+      expect(fixture.document.config.sources).toEqual(
+        baseDocument().config.sources,
+      );
+    },
+    ["", "settings-overlap"],
+  );
+  await check(
+    "Auto-check in Code view waits for Apply, then checks the applied draft",
+    async () => {
+      await load({ autoCheck: true });
+      await expect.poll(() => fixture.validations.length).toBe(1);
+      await button("Code").click();
+      await page.getByLabel("Format", { exact: true }).selectOption("json");
+      const edited = baseDocument().config;
+      edited.transforms.sample.rate = 20;
+      await code().fill(JSON.stringify(edited));
+      await state("stale");
+      await expect(tip().locator(".problems-verdict")).toHaveText(
+        "Apply code changes to check automatically.",
+      );
+      await page.waitForTimeout(1700);
+      expect(fixture.validations).toHaveLength(1);
+      await button("Apply code changes").click();
+      await expect.poll(() => fixture.validations.length).toBe(2);
+      expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(20);
+      await state("partial");
+    },
+    ["auto-code"],
+  );
+  expect(results).toHaveLength(focus ? 1 : 6);
   expect(requests.filter(({ path }) => path.endsWith("/publish"))).toEqual([]);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
@@ -586,7 +767,7 @@ try {
       {
         recorded_at: new Date().toISOString(),
         scope: focus
-          ? `Actual App/editor with isolated synthetic API. Focused ${focus} Code-check draft persistence observation. No preview, real server, native Vector, publication or device mutation.`
+          ? `Actual App/editor with isolated synthetic API. Focused ${focus} Code-check behavior. No preview, real server, native Vector, publication or device mutation.`
           : "Actual App/editor with isolated synthetic API. Missing blackhole disk buffer max_size and topology errors block Check before a permissive mocked validator is called. Exact Code candidates, recovery, pending fields, parse/network failures, held response generations and matching disabled publication UI are exercised. Synthetic draft saves only; no preview, real server, native Vector, publication or device mutation.",
         focus: focus || null,
         passed: !failure,

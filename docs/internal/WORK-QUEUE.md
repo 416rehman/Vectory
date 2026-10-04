@@ -12,7 +12,7 @@ Rules for every item: real data only (a synthetic fleet is always labeled as suc
 | 4 | [Editor, live graph, navigation and command palette](#4-editor-live-graph-navigation-and-command-palette) | M | |
 | 5 | [Effective configuration per device](#5-effective-configuration-per-device) | M | |
 | 6 | ["Check on devices": validate on the real hosts before deploying](#6-check-on-devices-validate-on-the-real-hosts-before-deploying) | L | |
-| 7 | [`vectory status` says what runs](#7-vectory-status-says-what-runs) | S | |
+| 7 | [`vectory status` distinguishes verified from running](#7-vectory-status-distinguishes-verified-from-running) | S | |
 | 8 | [Authoring gaps](#8-authoring-gaps) | L | |
 | 9 | [Capability tiers and managed assets](#9-capability-tiers-and-managed-assets) | XL | 1 (finding 5) |
 | 10 | [Opt-in event sampling](#10-opt-in-event-sampling) | XL | 1 (finding 5), 9 helps |
@@ -107,9 +107,9 @@ Rehearse: deploy a pipeline with a variable to two devices with different values
 
 **Tests (all required).** Server: request and response lifecycle, per-device isolation of the artifact download, expiry, rate limits, roles and CSRF, bounded results, offline and unsupported handling, audit row content, old-agent heartbeat unchanged. Agent: a verified manifest with `validation` triggers staging, validation and cleanup; a bad signature or wrong recipient never does; an apply in flight defers it; a missing secret binding, a restricted-mode refusal and a failing `vector validate` produce the right diagnostics; the managed file, journal and last-known-good are byte-identical before and after; the result never contains a secret value. Native test with the pinned Vector: a passing and a failing candidate. Protocol suite subtests. Dashboard: vitest for the matrix model and copy, a Playwright harness with a synthetic transport for every state, and a live rehearsal.
 
-## 7. `vectory status` says what runs
+## 7. `vectory status` distinguishes verified from running
 
-`vectory status` should name the pipeline and version number the device runs (the signed manifest would carry both), say whether the device is listening for wake-ups, and say when the next check-in is due. New manifest fields are additive, covered by the signature and listed in `features`; the agent shows less rather than inventing when the server is older. Update `docs/user/cli.md` and the CLI golden files, and add agent tests for the old-server case.
+Implemented: `vectory status` names the pipeline and version number from the signed manifest when known, shows the last verified version separately after a rollback or unassignment, and reports the service, check-in timing and wake-ups. These are stored outcomes, not proof that Vector is running now. The older JSON key `running_pipeline` retains its wire shape and identifies last verified metadata. New manifest fields are additive, covered by the signature and listed in `features`; the agent shows less rather than inventing when the server is older. The CLI guide and golden tests reflect the current wording.
 
 ## 8. Authoring gaps
 
@@ -118,10 +118,10 @@ Rehearse: deploy a pipeline with a variable to two devices with different values
 1. Secrets in headers and URLs, and a wider plaintext detector (finding 4). Designed in [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md) and planned in [SECRETS-IMPLEMENTATION-PLAN.md](SECRETS-IMPLEMENTATION-PLAN.md); the detector and the import dialog can ship first.
 2. "Save as test" that does not assert volatile values (finding 3).
 3. A refused import stays in the dialog and names the field (finding 5).
-4. Merge-aware conflict resolution instead of a destructive reload (finding 1).
+4. Complete conflict recovery (finding 1): three-way merge now combines disjoint edits and asks for a choice on collisions; add **Save mine as a new pipeline** with the same durable request recovery as ordinary creation.
 5. Per-device host approval commands (finding 6).
 6. Vector's own config-time warnings as problems (finding 7); a failed `api` bind named as `ADDRESS_IN_USE` (9); `api` changes activate by restart (10); `require_healthy` honored at apply (11).
-7. Code-view auto-check (8), large-graph "Fit" and level of detail (12), plain-language restricted-mode notices (13), label search (14), and the P3 list.
+7. Large-graph "Fit" and level of detail (12), plain-language restricted-mode notices (13), label search (14), and the P3 list. Code-view auto-check (8) is fixed.
 8. Multi-file import and YAML merge keys; graph export (Mermaid, DOT, SVG).
 
 ## 9. Capability tiers and managed assets

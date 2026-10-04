@@ -759,7 +759,7 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/artifacts/end-to-end/dashboard-specs.json
         run: |
           mkdir -p ../docs/evidence
-          npx playwright test e2e/concurrency.spec.ts e2e/issues-history.spec.ts e2e/performance.spec.ts e2e/pipeline-create-entry.spec.ts --reporter=list,json
+          npx playwright test e2e/concurrency.spec.ts e2e/issues-history.spec.ts e2e/performance.spec.ts e2e/pipeline-create-entry.spec.ts e2e/stale-draft-recovery.spec.ts --reporter=list,json
           cp ../docs/evidence/browser-performance.json ../artifacts/end-to-end/
       - name: Validate every starter pipeline with the pinned Vector
         if: ${{ !cancelled() }}

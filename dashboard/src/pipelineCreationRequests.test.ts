@@ -6,11 +6,14 @@ import {
   pipelineCopyName,
   dismissPipelineCreationStorageIssue,
   finishPipelineCreationOperation,
+  isDefinitivePipelineCreationRejection,
+  pipelineNameError,
   pipelineCreationOperationAvailable,
   readPipelineCreationOperations,
   subscribePipelineCreationOperations,
   type PipelineCreationOperation,
 } from "./pipelineCreationRequests";
+import { APIError } from "./api";
 
 class BrowserStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -94,6 +97,48 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("durable pipeline creation registry", () => {
+  it("validates the trimmed creation name against the server's UTF-8 byte limit", () => {
+    expect(pipelineNameError("   ")).toBe(
+      "Enter a pipeline name to create a draft.",
+    );
+    expect(pipelineNameError("é".repeat(60))).toBe("");
+    expect(pipelineNameError("é".repeat(61))).toMatch(/120 UTF-8 bytes/);
+    expect(pipelineNameError(`  ${"é".repeat(60)}  `)).toBe("");
+    expect(pipelineNameError("🙂".repeat(30))).toBe("");
+    expect(pipelineNameError("🙂".repeat(31))).toMatch(/120 UTF-8 bytes/);
+  });
+  it("only clears reminders for a definitive rejection from the creation POST", () => {
+    for (const [code, status] of [
+      ["INVALID_INPUT", 400],
+      ["FORBIDDEN", 403],
+      ["PAYLOAD_TOO_LARGE", 413],
+      ["VALIDATION_FAILED", 422],
+    ] as const) {
+      const rejected = new APIError(code, "Rejected", status, true);
+      expect(isDefinitivePipelineCreationRejection(rejected, true)).toBe(true);
+      expect(isDefinitivePipelineCreationRejection(rejected, false)).toBe(
+        false,
+      );
+      expect(
+        isDefinitivePipelineCreationRejection(
+          new APIError(code, "Unverified", status),
+          true,
+        ),
+      ).toBe(false);
+    }
+    expect(
+      isDefinitivePipelineCreationRejection(
+        new APIError("STALE_REVISION", "Source changed", 409, true),
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      isDefinitivePipelineCreationRejection(
+        new APIError("NETWORK_UNAVAILABLE", "Connection lost", 0),
+        true,
+      ),
+    ).toBe(false);
+  });
   it("fits a default copy name within the UTF-8 byte limit without splitting Unicode", () => {
     expect(pipelineCopyName("Logs")).toBe("Logs copy");
     expect(pipelineCopyName("\u{1f600}".repeat(30))).toBe(

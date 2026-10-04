@@ -1121,6 +1121,7 @@ func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, err
 }
 
 func TestWithdrawingUpdatesFromAnInvalidPolicyWritesOne(t *testing.T) {
+	requireRootOwnedWriter(t) // the invalid policy is written as a root-owned file
 	paths := useUpdateRoots(t)
 	dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
 	if err != nil {

@@ -1776,7 +1776,7 @@ try {
           .poll(() =>
             page.evaluate(() =>
               Object.keys(localStorage).some((key) =>
-                key.startsWith("vectory.draft.v1:"),
+                key.startsWith("vectory.draft.v2:"),
               ),
             ),
           )
@@ -1799,14 +1799,16 @@ try {
         await sample();
         await expect(rate()).toHaveValue("33");
         await page.reload();
-        await banner
-          .getByRole("button", { name: "Discard", exact: true })
-          .click();
+        for (let index = 0; index < 3 && (await banner.count()); index++) {
+          await banner
+            .getByRole("button", { name: /^Discard( copy)?$/ })
+            .click();
+        }
         await expect(banner).toHaveCount(0);
         expect(
           await page.evaluate(() =>
             Object.keys(localStorage).filter((key) =>
-              key.startsWith("vectory.draft.v1:"),
+              key.startsWith("vectory.draft.v2:"),
             ),
           ),
         ).toEqual([]);

@@ -82,11 +82,12 @@ node scripts/demo.mjs --agents 4
 node scripts/capture-screenshots.mjs              # or name screens: editor overview
 ```
 
-It signs in as the demo administrator, changes nothing but its own session, and signs out again. It writes 1440×900 light screenshots of the demo pipeline in the editor, Overview, Devices, a device, the pipeline's rollout, Add device and the Help center, plus a dark editor for the README, to `docs/screenshots/product-*.png`. It warns when a device hasn't applied its pipeline yet, and refuses to save **Add device** if opening it issued an enrollment token.
+It signs in as the demo administrator, changes nothing but its own session and local form selections, and signs out again. It writes 1440-pixel-wide light screenshots of the demo pipeline in the editor, Overview, Devices, a device, the pipeline's rollout, Add device and the Help center, plus a dark editor for the README, to `docs/screenshots/product-*.png`. Most images are 900 pixels tall; Overview captures the complete page, while the device and Add device frames are taller to show complete sections. For Add device, it selects Linux and restricted mode but does not create an install command or token. It first verifies that the instance contains only demo records, exactly one demo enrollment token, and devices matching local demo agents. It waits for the demo devices to verify application, for the rollout to finish and for page loading indicators to clear, and refuses an editor capture until Vector accepts the pipeline. It refuses to save **Add device** if opening it issued an enrollment token.
 
 | Variable | Use |
 | --- | --- |
 | `VECTORY_PREVIEW_DIR`, `VECTORY_PREVIEW_WEB_PORT` | The same preview settings as `scripts/preview.sh`. |
+| `VECTORY_DEMO_DIR` | The demo agent directory used by `scripts/demo.mjs`; set this when capturing an isolated demo outside `.local/demo`. |
 | `VECTORY_SCREENSHOTS_DIR` | Write somewhere else, for example to review before you replace the committed images. |
 | `VECTORY_CHROMIUM` | A Chromium executable, when Playwright's own browser isn't installed. |
 

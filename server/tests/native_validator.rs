@@ -100,10 +100,9 @@ async fn event_type_table_matches_the_pinned_vector() {
         json!({"type":"influxdb_logs","endpoint":"http://127.0.0.1:8086","measurement":"m","database":"d"}),
         json!({"type":"papertrail","endpoint":"tcp://127.0.0.1:514","encoding":json_codec}),
     ];
-    let sources = [
+    let mut sources = vec![
         logs.clone(),
         json!({"type":"file","include":["/tmp/x.log"]}),
-        json!({"type":"journald"}),
         json!({"type":"kubernetes_logs"}),
         json!({"type":"syslog","mode":"udp","address":"127.0.0.1:5514"}),
         json!({"type":"docker_logs"}),
@@ -116,6 +115,10 @@ async fn event_type_table_matches_the_pinned_vector() {
         json!({"type":"apache_metrics","endpoints":["http://127.0.0.1/server-status"]}),
         json!({"type":"nginx_metrics","endpoints":["http://127.0.0.1/status"]}),
     ];
+    #[cfg(target_os = "linux")]
+    sources.push(json!({"type":"journald"}));
+    #[cfg(windows)]
+    sources.push(json!({"type":"windows_event_log","channels":["Application"]}));
     let loki = sinks[7].clone();
     let prometheus = sinks[1].clone();
     let mut cases = Vec::new();
@@ -237,7 +240,7 @@ async fn outdated_worker_replies_are_refused() {
     worker.abort();
 }
 
-/// A writer that keeps everything logged while it is the default subscriber.
+/// A writer that keeps the warnings emitted by this test's runtime thread.
 #[derive(Clone, Default)]
 struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 impl std::io::Write for Logs {
@@ -259,6 +262,25 @@ impl Logs {
     }
 }
 
+struct TestThreadLogs {
+    logs: Logs,
+    thread: std::thread::ThreadId,
+}
+
+impl std::io::Write for TestThreadLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if std::thread::current().id() == self.thread {
+            self.logs.write(buf)
+        } else {
+            Ok(buf.len())
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.logs.flush()
+    }
+}
+
 /// A worker that speaks the right protocol and gives the unusable answer it is
 /// set to, on every path. Each member the server reads holds a marker where it
 /// takes text, so a log line that quoted the worker would show it.
@@ -268,12 +290,19 @@ async fn an_answer_in_the_right_protocol_that_cannot_be_used_is_logged_with_a_fi
     const MARKER: &str = "WORKER-TEXT-\u{1b}[31m-FORGED";
     let logs = Logs::default();
     let writer = logs.clone();
+    let test_thread = std::thread::current().id();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
         .with_max_level(tracing::Level::WARN)
-        .with_writer(move || writer.clone())
+        .with_writer(move || TestThreadLogs {
+            logs: writer.clone(),
+            thread: test_thread,
+        })
         .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    // A thread-local subscriber can lose callsite interest when another test
+    // refreshes tracing's process-wide cache. Keep the subscriber global and
+    // capture only this current-thread Tokio runtime's events.
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     let answer = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
     let served = answer.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

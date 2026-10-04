@@ -5,15 +5,19 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const serviceDefinition = "/Library/LaunchDaemons/" + launchdLabel + ".plist"
+const serviceStopRecord = "/Library/LaunchDaemons/" + launchdLabel + ".stop.json"
 
 // ServiceName is how launchd knows the agent.
 const ServiceName = launchdLabel
@@ -28,7 +32,28 @@ var agentJob = launchdJob{
 	now:   time.Now,
 	sleep: time.Sleep,
 	// A stop ends when launchd no longer lists the job and the process it had is gone.
-	alive: processExists,
+	alive:          processExists,
+	uninstallGuard: &launchdStopGuard{path: serviceStopRecord, identity: macProcessIdentity},
+}
+
+// The start time distinguishes the agent from a later process that reuses its
+// PID after launchd has unloaded the job. An unreadable process fails closed.
+func macProcessIdentity(pid int) (string, bool, error) {
+	if !processExists(pid) {
+		return "", false, nil
+	}
+	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if errors.Is(err, unix.ESRCH) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if info.Proc.P_pid != int32(pid) {
+		return "", false, errors.New("launchd process identity changed while checking it")
+	}
+	started := info.Proc.P_starttime
+	return fmt.Sprintf("%d:%d", started.Sec, started.Usec), true, nil
 }
 
 // runLaunchctl runs /bin/launchctl, a fixed local tool, with a clean
@@ -101,6 +126,13 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 		return "", err
 	}
 	defer releaseLifecycle()
+	// Service control locks the stable LaunchDaemons directory. Take that lock
+	// after the state-parent lock and keep it through the plist read/write.
+	releaseService, err := lockLifecycle(serviceDefinition)
+	if err != nil {
+		return "", err
+	}
+	defer releaseService()
 	if err := checkNoPendingPurge(dir); err != nil {
 		return "", err
 	}
@@ -171,21 +203,14 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 }
 
 func ServiceControl(action string) error {
-	if action == "uninstall" {
-		// The update step goes first, and is refused while it is trying a build: the
-		// agent's service must not be removed under it.
-		if err := RemoveUpdateHelper(); err != nil {
-			return err
-		}
-		// The same stop as service-stop: it ends when launchd no longer lists the job and
-		// the process it had is gone, or after the stop limit.
-		_ = agentJob.control("stop")
+	return controlLaunchdService(action, agentJob, func() (func(), error) {
+		return lockLifecycle(serviceDefinition)
+	}, RemoveUpdateHelper, func() error {
 		if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
-	}
-	return agentJob.control(action)
+	})
 }
 
 // ServiceStatus asks launchd about the agent daemon without changing it.

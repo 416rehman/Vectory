@@ -694,7 +694,7 @@ func TestAStopThatGivesUpLeavesTheDepartingJobRememberedForTheNextRunAndAListing
 	next := nextRunOf(host, recorder, slept)
 	recorder.calls, *slept = nil, nil
 	err = next.StartService(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "launchd doesn't show the agent's job after 60 s") || !strings.Contains(err.Error(), "it lists only the job it was told to remove, of the process 4242") {
+	if err == nil || !strings.Contains(err.Error(), "launchd doesn't show the agent's job after 60 s") || !strings.Contains(err.Error(), "it still lists the agent's label while an earlier bootout is unresolved (recorded process 4242 before bootout)") {
 		t.Fatalf("a start that found only the job that was told to leave: %v", err)
 	}
 	if changes := recorder.changes(); len(changes) != 0 {
@@ -727,35 +727,32 @@ func TestAStopThatGivesUpLeavesTheDepartingJobRememberedForTheNextRunAndAListing
 	}
 }
 
-// A listing of another process is a job that was started since, and a listing of the same
-// process or of none is the job that is leaving. A record that names no process (print listed
-// none before the bootout) takes any listing for the job that is leaving, until print says that
-// launchd has no such job.
-func TestAListingIsTheJobThatWasToldToLeaveOnlyWhenItHasThatProcessOrNone(t *testing.T) {
+// A different process ID can be KeepAlive restarting the same loaded job between the record
+// and bootout. While the record holds, no loaded listing proves a replacement was started.
+func TestAListingWithAnyProcessDoesNotResolveAnEarlierBootout(t *testing.T) {
 	const print = "print system/io.vectory.agent"
 	for name, c := range map[string]struct {
-		named     int // the process the record names, 0 for none
-		listing   launchctlResult
-		departing bool
+		named   int // the process the record names, 0 for none
+		listing launchctlResult
 	}{
-		"the same process":             {4242, listingOf(4242), true},
-		"no process":                   {4242, listingOf(0), true},
-		"another process":              {4242, listingOf(4300), false},
-		"a listing that can't be read": {4242, launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n}\n"}, true},
-		"a record that names no process, and a listing of a process":       {0, listingOf(4300), true},
-		"a record that names no process, and a listing of no process":      {0, listingOf(0), true},
-		"a record that names no process, and a listing that can't be read": {0, launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n}\n"}, true},
+		"the same process":             {4242, listingOf(4242)},
+		"no process":                   {4242, listingOf(0)},
+		"another process":              {4242, listingOf(4300)},
+		"a listing that can't be read": {4242, launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n}\n"}},
+		"a record that names no process, and a listing of a process":       {0, listingOf(4300)},
+		"a record that names no process, and a listing of no process":      {0, listingOf(0)},
+		"a record that names no process, and a listing that can't be read": {0, launchctlResult{stdout: "system/io.vectory.agent = {\n\tstate = running\n}\n"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			host, recorder, _ := newTestMacOSHost(t)
 			rememberRecord(t, host, c.named)
 			recorder.answer(print, c.listing)
 			err := host.StartService(context.Background())
-			if c.departing != (err != nil) {
+			if err == nil || !strings.Contains(err.Error(), "an earlier bootout is unresolved") {
 				t.Errorf("a start that found %s: %v", name, err)
 			}
-			if _, kept := recordNames(t, host); !c.departing && kept {
-				t.Errorf("a job that was started since leaves the record: %q", leavingRecord(t, host))
+			if _, kept := recordNames(t, host); !kept {
+				t.Errorf("the unresolved bootout lost its record: %q", leavingRecord(t, host))
 			}
 		})
 	}

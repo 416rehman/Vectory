@@ -907,7 +907,7 @@ try {
     },
   );
   await check(
-    "documentation and sign-out retain draft guards; a failed sign-out checks the session before a deliberate retry",
+    "documentation and sign-out retain draft guards; dismissed attempts review status before a deliberate retry",
     async () => {
       await page.goto(
         origin + `/__sidebar-fixture#/configurations/${ids.pipeline}`,
@@ -997,8 +997,8 @@ try {
             request.method !== "GET" && !request.path.endsWith("/validate"),
         ),
       ).toEqual([]);
-      // No draft: sign-out starts at once. A slow one shows its progress; a
-      // failure checks the session itself before offering a deliberate retry.
+      // No draft: sign-out starts at once. Dismissing an uncertain request
+      // preserves its original session for a read-only review on reopening.
       failLogout = true;
       holdLogout = true;
       await openAccount();
@@ -1014,12 +1014,46 @@ try {
       await expect(
         progress.getByRole("button", { name: "Stop waiting", exact: true }),
       ).toBeEnabled();
+      await progress
+        .getByRole("button", { name: "Stop waiting", exact: true })
+        .click();
+      await expect(progress).toHaveCount(0);
+      expect(
+        requests.filter((request) => request.path === "/logout"),
+      ).toHaveLength(1);
+      // The original transport is abandoned; a late reply cannot own the UI.
       await pendingLogout.shift()();
+      await expect(accountTrigger()).toBeVisible();
+      const sessionReads = requests.filter(
+        (request) => request.method === "GET" && request.path === "/session",
+      ).length;
+      await openAccount();
+      await page.screenshot({
+        path: resolve(output, "account-signout-review-mobile.png"),
+        animations: "disabled",
+      });
+      await chooseAppearance("Dark");
+      await page.screenshot({
+        path: resolve(output, "account-signout-review-mobile-dark.png"),
+        animations: "disabled",
+      });
+      await chooseAppearance("Light");
+      await page
+        .getByRole("menuitem", {
+          name: "Check sign-out status",
+          exact: true,
+        })
+        .click();
       const retry = page.getByRole("alertdialog", {
         name: "Couldn't sign out",
       });
       await expect(retry).toBeVisible();
       await expect(retry).toContainText("Your session is still active.");
+      expect(
+        requests.filter(
+          (request) => request.method === "GET" && request.path === "/session",
+        ),
+      ).toHaveLength(sessionReads + 1);
       await expect(
         retry.getByRole("button", { name: "Try again", exact: true }),
       ).toBeFocused();
@@ -1041,13 +1075,23 @@ try {
       failLogout = false;
       await openAccount();
       await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
+        .getByRole("menuitem", {
+          name: "Check sign-out status",
+          exact: true,
+        })
+        .click();
+      await expect(retry).toBeVisible();
+      expect(
+        requests.filter((request) => request.path === "/logout"),
+      ).toHaveLength(1);
+      expect(signedIn).toBe(true);
+      await retry
+        .getByRole("button", { name: "Try again", exact: true })
         .click();
       await expect.poll(() => pendingLogout.length).toBe(1);
       expect(
         requests.filter((request) => request.path === "/logout"),
       ).toHaveLength(2);
-      expect(signedIn).toBe(true);
       await pendingLogout.shift()();
       holdLogout = false;
       await expect(
@@ -1088,6 +1132,67 @@ try {
       ]);
       await page.setViewportSize({ width: 1440, height: 960 });
       await expect(accountTrigger()).toBeVisible();
+    },
+  );
+  await check(
+    "an absent-session status read waits for a separate guarded exit",
+    async () => {
+      await page.setViewportSize({ width: 1440, height: 960 });
+      failLogout = false;
+      holdLogout = true;
+      const postsBefore = requests.filter(
+        (request) => request.method === "POST" && request.path === "/logout",
+      ).length;
+      await openAccount();
+      await page
+        .getByRole("menuitem", { name: "Sign out", exact: true })
+        .click();
+      await expect.poll(() => pendingLogout.length).toBe(1);
+      const progress = page.getByRole("alertdialog", { name: "Signing out…" });
+      await expect(progress).toBeVisible();
+      await progress
+        .getByRole("button", { name: "Stop waiting", exact: true })
+        .click();
+      // The server ends the original session after the browser has abandoned
+      // the request. Its late receipt must not leave the current workspace.
+      await pendingLogout.shift()();
+      await expect(page).toHaveURL(/#\/users$/);
+      await expect(accountTrigger()).toBeVisible();
+      await openAccount();
+      await page
+        .getByRole("menuitem", {
+          name: "Check sign-out status",
+          exact: true,
+        })
+        .click();
+      const signedOut = page.getByRole("alertdialog", {
+        name: "You're signed out",
+        exact: true,
+      });
+      await expect(signedOut).toBeVisible();
+      await expect(page).toHaveURL(/#\/users$/);
+      await expect(
+        page.getByRole("heading", { name: "Sign in to Vectory", exact: true }),
+      ).toHaveCount(0);
+      expect(
+        requests.filter(
+          (request) => request.method === "POST" && request.path === "/logout",
+        ),
+      ).toHaveLength(postsBefore + 1);
+      await signedOut
+        .getByRole("button", { name: "Go to sign in", exact: true })
+        .click();
+      await expect(
+        page.getByRole("heading", { name: "Sign in to Vectory", exact: true }),
+      ).toBeVisible();
+      await page.getByLabel("Email address", { exact: true }).fill(user.email);
+      await page
+        .getByLabel("Password", { exact: true })
+        .fill("synthetic-unused-password");
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      await expect(accountTrigger()).toBeVisible();
+      holdLogout = false;
+      expect(signedIn).toBe(true);
     },
   );
   await check(

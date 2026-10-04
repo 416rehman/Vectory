@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,6 +19,7 @@ type fakeLaunchctl struct {
 	calls    []string
 	loaded   []bool // print answers, in order; the last one repeats
 	running  bool
+	pid      int // 0 uses the usual fake process, 812.
 	bootout  launchctlResult
 	clock    time.Time
 	sleeping time.Duration
@@ -45,7 +50,11 @@ func (f *fakeLaunchctl) job() launchdJob {
 				if f.running {
 					state = "running"
 				}
-				return launchctlResult{stdout: "system/" + launchdLabel + " = {\n\tstate = " + state + "\n\truns = 1\n\tpid = 812\n}\n"}
+				pid := f.pid
+				if pid == 0 {
+					pid = 812
+				}
+				return launchctlResult{stdout: "system/" + launchdLabel + " = {\n\tstate = " + state + "\n\truns = 1\n\tpid = " + strconv.Itoa(pid) + "\n}\n"}
 			case "bootout":
 				return f.bootout
 			}
@@ -153,6 +162,222 @@ func TestTheAgentsOwnStopWaitsForTheProcessOfTheJobToBeGoneAsTheUpdateStepsDoes(
 	f = &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
 	if err := f.job().control("stop"); err != nil || f.sleeping != 0 {
 		t.Errorf("a stop with nothing to look for a process with: %v, slept %s", err, f.sleeping)
+	}
+}
+
+func TestLaunchdUninstallKeepsTheDefinitionUntilTheJobAndProcessStop(t *testing.T) {
+	t.Run("bootout refused", func(t *testing.T) {
+		f := &fakeLaunchctl{loaded: []bool{true, true}, running: true, clock: time.Now(),
+			bootout: launchctlResult{status: 5, stderr: "permission denied"}}
+		if err := f.job().uninstallDefinition(func() error { f.removed = true; return nil }); err == nil {
+			t.Fatal("uninstall reported success after launchd refused bootout")
+		}
+		if f.removed {
+			t.Fatal("uninstall removed the definition while launchd still had the job")
+		}
+	})
+
+	t.Run("process still alive", func(t *testing.T) {
+		f := &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
+		job := f.job()
+		job.alive = func(int) bool { return true }
+		if err := job.uninstallDefinition(func() error { f.removed = true; return nil }); err == nil {
+			t.Fatal("uninstall reported success while the agent process was still alive")
+		}
+		if f.removed {
+			t.Fatal("uninstall removed the definition while the agent process was still alive")
+		}
+	})
+
+	t.Run("stopped", func(t *testing.T) {
+		f := &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
+		job := f.job()
+		job.alive = func(int) bool { return false }
+		if err := job.uninstallDefinition(func() error { f.removed = true; return nil }); err != nil || !f.removed {
+			t.Fatalf("uninstall after confirmed stop: removed %v, err %v", f.removed, err)
+		}
+	})
+}
+
+func TestLaunchdUninstallRetryRemembersAStillRunningProcessAcrossCalls(t *testing.T) {
+	f := &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
+	record := filepath.Join(t.TempDir(), "launchd-stop.json")
+	alive := true
+	newJob := func() launchdJob {
+		job := f.job() // A fresh job models a separate CLI invocation.
+		job.alive = func(int) bool { return alive }
+		job.uninstallGuard = &launchdStopGuard{
+			path: record,
+			identity: func(pid int) (string, bool, error) {
+				if pid != 812 || !alive {
+					return "", false, nil
+				}
+				return "process-start-1", true, nil
+			},
+		}
+		return job
+	}
+	remove := func() error { f.removed = true; return nil }
+	if err := newJob().uninstallDefinition(remove); err == nil || !strings.Contains(err.Error(), "still there") {
+		t.Fatalf("first stop did not report the live process: %v", err)
+	}
+	if _, err := os.Stat(record); err != nil || f.removed {
+		t.Fatalf("failed stop lost its durable process record: %v, removed %v", err, f.removed)
+	}
+	if err := newJob().uninstallDefinition(remove); err == nil || !strings.Contains(err.Error(), "earlier launchd stop") {
+		t.Fatalf("retry removed a definition while the old process lived: %v", err)
+	}
+	if f.removed {
+		t.Fatal("retry removed the definition while the old process lived")
+	}
+	alive = false
+	if err := newJob().uninstallDefinition(remove); err != nil || !f.removed {
+		t.Fatalf("uninstall after the old process exited: removed %v, err %v", f.removed, err)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("completed uninstall kept the stop record: %v", err)
+	}
+}
+
+func TestLaunchdUninstallAfterTimedOutServiceStopKeepsEveryUnresolvedProcess(t *testing.T) {
+	f := &fakeLaunchctl{loaded: []bool{true, false}, running: true, clock: time.Now()}
+	record := filepath.Join(t.TempDir(), "launchd-stop.json")
+	alive := map[int]bool{812: true, 913: true}
+	newJob := func() launchdJob {
+		job := f.job() // Each call constructs a fresh job, as a separate CLI invocation does.
+		job.alive = func(pid int) bool { return alive[pid] }
+		job.uninstallGuard = &launchdStopGuard{
+			path: record,
+			identity: func(pid int) (string, bool, error) {
+				if !alive[pid] {
+					return "", false, nil
+				}
+				return fmt.Sprintf("start-%d", pid), true, nil
+			},
+		}
+		return job
+	}
+	if err := newJob().stopWithGuard(); err == nil || !strings.Contains(err.Error(), "still there") {
+		t.Fatalf("service-stop did not report the live process: %v", err)
+	}
+	noLock := func() (func(), error) { return func() {}, nil }
+	for _, action := range []string{"start", "restart"} {
+		before := len(f.calls)
+		if err := controlLaunchdService(action, newJob(), noLock, nil, nil); err == nil || len(f.calls) != before {
+			t.Fatalf("%s touched launchd while an earlier stopped process lived: %v, calls %v", action, err, f.calls[before:])
+		}
+	}
+	// A second agent may have started before the old, unregistered process exited.
+	// Its stop must not overwrite the record of the first process.
+	f.loaded, f.pid = []bool{true, false}, 913
+	if err := newJob().stopWithGuard(); err == nil || !strings.Contains(err.Error(), "still there") {
+		t.Fatalf("second service-stop did not report the live process: %v", err)
+	}
+	f.loaded = []bool{false}
+	alive[913] = false
+	if err := newJob().uninstallDefinition(func() error { f.removed = true; return nil }); err == nil || !strings.Contains(err.Error(), "812") {
+		t.Fatalf("uninstall lost the old live process after a later stop: %v", err)
+	}
+	if f.removed {
+		t.Fatal("uninstall removed the definition while an earlier process still lived")
+	}
+	alive[812] = false
+	if err := newJob().uninstallDefinition(func() error { f.removed = true; return nil }); err != nil || !f.removed {
+		t.Fatalf("uninstall after both processes exited: removed %v, err %v", f.removed, err)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("successful stop left the durable record: %v", err)
+	}
+}
+
+func TestLaunchdGuardStopsAJobWithoutAProcessAndRejectsAnUnreadablePrint(t *testing.T) {
+	for _, tc := range []struct {
+		name, printed string
+		wantError     bool
+	}{
+		{"not running", "system/io.vectory.agent = {\n state = not running\n runs = 1\n}\n", false},
+		{"unreadable", "system/io.vectory.agent = {\n state = running\n}\n", true},
+		{"running without pid", "system/io.vectory.agent = {\n state = running\n runs = 1\n}\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			job := launchdJob{
+				definition:     "/Library/LaunchDaemons/io.vectory.agent.plist",
+				uninstallGuard: &launchdStopGuard{path: filepath.Join(t.TempDir(), "stop.json"), identity: func(int) (string, bool, error) { t.Fatal("no process should be queried"); return "", false, nil }},
+				now:            time.Now,
+				sleep:          func(time.Duration) {},
+				run: func(_ context.Context, args ...string) launchctlResult {
+					calls++
+					if calls == 1 {
+						return launchctlResult{stdout: tc.printed}
+					}
+					if args[0] == "bootout" {
+						return launchctlResult{}
+					}
+					return launchctlResult{status: 113, stderr: "Could not find service"}
+				},
+			}
+			err := job.stopWithGuard()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("stop error = %v, wantError %v", err, tc.wantError)
+			}
+			if tc.wantError && calls != 1 {
+				t.Fatalf("malformed print allowed bootout: %d calls", calls)
+			}
+		})
+	}
+}
+
+func TestLaunchdServiceLockKeepsStartOutOfUninstallRemoval(t *testing.T) {
+	definition := filepath.Join(t.TempDir(), "io.vectory.agent.plist")
+	lock := func() (func(), error) { return lockLifecycle(definition) }
+	var installed atomic.Bool
+	installed.Store(true)
+	var prints, bootstraps atomic.Int32
+	job := launchdJob{
+		definition: definition,
+		installed:  installed.Load,
+		now:        time.Now,
+		sleep:      func(time.Duration) {},
+		run: func(_ context.Context, args ...string) launchctlResult {
+			switch args[0] {
+			case "print":
+				if prints.Add(1) == 1 {
+					return launchctlResult{stdout: "system/io.vectory.agent = {\n state = running\n runs = 1\n pid = 812\n}\n"}
+				}
+				return launchctlResult{status: 113, stderr: "Could not find service"}
+			case "bootstrap":
+				bootstraps.Add(1)
+			}
+			return launchctlResult{}
+		},
+	}
+	removing, allowRemoval := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- controlLaunchdService("uninstall", job, lock, func() error { return nil }, func() error {
+			close(removing)
+			<-allowRemoval
+			installed.Store(false)
+			return nil
+		})
+	}()
+	select {
+	case <-removing:
+	case <-time.After(2 * time.Second):
+		t.Fatal("uninstall never reached plist removal")
+	}
+	// A second CLI cannot bootstrap while uninstall has confirmed the stop but
+	// has not yet removed its plist. The lifecycle lock is nonblocking.
+	if err := controlLaunchdService("start", job, lock, nil, nil); err == nil || bootstraps.Load() != 0 {
+		t.Fatalf("start interleaved with uninstall removal: %v, %d bootstraps", err, bootstraps.Load())
+	}
+	close(allowRemoval)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := controlLaunchdService("start", job, lock, nil, nil); err != nil || bootstraps.Load() != 1 {
+		t.Fatalf("a later service control could not take the released lock: %v, %d bootstraps", err, bootstraps.Load())
 	}
 }
 

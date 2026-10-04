@@ -67,6 +67,11 @@ type VectorDriver struct {
 	done     chan struct{}
 	verified bool
 	method   string
+	// activeAPI is the API configuration acknowledged by the live Vector child.
+	// Vector 0.58 can report a successful reload while binding the default API
+	// address instead of a changed api.address, so such changes need a restart.
+	activeAPI []byte
+	apiKnown  bool
 }
 
 // limitedWriter keeps at most max bytes of a child's output. Once output
@@ -290,7 +295,10 @@ func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (
 		return unready(errors.New("cannot securely read staged configuration"), "CHECK_UNAVAILABLE", "The agent couldn't read its staged copy of this version.", "Run it again. If it keeps failing, run vectory doctor on the host.")
 	}
 	var document struct {
-		Tests []json.RawMessage `json:"tests"`
+		Tests        []json.RawMessage `json:"tests"`
+		Healthchecks struct {
+			RequireHealthy bool `json:"require_healthy"`
+		} `json:"healthchecks"`
 	}
 	if json.Unmarshal(data, &document) != nil {
 		return unready(errors.New("configuration or tests must use the expected JSON structure"), "VALIDATION_ERROR", "The configuration or its tests don't have the structure Vector expects.", "Open the pipeline's Tests and check them.")
@@ -321,13 +329,9 @@ func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (
 		if ctx.Err() != nil {
 			return run, timeout
 		}
-		// Healthchecks are not a safety control: they only probe whether a
-		// destination answers right now. Refusing a configuration because a
-		// destination is down would keep a device on its old configuration,
-		// or keep Vector stopped after a restart, and block the very deploy
-		// that routes around the outage. Vector buffers and retries at
-		// runtime, so only configuration errors may reject a candidate. Rerun
-		// without healthchecks; a remaining failure is a real error.
+		// Healthchecks usually do not block an apply: Vector buffers and
+		// retries when a destination is down. Recheck without healthchecks to
+		// distinguish a failed probe from a configuration error.
 		checked, recheck := d.run(ctx, "validate", paths, "--skip-healthchecks")
 		if recheck != nil {
 			if ctx.Err() != nil {
@@ -335,6 +339,13 @@ func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (
 			}
 			note("vector validate rejected the configuration", checked)
 			return run, &VectorFailure{Phase: "validate", Summary: "Vector rejected the configuration", Output: checked}
+		}
+		if document.Healthchecks.RequireHealthy {
+			// Unlike the default, this pipeline tells Vector to stop at startup
+			// while a sink is unhealthy. Accepting a reload here would leave a
+			// verified configuration that cannot survive an agent restart.
+			note("vector validate: required health checks failed", out)
+			return run, &VectorFailure{Phase: "validate", Summary: "Vector requires healthy sinks and a health check failed", Diagnostics: []Diagnostic{{Code: "HEALTHCHECK_REQUIRED", Field: "healthchecks.require_healthy", Message: "This pipeline requires healthy sinks at startup, and a sink failed its health check."}}}
 		}
 		note("vector validate: configuration valid; some health checks failed", out)
 	}
@@ -385,6 +396,8 @@ func (d *VectorDriver) Stop() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.verified = false
+	d.activeAPI = nil
+	d.apiKnown = false
 	if d.child == nil {
 		return nil
 	}
@@ -412,10 +425,11 @@ func (d *VectorDriver) startupTimeout() time.Duration {
 }
 
 // Activate makes the managed configuration active. On Unix a live, verified
-// process is reloaded in place (SIGHUP) and success requires Vector's own
-// "Vector has reloaded." acknowledgment followed by a liveness observation;
-// otherwise, or if the reload is refused (for example a changed data_dir),
-// the process is restarted and must acknowledge startup again.
+// process is reloaded in place (SIGHUP) when its api block is unchanged, and
+// success requires Vector's own "Vector has reloaded." acknowledgment followed
+// by a liveness observation. A changed api block must restart because Vector
+// 0.58 can acknowledge a reload while binding the wrong API address. Other
+// refused reloads (for example a changed data_dir) also fall back to restart.
 func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	if !d.Settings.Adopted {
 		return errors.New("Vector instance has not been explicitly adopted")
@@ -426,12 +440,16 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	if d.Log == nil {
 		d.Log = newVectorLog(d.Dir)
 	}
+	data, err := readArtifact(path)
+	if err != nil {
+		return errors.New("cannot securely read the managed configuration")
+	}
+	api, err := apiConfiguration(data)
+	if err != nil {
+		return errors.New("the managed configuration is not valid JSON")
+	}
 	overlay := ""
 	if d.Dir != "" {
-		data, err := readArtifact(path)
-		if err != nil {
-			return errors.New("cannot securely read the managed configuration")
-		}
 		content, host, err := runtimeOverlay(d.Settings, d.Dir, data)
 		if err != nil {
 			return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
@@ -444,23 +462,48 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 			return fmt.Errorf("cannot record the device's Vector data directory: %w", err)
 		}
 	}
-	if d.canReload() {
+	if d.canReload(api) {
 		if err := d.reload(ctx); err == nil {
 			return nil
 		} else if ctx.Err() != nil {
 			return err
 		}
 	}
-	return d.restart(ctx, path, overlay)
+	if err := d.restart(ctx, path, overlay); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.activeAPI, d.apiKnown = api, true
+	d.mu.Unlock()
+	return nil
 }
 
-func (d *VectorDriver) canReload() bool {
+// apiConfiguration canonicalizes the API block so key order and whitespace do
+// not turn an otherwise safe reload into a restart.
+func apiConfiguration(data []byte) ([]byte, error) {
+	var document struct {
+		API json.RawMessage `json:"api"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	if len(document.API) == 0 {
+		return nil, nil
+	}
+	var api any
+	if err := json.Unmarshal(document.API, &api); err != nil {
+		return nil, err
+	}
+	return json.Marshal(api)
+}
+
+func (d *VectorDriver) canReload(api []byte) bool {
 	if runtime.GOOS == "windows" || d.Dir == "" {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.aliveLocked()
+	return d.aliveLocked() && d.apiKnown && bytes.Equal(d.activeAPI, api)
 }
 
 // reload asks the supervisor to send SIGHUP and waits for Vector's verdict.

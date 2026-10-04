@@ -127,6 +127,49 @@ func TestAStopCutShortInsideTheBootoutLeavesTheRequestOpenUntilLaunchdHasRemoved
 	f.holdsUntilLaunchdIsDone(machine, mac, release, oldDigest)
 }
 
+// KeepAlive can restart the agent after the step records the process launchd listed but
+// before launchctl receives bootout. The process ID in the record is then older than the
+// process ID launchd lists while removing the *same job*. A later step process must not
+// treat that different ID as proof that someone has loaded a replacement job.
+func TestAKeepAliveRestartBetweenRecordAndInterruptedBootoutDoesNotEndTheRequestOnTheDepartingJob(t *testing.T) {
+	f := newStepFixture(t)
+	machine, mac, release, oldDigest := f.aMachineWhoseDrainTakesFiveMinutes()
+	before := 1000 + f.service().Starts
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inner := mac.agent.run
+	mac.agent.run = func(c context.Context, args ...string) launchctlResult {
+		if args[0] == "bootout" && args[1] == machineAgentTarget {
+			if pid, kept := recordNames(t, mac); !kept || pid != before {
+				t.Errorf("record before bootout: process %d, kept %v; want process %d", pid, kept, before)
+			}
+			// launchd's KeepAlive starts the same loaded job with a new process just before
+			// it takes the bootout in hand. The launchctl caller is then interrupted.
+			running := f.service()
+			running.Starts++
+			running.Restarts++
+			running.Started = f.clock.Now().UnixNano()
+			f.host.saveService(running)
+			inner(c, args...)
+			cancel()
+			return launchctlResult{status: -1}
+		}
+		return inner(c, args...)
+	}
+	if err := RunUpdateHelper(ctx, f.stateDir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the interrupted bootout: %v", err)
+	}
+	if !machine.beingRemoved() || machine.departed.pid == before {
+		t.Fatalf("the test did not leave the restarted job being removed: %+v", machine.departed)
+	}
+	if pid, kept := recordNames(t, mac); !kept || pid != before {
+		t.Fatalf("record after the interrupted bootout: process %d, kept %v", pid, kept)
+	}
+
+	f.holdsUntilLaunchdIsDone(machine, mac, release, oldDigest)
+}
+
 // The step's process dies while launchctl waits (it is killed, or it crashes): nothing after the
 // bootout runs, so what is on disk is what it wrote before launchctl was asked.
 func TestAStepThatDiesInsideTheBootoutHasWrittenItsRecordBeforeLaunchctlWasAskedAndTheNextRunHoldsTheRequest(t *testing.T) {

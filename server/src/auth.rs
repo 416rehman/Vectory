@@ -14,6 +14,7 @@ use rand::RngCore;
 use serde_json::{Value, json};
 use sqlx::{Row, SqliteConnection};
 use subtle::ConstantTimeEq;
+use tokio::sync::Semaphore;
 
 /// Browser sessions last this long from sign-in; there is no sliding renewal.
 pub const SESSION_HOURS: i64 = 12;
@@ -21,6 +22,33 @@ pub const SESSION_HOURS: i64 = 12;
 const ENDING_RETENTION_DAYS: i64 = 7;
 /// "Last active" precision. Bounds session-detail writes to one per session per window.
 const LAST_SEEN_SECONDS: i64 = 300;
+/// Argon2's default workspace is memory-intensive. Keep simultaneous password
+/// proofs bounded independently of the HTTP admission budget.
+const PASSWORD_WORKERS: u32 = 4;
+static PASSWORD_WORK_SLOTS: Semaphore = Semaphore::const_new(PASSWORD_WORKERS as usize);
+
+#[cfg(test)]
+const PASSWORD_WORK_TEST_MARKER: &str = "password-work-cancellation-probe";
+#[cfg(test)]
+struct PasswordWorkTestHook {
+    entered: tokio::sync::oneshot::Sender<()>,
+    resume: std::sync::mpsc::Receiver<()>,
+}
+#[cfg(test)]
+static PASSWORD_WORK_TEST_HOOK: std::sync::Mutex<Option<PasswordWorkTestHook>> =
+    std::sync::Mutex::new(None);
+#[cfg(test)]
+static PASSWORD_WORK_CANCEL_TEST_SLOTS: Semaphore = Semaphore::const_new(1);
+
+#[cfg(test)]
+fn pause_password_worker_for_test(password: &str) {
+    if password == PASSWORD_WORK_TEST_MARKER {
+        if let Some(hook) = PASSWORD_WORK_TEST_HOOK.lock().unwrap().take() {
+            let _ = hook.entered.send(());
+            let _ = hook.resume.recv();
+        }
+    }
+}
 
 /// Why a browser session ended. Stored per session verifier; never a secret.
 pub mod ending {
@@ -126,7 +154,19 @@ async fn touch_session(s: &crate::App, conn: &mut SqliteConnection, verifier: &s
     }
 }
 pub(crate) async fn password_hash(password: String) -> Result<String> {
+    password_hash_with_slots(password, &PASSWORD_WORK_SLOTS).await
+}
+async fn password_hash_with_slots(password: String, slots: &'static Semaphore) -> Result<String> {
+    // Move the permit into the worker: cancelling an HTTP request cannot free
+    // its memory slot while the blocking Argon2 computation is still running.
+    let permit = slots
+        .acquire()
+        .await
+        .expect("password work semaphore stays open");
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        #[cfg(test)]
+        pause_password_worker_for_test(&password);
         let salt = SaltString::generate(&mut rand::rngs::OsRng);
         Argon2::default()
             .hash_password(password.as_bytes(), &salt)
@@ -867,7 +907,21 @@ pub(crate) async fn finish_login(
     create_session(s, conn, user, h, client).await
 }
 pub(crate) async fn verify_password(password: String, stored: Option<String>) -> bool {
+    verify_password_with_slots(password, stored, &PASSWORD_WORK_SLOTS).await
+}
+async fn verify_password_with_slots(
+    password: String,
+    stored: Option<String>,
+    slots: &'static Semaphore,
+) -> bool {
+    let permit = slots
+        .acquire()
+        .await
+        .expect("password work semaphore stays open");
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        #[cfg(test)]
+        pause_password_worker_for_test(&password);
         // An account without a usable verifier (unknown email, or an invited
         // account that has not chosen a password yet) costs the same hashing work.
         match stored.as_deref().map(PasswordHash::new) {
@@ -1147,6 +1201,91 @@ pub async fn create_user(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn password_hashing_and_verification_wait_for_the_shared_memory_budget() {
+        let stored = password_hash("valid-test-password".to_owned())
+            .await
+            .unwrap();
+        let permits = PASSWORD_WORK_SLOTS
+            .acquire_many(PASSWORD_WORKERS)
+            .await
+            .unwrap();
+        let mut hashing = tokio::spawn(password_hash("another-test-password".to_owned()));
+        let mut checking = tokio::spawn(verify_password(
+            "valid-test-password".to_owned(),
+            Some(stored),
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), &mut hashing)
+                .await
+                .is_err(),
+            "password creation ran without a memory permit"
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), &mut checking)
+                .await
+                .is_err(),
+            "password verification ran without a memory permit"
+        );
+        drop(permits);
+        assert!(hashing.await.unwrap().is_ok());
+        assert!(checking.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_keeps_its_permit_until_argon2_worker_finishes() {
+        let stored = password_hash(PASSWORD_WORK_TEST_MARKER.to_owned())
+            .await
+            .unwrap();
+        for verify in [false, true] {
+            let (entered, worker_started) = tokio::sync::oneshot::channel();
+            let (resume, worker_resume) = std::sync::mpsc::channel();
+            *PASSWORD_WORK_TEST_HOOK.lock().unwrap() = Some(PasswordWorkTestHook {
+                entered,
+                resume: worker_resume,
+            });
+            let stored = stored.clone();
+            let request = tokio::spawn(async move {
+                if verify {
+                    assert!(
+                        verify_password_with_slots(
+                            PASSWORD_WORK_TEST_MARKER.to_owned(),
+                            Some(stored),
+                            &PASSWORD_WORK_CANCEL_TEST_SLOTS,
+                        )
+                        .await
+                    );
+                } else {
+                    password_hash_with_slots(
+                        PASSWORD_WORK_TEST_MARKER.to_owned(),
+                        &PASSWORD_WORK_CANCEL_TEST_SLOTS,
+                    )
+                    .await
+                    .unwrap();
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), worker_started)
+                .await
+                .expect("Argon2 worker did not start")
+                .unwrap();
+            request.abort();
+            assert!(request.await.unwrap_err().is_cancelled());
+            assert!(
+                PASSWORD_WORK_CANCEL_TEST_SLOTS.try_acquire().is_err(),
+                "cancelled request released an active Argon2 worker's permit"
+            );
+            resume.send(()).unwrap();
+            let returned = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                PASSWORD_WORK_CANCEL_TEST_SLOTS.acquire(),
+            )
+            .await
+            .expect("Argon2 worker did not release its permit")
+            .unwrap();
+            drop(returned);
+        }
+    }
 
     #[test]
     fn password_floor_rejects_short_common_patterned_and_identity_choices() {

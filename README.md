@@ -58,7 +58,7 @@ The same guides ship inside every server as a searchable, offline Help center at
   <tr>
     <td width="33%"><img src="docs/screenshots/product-devices.png" alt="Devices: each demo agent with its connection and pipeline status"></td>
     <td width="33%"><img src="docs/screenshots/product-rollout.png" alt="A deployment's details: every device applied and verified the new version"></td>
-    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: choose the OS and mode, run one command, and watch the device connect"></td>
+    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: Linux and restricted mode selected, ready to create an install command"></td>
   </tr>
   <tr>
     <td align="center">Every device, and what it runs</td>

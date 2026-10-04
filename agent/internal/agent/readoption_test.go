@@ -105,6 +105,34 @@ func successfulChecks() adoptionChecks {
 	return adoptionChecks{func(context.Context, Settings) (string, error) { return VectorVersion, nil }, func(context.Context, Settings, string) error { return nil }}
 }
 
+func TestReAdoptValidatesWithHostRuntimeWithoutLeavingFiles(t *testing.T) {
+	f := newReadoptFixture(t, false)
+	previousProbe := vectorDefaultDataDirProbe
+	vectorDefaultDataDirProbe = filepath.Join(t.TempDir(), "absent-default")
+	t.Cleanup(func() { vectorDefaultDataDirProbe = previousProbe })
+	calls := filepath.Join(t.TempDir(), "calls.log")
+	binary := standInVector(t, fakeVectorConfig{Calls: calls})
+	digest, err := FileDigest(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReAdopt(context.Background(), f.dir, binary, digest); err != nil {
+		t.Fatal(err)
+	}
+	validations, _ := vectorCalls(t, calls)
+	if len(validations) != 2 {
+		t.Fatalf("expected both retained configurations to be validated: %v", validations)
+	}
+	for _, validation := range validations {
+		if strings.Count(validation, "--config-json") != 2 {
+			t.Fatalf("re-adoption validated a different runtime than apply: %s", validation)
+		}
+	}
+	if _, err := os.Lstat(agentDataDir(f.dir)); !os.IsNotExist(err) {
+		t.Fatalf("validation left a new host data directory: %v", err)
+	}
+}
+
 func TestReAdoptChangesOnlyApprovedIdentityAndValidatesBothSnapshots(t *testing.T) {
 	for _, full := range []bool{false, true} {
 		t.Run(map[bool]string{false: "restricted", true: "full"}[full], func(t *testing.T) {

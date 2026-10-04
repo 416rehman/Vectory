@@ -300,6 +300,85 @@ async fn credential_arrays_cannot_enter_draft_graph_or_immutable_history() {
 }
 
 #[tokio::test]
+async fn short_named_credentials_are_refused_before_draft_history() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Short credential guard","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+
+    for (index, path, secret) in [
+        (0, &["client_secret"][..], "c5sC3"),
+        (1, &["request", "headers", "Authorization"][..], "h6rB2"),
+        (2, &["request", "query", "api_key"][..], "q7zA1"),
+    ] {
+        let mut config = pipeline();
+        config["sinks"]["out"]["type"] = json!("http");
+        config["sinks"]["out"]["uri"] = json!("https://example.test/events");
+        let mut field = &mut config["sinks"]["out"];
+        for key in path {
+            field = &mut field[*key];
+        }
+        *field = json!(secret);
+        let create_body = json!({"name":format!("Rejected credential {index}"),"description":"","config":config,"graph":{"nodes":[],"edges":[]}});
+        let (status, error, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            create_body.clone(),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert!(
+            error.to_string().contains("Plaintext credentials"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains(secret));
+
+        let (status, error, _) = call(
+            app.clone(),
+            "PUT",
+            &format!("/api/v1/configurations/{id}/draft"),
+            json!({"revision":draft["revision"],"config":create_body["config"],"graph":create_body["graph"]}),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert!(
+            error.to_string().contains("Plaintext credentials"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains(secret));
+        let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+            .bind(format!("%{secret}%"))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(persisted, 0, "{secret} entered draft history");
+    }
+    let current: String =
+        sqlx::query_scalar("SELECT data FROM records WHERE kind='configuration' AND id=?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    let current: Value = serde_json::from_str(&current).unwrap();
+    assert_eq!(current["revision"], draft["revision"]);
+}
+
+#[tokio::test]
 async fn only_get_api_reference_permits_same_origin_embedding() {
     let (_temp, s) = state().await;
     let app = api::router(s);

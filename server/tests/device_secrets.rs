@@ -260,6 +260,169 @@ async fn plain_text_credentials_never_reach_history_and_references_publish() {
     );
 }
 
+#[tokio::test]
+async fn http_header_and_url_credentials_are_refused_before_draft_history() {
+    let (_temp, state, app, actor) = fixture(None).await;
+    let base = json!({
+        "sources":{"in":{"type":"demo_logs","format":"json"}},
+        "sinks":{"out":{"type":"http","inputs":["in"],"uri":"https://example.test/events","encoding":{"codec":"json"},"request":{"headers":{}}}}
+    });
+    for (field, value, header) in [
+        (
+            "sinks.out.uri",
+            "https://example.test/events?api_key=unpublished-secret",
+            None,
+        ),
+        (
+            "sinks.out.uri",
+            "https://hooks.slack.com/services/T123/B456/unpublished-secret",
+            None,
+        ),
+        (
+            "sinks.out.uri",
+            "https://example.test/events?note=(ok)&api_key=unpublished-secret",
+            None,
+        ),
+        (
+            "sinks.out.uri",
+            "https://user:unpublished-secret)@example.test/events",
+            None,
+        ),
+        (
+            "sinks.out.request.headers.X-Honeycomb-Team",
+            "unpublished-secret",
+            Some("X-Honeycomb-Team"),
+        ),
+        (
+            "sinks.out.request.headers.Cookie",
+            "unpublished-secret",
+            Some("Cookie"),
+        ),
+        (
+            "sinks.out.request.headers.Authorization",
+            "Bearer live-secret=example",
+            Some("Authorization"),
+        ),
+        (
+            "sinks.out.request.headers.Cookie",
+            "sid=live-secret; theme=example",
+            Some("Cookie"),
+        ),
+        (
+            "sinks.out.request.headers.Cookie",
+            "sid=live-secret; theme=${THEME}",
+            Some("Cookie"),
+        ),
+    ] {
+        let mut config = base.clone();
+        if let Some(header) = header {
+            config["sinks"]["out"]["request"]["headers"][header] = json!(value);
+        } else {
+            config["sinks"]["out"]["uri"] = json!(value);
+        }
+        let (status, reply) = call(
+            &app,
+            "POST",
+            "/api/v1/configurations",
+            json!({"name":"HTTP credential refusal","description":"","config":config,"graph":{"nodes":[],"edges":[]}}),
+            &actor,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {reply}");
+        assert!(reply.to_string().contains(field), "{field}: {reply}");
+        assert!(
+            reply.to_string().contains("Use a native secret"),
+            "{field}: {reply}"
+        );
+        assert!(!reply.to_string().contains(value), "{field}: {reply}");
+    }
+    for (field, header) in [
+        ("uri", None),
+        ("request.headers.Authorization", Some("Authorization")),
+    ] {
+        let mut config = base.clone();
+        if let Some(header) = header {
+            config["sinks"]["out"]["request"]["headers"][header] = json!("vectory-secret:UNBOUND");
+        } else {
+            config["sinks"]["out"]["uri"] = json!("vectory-secret:UNBOUND");
+        }
+        let (status, reply) = call(
+            &app,
+            "POST",
+            "/api/v1/configurations",
+            json!({"name":"Unsupported HTTP reference","description":"","config":config,"graph":{"nodes":[],"edges":[]}}),
+            &actor,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {reply}");
+        assert!(reply.to_string().contains(field), "{field}: {reply}");
+        assert!(
+            reply
+                .to_string()
+                .contains("Only credential fields can hold a device secret"),
+            "{field}: {reply}"
+        );
+    }
+    let records: Vec<String> =
+        sqlx::query_scalar("SELECT data FROM records WHERE kind IN ('configuration','revision')")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap();
+    assert!(
+        records
+            .iter()
+            .all(|record| !record.contains("unpublished-secret") && !record.contains("live-secret"))
+    );
+}
+
+#[tokio::test]
+async fn graph_token_shapes_never_reach_draft_history() {
+    let (_temp, state, app, actor) = fixture(None).await;
+    let token = "ghp_0123456789abcdef0123456789abcdef";
+    let graph =
+        json!({"nodes":[{"id":"in","type":"component","data":{"description":token}}],"edges":[]});
+    let config = pipeline("vectory-secret:DD_API_KEY");
+    let (status, refused) = call(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Graph credential refusal","description":"","config":config,"graph":graph}),
+        &actor,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused.to_string().contains("nodes[0].data.description"));
+    assert!(!refused.to_string().contains(token));
+
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Graph credential refusal","description":"","config":config,"graph":{"nodes":[{"id":"in","type":"component","data":{"description":"Open settings to configure"}}],"edges":[]}}),
+        &actor,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let (status, refused) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/configurations/{id}/draft"),
+        json!({"revision":created["revision"],"config":config,"graph":graph}),
+        &actor,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused.to_string().contains("nodes[0].data.description"));
+    assert!(!refused.to_string().contains(token));
+    let records: Vec<String> =
+        sqlx::query_scalar("SELECT data FROM records WHERE kind IN ('configuration','revision')")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap();
+    assert!(records.iter().all(|record| !record.contains(token)));
+}
+
 async fn start_worker(vector: &str) -> (tokio::process::Child, String) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

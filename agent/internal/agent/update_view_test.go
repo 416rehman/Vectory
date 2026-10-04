@@ -360,6 +360,7 @@ func TestTheAdviceForApplyReadsTheAgentsReport(t *testing.T) {
 // ---------------------------------------------------------------- reading the host
 
 func TestTheViewReadsThePolicyTheStepAndWhatTheAgentStaged(t *testing.T) {
+	requireRootOwnedWriter(t) // the policy and step status are written as root-owned files
 	withLocalZone(t, time.UTC)
 	paths := useUpdateRoots(t)
 	dir := realTempDir(t)
@@ -444,6 +445,7 @@ func TestAHostThatNeverConsentedAsksTheStepAboutItselfAndIsNoFaultForLackingIt(t
 }
 
 func TestAPolicyThatCantBeUsedIsNamedAndTakesNoUpdate(t *testing.T) {
+	requireRootOwnedWriter(t) // the invalid policy is still stored under a root-owned directory
 	paths := useUpdateRoots(t)
 	dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
 	if err != nil {

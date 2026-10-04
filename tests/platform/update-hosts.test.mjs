@@ -285,27 +285,36 @@ test(
 test("the files only root may read are read the same way on every host", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vectory-hosts-"));
   try {
-    const paths = {
+    const windows = onWindows ? windowsHost({ programData: dir }) : null;
+    const paths = windows?.paths ?? {
       status: path.join(dir, "status.json"),
       journal: path.join(dir, "journal.json"),
       counters: path.join(dir, "counters.json"),
       policy: path.join(dir, "policy.json"),
     };
-    // Without elevation: the files are the test's own.
-    const readers = rootReaders({
+    // Without elevation: the files are the test's own. The Unix hosts use
+    // command-line readers; Windows reads the same files with Node's fs APIs.
+    const readers = windows ?? rootReaders({
       paths,
       sudo: (command, args, options = {}) => run(command, args, options),
     });
     assert.equal(readers.status(), null);
     assert.equal(readers.exists(paths.status), false);
 
+    fs.mkdirSync(path.dirname(paths.status), { recursive: true });
+    fs.mkdirSync(path.dirname(paths.journal), { recursive: true });
     fs.writeFileSync(paths.status, JSON.stringify({ stage: "idle", n: 1 }));
     fs.writeFileSync(paths.journal, "not json");
     assert.deepEqual(readers.status(), { stage: "idle", n: 1 });
     assert.equal(readers.journal(), null);
     assert.deepEqual(readers.readJson(paths.status), { stage: "idle", n: 1 });
     assert.equal(readers.exists(paths.status), true);
-    assert.deepEqual(readers.list(dir).sort(), ["journal.json", "status.json"]);
+    assert.deepEqual(
+      readers.list(path.dirname(paths.status)).sort(),
+      onWindows ? ["private", "status.json"] : ["journal.json", "status.json"],
+    );
+    if (onWindows)
+      assert.deepEqual(readers.list(path.dirname(paths.journal)), ["journal.json"]);
     assert.deepEqual(readers.list(path.join(dir, "missing")), []);
 
     // waitForStage returns the status when the stage shows, and says what it saw when it doesn't.

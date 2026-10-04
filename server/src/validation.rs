@@ -1,4 +1,5 @@
 use crate::vector_diagnostics::Diagnostic;
+use base64::Engine;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -50,6 +51,362 @@ pub fn is_native_secret_reference(text: &str) -> bool {
             && (name.as_bytes()[0].is_ascii_alphabetic() || name.starts_with('_'))
             && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     })
+}
+
+fn credential_key_name(key: &str) -> bool {
+    let key = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    // Vector also uses "key" for event-field names. These configure shape,
+    // not authentication, and may legitimately be longer than eight bytes.
+    if [
+        "cache_size_per_key",
+        "client_key",
+        "client_metadata_key",
+        "emit_events_discarded_per_key",
+        "exchange_key",
+        "file_key",
+        "global_host_key",
+        "global_log_schema_host_key",
+        "global_timestamp_key",
+        "headers_key",
+        "host_key",
+        "id_key",
+        "include_key",
+        "kms_key",
+        "labels_key",
+        "max_tracked_key",
+        "message_key",
+        "metadata_key",
+        "offset_key",
+        "partition_key",
+        "path_key",
+        "pid_key",
+        "port_key",
+        "properties_key",
+        "redis_key",
+        "routing_key",
+        "sample_rate_key",
+        "severity_key",
+        "source_key",
+        "source_type_key",
+        "ssekms_key",
+        "subject_key",
+        "tag_cardinality_tracked_key",
+        "tag_key",
+        "timestamp_key",
+        "timestamp_nanos_key",
+        "topic_key",
+    ]
+    .contains(&key.as_str())
+    {
+        return false;
+    }
+    [
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "access_key_id",
+        "secret_access_key",
+        "token",
+        "bearer",
+        "authorization",
+        "proxy_authorization",
+        "client_secret",
+        "private_key",
+        "cookie",
+        "set_cookie",
+        "x_honeycomb_team",
+        "dd_api_key",
+        "x_api_key",
+        "x_auth_token",
+        "private_token",
+        "x_insert_key",
+        "x_license_key",
+        "signature",
+        "sig",
+    ]
+    .iter()
+    .any(|name| key == *name || key.ends_with(&format!("_{name}")))
+        || ["_token", "_key", "_secret", "_password", "_signature"]
+            .iter()
+            .any(|suffix| key.ends_with(suffix))
+}
+
+fn credential_header_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [
+        "token",
+        "key",
+        "secret",
+        "auth",
+        "team",
+        "cookie",
+        "signature",
+        "session",
+    ]
+    .iter()
+    .any(|part| name.contains(part))
+}
+
+fn credential_query_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '.'], "_").as_str(),
+        "api_key"
+            | "apikey"
+            | "key"
+            | "token"
+            | "access_token"
+            | "auth"
+            | "sig"
+            | "signature"
+            | "secret"
+            | "client_secret"
+            | "password"
+    )
+}
+
+fn placeholder_word(text: &str) -> bool {
+    let text = text
+        .trim()
+        .strip_prefix("Bearer ")
+        .or_else(|| text.trim().strip_prefix("Basic "))
+        .unwrap_or(text.trim());
+    matches!(
+        text.to_ascii_lowercase().as_str(),
+        "changeme" | "example" | "redacted" | "xxxxxxxx"
+    )
+}
+
+fn credential_literal(text: &str) -> bool {
+    // One cookie-style key=value may hold a native reference. Looking only
+    // after the last '=' would excuse an earlier plaintext cookie or token.
+    let native_value = text.strip_prefix("Token ").or_else(|| {
+        text.split_once('=').and_then(|(key, value)| {
+            (!key.is_empty()
+                && key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || [b'_', b'-', b'.'].contains(&byte)))
+            .then_some(value)
+        })
+    });
+    !text.is_empty()
+        && !placeholder_word(text)
+        && !is_native_secret_reference(text)
+        && !native_value.is_some_and(is_native_secret_reference)
+}
+
+fn decoded_url_piece(piece: &str) -> String {
+    // Here '&' and '+' are URL-path characters, not form delimiters or spaces.
+    let encoded = format!("v={}", piece.replace('&', "%26").replace('+', "%2B"));
+    url::form_urlencoded::parse(encoded.as_bytes())
+        .next()
+        .map(|(_, decoded)| decoded.into_owned())
+        .unwrap_or_default()
+}
+
+fn url_credential_candidate(text: &str) -> bool {
+    let Ok(url) = url::Url::parse(text) else {
+        // A malformed destination still reaches draft history. Do not let an
+        // invalid URL evade the credential check before Vector rejects it.
+        return text.split_once("://").is_some_and(|(_, tail)| {
+            let authority = tail.split(['/', '?', '#']).next().unwrap_or("");
+            authority
+                .split_once('@')
+                .is_some_and(|(userinfo, _)| !userinfo.split(':').all(is_native_secret_reference))
+                || tail.split_once('?').is_some_and(|(_, query)| {
+                    url::form_urlencoded::parse(query.split('#').next().unwrap_or("").as_bytes())
+                        .any(|(name, value)| {
+                            credential_query_name(&name) && credential_literal(&value)
+                        })
+                })
+        });
+    };
+    if (!url.username().is_empty()
+        && !is_native_secret_reference(&decoded_url_piece(url.username())))
+        || url.password().is_some_and(|password| {
+            !password.is_empty() && !is_native_secret_reference(&decoded_url_piece(password))
+        })
+    {
+        return true;
+    }
+    if url
+        .query_pairs()
+        .any(|(name, value)| credential_query_name(&name) && credential_literal(&value))
+    {
+        return true;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    let path: Vec<_> = url
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .map(decoded_url_piece)
+        .collect();
+    let token = if host == "hooks.slack.com"
+        && path.len() >= 4
+        && path.first().is_some_and(|part| part == "services")
+    {
+        path.last()
+    } else if [
+        "discord.com",
+        "discordapp.com",
+        "canary.discord.com",
+        "ptb.discord.com",
+    ]
+    .contains(&host.as_str())
+        && path.len() >= 4
+        && path[0] == "api"
+        && path[1] == "webhooks"
+    {
+        path.get(3)
+    } else if host == "webhook.office.com" || host.ends_with(".webhook.office.com") {
+        path.last()
+    } else if host == "outlook.office.com" && path.first().is_some_and(|part| part == "webhook") {
+        path.last()
+    } else {
+        None
+    };
+    token.is_some_and(|value| credential_literal(value))
+}
+
+fn plaintext_url_credential(text: &str) -> bool {
+    const MAX_URL_CANDIDATES: usize = 64;
+    const MAX_URL_BYTES: usize = 16 * 1024;
+    let mut prefix_end = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut candidates = 0;
+    text.match_indices("://").any(|(scheme_end, _)| {
+        candidates += 1;
+        if candidates > MAX_URL_CANDIDATES {
+            // Avoid repeatedly parsing attacker-controlled nested URLs. An
+            // exceptional field cannot safely enter draft history unchecked.
+            return true;
+        }
+        let start = text[..scheme_end]
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '+' || *ch == '-' || *ch == '.'))
+            .map_or(0, |(index, ch)| index + ch.len_utf8());
+        // Track an enclosing string across any prose before the URL. A quote
+        // inside a direct URL is URL data, while an escaped quote in a VRL
+        // string cannot close the URL before a later credential.
+        for (offset, ch) in text[prefix_end..start].char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if quote.is_some() && ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() && ch == '"' {
+                quote = Some(ch);
+            } else if quote.is_none() && ch == '\'' {
+                let at = prefix_end + offset;
+                let before = &text[..at];
+                let previous = before.chars().last();
+                // `s'...'` is a VRL raw string. Do not mistake a word's
+                // apostrophe (for example, "don't") for a string opener.
+                let raw_string = previous == Some('s')
+                    && before[..before.len() - 1]
+                        .chars()
+                        .last()
+                        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_');
+                if raw_string || previous.is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
+                {
+                    quote = Some(ch);
+                }
+            }
+        }
+        prefix_end = start;
+        let tail = &text[scheme_end + 3..];
+        let mut tail_escaped = false;
+        let mut too_long = false;
+        let end = tail
+            .char_indices()
+            .find(|(index, ch)| {
+                if *index >= MAX_URL_BYTES {
+                    too_long = true;
+                    return true;
+                }
+                if ch.is_whitespace() {
+                    return true;
+                }
+                if tail_escaped {
+                    tail_escaped = false;
+                    return false;
+                }
+                if quote.is_some() && *ch == '\\' {
+                    tail_escaped = true;
+                    return false;
+                }
+                quote == Some(*ch)
+            })
+            .map_or(text.len(), |(index, _)| scheme_end + 3 + index);
+        if too_long || end - start > MAX_URL_BYTES {
+            return true;
+        }
+        url_credential_candidate(&text[start..end])
+    })
+}
+
+fn credential_token_shape(text: &str) -> bool {
+    if text.contains("-----BEGIN ")
+        && text.contains("PRIVATE KEY-----")
+        && text.contains("-----END ")
+    {
+        return true;
+    }
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.'))
+        .filter(|word| !word.is_empty())
+        .any(|word| {
+            if word.len() == 20
+                && (word.starts_with("AKIA") || word.starts_with("ASIA"))
+                && word[4..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+            {
+                return true;
+            }
+            if let [header, payload, signature] = word.split('.').collect::<Vec<_>>().as_slice()
+                && !header.is_empty()
+                && payload.len() >= 8
+                && signature.len() >= 8
+                && let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(header)
+                && serde_json::from_slice::<Value>(&decoded)
+                    .ok()
+                    .is_some_and(|header| header["alg"].as_str().is_some())
+            {
+                return true;
+            }
+            let prefix = [
+                "xoxa-",
+                "xoxb-",
+                "xoxe-",
+                "xoxp-",
+                "xoxr-",
+                "xoxs-",
+                "ghp_",
+                "github_pat_",
+                "glpat-",
+                "sk-",
+            ]
+            .into_iter()
+            .find(|prefix| word.starts_with(prefix));
+            prefix.is_some_and(|prefix| {
+                let suffix = &word[prefix.len()..];
+                suffix.len() >= 12
+                    && suffix
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            })
+        })
 }
 fn has_environment_reference(text: &str) -> bool {
     text.as_bytes()
@@ -1299,6 +1656,9 @@ pub fn structural_diagnostics(config: &Value, result: &Value) -> Vec<Diagnostic>
             } else if let Some(id) = message.strip_prefix("Duplicate component ID: ") {
                 diagnostic = diagnostic.at(config, id.trim());
                 diagnostic.code = Some("duplicate_id".into());
+            } else if let Some((code, field)) = secret_problem(message) {
+                diagnostic.code = Some(code.into());
+                diagnostic.field = Some(field.into());
             } else if message == "Pipeline contains a cycle" {
                 diagnostic.code = Some("cycle".into());
             } else if message.starts_with("At least one source")
@@ -2746,8 +3106,8 @@ fn source_emits(item: &Value, port: Option<&str>) -> u8 {
         return ANY_EVENT;
     }
     match typ {
-        "demo_logs" | "file" | "journald" | "kubernetes_logs" | "syslog" | "docker_logs"
-        | "internal_logs" => LOGS,
+        "demo_logs" | "file" | "journald" | "windows_event_log" | "kubernetes_logs" | "syslog"
+        | "docker_logs" | "internal_logs" => LOGS,
         "host_metrics" | "internal_metrics" | "prometheus_scrape" | "statsd" | "static_metrics"
         | "apache_metrics" | "nginx_metrics" => METRICS,
         _ => ANY_EVENT,
@@ -3183,20 +3543,7 @@ pub fn validate(config: &Value) -> Value {
             config,
             &mut Vec::new(),
             &mut Vec::new(),
-            &mut |text, path, _| {
-                if text.split_once("://").is_some_and(|(_, tail)| {
-                    tail.split('/')
-                        .next()
-                        .unwrap_or("")
-                        .split_once('@')
-                        .is_some_and(|(credentials, _)| {
-                            !credentials.split(':').all(is_native_secret_reference)
-                        })
-                }) {
-                    errors.push(
-                        "Plaintext credentials cannot be stored in configuration history".into(),
-                    );
-                }
+            &mut |text, path, indexes| {
                 if text.is_empty()
                     || is_local_secret(text)
                     || is_native_secret_reference(text)
@@ -3205,36 +3552,29 @@ pub fn validate(config: &Value) -> Value {
                 {
                     return;
                 }
-                let normalized = |key: &str| key.to_ascii_lowercase().replace(['-', '.'], "_");
-                let credential = match path {
+                let credential_key = match path {
                     // Native nullable credential lists retain field context while
                     // inspecting elements. JSON Schema marks these SensitiveString.
-                    [.., PathStep::Field(key), PathStep::Item] => {
-                        ["valid_tokens", "access_keys"].contains(&normalized(key).as_str())
-                    }
-                    [.., PathStep::Field(key)] => {
-                        let key = normalized(key);
-                        [
-                            "password",
-                            "passwd",
-                            "api_key",
-                            "apikey",
-                            "access_key_id",
-                            "secret_access_key",
-                            "token",
-                            "bearer",
-                            "authorization",
-                            "proxy_authorization",
-                            "client_secret",
-                            "private_key",
-                        ]
-                        .iter()
-                        .any(|name| key == *name || key.ends_with(&format!("_{name}")))
-                    }
+                    [.., PathStep::Field(key), PathStep::Item] => ["valid_tokens", "access_keys"]
+                        .contains(&key.to_ascii_lowercase().replace(['-', '.'], "_").as_str()),
+                    [.., PathStep::Field(key)] => credential_key_name(key),
                     _ => false,
                 };
-                if credential {
-                    errors.push("Plaintext credentials cannot be stored in configuration history; use native secret or environment references".into());
+                let credential_header = matches!(path,
+                    [.., PathStep::Field(headers), PathStep::Field(name)]
+                    if headers == "headers" && credential_header_name(name));
+                // Graph metadata also reaches draft and version history. A
+                // token-shaped value must not escape simply because it has no
+                // component field location there.
+                let token_shape = credential_token_shape(text);
+                if ((credential_key || credential_header) && credential_literal(text))
+                    || plaintext_url_credential(text)
+                    || token_shape
+                {
+                    errors.push(format!(
+                        "Plaintext credentials cannot be stored in `{}`. Use a native secret or environment reference, such as SECRET[backend.key].",
+                        display_path(path, indexes),
+                    ));
                 }
             },
         );
@@ -3453,6 +3793,23 @@ mod tests {
         assert_eq!(
             mismatch(&otel),
             ["t: `otel.logs` emits logs but `t` accepts metrics."]
+        );
+    }
+
+    #[test]
+    fn windows_event_log_emits_logs_for_static_type_checks() {
+        let config = json!({
+            "sources":{"events":{"type":"windows_event_log","channels":["Application"]}},
+            "sinks":{"metrics":{"type":"prometheus_exporter","inputs":["events"]}}
+        });
+        let errors = validate(&config)["errors"].as_array().unwrap().clone();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.as_str().is_some_and(|error| {
+                    error == "metrics: `events` emits logs but `metrics` accepts metrics."
+                })),
+            "{errors:?}"
         );
     }
 
@@ -3823,6 +4180,258 @@ mod tests {
             errors
                 .iter()
                 .all(|e| e.as_str().unwrap().starts_with("Plaintext credentials"))
+        );
+    }
+
+    #[test]
+    fn http_credentials_outside_the_generated_table_are_refused_by_full_field_path() {
+        let base = json!({
+            "sources":{"in":{"type":"demo_logs","format":"json"}},
+            "sinks":{"out":{"type":"http","inputs":["in"],"uri":"https://example.test/events","encoding":{"codec":"json"},"request":{"headers":{},"query":{}}}}
+        });
+        for (pointer, value, field) in [
+            (
+                "/sinks/out/client_secret",
+                "z9Q4",
+                "sinks.out.client_secret",
+            ),
+            (
+                "/sinks/out/request/headers/Authorization",
+                "z9Q4",
+                "sinks.out.request.headers.Authorization",
+            ),
+            (
+                "/sinks/out/request/query/api_key",
+                "z9Q4",
+                "sinks.out.request.query.api_key",
+            ),
+            (
+                "/sinks/out/request/headers/Authorization",
+                "Bearer plaintext-token",
+                "sinks.out.request.headers.Authorization",
+            ),
+            (
+                "/sinks/out/request/headers/X-Honeycomb-Team",
+                "plain-team-id",
+                "sinks.out.request.headers.X-Honeycomb-Team",
+            ),
+            (
+                "/sinks/out/request/headers/Cookie",
+                "session=plain-cookie",
+                "sinks.out.request.headers.Cookie",
+            ),
+            (
+                "/sinks/out/request/headers/X-Signature",
+                "plain-signature",
+                "sinks.out.request.headers.X-Signature",
+            ),
+            (
+                "/sinks/out/uri",
+                "https://example.test/events?api_key=z9Q4",
+                "sinks.out.uri",
+            ),
+            (
+                "/sinks/out/uri",
+                "https://example.test/events?api_key=plain-key",
+                "sinks.out.uri",
+            ),
+            (
+                "/sinks/out/uri",
+                "https://example.test/events?access%5Ftoken=plain-token",
+                "sinks.out.uri",
+            ),
+            (
+                "/sinks/out/uri",
+                "https://hooks.slack.com/services/T123/B456/plain-webhook-token",
+                "sinks.out.uri",
+            ),
+            (
+                "/sinks/out/uri",
+                "https://discord.com/api/webhooks/123/plain-discord-token",
+                "sinks.out.uri",
+            ),
+            (
+                "/sinks/out/uri",
+                "https://user:plain-password@example.test/events",
+                "sinks.out.uri",
+            ),
+        ] {
+            let mut config = base.clone();
+            if config.pointer(pointer).is_some() {
+                *config.pointer_mut(pointer).unwrap() = json!(value);
+            } else {
+                let (parent, key) = pointer.rsplit_once('/').unwrap();
+                config.pointer_mut(parent).unwrap()[key] = json!(value);
+            }
+            let result = validate(&config);
+            assert_eq!(result["valid"], false, "{pointer}: {result}");
+            let errors = result["errors"].as_array().unwrap();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.as_str().unwrap().contains(&format!("`{field}`"))),
+                "{pointer}: {result}"
+            );
+            assert!(
+                !result.to_string().contains(value),
+                "credential appeared in validation response"
+            );
+            let diagnostic = structural_diagnostics(&config, &result)
+                .into_iter()
+                .find(|diagnostic| diagnostic.code.as_deref() == Some("plaintext_credential"))
+                .unwrap();
+            assert_eq!(diagnostic.field.as_deref(), Some(field));
+        }
+        let mut safe = base;
+        safe["sinks"]["out"]["request"]["headers"]["X-Trace-Id"] = json!("nonsecret-id");
+        for uri in [
+            "https://example.test/events?page=3",
+            "https://example.test/events?api_key=${API_KEY}",
+            "https://hooks.slack.com/services/T123/B456/${WEBHOOK_TOKEN}",
+        ] {
+            safe["sinks"]["out"]["uri"] = json!(uri);
+            assert_eq!(validate(&safe)["valid"], true, "{uri}");
+        }
+    }
+
+    #[test]
+    fn credential_shapes_cover_http_variants_without_refusing_examples() {
+        for name in [
+            "api_key",
+            "apikey",
+            "key",
+            "token",
+            "access_token",
+            "auth",
+            "sig",
+            "signature",
+            "secret",
+            "client_secret",
+            "password",
+        ] {
+            assert!(
+                plaintext_url_credential(&format!(
+                    "https://example.test/ingest?{name}=long-credential"
+                )),
+                "{name}"
+            );
+            assert!(
+                !plaintext_url_credential(&format!("https://example.test/ingest?{name}=example")),
+                "{name}"
+            );
+            assert!(
+                plaintext_url_credential(&format!("https://example.test/ingest?{name}=x")),
+                "{name}"
+            );
+        }
+        for url in [
+            "https://hooks.slack.com/services/T123/B456/long-webhook-token",
+            "https://discordapp.com/api/webhooks/123/long-webhook-token",
+            "https://tenant.webhook.office.com/IncomingWebhook/long-webhook-token",
+            "https://outlook.office.com/webhook/long-webhook-token",
+            "https://example.test/ingest?note=(ok)&api_key=short-secret",
+            "https://example.test/ingest?note=\"ok\"&api_key=short-secret",
+            "https://user:short-secret)@example.test/ingest",
+            "https://example.test/ingest?note='ok'&api_key=short-secret",
+            "https://example.test/ingest?note=<ok>&api_key=short-secret",
+            "https://example.test/ingest?note=\\ok&api_key=short-secret",
+        ] {
+            assert!(plaintext_url_credential(url), "{url}");
+        }
+        assert!(plaintext_url_credential(
+            ".uri = \"https://example.test/ingest?api_key=long-credential\""
+        ));
+        assert!(plaintext_url_credential(
+            ".uri = \"https://example.test/ingest?note='ok'&api_key=short-secret\""
+        ));
+        assert!(!plaintext_url_credential(
+            "https://example.test/ingest?api_key=${API_KEY}"
+        ));
+        assert!(!plaintext_url_credential(
+            "https://${USER}:${PASSWORD}@example.test/ingest"
+        ));
+        assert!(!plaintext_url_credential(
+            "https://SECRET[vault.user]:SECRET[vault.password]@example.test/ingest"
+        ));
+        assert!(!plaintext_url_credential(
+            "https://example.test/ingest?note=(ok)&api_key=${API_KEY}"
+        ));
+        assert!(!plaintext_url_credential(
+            "https://example.test/ingest?note=(ok)&api_key=example"
+        ));
+        assert!(!plaintext_url_credential(
+            ".uri = \"https://example.test/ingest?note='ok'&api_key=${API_KEY}\""
+        ));
+        assert!(!plaintext_url_credential(
+            ".message = \"hit https://example.test/?api_key=${API_KEY}\""
+        ));
+        assert!(!plaintext_url_credential(
+            "s'hit https://example.test/?api_key=${API_KEY}'"
+        ));
+        assert!(plaintext_url_credential(
+            ".message = \"hit https://example.test/?api_key=plain-secret\""
+        ));
+        assert!(plaintext_url_credential(
+            "s'hit https://example.test/?api_key=plain-secret'"
+        ));
+        assert!(plaintext_url_credential(
+            "don't trust https://example.test/?note='ok'&api_key=plain-secret"
+        ));
+        assert!(plaintext_url_credential(&format!(
+            "https://example.test/{}?api_key=${{API_KEY}}",
+            "x".repeat(16 * 1024)
+        )));
+        assert!(plaintext_url_credential(
+            &std::iter::repeat_n("https://example.test/?api_key=${API_KEY}", 65)
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+        assert!(plaintext_url_credential(
+            ".message = \"https://example.test/?note=\\\"ok\\\"&api_key=plain-secret\""
+        ));
+        assert!(!plaintext_url_credential(
+            ".message = \"https://example.test/?note=\\\"ok\\\"&api_key=${API_KEY}\""
+        ));
+        assert!(!credential_literal("sid=${COOKIE}"));
+        assert!(!credential_literal("Bearer redacted"));
+        assert!(!credential_literal(""));
+        assert!(!credential_literal("example"));
+        assert!(!credential_literal("SECRET[vault.key]"));
+        assert!(credential_literal("x"));
+        assert!(credential_literal("abc"));
+        assert!(credential_literal("sid=example"));
+        assert!(credential_literal("Bearer live-secret=example"));
+        assert!(credential_literal("sid=live-secret; theme=example"));
+        assert!(credential_literal("sid=live-secret; theme=${THEME}"));
+        assert!(!credential_key_name("source_key"));
+        assert!(credential_key_name("x_honeycomb_team"));
+        assert!(credential_header_name("X-Session-Token"));
+
+        for token in [
+            "AKIAABCDEFGHIJKLMNOP",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijklmnop",
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+            "xoxb-abcdefghijklmnop",
+            "ghp_abcdefghijklmnop",
+            "github_pat_abcdefghijklmnop",
+            "glpat-abcdefghijklmnop",
+            "sk-abcdefghijklmnop",
+        ] {
+            assert!(credential_token_shape(token), "{token}");
+        }
+        for ordinary in ["AKIAexample", "sk-example", "eyJhbGciOiJIUzI1NiJ9.abc"] {
+            assert!(!credential_token_shape(ordinary), "{ordinary}");
+        }
+        let config = json!({
+            "sources":{"in":{"type":"demo_logs","format":"json","note":"sk-abcdefghijklmnop"}},
+            "sinks":{"out":{"type":"blackhole","inputs":["in"]}}
+        });
+        assert!(
+            validate(&config)["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| error.as_str().unwrap().contains("`sources.in.note`"))
         );
     }
 

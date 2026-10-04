@@ -9,6 +9,7 @@ import {
 } from "./authRequests";
 import { formatCountdown, formatExpiry, formatRemaining } from "./authControls";
 import { initials, setupCommand } from "./AuthScreen";
+import { powerShellWords } from "./powershellText.test-support";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -152,7 +153,7 @@ describe("setup secret command", () => {
         container: true,
         path: "/run/secrets/bootstrap",
       })?.command,
-    ).toBe("docker compose exec server cat /run/secrets/bootstrap");
+    ).toBe("docker compose exec server cat -- '/run/secrets/bootstrap'");
     expect(
       setupCommand({
         source: "file",
@@ -160,7 +161,7 @@ describe("setup secret command", () => {
         container: false,
         path: "/srv/vectory/bootstrap",
       })?.command,
-    ).toBe("sudo cat /srv/vectory/bootstrap");
+    ).toBe("sudo cat -- '/srv/vectory/bootstrap'");
     expect(
       setupCommand({
         source: "file",
@@ -168,7 +169,7 @@ describe("setup secret command", () => {
         container: false,
         path: "C:\\ProgramData\\Vectory\\bootstrap",
       })?.command,
-    ).toBe('Get-Content "C:\\ProgramData\\Vectory\\bootstrap"');
+    ).toBe("Get-Content -LiteralPath 'C:\\ProgramData\\Vectory\\bootstrap'");
     expect(
       setupCommand({
         source: "environment",
@@ -178,5 +179,70 @@ describe("setup secret command", () => {
       }),
     ).toBeNull();
     expect(setupCommand(undefined)).toBeNull();
+  });
+
+  it("keeps a server-configured path literal across spaces, quotes, globs and shell syntax", () => {
+    const path = `/run/secrets/admin's $(touch /tmp/unwanted) [1]`;
+    const posix = setupCommand({
+      source: "file",
+      variable: "VECTORY_BOOTSTRAP_SECRET_FILE",
+      container: false,
+      path,
+    })?.command;
+    expect(posix).toBe(
+      `sudo cat -- '/run/secrets/admin'"'"'s $(touch /tmp/unwanted) [1]'`,
+    );
+    const windowsPath =
+      "C:\\ProgramData\\Vectory\\admin's $(Write-Output bad) [1] ‘file’";
+    const powershell = setupCommand({
+      source: "file",
+      variable: "VECTORY_BOOTSTRAP_SECRET_FILE",
+      container: false,
+      path: windowsPath,
+    })?.command;
+    expect(powerShellWords(powershell!)).toEqual([
+      "Get-Content",
+      "-LiteralPath",
+      windowsPath,
+    ]);
+    const share = "\\\\fileserver\\Vectory\\bootstrap [1]";
+    expect(
+      powerShellWords(
+        setupCommand({
+          source: "file",
+          variable: "VECTORY_BOOTSTRAP_SECRET_FILE",
+          container: false,
+          path: share,
+        })!.command,
+      ),
+    ).toEqual(["Get-Content", "-LiteralPath", share]);
+  });
+
+  it("does not offer a pasted command for visually misleading path controls", () => {
+    expect(
+      setupCommand({
+        source: "file",
+        variable: "VECTORY_BOOTSTRAP_SECRET_FILE",
+        container: false,
+        path: "/run/secrets/admin\u202eexe",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not guess a shell or working directory for a relative server path", () => {
+    for (const path of [
+      "bootstrap.txt",
+      "secrets/bootstrap",
+      "C:bootstrap.txt",
+    ]) {
+      expect(
+        setupCommand({
+          source: "file",
+          variable: "VECTORY_BOOTSTRAP_SECRET_FILE",
+          container: false,
+          path,
+        }),
+      ).toBeNull();
+    }
   });
 });

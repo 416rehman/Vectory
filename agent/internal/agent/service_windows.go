@@ -90,7 +90,9 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		if e = checkServiceConfig(cfg, exe, dir); e != nil {
 			return "", e
 		}
-		return ServiceUnchanged, nil
+		// Creation may have succeeded on an earlier setup while configuring
+		// recovery failed. Reconcile it on every retry before reporting success.
+		return finishWindowsServiceRegistration(existing, ServiceUnchanged)
 	}
 	if user != "" && user != "NT SERVICE\\Vectory" {
 		return "", errors.New("native SCM adapter uses the dedicated NT SERVICE\\Vectory virtual account; configure other identities explicitly through SCM")
@@ -154,12 +156,27 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		_ = service.Delete()
 		return "", err
 	}
+	return finishWindowsServiceRegistration(service, ServiceCreated)
+}
+
+type windowsRecoveryService interface {
+	SetRecoveryActions([]mgr.RecoveryAction, uint32) error
+}
+
+// A newly created service can remain registered when this last SCM call
+// fails. A matching registration takes this same path on the next setup, so
+// success always means its recovery policy was installed.
+func finishWindowsServiceRegistration(service windowsRecoveryService, registration ServiceRegistration) (ServiceRegistration, error) {
 	actions := make([]mgr.RecoveryAction, len(agentServiceRestartDelays))
 	for i, delay := range agentServiceRestartDelays {
 		actions[i] = mgr.RecoveryAction{Type: mgr.ServiceRestart, Delay: delay}
 	}
-	return ServiceCreated, service.SetRecoveryActions(actions, 24*60*60)
+	if err := service.SetRecoveryActions(actions, 24*60*60); err != nil {
+		return "", err
+	}
+	return registration, nil
 }
+
 func ServiceControl(action string) error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -302,7 +319,18 @@ func ServiceStatus(ctx context.Context) ServiceInfo {
 		info.PID = int(status.ProcessId)
 	}
 	if cfg, err := s.Config(); err == nil {
-		info.Enabled = cfg.StartType == mgr.StartAutomatic
+		info = windowsServiceConfig(info, cfg)
+	}
+	return info
+}
+
+// Read the directory from the same registration format service-install writes.
+// Status can then distinguish this global Windows service from another local
+// agent installation selected with --state-dir.
+func windowsServiceConfig(info ServiceInfo, cfg mgr.Config) ServiceInfo {
+	info.Enabled = cfg.StartType == mgr.StartAutomatic
+	if _, dir, err := agentServiceCommand(cfg.BinaryPathName); err == nil {
+		info.StateDir = dir
 	}
 	return info
 }

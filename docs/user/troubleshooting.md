@@ -223,7 +223,8 @@ Credentials stay on the devices, so a credential field holds a secret name, neve
 
 | Message | Fix |
 | --- | --- |
-| Plaintext credentials cannot be stored in the field | Replace the value with a device secret name, then bind it on each device with `vectory configure-secrets`. |
+| Plaintext credentials cannot be stored in a credential field | Replace the value with a device secret name, then bind it on each device with `vectory configure-secrets`. |
+| A header or URL field looks like it holds a plaintext credential | Remove it from the draft. On a full-mode device, a native Vector secret backend or service-environment reference may work where Vector supports one. Device secrets for headers and URLs are not supported in this preview. |
 | Only credential fields can hold a device secret | Move the reference out of the URL, header, path or program, into the step's credential field, such as `auth.token`. |
 | The field must be exactly `vectory-secret:NAME` | Remove any text around the reference, and start the name with a letter. |
 
@@ -285,7 +286,7 @@ Start with the device's page: its **Agent updates** card says what the host repo
 | **The release's signature didn't verify on this host** (`SIGNATURE_INVALID`) or its **manifest broke a rule of its format** (`MANIFEST_INVALID`) | Don't retry. Withdraw the release and prepare it again, and check the signature with `vectory release verify`. |
 | **This release has expired** (`MANIFEST_EXPIRED`) | Prepare a new release. A release expires 180 days after it is prepared, by each host's own clock. |
 | **This host saw two successors of its key** (`KEY_ROLLOVER_CONFLICT`) | Someone else signed a statement from a key the host pins. Run its **Upgrade agent** command with the key you trust. See [If a key is stolen](agent-updates.md#if-a-key-is-stolen). |
-| **This build was tried here and rolled back** (`RELEASE_ALREADY_TRIED`), or **older than one this host already tried** (`COUNTER_REPLAYED`) | The host never tries a release twice, and it counts a release as tried a moment before it replaces the agent, so an update interrupted just then lands here too. Prepare a new one with a higher counter. |
+| **This build was tried here and rolled back** (`RELEASE_ALREADY_TRIED`), or **older than one this host already tried** (`COUNTER_REPLAYED`) | While the update step stays installed, the host refuses a release it already tried. It counts a release as tried a moment before it replaces the agent, so an update interrupted just then lands here too. Prepare a new one with a higher counter. Turning updates off removes this record; see [Agent updates](agent-updates.md#limits). |
 | **This version is outside the releases this host takes** (`VERSION_NOT_ON_TRACK`) | The host takes patch releases only. Run **Upgrade agent** with **Minor releases too**. A new major version is an upgrade by hand. |
 | **This host already runs this version** (`ALREADY_RUNNING`), **runs a newer agent** (`DOWNGRADE_REFUSED`) | Nothing to fix. A host never goes backward. |
 | **A package manager owns this agent** (`PACKAGE_MANAGED`) | Update it with the package manager. The system's own directories count, and so do Homebrew's (`/opt/homebrew`, `/usr/local/Cellar`) and, on a Mac only, MacPorts' (`/opt/local`). |

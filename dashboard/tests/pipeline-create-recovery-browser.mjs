@@ -786,6 +786,40 @@ try {
     },
   );
   await run(
+    "Multibyte pipeline names show the server limit before creating a saved request",
+    async () => {
+      const s = await start();
+      try {
+        const dialog = await openForm(s.page, "create"),
+          name = dialog.getByLabel("Pipeline name", { exact: true }),
+          create = dialog.getByRole("button", {
+            name: "Create pipeline",
+            exact: true,
+          });
+        await name.fill("é".repeat(61));
+        await expect(dialog.getByRole("alert")).toContainText(
+          "120 UTF-8 bytes",
+        );
+        await expect(name).toHaveAttribute("aria-invalid", "true");
+        await create.click();
+        expect(s.f.lookups).toHaveLength(0);
+        expect(s.f.posts).toHaveLength(0);
+        expect(await storage(s.page)).toEqual({});
+        await name.fill("é".repeat(60));
+        await expect(dialog.getByRole("alert")).toHaveCount(0);
+        await create.click();
+        await expect(
+          s.page.getByRole("region", { name: "Pipeline canvas", exact: true }),
+        ).toBeVisible();
+        expect(s.f.posts).toHaveLength(1);
+        expect(s.f.posts[0].body.name).toBe("é".repeat(60));
+        clean(s.f);
+      } finally {
+        await s.close();
+      }
+    },
+  );
+  await run(
     "A shared preflight failure cannot erase an operation explicitly retried and committed by another tab",
     async () => {
       for (const kind of ["create", "duplicate"]) {
@@ -883,19 +917,28 @@ try {
       for (const kind of ["create", "duplicate"]) {
         const s = await start(state({ createMode: "invalid" }));
         try {
-          await submit(s.page, kind);
-          await uncertain(s.page, kind);
-          const key = storageKey(s.f.posts[0].body.request_id);
-          expect((await storage(s.page))[key]).toBeTruthy();
-          expect(s.f.documents).toHaveLength(1);
-          await closeForm(s.page, kind);
-          await openRecovery(s.page);
+          const dialog = await submit(s.page, kind);
+          await expect(dialog.getByRole("alert")).toContainText(
+            "Synthetic input rejected",
+          );
+          await expect(dialog).not.toContainText("needs confirmation");
           await expect(
-            s.page.getByRole("button", {
-              name: "Retry same request",
+            dialog.getByRole("button", {
+              name:
+                kind === "create" ? "Create pipeline" : "Duplicate pipeline",
               exact: true,
             }),
           ).toBeEnabled();
+          await expect(
+            dialog.getByLabel("Pipeline name", { exact: true }),
+          ).toHaveValue("Synthetic recovered " + kind);
+          const key = storageKey(s.f.posts[0].body.request_id);
+          expect((await storage(s.page))[key]).toBeUndefined();
+          expect(s.f.documents).toHaveLength(1);
+          await dialog
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
+          await expect(form(s.page, kind)).toHaveCount(0);
           expect(s.f.posts).toHaveLength(1);
           clean(s.f);
         } finally {

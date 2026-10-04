@@ -160,7 +160,7 @@ func TestAStartTakesAListingOfTheProcessARecordNamesForAStartOnceTheRecordIsOver
 	// Inside its life, a listing of that process is the job that was told to leave.
 	next := nextRunOf(host, recorder, slept)
 	recorder.clock = stopped
-	if err := next.StartService(context.Background()); err == nil || !strings.Contains(err.Error(), "it lists only the job it was told to remove, of the process 4242") {
+	if err := next.StartService(context.Background()); err == nil || !strings.Contains(err.Error(), "it still lists the agent's label while an earlier bootout is unresolved (recorded process 4242 before bootout)") {
 		t.Fatalf("a start inside the record's life: %v", err)
 	}
 	// Past it, the same listing is a start, and the record goes.

@@ -8,6 +8,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  RefreshCw,
   Settings,
   ShieldCheck,
   Sun,
@@ -252,7 +253,11 @@ export default function AccountMenu({
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="account-menu-separator" />
             <DropdownMenu.Item
-              className="account-menu-item account-menu-signout"
+              className={
+                signOutReview
+                  ? "account-menu-item"
+                  : "account-menu-item account-menu-signout"
+              }
               onSelect={(event) => {
                 event.preventDefault();
                 // Keep the parent account overlay open so the mobile navigation
@@ -260,7 +265,11 @@ export default function AccountMenu({
                 setConfirmingSignOut(true);
               }}
             >
-              <LogOut size={16} aria-hidden="true" />
+              {signOutReview ? (
+                <RefreshCw size={16} aria-hidden="true" />
+              ) : (
+                <LogOut size={16} aria-hidden="true" />
+              )}
               <span>
                 {signOutReview ? "Check sign-out status" : "Sign out"}
               </span>

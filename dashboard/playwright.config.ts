@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import path from "node:path";
 
 // Chromium is the default: every spec runs in it against a seeded instance.
 // VECTORY_E2E_BROWSERS (for example "firefox,webkit") instead runs only the
@@ -16,6 +17,11 @@ if (unknown.length)
     `VECTORY_E2E_BROWSERS names ${unknown.join(", ")}; choose from ${known.join(", ")}.`,
   );
 const smoke = requested.length > 0;
+const previewDir = path.resolve(
+  import.meta.dirname,
+  "..",
+  process.env.VECTORY_PREVIEW_DIR || ".local/preview",
+);
 
 export default defineConfig({
   testDir: "./e2e",
@@ -35,7 +41,9 @@ export default defineConfig({
   // five seconds for its first page.
   ...(smoke ? { expect: { timeout: 15000 } } : {}),
   use: {
-    ...(smoke ? {} : { storageState: "../.local/preview/browser-auth.json" }),
+    ...(smoke
+      ? {}
+      : { storageState: path.join(previewDir, "browser-auth.json") }),
     baseURL: process.env.VECTORY_UI_URL || "http://127.0.0.1:5173",
     viewport: { width: 1440, height: 1000 },
     trace: "retain-on-failure",
@@ -43,6 +51,13 @@ export default defineConfig({
   },
   reporter: [
     ["list"],
-    ["json", { outputFile: "../docs/evidence/browser-tests.json" }],
+    [
+      "json",
+      {
+        outputFile:
+          process.env.VECTORY_E2E_REPORT_PATH ||
+          "../docs/evidence/browser-tests.json",
+      },
+    ],
   ],
 });

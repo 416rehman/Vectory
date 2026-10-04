@@ -46,6 +46,10 @@ func TestCommandForNamesAStateDirectoryThatIsNotTheDefault(t *testing.T) {
 func TestStatusNextStepsNameANonDefaultStateDirectory(t *testing.T) {
 	dir := "/srv/vectory agent"
 	flag := " --state-dir '/srv/vectory agent'"
+	elevation := "sudo "
+	if runtime.GOOS == "windows" {
+		elevation = ""
+	}
 	now := time.Now()
 	last := now.Add(-5 * time.Second)
 	enrolled := func(change func(*StatusView)) string {
@@ -58,9 +62,9 @@ func TestStatusNextStepsNameANonDefaultStateDirectory(t *testing.T) {
 		want   string
 	}{
 		"binary changed": {func(v *StatusView) { v.BinaryOK = false }, "`vectory re-adopt --expected-sha256 SHA256" + flag + "`"},
-		"paused":         {func(v *StatusView) { v.LocalPaused = true }, "Resume it with: sudo vectory resume" + flag},
-		"first check-in": {func(v *StatusView) { v.State.LastHeartbeat = nil }, "`sudo vectory doctor" + flag + "`"},
-		"silent":         {func(v *StatusView) { v.State.LastHeartbeat = &[]time.Time{now.Add(-time.Hour)}[0] }, "`sudo vectory doctor" + flag + "`"},
+		"paused":         {func(v *StatusView) { v.LocalPaused = true }, "Resume it with: " + elevation + "vectory resume" + flag},
+		"first check-in": {func(v *StatusView) { v.State.LastHeartbeat = nil }, "`" + elevation + "vectory doctor" + flag + "`"},
+		"silent":         {func(v *StatusView) { v.State.LastHeartbeat = &[]time.Time{now.Add(-time.Hour)}[0] }, "`" + elevation + "vectory doctor" + flag + "`"},
 		"not running":    {func(v *StatusView) { v.Foreground = false }, "register a service with vectory setup" + flag},
 		"binary finding": {func(v *StatusView) {
 			v.State.Error = &Issue{Code: "VALIDATION_FAILED", Diagnostics: []Diagnostic{{Severity: "error", Code: "VECTOR_BINARY_UNAVAILABLE", Message: "m"}}}

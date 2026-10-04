@@ -66,6 +66,35 @@ func TestTheAgentServiceCommandIsWhatServiceInstallWrites(t *testing.T) {
 	}
 }
 
+func TestStatusAssociatesWindowsServiceWithItsRegisteredStateDirectory(t *testing.T) {
+	registered := `C:\ProgramData\Vectory Agent`
+	other := `D:\Other Vectory Agent`
+	service := ServiceInfo{Manager: "Windows services", Name: ServiceName, Installed: true, State: "running", PID: 441}
+	service = windowsServiceConfig(service, agentRegistration(`C:\Program Files\Vectory\vectory.exe`, registered))
+	if service.StateDir != registered || !service.Enabled {
+		t.Fatalf("service configuration lost its state directory: %+v", service)
+	}
+	if got := serviceForStateDir(service, strings.ToLower(registered)); !got.Running() {
+		t.Fatalf("the same Windows path with different case was treated as another agent: %+v", got)
+	}
+	selected := serviceForStateDir(service, other)
+	if selected.Running() || selected.Installed || selected.PID != 0 {
+		t.Fatalf("status attributed another installation's running service to this one: %+v", selected)
+	}
+	unknown := serviceForStateDir(ServiceInfo{Manager: "Windows services", Name: ServiceName, Installed: true, State: "running", PID: 441}, registered)
+	if unknown.Running() || unknown.Installed {
+		t.Fatalf("status trusted a running service without a readable registration: %+v", unknown)
+	}
+	v := statusView(func(v *StatusView) {
+		v.StateDir = other
+		v.Service = selected
+	})
+	status := StatusJSON(v)
+	if status["agent_running"] != false || status["check_in"] != nil || status["wake_ups"] != nil {
+		t.Fatalf("status claimed another installation's service was checking in: %+v", status)
+	}
+}
+
 func TestTheRegistrationOfTheAgentIsEitherExactlyWhatSetupWritesOrNoService(t *testing.T) {
 	exe, dir := `C:\Program Files\Vectory\vectory.exe`, `C:\ProgramData\Vectory`
 	good := agentRegistration(exe, dir)

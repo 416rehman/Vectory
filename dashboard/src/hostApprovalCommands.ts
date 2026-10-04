@@ -164,7 +164,24 @@ export function hostApprovalCommands(
   const blocks = new Map<string, string[]>();
   for (const device of devices) {
     const commands = hostCommands(approvals, device);
-    blocks.set(commands, [...(blocks.get(commands) || []), device.name]);
+    if (!blocks.has(commands)) blocks.set(commands, []);
+    blocks.get(commands)!.push(device.name);
+  }
+  return [...blocks].map(([commands, names]) => ({ devices: names, commands }));
+}
+
+/** Group the commands rendered for each host's own variable values and setup. */
+export function hostApprovalCommandsByDevice(
+  approvals: ReadonlyMap<string, HostApprovals>,
+  devices: (HostDevice & Pick<Device, "id">)[],
+): { devices: string[]; commands: string }[] {
+  const blocks = new Map<string, string[]>();
+  for (const device of devices) {
+    const needed = approvals.get(device.id);
+    if (!needed) continue;
+    const commands = hostCommands(needed, device);
+    if (!blocks.has(commands)) blocks.set(commands, []);
+    blocks.get(commands)!.push(device.name);
   }
   return [...blocks].map(([commands, names]) => ({ devices: names, commands }));
 }

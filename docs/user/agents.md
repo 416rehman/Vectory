@@ -14,9 +14,9 @@ sudo vectory logs --follow    # Vector's own log, and anything your pipelines lo
 
 Add `--json` to `status` or `doctor` for scripts. Both only read: they never change settings, retry state or counters.
 
-The dashboard shows the same device from the server's side. A recent check-in proves the agent is connected. **Applied** proves which version Vector runs.
+The dashboard shows the same device from the server's side. A recent check-in shows the agent was connected at that time. **Applied** records the version the agent last verified; check the service and check-in state to tell whether that report is current.
 
-`status` names the pipeline and version number the device runs, when its next check-in is due (`overdue by 2 min` means the agent isn't getting through), and whether it waits for wake-ups. [`vectory status`](cli.md#status) lists every row.
+`status` identifies the last verified pipeline version when known, reports service state separately, and shows when the next check-in is due (`overdue by 2 min` means the agent isn't getting through) and whether it waits for wake-ups. [`vectory status`](cli.md#status) lists every row.
 
 ### What Check on devices does on the host
 
@@ -147,7 +147,7 @@ The command passes `--state-dir` when the device keeps its state elsewhere, and 
 
 A host keeps the address it enrolled with. If the command names another address, setup stops before it changes anything and prints the address the host is enrolled with. If it's the same server, run the command again with `--server` set to that address. Moving a host to another server is a separate step: run `vectory unenroll`, revoke the old device in the dashboard, then run setup again.
 
-To upgrade by hand instead (on Windows, the only way), open **By hand** in the same dialog:
+To upgrade by hand instead, open **By hand** in the same dialog. On Linux or macOS:
 
 <!-- steps -->
 1. On the device page, choose **Upgrade agent** and download the agent for the device's OS and CPU. Check its SHA-256 against the value shown.
@@ -155,6 +155,15 @@ To upgrade by hand instead (on Windows, the only way), open **By hand** in the s
 3. Back up the state directory, the managed configuration and the current agent binary. The state holds the device's private key, so keep the backup private.
 4. Replace the binary at the same path, keeping its owner and permissions: `sudo install -m 0755 vectory /usr/local/bin/vectory`.
 5. Start the agent and check it: `sudo vectory service-start`, then `sudo vectory --version` and `sudo vectory status`.
+
+On Windows, open an elevated PowerShell in the folder holding the newly downloaded `vectory.exe`. Check `Get-FileHash .\vectory.exe -Algorithm SHA256` against the SHA-256 shown in **Upgrade agent**. If you installed Vectory with an MSI, upgrade with the new MSI instead of replacing its file behind Windows Installer. For a manually installed agent:
+
+<!-- steps -->
+1. Check the registered executable path with `sc.exe qc Vectory`. The commands below use the default `C:\Program Files\Vectory\vectory.exe`; use the registered path if yours differs.
+2. Stop the service: `& 'C:\Program Files\Vectory\vectory.exe' service-stop`.
+3. Back up the state directory, managed configuration and current executable. The state contains the device's private key, so keep the backup private.
+4. From the download folder, replace the executable at the same path: `Copy-Item -LiteralPath .\vectory.exe -Destination 'C:\Program Files\Vectory\vectory.exe' -Force`.
+5. Start and check it: `& 'C:\Program Files\Vectory\vectory.exe' service-start`, then `& 'C:\Program Files\Vectory\vectory.exe' --version` and `& 'C:\Program Files\Vectory\vectory.exe' status`.
 
 On the device page, confirm the same device identity, a fresh check-in and the expected pipeline.
 
@@ -176,7 +185,7 @@ With agent updates on, this is also how a host agrees to them: the command's **A
 
 ## Replace the Vector binary
 
-The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed binary. After you upgrade or move Vector on purpose, approve the new binary:
+The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed binary. After you upgrade or move Vector on purpose, approve the new binary. On Linux or macOS:
 
 <!-- steps -->
 1. Get the new Vector 0.58.x binary from a trusted source and note the SHA-256 of the executable itself (not of its archive): `sha256sum /usr/bin/vector`.
@@ -190,9 +199,17 @@ The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed
    If Vector moved, add `--vector-binary NEW_PATH`.
 4. Start the agent: `sudo vectory service-start`.
 
-`re-adopt` checks the SHA-256 before running the binary, then validates the current configuration with it. It changes only the approved binary. If validation fails, fix the reported problem or put the previous binary back.
+On Windows, use an elevated PowerShell and the registered Vectory executable path (the default is `C:\Program Files\Vectory\vectory.exe`):
 
-A version deployed while the binary was changed failed without Vector running it (the finding `VECTOR_BINARY_UNAVAILABLE`) and waits for a retry. After the agent runs again, choose **Retry application** on the device page or run `sudo vectory retry`.
+<!-- steps -->
+1. Get Vector 0.58.x from a trusted source and calculate the executable's SHA-256 with `Get-FileHash 'C:\Program Files\Vector\bin\vector.exe' -Algorithm SHA256`.
+2. Stop the service with `& 'C:\Program Files\Vectory\vectory.exe' service-stop`.
+3. Run `& 'C:\Program Files\Vectory\vectory.exe' re-adopt --expected-sha256 THE_SHA256`. If Vector moved, add `--vector-binary NEW_PATH`.
+4. Start the service with `& 'C:\Program Files\Vectory\vectory.exe' service-start`.
+
+`re-adopt` checks the SHA-256 before running the binary, then validates the current configuration with it, including the host runtime settings used during a normal deployment. It changes only the approved binary. If validation fails, fix the reported problem or put the previous binary back.
+
+A version deployed while the binary was changed failed without Vector running it (the finding `VECTOR_BINARY_UNAVAILABLE`) and waits for a retry. After the agent runs again, choose **Retry application** on the device page or run `sudo vectory retry` (on Windows, `& 'C:\Program Files\Vectory\vectory.exe' retry` in an elevated PowerShell).
 
 If you didn't replace Vector yourself, don't approve the change. Find out why the file changed first.
 

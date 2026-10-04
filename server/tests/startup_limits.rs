@@ -13,8 +13,14 @@ const SECRET: &str = "isolated-startup-limits-secret-123456789";
 /// given variable set. Its output goes to `server.log` there.
 fn spawn(temp: &Path, variable: &str, value: &str) -> Child {
     let log = std::fs::File::create(temp.join("server.log")).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_vectory-server"))
-        .env_clear()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_vectory-server"));
+    command.env_clear();
+    // Winsock providers may need SystemRoot to load their DLLs on Windows.
+    #[cfg(windows)]
+    if let Ok(root) = std::env::var("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
+    command
         .env("VECTORY_DATA_DIR", temp.join("state"))
         .env("VECTORY_HTTP_ADDR", "127.0.0.1:0")
         .env("VECTORY_BOOTSTRAP_SECRET", SECRET)

@@ -25,8 +25,8 @@ import (
 type fakeVectorConfig struct {
 	// Version is what --version reports.
 	Version string `json:"version"`
-	// Validate is how `vector validate` ends: ok, reject, hang (never ends)
-	// or slow (ends after Seconds).
+	// Validate is how `vector validate` ends: ok, reject, healthcheck
+	// (fails unless --skip-healthchecks is passed), hang or slow.
 	Validate string  `json:"validate"`
 	Seconds  float64 `json:"seconds"`
 	// PIDFile receives the process id of a validation that hangs, and Calls
@@ -97,6 +97,11 @@ func fakeVectorMain(args []string, stdout io.Writer) int {
 	case "validate":
 		fakeVectorLog(config, args)
 		switch config.Validate {
+		case "healthcheck":
+			if !slices.Contains(args, "--skip-healthchecks") {
+				fmt.Fprintln(stdout, `x Health check for "es" failed: Failed to make HTTP(S) request: Connection refused (os error 111)`)
+				return 1
+			}
 		case "hang", "slow":
 			if config.PIDFile != "" {
 				_ = os.WriteFile(config.PIDFile, []byte(strconv.Itoa(os.Getpid())), 0600)

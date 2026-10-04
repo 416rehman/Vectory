@@ -6,7 +6,7 @@ See which devices are healthy, what they run and how much data flows through the
 
 [**Devices**](/#/devices) lists your fleet a page at a time, so it opens as quickly with thousands of devices as with ten. The server searches, filters, sorts and counts; the page only holds the rows you're looking at.
 
-- **Search** matches a device's name, platform, pipeline, Vector and agent versions, and the names of its groups. Type a few letters; the list follows a moment after you stop. Labels aren't searched.
+- **Search** matches a device's name, platform, pipeline, Vector and agent versions, enrollment label keys and values, and the names of its groups. Type a few letters; the list follows a moment after you stop. A full label such as `site=berlin` works too.
 - **Quick filters** (**Needs attention**, **Not on desired version**, **Offline**, **Paused**, **No telemetry**) and the **Status** column filter show how many devices each holds. The counts follow your search, and a device counts in every filter that fits it.
 - **Group** shows one group's devices. A group name in a row does the same.
 - **Sort** by name, status, pipeline, Vector version, events per second or last seen. Names sort the way people read them, so `edge-2` comes before `edge-10`, and a device with no value sorts last in both directions.
@@ -226,7 +226,7 @@ Suppose throughput drops while buffered data grows:
 1. Check the last sample and check-in times, so you know the numbers are fresh.
 2. Look at the destination's error and sent counters.
 3. Compare with **Activity**: a deployment, restart, pause or local change at that time.
-4. Check the destination and the device itself. Vectory doesn't collect events or Vector's full logs for you.
+4. Check the destination and the device itself. Vectory doesn't collect the event stream or Vector's full logs for you; a redacted error summary can still contain event-derived text.
 
 This pattern points to a slow or failing destination, but confirm it with the destination's own monitoring.
 

@@ -775,13 +775,15 @@ pub(crate) fn validate_draft(v: &Value) -> Result<()> {
     crate::variables::declarations(&v["config"], v.get("variables").unwrap_or(&json!([])))?;
     for field in ["config", "graph"] {
         let security = validation::validate(&v[field]);
-        if security["errors"].as_array().unwrap().iter().any(|e| {
-            e.as_str()
-                .is_some_and(|s| s.contains("Plaintext credentials"))
-        }) {
-            return Err(ApiError::invalid(
-                "Plaintext credentials cannot be stored in draft history",
-            ));
+        let errors = security["errors"].as_array().unwrap();
+        let messages = || errors.iter().filter_map(Value::as_str);
+        let reference = messages().find(|message| {
+            message.contains("Only credential fields can hold a device secret")
+                || message.contains("must be exactly `vectory-secret:NAME`")
+        });
+        let plaintext = messages().find(|message| message.contains("Plaintext credentials"));
+        if let Some(message) = reference.or(plaintext) {
+            return Err(ApiError::invalid(message));
         }
     }
     Ok(())

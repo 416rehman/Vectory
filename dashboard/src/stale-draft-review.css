@@ -1,0 +1,140 @@
+.stale-draft-dialog {
+  overflow: hidden;
+}
+.stale-draft-dialog > .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+.stale-draft-dialog > .modal-footer {
+  flex-shrink: 0;
+  position: static;
+}
+.stale-draft-review {
+  display: grid;
+  gap: 12px;
+}
+.stale-draft-review p {
+  margin: 0;
+  line-height: 1.5;
+}
+.stale-draft-differences {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.stale-draft-differences table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+.stale-draft-differences th,
+.stale-draft-differences td {
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.stale-draft-differences thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.stale-draft-differences tbody th {
+  width: 28%;
+  font-weight: 600;
+}
+.stale-draft-differences code {
+  white-space: pre-wrap;
+}
+.stale-draft-merge {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.stale-draft-merge h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.stale-draft-conflict {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.stale-draft-conflict legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+.stale-draft-conflict label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+.stale-draft-conflict code {
+  overflow-wrap: anywhere;
+}
+.stale-draft-full-value {
+  margin-left: 24px;
+  min-width: 0;
+}
+.stale-draft-full-value summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.stale-draft-full-value pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .stale-draft-differences table,
+  .stale-draft-differences tbody,
+  .stale-draft-differences tr,
+  .stale-draft-differences th,
+  .stale-draft-differences td {
+    display: block;
+    width: auto;
+  }
+  .stale-draft-differences thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  .stale-draft-differences tbody tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .stale-draft-differences tbody th,
+  .stale-draft-differences tbody td {
+    padding: 4px 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+  .stale-draft-differences tbody td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+}

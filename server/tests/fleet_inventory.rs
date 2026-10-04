@@ -726,6 +726,113 @@ async fn inventory_pages_filters_sorts_and_counts_like_the_devices_page() {
 }
 
 #[tokio::test]
+async fn inventory_search_matches_labels_in_pages_ids_and_group_members() {
+    let f = fleet().await;
+    for (name, labels) in [
+        ("edge-1", json!({"site":"West 7","rack":"A_10%[]"})),
+        ("edge-2", json!({"site":"west 7","rack":"B%2"})),
+        ("retired-1", json!({"site":"West 7"})),
+        (
+            "spare-1",
+            json!({"site":"São Paulo","oversized":"x".repeat(4096),"bad key":"not indexed"}),
+        ),
+    ] {
+        sqlx::query("UPDATE devices SET data=json_set(data,'$.labels',json(?)) WHERE id=?")
+            .bind(labels.to_string())
+            .bind(f.id(name))
+            .execute(&f.s.pool)
+            .await
+            .unwrap();
+    }
+    f.s.fleet.invalidate();
+
+    // Key, value and key=value are all useful free-text queries. The same
+    // literal matching rules apply to punctuation in labels as elsewhere.
+    for (q, expected) in [
+        ("site=west", vec!["edge-1", "edge-2"]),
+        ("West%207", vec!["edge-1", "edge-2"]),
+        ("rack=a_10%25%5B%5D", vec!["edge-1"]),
+        ("rack=b%252", vec!["edge-2"]),
+        ("site=s%C3%A3o%20paulo", vec!["spare-1"]),
+        ("oversized", vec![]),
+        ("not%20indexed", vec![]),
+    ] {
+        let page = get(
+            &f.app,
+            &f.admin,
+            &format!("/api/v1/devices/inventory?q={q}"),
+        )
+        .await;
+        assert_eq!(f.names(&page["items"]), expected, "q={q}");
+        assert_eq!(page["total"], expected.len(), "q={q}");
+    }
+    let first = get(
+        &f.app,
+        &f.admin,
+        "/api/v1/devices/inventory?q=site%3Dwest&page_size=1&page=1",
+    )
+    .await;
+    let second = get(
+        &f.app,
+        &f.admin,
+        "/api/v1/devices/inventory?q=site%3Dwest&page_size=1&page=2",
+    )
+    .await;
+    assert_eq!(f.names(&first["items"]), ["edge-1"]);
+    assert_eq!(f.names(&second["items"]), ["edge-2"]);
+    assert_eq!(
+        (first["total"].as_u64(), second["total"].as_u64()),
+        (Some(2), Some(2))
+    );
+    assert_eq!(first["counts"]["status"]["applied"], 2);
+    assert_eq!(first["counts"]["status"]["revoked"], 1);
+    let ids = get(
+        &f.app,
+        &f.admin,
+        "/api/v1/devices/inventory/ids?q=site%3Dwest",
+    )
+    .await;
+    assert_eq!(ids["ids"], json!([f.id("edge-1"), f.id("edge-2")]));
+    assert_eq!(ids["total"], 2);
+    assert_eq!(ids["truncated"], false);
+
+    // A revoked device remains hidden until explicitly requested, and a
+    // group's member search includes labels but not its own group name.
+    let revoked = get(
+        &f.app,
+        &f.admin,
+        "/api/v1/devices/inventory?q=site%3Dwest&status=revoked",
+    )
+    .await;
+    assert_eq!(f.names(&revoked["items"]), ["retired-1"]);
+    let members = get(
+        &f.app,
+        &f.admin,
+        &format!(
+            "/api/v1/groups/{}/members?q=site%3Dwest",
+            f.groups["Edge collectors"]
+        ),
+    )
+    .await;
+    assert_eq!(f.names(&members["items"]), ["edge-1", "edge-2"]);
+
+    let viewer = actor(&f.s, "viewer").await;
+    assert_eq!(
+        get(&f.app, &viewer, "/api/v1/devices/inventory?q=site%3Dwest").await["total"],
+        2
+    );
+    let (status, _) = call(
+        &f.app,
+        "GET",
+        "/api/v1/devices/inventory?q=site%3Dwest",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn inventory_parameters_fail_closed_and_need_a_session() {
     let f = fleet().await;
     for uri in [

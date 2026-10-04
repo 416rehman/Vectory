@@ -9,8 +9,8 @@ What Vectory guarantees, who has to trust whom, and where the limits are. Read t
 - **Devices only run what they can verify.** A configuration is an immutable, published version. It arrives in a manifest signed for that one device, and the agent refuses anything older than what it has already accepted.
 - **An agent updates only with the host's consent and a signature.** A host installs a new agent build only if someone on it agreed to updates, and only if a key it pinned signed the build. Updates are off until an administrator turns them on. See [Agent updates](#agent-updates).
 - **The host decides what a pipeline may touch.** Restricted mode, files, destinations and listeners are local choices. The server can't widen them. The one exception is a loopback-only exporter of Vector's own metrics, described under [Restricted and full mode](#restricted-and-full-mode).
-- **Credentials stay on the host.** Pipelines reference secrets by name. The values live in local files the server never sees.
-- **Your events stay yours.** Events flow from Vector to your destinations. Vectory receives only status and the bounded metrics you enable.
+- **Device-bound credentials stay on the host.** Pipelines reference secrets by name. Their local files and values are not sent as configuration or bindings to the server. A Vector report can still echo a value that redaction misses; see [Credentials and data](#credentials-and-data).
+- **Your event stream stays on its route.** Events flow from Vector to your destinations, not through Vectory. Vectory receives status, the bounded metrics you enable, and redacted Vector error and validation reports. A report can contain text derived from an event; see [Credentials and data](#credentials-and-data).
 - **Changes are authorized and recorded.** The server checks each permission itself and writes an audit event for each change it accepts.
 
 ## Trust boundaries
@@ -71,7 +71,7 @@ Within those components, restricted mode also:
 
 Enrollment tokens can be limited by use count, expiry and device-name prefix, and to a list of up to 500 device names, each of which can enroll once. A token can't take over a name that belongs to an existing device.
 
-A token can also give the devices it enrolls up to 8 labels, such as `site=berlin`. Labels describe a device. They never add it to a group, target it with a deployment or give it secrets: every new device starts unmanaged until someone deploys to it. Someone who steals a token can enroll a device only within the token's limits, and that device receives nothing until an operator targets it. Revoke a token you no longer need in **Add device**.
+A token can also give the devices it enrolls up to 8 labels, such as `site=berlin`. Search **Devices** for a label key, value or `key=value` to find those hosts. Labels describe a device. They never add it to a group, target it with a deployment or give it secrets: every new device starts unmanaged until someone deploys to it. Someone who steals a token can enroll a device only within the token's limits, and that device receives nothing until an operator targets it. Revoke a token you no longer need in **Add device**.
 
 ## How a version reaches a device
 
@@ -89,7 +89,7 @@ A token can also give the devices it enrolls up to 8 labels, such as `site=berli
 
 **Check on devices** in the deploy review asks the devices you're about to target to validate the version on their own hosts first. Each one downloads that candidate, runs Vector's validation against its own local policy and secrets, and answers in a check-in. A device that keeps a request open for changes (see [Turn off wake-ups](agents.md#turn-off-wake-ups)) hears of the request within seconds, any other at its next check-in. A check never applies anything.
 
-- **A check can't change a device.** It never touches the managed file, the recovery journal, the last working configuration, a generation or Vector's process. Vectory records only the answer.
+- **A check never activates the candidate.** It never touches the managed file, the recovery journal, the last working configuration, a generation or the running Vector process. Vectory records only the answer. On a full-mode device, native providers and `exec` secret backends used during Vector validation may have their own host-side effects.
 - **It's advisory.** Deploy never waits for a check. **Passes here** is the device's own report that validation found no error, not evidence that the version is applied or healthy.
 - **It uses the trust a deployment uses.** The request is part of the manifest signed for that one device, and it expires after ten minutes. A device can download only its own candidate, over its own mutual-TLS connection. The server serves it to no other device, and not after the device answered or the check expired.
 - **What Vectory keeps.** The candidate, with that device's variable values and secret references, is held only while the device hasn't answered. The answer holds the diagnostics the agent redacted on the device, test results and the names of unbound device secrets, in fixed fields with fixed limits, and nothing else. Answers are kept for 24 hours.
@@ -125,8 +125,8 @@ A host trusts a key until someone runs its **Upgrade agent** command with anothe
 ## Credentials and data
 
 - **Device secrets.** A reference such as `vectory-secret:API_TOKEN` is resolved by the agent from a private local file, in any credential field. Plain text in a credential field is refused at save and publish. The agent substitutes only at the credential fields of its own built-in table, never where the server asks, so a pipeline can't move a secret into a URL, header or program. It reports bound names at check-in, never values or paths. The value is written only into the device's managed configuration, which the agent keeps private. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
-- **Native Vector secrets and environment variables** (full mode only) are resolved by Vector on the host. The server never sees their values.
-- **Events** never pass through Vectory. Operational metrics come only from a Prometheus exporter in your own pipeline, are bounded in size, and never include event contents.
+- **Native Vector secrets and environment variables** (full mode only) are resolved by Vector on the host; their values are not sent as configuration. The agent may not know a value resolved by a native provider, so it cannot guarantee redaction if Vector writes that value into a report.
+- **Event flow and reports.** Vectory does not transport the event stream. Operational metrics come only from a Prometheus exporter in your own pipeline, are bounded in size, and never include event contents. The agent also sends bounded, redacted Vector warning and error summaries and validation diagnostics. Vector can echo event data in a log message; redaction removes known secrets and suspicious tokens but cannot guarantee removal of arbitrary event-derived text. Treat device diagnostics as sensitive. See [Recent Vector errors](telemetry.md#read-a-device).
 - **The validator** receives the pipeline you check, runs as its own user with no network route and no secrets, and returns only bounded results. It never runs your Lua, never sends the requests of an AWS instance metadata step, and never reads your enrichment files or the files a VRL program names: those are used only on a device.
 - **Notification channels** keep their webhook URLs, signing secrets, header values and SMTP passwords write-only: encrypted at rest, never returned by the API, never written to the audit log or server logs. The server sends notifications only to public addresses, unless an administrator allows private ones for a channel, and never to link-local or cloud metadata addresses. See [Alerts and notifications](notifications.md#private-networks-and-blocked-addresses).
 

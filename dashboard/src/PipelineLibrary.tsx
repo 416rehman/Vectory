@@ -46,7 +46,9 @@ import PipelineCreationRecovery, {
 import {
   beginPipelineCreationOperation,
   finishPipelineCreationOperation,
+  isDefinitivePipelineCreationRejection,
   pipelineCreationOperationAvailable,
+  pipelineNameError,
   usePipelineCreationOperations,
   type PipelineCreationOperation,
 } from "./pipelineCreationRequests";
@@ -194,6 +196,7 @@ export default function PipelineLibrary({
     [busy, setBusy] = useState(false),
     [nameError, setNameError] = useState(""),
     [formError, setFormError] = useState("");
+  const displayedNameError = name.trim() ? pipelineNameError(name) : nameError;
   const [action, setAction] = useState<{
     configuration: PipelineSummary;
     action: PipelineAction;
@@ -247,8 +250,9 @@ export default function PipelineLibrary({
     event.preventDefault();
     if (active.current || busy || unresolved || notice || !can(user, "edit"))
       return;
-    if (!name.trim()) {
-      setNameError("Enter a pipeline name to create a draft.");
+    const invalidName = pipelineNameError(name);
+    if (invalidName) {
+      setNameError(invalidName);
       nameInput.current?.focus();
       return;
     }
@@ -339,6 +343,19 @@ export default function PipelineLibrary({
       navigate(pipelineRoute(result.id, initialDeviceId, destination));
     } catch (failure) {
       if (!current()) return;
+      if (operation && isDefinitivePipelineCreationRejection(failure, sent)) {
+        try {
+          finishPipelineCreationOperation(operation);
+          setFormError(failure.message);
+          return;
+        } catch {
+          setNotice("uncertain");
+          setFormError(
+            "The server rejected this request, but this browser could not clear its reminder. Review the saved request before trying again.",
+          );
+          return;
+        }
+      }
       if (operation) {
         setNotice("uncertain");
         const message =
@@ -713,18 +730,20 @@ export default function PipelineLibrary({
                   setNameEdited(true);
                   setNameError("");
                 }}
-                aria-invalid={!!nameError}
-                aria-describedby={nameError ? "pipeline-name-error" : undefined}
+                aria-invalid={!!displayedNameError}
+                aria-describedby={
+                  displayedNameError ? "pipeline-name-error" : undefined
+                }
                 placeholder="Application logs"
               />
             </Field>
-            {nameError && (
+            {displayedNameError && (
               <p
                 id="pipeline-name-error"
                 className="pipeline-library-name-error"
                 role="alert"
               >
-                {nameError}
+                {displayedNameError}
               </p>
             )}
             <ChunkBoundary

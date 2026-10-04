@@ -301,12 +301,44 @@ export function monitoringExporter(config: Record<string, unknown>) {
   }
   return null;
 }
+/** The agent uses its host's path style when it checks an absolute file path. */
+function absoluteFilePath(path: string, os: string): string | null {
+  if (os !== "windows") return path.startsWith("/") ? path : null;
+  const normalized = path.replace(/\//g, "\\");
+  if (/^[A-Za-z]:\\/.test(normalized)) return normalized;
+  // Windows accepts a complete UNC server and share, including the extended
+  // drive and UNC spellings. A root-relative path (\\logs) is not absolute.
+  if (/^\\\\[?.]\\/.test(normalized)) {
+    const extended = normalized.slice(4);
+    if (/^[A-Za-z]:\\/.test(extended)) return normalized;
+    if (/^UNC\\[^\\]+\\[^\\]+(?:\\|$)/i.test(extended)) return normalized;
+    return null;
+  }
+  return /^\\\\[^\\]+\\[^\\]+(?:\\|$)/.test(normalized) ? normalized : null;
+}
 /** The directory to approve for a path: the part before any wildcard. */
-function fileRoot(path: string) {
+function fileRoot(path: string, os: string) {
+  const separator = os === "windows" ? "\\" : "/";
   const wildcard = path.search(/[*?[]/);
-  if (wildcard < 0) return path.replace(/\/+$/, "") || "/";
+  if (wildcard < 0) {
+    if (
+      os === "windows" &&
+      (/^[A-Za-z]:\\+$/.test(path) || /^\\\\[?.]\\[A-Za-z]:\\+$/.test(path))
+    )
+      return path.replace(/\\+$/, "\\");
+    const withoutTrailing = path.replace(
+      os === "windows" ? /\\+$/ : /\/+$/,
+      "",
+    );
+    return withoutTrailing || separator;
+  }
   const head = path.slice(0, wildcard);
-  return head.slice(0, head.lastIndexOf("/")) || "/";
+  if (os === "windows") {
+    if (/^[A-Za-z]:\\+$/.test(head)) return head.replace(/\\+$/, "\\");
+    if (/^\\\\[?.]\\[A-Za-z]:\\+$/.test(head))
+      return head.replace(/\\+$/, "\\");
+  }
+  return head.slice(0, head.lastIndexOf(separator)) || separator;
 }
 /**
  * Destinations, listeners and file roots a pipeline uses, found the way the
@@ -314,7 +346,10 @@ function fileRoot(path: string) {
  * version until its local allowances list each one; the dashboard can't grant
  * them.
  */
-export function hostApprovals(config: Record<string, unknown>): HostApprovals {
+export function hostApprovals(
+  config: Record<string, unknown>,
+  os = "linux",
+): HostApprovals {
   const destinations = new Set<string>();
   const listeners = new Set<string>();
   const fileRoots = new Set<string>();
@@ -333,15 +368,16 @@ export function hostApprovals(config: Record<string, unknown>): HostApprovals {
       }
       if (key === "address") listeners.add(value);
       if (
-        (key === "include" ||
-          key === "exclude" ||
-          (key === "path" && pathIsFile) ||
-          key.endsWith("_file") ||
-          key.endsWith("_path") ||
-          key.endsWith("_dir")) &&
-        value.startsWith("/")
-      )
-        fileRoots.add(fileRoot(value));
+        key === "include" ||
+        key === "exclude" ||
+        (key === "path" && pathIsFile) ||
+        key.endsWith("_file") ||
+        key.endsWith("_path") ||
+        key.endsWith("_dir")
+      ) {
+        const filePath = absoluteFilePath(value, os);
+        if (filePath) fileRoots.add(fileRoot(filePath, os));
+      }
     }
   };
   // Restricted mode runs the monitoring exporter without an allowance.
@@ -357,8 +393,10 @@ export function hostApprovals(config: Record<string, unknown>): HostApprovals {
         kind,
         component?.type === "syslog" && component?.mode === "unix",
       );
-  if (typeof config.data_dir === "string" && config.data_dir.startsWith("/"))
-    fileRoots.add(fileRoot(config.data_dir));
+  if (typeof config.data_dir === "string") {
+    const filePath = absoluteFilePath(config.data_dir, os);
+    if (filePath) fileRoots.add(fileRoot(filePath, os));
+  }
   return {
     destinations: [...destinations].sort(),
     listeners: [...listeners].sort(),

@@ -60,6 +60,71 @@ pub fn is_log_line(line: &str) -> bool {
             .any(|level| trimmed.contains(level))
 }
 
+/// Config-time tracing warnings live outside Vector's usual validation
+/// sections. Only known configuration/topology targets are eligible, and no
+/// free-form log body is returned: it can include paths, URLs or credentials.
+fn tracing_warning(config: &Value, line: &str) -> Option<Diagnostic> {
+    let line = line.trim_start();
+    let (timestamp, entry) = line.split_once(" WARN ")?;
+    if !is_log_line(line) || chrono::DateTime::parse_from_rfc3339(timestamp.trim()).is_err() {
+        return None;
+    }
+    let (target, body) = entry.split_once(": ")?;
+    if target != "vector::config"
+        && target != "vector::topology"
+        && !target.starts_with("vector::topology::")
+    {
+        return None;
+    }
+
+    const ACK_MISMATCH: &str = "Source has acknowledgements enabled by a sink, but acknowledgements are not supported by this source. Silent data loss could occur.";
+    if target == "vector::config"
+        && let Some(fields) = body.strip_prefix(ACK_MISMATCH)
+    {
+        // Vector's structured fields are only location hints. They must name
+        // actual components before a diagnostic is attached to either one.
+        let field = |key: &str| {
+            fields
+                .split_ascii_whitespace()
+                .find_map(|part| {
+                    part.strip_prefix(key)?
+                        .strip_prefix("=\"")?
+                        .strip_suffix('"')
+                })
+                .filter(|id| {
+                    !id.is_empty()
+                        && id.len() <= MAX_IDENTIFIER
+                        && id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+                })
+        };
+        if let (Some(source), Some(sink)) = (field("source"), field("sink"))
+            && config["sources"].get(source).is_some()
+            && config["sinks"].get(sink).is_some()
+        {
+            return Some(Diagnostic {
+                severity: "warning",
+                section: Some("sinks".into()),
+                component: Some(sink.into()),
+                field: Some("acknowledgements".into()),
+                code: Some("acknowledgement_mismatch".into()),
+                message: "This destination requests end-to-end acknowledgements, but its source cannot provide them. Events may be lost without an error.".into(),
+                hint: Some("Choose a source that supports acknowledgements or disable acknowledgements on this destination.".into()),
+                related: vec![source.into()],
+                ..Default::default()
+            });
+        }
+    }
+    Some(Diagnostic {
+        section: Some("global".into()),
+        code: Some("vector_config_warning".into()),
+        ..Diagnostic::warning(
+            "Vector reported a configuration warning that needs review before deployment.",
+        )
+    })
+}
+
 pub fn bounded(text: &str, limit: usize) -> String {
     let text = text.trim_end();
     if text.len() <= limit {
@@ -766,6 +831,12 @@ pub fn parse_validate(config: &Value, stdout: &[u8], stderr: &[u8]) -> Vec<Diagn
         index += 1;
         // A failed start logs `... ERROR vector::topology::builder: Configuration error. error=Transform "id": `.
         if is_log_line(line) {
+            if let Some(warning) = tracing_warning(config, line) {
+                diagnostics.push(warning);
+                if diagnostics.len() >= MAX_DIAGNOSTICS {
+                    break;
+                }
+            }
             if let Some((_, rest)) = line.split_once("Configuration error. error=") {
                 let body_start = index;
                 while index < lines.len() && !is_log_line(lines[index]) {
@@ -1273,6 +1344,71 @@ mod tests {
                 "enrich":{"type":"remap","inputs":["parse"],"source":".a = 1\n.b = foo(.x)"},
                 "route":{"type":"route","inputs":["enrich"],"route":{"server_errors":".status >= 500"}}},
             "sinks":{"out":{"type":"blackhole","inputs":["route.server_errors"]},"es":{"type":"elasticsearch","inputs":["nginx"]}}})
+    }
+
+    #[test]
+    fn vector_config_acknowledgement_warning_is_attached_to_the_sink() {
+        // Reproduced with pinned Vector 0.58.0: `validate --no-environment`
+        // exits 0 and writes this warning to stderr, outside its usual
+        // `Loaded with warnings` stdout block.
+        let config = json!({
+            "sources": {"tick": {"type": "demo_logs", "format": "json"}},
+            "sinks": {"out_http": {"type": "http", "inputs": ["tick"],
+                "uri": "https://example.invalid/ingest", "encoding": {"codec": "json"},
+                "acknowledgements": {"enabled": true}}}
+        });
+        let stdout = "√ Loaded [\"config.json\"]\n√ Transforms configuration\nValidated\n";
+        let stderr = "2026-10-04T18:12:42.881497Z  WARN vector::config: Source has acknowledgements enabled by a sink, but acknowledgements are not supported by this source. Silent data loss could occur. source=\"tick\" sink=\"out_http\"\n";
+        let diagnostics = parse_validate(&config, stdout.as_bytes(), stderr.as_bytes());
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        let warning = &diagnostics[0];
+        assert_eq!(warning.severity, "warning");
+        assert_eq!(warning.section.as_deref(), Some("sinks"));
+        assert_eq!(warning.component.as_deref(), Some("out_http"));
+        assert_eq!(warning.field.as_deref(), Some("acknowledgements"));
+        assert!(warning.message.contains("Events may be lost"));
+        assert!(!warning.to_json().to_string().contains("2026-10-04"));
+    }
+
+    #[test]
+    fn tracing_warnings_never_echo_unrecognized_log_text_or_secret_fields() {
+        let config = json!({
+            "sources": {"tick": {"type": "demo_logs"}},
+            "sinks": {"out_http": {"type": "http", "inputs": ["tick"]}}
+        });
+        let stderr = concat!(
+            "2026-10-04T18:12:42.881497Z  INFO vector::config: INFO_TOKEN_DO_NOT_ECHO\n",
+            "2026-10-04T18:12:42.881497Z  WARN vector::api: API_TOKEN_DO_NOT_ECHO\n",
+            "2026-10-04T18:12:42.881497Z  WARN vector::config: Unexpected warning token=UNKNOWN_TOKEN_DO_NOT_ECHO\n",
+            "2026-10-04T18:12:42.881497Z  WARN vector::topology::builder: Backend warned password=TOPOLOGY_TOKEN_DO_NOT_ECHO\n",
+            "2026-10-04T18:12:42.881497Z  WARN vector::config: Source has acknowledgements enabled by a sink, but acknowledgements are not supported by this source. Silent data loss could occur. source=\"tick\" sink=\"out_http\" token=ACK_TOKEN_DO_NOT_ECHO\n",
+            "2026-10-04T18:12:42.881497Z  WARN vector::config: Source has acknowledgements enabled by a sink, but acknowledgements are not supported by this source. Silent data loss could occur. source=\"other\" sink=\"out_http\"\n",
+            "not-a-timestamp WARN vector::config: FORGED_TOKEN_DO_NOT_ECHO\n",
+        );
+        let found = parse_validate(&config, b"Validated\n", stderr.as_bytes());
+        assert_eq!(found.len(), 4, "{found:#?}");
+        assert_eq!(found[0].section.as_deref(), Some("global"));
+        assert_eq!(found[1].section.as_deref(), Some("global"));
+        assert_eq!(found[2].component.as_deref(), Some("out_http"));
+        assert_eq!(found[3].component, None);
+        let public =
+            serde_json::to_string(&found.iter().map(Diagnostic::to_json).collect::<Vec<_>>())
+                .unwrap();
+        assert!(!public.contains("_TOKEN_DO_NOT_ECHO"), "{public}");
+        assert!(!public.contains("password="), "{public}");
+
+        let flood =
+            "2026-10-04T18:12:42.881497Z  WARN vector::config: token=FLOOD_TOKEN_DO_NOT_ECHO\n"
+                .repeat(MAX_DIAGNOSTICS + 10);
+        let bounded = parse_validate(&config, b"", flood.as_bytes());
+        assert_eq!(bounded.len(), MAX_DIAGNOSTICS);
+        assert!(bounded.iter().all(|warning| {
+            warning.severity == "warning"
+                && !warning
+                    .to_json()
+                    .to_string()
+                    .contains("FLOOD_TOKEN_DO_NOT_ECHO")
+        }));
     }
 
     #[test]

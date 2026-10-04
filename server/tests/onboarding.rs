@@ -776,6 +776,13 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         (StatusCode::OK, script.clone().into_bytes())
     );
 
+    // The assertions above also run on Windows. The rest executes a POSIX
+    // installer using Unix paths and permissions; Linux and macOS CI exercise
+    // its install, rejection, and dry-run behavior.
+    if !cfg!(unix) {
+        return;
+    }
+
     // It is valid POSIX sh and does what it says.
     let root = f.temp.path().join("installer");
     std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -1454,4 +1461,82 @@ async fn a_token_made_for_a_typed_name_enrolls_only_that_device() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(open["record"].get("device_name").is_none());
+}
+
+#[tokio::test]
+async fn anonymous_agent_mutations_do_not_wait_for_the_writer() {
+    let f = fixture(|_, _| {}).await;
+    // Enrollment requires anonymous TLS access to the agent listener, but an
+    // unauthenticated heartbeat or renewal must not queue behind the shared
+    // SQLite writer.
+    let held_writer = db::writer(&f.s).await;
+    let anonymous = agent(&f.s).layer(Extension(device::PeerCertificate(None)));
+    for path in ["/agent/v1/heartbeat", "/agent/v1/renew"] {
+        let request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), send(&anonymous, request))
+                .await;
+        let (status, _, _) =
+            result.unwrap_or_else(|_| panic!("{path} queued behind the writer lock"));
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    drop(held_writer);
+}
+
+#[tokio::test]
+async fn agent_mutations_recheck_revocation_after_waiting_for_the_writer() {
+    for (path, budget_prefix) in [
+        ("/agent/v1/heartbeat", "heartbeat"),
+        ("/agent/v1/renew", "renew"),
+    ] {
+        let f = fixture(|_, _| {}).await;
+        let (token, _) = f
+            .token(json!({"name":"Revocation race","expires_hours":1,"max_uses":1}))
+            .await;
+        let (status, enrolled) = f
+            .enroll(&enrollment(&token, "revocation-race", "race-01", &csr()))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{enrolled}");
+        let id = enrolled["device_id"].as_str().unwrap().to_owned();
+        let fingerprint: String =
+            sqlx::query_scalar("SELECT fingerprint FROM credentials WHERE device_id=?")
+                .bind(&id)
+                .fetch_one(&f.s.pool)
+                .await
+                .unwrap();
+
+        let held_writer = db::writer(&f.s).await;
+        let authenticated =
+            agent(&f.s).layer(Extension(device::PeerCertificate(Some(fingerprint))));
+        let request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let pending = tokio::spawn(async move { send(&authenticated, request).await });
+        // Observe the pre-lock admission, then simulate a revocation that
+        // commits while this request waits. The second read must reject it.
+        let budget = format!("{budget_prefix}:{id}");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while f.s.counted(&budget) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{path} did not authenticate before waiting for the writer"));
+        sqlx::query("UPDATE credentials SET revoked=1 WHERE device_id=?")
+            .bind(&id)
+            .execute(&f.s.pool)
+            .await
+            .unwrap();
+        drop(held_writer);
+        let (status, _, _) = pending.await.unwrap();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+    }
 }

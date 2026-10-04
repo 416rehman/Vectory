@@ -15,10 +15,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..");
 const preview =
   process.env.VECTORY_PREVIEW_DIR || path.join(root, ".local", "preview");
+const demoRoot =
+  process.env.VECTORY_DEMO_DIR || path.join(root, ".local", "demo");
 const web = `http://127.0.0.1:${process.env.VECTORY_PREVIEW_WEB_PORT || 8080}`;
 const out = path.resolve(
   root,
@@ -26,10 +29,28 @@ const out = path.resolve(
 );
 const viewport = { width: 1440, height: 900 };
 const settleTimeout = 20_000;
+const demoNames = new Set([
+  "edge-nyc-01",
+  "edge-nyc-02",
+  "edge-fra-01",
+  "web-ams-01",
+  "web-ams-02",
+  "edge-sfo-01",
+  "edge-sfo-02",
+  "web-sin-01",
+  "edge-syd-01",
+  "web-lon-01",
+  "edge-tor-01",
+  "web-sao-01",
+]);
+const demoPipelines = new Set([
+  "Edge syslog processing (synthetic demo)",
+  "Web access logs (synthetic demo)",
+]);
+const demoGroups = new Set(["Edge collectors", "Web tier"]);
 
 const say = (message) => console.log(`\x1b[2m›\x1b[0m ${message}`);
 const done = (message) => console.log(`\x1b[32m✓\x1b[0m ${message}`);
-const warn = (message) => console.warn(`\x1b[33m!\x1b[0m ${message}`);
 class Stop extends Error {}
 const fail = (message) => {
   throw new Stop(message);
@@ -48,6 +69,11 @@ async function signIn() {
   const status = await fetch(`${web}/api/v1/status`).catch(() => null);
   if (!status?.ok)
     fail(`No preview answers at ${web}. Start it with node scripts/demo.mjs.`);
+  const instance = await status.json();
+  if (instance.instance_name !== "Vectory demo")
+    fail(
+      "This server is not the synthetic demo instance. No screenshots were saved.",
+    );
   const login = await fetch(`${web}/api/v1/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -81,41 +107,168 @@ async function signIn() {
   return { get, signOut, session: cookie.slice(cookie.indexOf("=") + 1) };
 }
 
-// Pick the demo's own records by name, so every run shows the same things.
-async function subjects(get) {
-  const [pipelines, devices, deployments] = await Promise.all([
-    get("/configurations"),
-    get("/devices"),
-    get("/deployments"),
-  ]);
-  const demo = pipelines.filter((p) => p.name.endsWith("(synthetic demo)"));
-  const pipeline =
-    demo.find((p) => p.name.startsWith("Edge syslog processing")) ?? demo[0];
-  if (!pipeline)
-    fail(
-      "No synthetic demo pipeline found. Start the demo: node scripts/demo.mjs",
-    );
-  const device =
-    devices.find((d) => d.name === "edge-nyc-01") ??
-    devices.find((d) => d.status !== "revoked");
-  if (!device)
-    fail("No demo devices found. Start the demo: node scripts/demo.mjs");
-  const versions = new Set(
-    (await get(`/configurations/${pipeline.id}/versions`)).map((v) => v.id),
+/** Reject a mixed preview before a global view can expose unrelated records. */
+export function demoRecordProblem({
+  pipelines,
+  devices,
+  deployments,
+  groups,
+  users,
+  tokens,
+  versions,
+}) {
+  if (
+    ![pipelines, devices, deployments, groups, users, tokens, versions].every(
+      Array.isArray,
+    )
+  )
+    return "The demo inventory could not be verified.";
+  if (
+    !pipelines.length ||
+    pipelines.some((item) => !demoPipelines.has(item.name))
+  )
+    return "The pipeline list contains records outside the synthetic demo.";
+  if (
+    !devices.length ||
+    devices.some(
+      (item) => !demoNames.has(item.name) || item.status === "revoked",
+    ) ||
+    new Set(devices.map((item) => item.name)).size !== devices.length
+  )
+    return "The device list contains records outside the synthetic demo.";
+  if (
+    users.length !== 1 ||
+    users[0].email !== "operator@vectory.local" ||
+    users[0].name !== "Demo operator"
+  )
+    return "The account list is not the fresh synthetic demo administrator.";
+  const deviceIds = new Set(devices.map((item) => item.id));
+  if (
+    groups.some(
+      (item) =>
+        !demoGroups.has(item.name) ||
+        !Array.isArray(item.device_ids) ||
+        item.device_ids.some((id) => !deviceIds.has(id)),
+    )
+  )
+    return "The group list contains records outside the synthetic demo.";
+  if (
+    tokens.length !== 1 ||
+    tokens.some(
+      (item) =>
+        typeof item.name !== "string" ||
+        !/^Demo fleet \d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(item.name),
+    )
+  )
+    return "A fresh synthetic demo must have exactly one enrollment token.";
+  if (versions.some((items) => !Array.isArray(items)))
+    return "The demo versions could not be verified.";
+  const versionIds = new Set(
+    versions.flatMap((items) => items.map((item) => item.id)),
   );
-  const rollout = deployments
+  if (
+    !deployments.length ||
+    deployments.some(
+      (item) =>
+        !Array.isArray(item.targets) ||
+        item.targets.some((target) => !deviceIds.has(target.device_id)) ||
+        (item.version_id
+          ? !versionIds.has(item.version_id)
+          : item.policy?.heartbeat_seconds !== 15),
+    )
+  )
+    return "The deployment list contains records outside the synthetic demo.";
+  return null;
+}
+
+async function assertLocalDemoDevices(devices) {
+  for (const device of devices) {
+    // A familiar name is insufficient: match the enrolled local demo agent.
+    const identity = await fs
+      .readFile(
+        path.join(demoRoot, "agents", device.name, "state", "identity.json"),
+        "utf8",
+      )
+      .then(JSON.parse)
+      .catch(() => null);
+    if (identity?.credentials?.device_id !== device.id)
+      fail(
+        `Device ${device.name} does not match its local demo agent. No screenshots were saved.`,
+      );
+  }
+}
+
+// Pick the demo's own records only after proving the instance is isolated.
+async function subjects(get) {
+  const [pipelines, initialDevices, deployments, groups, users, tokens] =
+    await Promise.all([
+      get("/configurations"),
+      get("/devices"),
+      get("/deployments"),
+      get("/groups"),
+      get("/users"),
+      get("/tokens"),
+    ]);
+  const allVersions = await Promise.all(
+    pipelines.map((item) => get(`/configurations/${item.id}/versions`)),
+  );
+  const problem = demoRecordProblem({
+    pipelines,
+    devices: initialDevices,
+    deployments,
+    groups,
+    users,
+    tokens,
+    versions: allVersions,
+  });
+  if (problem)
+    fail(`${problem} Start from a fresh demo; no screenshots were saved.`);
+  await assertLocalDemoDevices(initialDevices);
+  const pipeline = pipelines.find(
+    (item) => item.name === "Edge syslog processing (synthetic demo)",
+  );
+  if (!pipeline)
+    fail("The edge demo pipeline is missing. No screenshots were saved.");
+  const versions = new Set(
+    allVersions[pipelines.indexOf(pipeline)].map((version) => version.id),
+  );
+  let rollout = deployments
     .filter((d) => versions.has(d.version_id))
     .sort((a, b) =>
       String(b.created_at).localeCompare(String(a.created_at)),
     )[0];
   if (!rollout) fail(`No deployment of “${pipeline.name}” found.`);
-  const unsettled = devices.filter(
-    (d) => d.status !== "revoked" && d.apply_state !== "verified_applied",
-  );
-  if (unsettled.length)
-    warn(
-      `Not every device runs a verified pipeline yet (${unsettled.map((d) => `${d.name}: ${d.apply_state}`).join(", ")}). Wait a minute for a representative capture.`,
+  let devices = initialDevices;
+  const unsettled = () =>
+    devices.filter(
+      (d) => d.status !== "revoked" && d.apply_state !== "verified_applied",
     );
+  const deadline = Date.now() + 120_000;
+  while (
+    (unsettled().length || rollout.status !== "completed") &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    const [currentDevices, currentRollout] = await Promise.all([
+      get("/devices"),
+      get(`/deployments/${rollout.id}`),
+    ]);
+    devices = currentDevices;
+    rollout = currentRollout;
+  }
+  if (unsettled().length)
+    fail(
+      `Demo devices have not verified application (${unsettled()
+        .map((d) => `${d.name}: ${d.apply_state}`)
+        .join(", ")}). No screenshots were saved.`,
+    );
+  if (rollout.status !== "completed")
+    fail(
+      `The demo rollout is ${rollout.status}, not completed. No screenshots were saved.`,
+    );
+  const device = devices.find((d) => d.name === "edge-nyc-01");
+  if (!device)
+    fail("Demo devices are no longer available. No screenshots were saved.");
   return { pipeline, device, rollout };
 }
 
@@ -127,11 +280,11 @@ function screens({ pipeline, device, rollout }) {
       themes: ["light", "dark"],
       ready: ".react-flow__node",
     },
-    { name: "overview", path: "/#/overview" },
+    { name: "overview", path: "/#/overview", fullPage: true },
     { name: "devices", path: "/#/devices" },
-    { name: "device", path: `/#/devices/${device.id}` },
+    { name: "device", path: `/#/devices/${device.id}`, height: 1400 },
     { name: "rollout", path: `/#/deployments/${rollout.id}` },
-    { name: "add-device", path: "/#/enrollment", noNewTokens: true },
+    { name: "add-device", path: "/#/enrollment", height: 960, noNewTokens: true },
     { name: "help", path: "/help/" },
   ];
 }
@@ -155,7 +308,7 @@ async function settle(page, ready) {
       { timeout: settleTimeout },
     )
     .catch(() =>
-      warn("A loading indicator was still visible; captured anyway."),
+      fail("A loading indicator remained visible. No screenshot was saved."),
     );
   await page.evaluate(async () => {
     await document.fonts.ready;
@@ -168,9 +321,72 @@ async function settle(page, ready) {
   await page.waitForLoadState("networkidle", { timeout: settleTimeout });
 }
 
+// The editor starts its automatic Vector check after a short pause. Network
+// idle can finish before that timer fires, leaving a "Not checked" hero image.
+// A native Vector result is part of the screenshot's claim about the demo
+// pipeline. "No problems" alone can also mean structural checks only.
+async function waitForEditorCheck(page) {
+  try {
+    await page.waitForFunction(
+      () => {
+        const panel = document.querySelector(".problems-panel");
+        const summary = panel?.querySelector(".problems-toggle strong");
+        const check = document.querySelector(".editor-check-button");
+        return (
+          panel?.getAttribute("data-state") === "clean" &&
+          summary?.textContent?.trim() === "No problems" &&
+          ["passed", "device"].includes(
+            check?.getAttribute("data-check-state"),
+          ) &&
+          check
+            ?.getAttribute("title")
+            ?.startsWith("Vector 0.58 accepted this pipeline.")
+        );
+      },
+      null,
+      { timeout: 60_000 },
+    );
+  } catch {
+    const summary =
+      (
+        await page
+          .locator(".problems-panel .problems-toggle strong")
+          .textContent()
+          .catch(() => null)
+      )?.trim() || "no check result";
+    const state =
+      (await page
+        .locator(".editor-check-button")
+        .getAttribute("data-check-state")
+        .catch(() => null)) || "no Vector result";
+    fail(
+      `The demo pipeline did not finish a clean Vector check (status: ${summary}; Vector: ${state}). No editor screenshot was saved.`,
+    );
+  }
+  await settle(page);
+}
+
+async function waitForDemoDeviceRates(page) {
+  try {
+    await page.waitForFunction(
+      () => {
+        const rows = [...document.querySelectorAll(".devices-page tbody tr")];
+        return rows.length > 0 && rows.every((row) => row.querySelector(".device-flow"));
+      },
+      null,
+      { timeout: 120_000 },
+    );
+  } catch {
+    fail(
+      "The demo Devices page did not show fresh per-device rates. No Devices screenshot was saved.",
+    );
+  }
+  await settle(page);
+}
+
 async function capture(browser, screen, theme, { get, session }) {
   const context = await browser.newContext({
-    viewport,
+    viewport: { ...viewport, height: screen.height ?? viewport.height },
     deviceScaleFactor: 1,
     colorScheme: theme,
     reducedMotion: "reduce",
@@ -196,6 +412,15 @@ async function capture(browser, screen, theme, { get, session }) {
     const tokens = screen.noNewTokens ? (await get("/tokens")).length : 0;
     await page.goto(web + screen.path);
     await settle(page, screen.ready);
+    if (screen.name === "editor") await waitForEditorCheck(page);
+    if (screen.name === "devices") await waitForDemoDeviceRates(page);
+    if (screen.name === "add-device") {
+      await page.locator('input[name="enroll-os"][value="linux"]').check();
+      await page.locator('input[name="enroll-mode"][value="restricted"]').check();
+      await settle(page);
+      if (!(await page.getByRole("button", { name: "Create install command" }).isEnabled()))
+        fail("The demo Add device page is not ready to create an install command. No image was saved.");
+    }
     const file = path.join(
       out,
       `product-${screen.name}${theme === "dark" ? "-dark" : ""}.png`,
@@ -204,6 +429,7 @@ async function capture(browser, screen, theme, { get, session }) {
       path: file,
       animations: "disabled",
       caret: "hide",
+      fullPage: screen.fullPage ?? false,
     });
     // A screen that issues an enrollment token could show its secret.
     if (screen.noNewTokens && (await get("/tokens")).length !== tokens) {
@@ -259,9 +485,13 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(
-    `\x1b[31m✗\x1b[0m ${error instanceof Stop ? error.message : error.stack}`,
-  );
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+)
+  main().catch((error) => {
+    console.error(
+      `\x1b[31m✗\x1b[0m ${error instanceof Stop ? error.message : error.stack}`,
+    );
+    process.exitCode = 1;
+  });

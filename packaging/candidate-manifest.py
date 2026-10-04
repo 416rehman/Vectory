@@ -2,14 +2,17 @@
 """Write CANDIDATE.json for an assembled release-candidate folder.
 
 Records the commit and workflow run, which parts are present and whether their
-jobs passed, the pinned tools, and whether the agents bundled in the server
-image are byte-identical to the separately built ones. It states signed:false
-and published:false; it is not a provenance attestation.
+jobs passed, the pinned tools, and whether the server-image and standalone
+agent catalogs agree. The image job separately hashes the embedded binaries
+against its catalog, so a successful workflow establishes byte identity. This
+manifest alone is not proof of that job or a provenance attestation. It states
+signed:false and published:false.
 """
 import argparse
 import json
 import os
 import re
+import runpy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,8 +34,21 @@ def reproducibility(folder):
     built, bundled = folder / 'catalog.json', folder / 'image-agent-catalog.json'
     if not built.is_file() or not bundled.is_file():
         return {'compared': False, 'reason': 'one of the catalogs is missing'}
-    left = {item['name']: item['sha256'] for item in json.loads(built.read_text(encoding='utf-8'))}
-    right = {item['name']: item['sha256'] for item in json.loads(bundled.read_text(encoding='utf-8'))}
+    try:
+        catalogs = []
+        for path in (built, bundled):
+            if path.stat().st_size > 1024 * 1024:
+                raise ValueError('catalog exceeds 1 MiB')
+            items = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(items, list) or any(
+                not isinstance(item, dict) or not isinstance(item.get('name'), str)
+                or not isinstance(item.get('sha256'), str) for item in items
+            ):
+                raise ValueError('catalog is not a release list')
+            catalogs.append({item['name']: item['sha256'] for item in items})
+        left, right = catalogs
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        return {'compared': False, 'reason': f'catalog comparison unavailable: {type(error).__name__}'}
     differing = sorted(name for name in left.keys() | right.keys() if left.get(name) != right.get(name))
     return {'compared': True, 'identical': not differing, 'differing': differing}
 
@@ -58,14 +74,22 @@ def main():
         'image_agents_match_release_agents': reproducibility(args.folder),
         'note': 'Unsigned development candidate. Signing, notarization, package repositories and publication are separate maintainer steps.',
     }
-    (args.folder / 'CANDIDATE.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-    missing = [part for part, files in manifest['parts'].items() if not files]
-    if missing:
-        print(f'::warning::The candidate has no {", ".join(missing)}; see job_results in CANDIDATE.json.')
-    check = manifest['image_agents_match_release_agents']
-    if check.get('compared') and not check['identical']:
-        print(f'::warning::Agents bundled in the image differ from the release agents: {", ".join(check["differing"])}')
-    print(json.dumps({k: manifest[k] for k in ('parts', 'job_results', 'image_agents_match_release_agents')}, indent=2))
+    path = args.folder / 'CANDIDATE.json'
+    path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    # Assembly deliberately saves an incomplete candidate when another job
+    # failed. Use the same inventory check as the offline verifier to mark that
+    # artifact prominently, without failing assembly before it can be uploaded.
+    try:
+        runpy.run_path(str(Path(__file__).with_name('verify-release.py')))['candidate_inventory'](args.folder, require_status=False)
+    except (ValueError, KeyError, TypeError, FileNotFoundError, json.JSONDecodeError) as error:
+        manifest['inventory_status'] = 'incomplete-diagnostic'
+        manifest['inventory_problem'] = str(error)
+        manifest['note'] = 'INCOMPLETE DIAGNOSTIC ARTIFACT. Do not publish this folder as a release candidate.'
+        print(f'::warning::{manifest["note"]} {error}')
+    else:
+        manifest['inventory_status'] = 'complete'
+    path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    print(json.dumps({k: manifest[k] for k in ('inventory_status', 'parts', 'job_results', 'image_agents_match_release_agents')}, indent=2))
 
 
 if __name__ == '__main__':

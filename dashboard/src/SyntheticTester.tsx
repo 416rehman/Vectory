@@ -25,7 +25,7 @@ import {
   writeSamples,
   type SampleStore,
 } from "./sampleStore";
-import { unitTestFromSample, type SampleResult } from "./sampleTests";
+import { unitTestsFromSamples, type SampleResult } from "./sampleTests";
 import {
   eventsOnPort,
   routeCounts,
@@ -129,6 +129,7 @@ function SampleCard({
   component,
   onJump,
   onSave,
+  saveDisabled = false,
 }: {
   index: number;
   /** The sample's position in the set, which may differ after upstream steps. */
@@ -139,6 +140,7 @@ function SampleCard({
   component: Config;
   onJump?: (line: number, column: number) => void;
   onSave?: () => void;
+  saveDisabled?: boolean;
 }) {
   const [showJSON, setShowJSON] = useState(false);
   const type = String(component.type || "");
@@ -170,6 +172,7 @@ function SampleCard({
             type="button"
             className="sample-result-action"
             onClick={onSave}
+            disabled={saveDisabled}
             title="Add a Vector unit test that expects this result"
           >
             <Save size={13} aria-hidden="true" />
@@ -322,6 +325,12 @@ export default function SyntheticTester({
   const [persisted, setPersisted] = useState(true);
   const [auto, setAuto] = useState(readAuto);
   const [run, setRun] = useState<RunState>({ status: "idle" });
+  const [saving, setSaving] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<{
+    kind: "ok" | "error";
+    message: string;
+  } | null>(null);
+  const savingRef = useRef(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const set = activeSet(store, componentId);
   function commitRename() {
@@ -354,6 +363,21 @@ export default function SyntheticTester({
     timezone || null,
     steps.map((step) => [step.transform, step.port]),
   ]);
+  const currentKey = useRef(key);
+  currentKey.current = key;
+  const currentComponentId = useRef(componentId);
+  currentComponentId.current = componentId;
+  const saveInputs = JSON.stringify([
+    key,
+    componentId,
+    set.id,
+    set.name,
+    existingTests,
+  ]);
+  const currentSaveInputs = useRef(saveInputs);
+  currentSaveInputs.current = saveInputs;
+  const currentOnSaveTests = useRef(onSaveTests);
+  currentOnSaveTests.current = onSaveTests;
   const generation = useRef(0);
   const callbacks = useRef({ onCompile, onPaths, onTrace });
   callbacks.current = { onCompile, onPaths, onTrace };
@@ -494,6 +518,7 @@ export default function SyntheticTester({
   useEffect(() => {
     if (!through) callbacks.current.onPaths?.(eventPaths(parsed.samples));
   }, [parsed.samples, through]);
+  useEffect(() => setSaveNotice(null), [key, componentId]);
 
   const completed =
     run.status === "done"
@@ -525,24 +550,91 @@ export default function SyntheticTester({
         ? "condition"
         : "";
 
-  function saveTests(indexes: number[]) {
-    if (!completed || !onSaveTests) return;
-    const created: Config[] = [];
-    for (const index of indexes) {
+  async function saveTests(indexes: number[]) {
+    if (
+      !completed ||
+      !onSaveTests ||
+      stale ||
+      run.status !== "done" ||
+      savingRef.current
+    )
+      return;
+    const snapshot = completed;
+    const cases = indexes.flatMap((index) => {
       const result = results[index];
-      if (!result) continue;
-      created.push(
-        unitTestFromSample({
-          componentId,
-          component,
-          sample: completed.samples[index],
-          result,
-          name: `${componentId}: ${set.name} ${(completed.origins[index] ?? index) + 1}`,
-          existing: [...existingTests, ...created],
-        }),
-      );
+      const sample = snapshot.samples[index];
+      return result && sample
+        ? [
+            {
+              sample,
+              result,
+              name: `${componentId}: ${set.name} ${(snapshot.origins[index] ?? index) + 1}`,
+            },
+          ]
+        : [];
+    });
+    if (!cases.length) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveNotice(null);
+    const runGeneration = generation.current;
+    const savedInputs = saveInputs;
+    try {
+      const saved = await unitTestsFromSamples({
+        componentId,
+        component,
+        cases,
+        existing: existingTests,
+        rerun: async (samples) => {
+          const reply = await api<TesterResponse>("/vrl/test", {
+            method: "POST",
+            body: JSON.stringify({
+              transform,
+              samples,
+              timezone: timezone || null,
+            }),
+          });
+          if (reply.compiled === false || !Array.isArray(reply.results))
+            throw new Error(
+              "The sample could not be checked again. Run it before saving a test.",
+            );
+          return reply.results;
+        },
+      });
+      if (
+        runGeneration !== generation.current ||
+        currentKey.current !== snapshot.key ||
+        currentComponentId.current !== componentId ||
+        currentSaveInputs.current !== savedInputs ||
+        !currentOnSaveTests.current
+      )
+        throw new Error(
+          "The sample, transform, or existing tests changed while checking. Run the sample again before saving a test.",
+        );
+      // The editor may have unrelated configuration or layout edits while the
+      // check is in flight. Use its latest callback so adding a test retains
+      // those edits rather than replacing them with the render at click time.
+      currentOnSaveTests.current(saved.tests);
+      const paths = saved.omittedPaths.map((path) => path.slice(1));
+      const listed = paths.slice(0, 8).join(", ");
+      setSaveNotice({
+        kind: "ok",
+        message: paths.length
+          ? `${paths.length} ${paths.length === 1 ? "field can" : "fields can"} change between runs and ${paths.length === 1 ? "was" : "were"} not asserted: ${listed}${paths.length > 8 ? `, and ${paths.length - 8} more` : ""}.`
+          : `Saved ${saved.tests.length} ${saved.tests.length === 1 ? "test" : "tests"}.`,
+      });
+    } catch (failure) {
+      setSaveNotice({
+        kind: "error",
+        message:
+          failure instanceof Error
+            ? failure.message
+            : "Could not check the samples again.",
+      });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-    if (created.length) onSaveTests(created);
   }
 
   return (
@@ -822,9 +914,10 @@ export default function SyntheticTester({
                     }
                     onSave={
                       canSaveTests && onSaveTests
-                        ? () => saveTests([index])
+                        ? () => void saveTests([index])
                         : undefined
                     }
+                    saveDisabled={saving || stale || run.status !== "done"}
                   />
                 ))}
               </ol>
@@ -832,11 +925,24 @@ export default function SyntheticTester({
                 <button
                   type="button"
                   className="sample-save-all"
-                  onClick={() => saveTests(results.map((_, index) => index))}
+                  disabled={saving || stale || run.status !== "done"}
+                  onClick={() =>
+                    void saveTests(results.map((_, index) => index))
+                  }
                 >
                   <Save size={13} aria-hidden="true" />
                   Save all {results.length} as tests
                 </button>
+              )}
+              {saveNotice && (
+                <p
+                  className={
+                    saveNotice.kind === "error" ? "sample-error" : "sample-hint"
+                  }
+                  role={saveNotice.kind === "error" ? "alert" : "status"}
+                >
+                  {saveNotice.message}
+                </p>
               )}
               {!!response?.placeholders?.length && (
                 <p className="sample-hint">

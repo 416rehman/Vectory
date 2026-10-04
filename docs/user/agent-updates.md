@@ -10,7 +10,7 @@ A host never installs an agent build because the server said so. Four things dec
 | --- | --- | --- |
 | **Consent** | Someone on the host, once, through the **Add device** or **Upgrade agent** command. | A host with no consent, or with **Off**, never fetches a build. |
 | **A pinned key** | You, by the fingerprint that command carries. | The host installs only a build signed by a key it pinned. |
-| **A release counter** | The server numbers each release. | The host remembers the highest counter it tried, so it never tries a release twice and never goes back. |
+| **A release counter** | The server numbers each release. | While its update step stays installed, the host remembers the highest counter it tried and refuses a replay or an older build. Turning updates off or uninstalling the step removes that record. |
 | **A trial** | The host. | It keeps the old build, runs the new one for five minutes and takes it back if it doesn't check in healthy. |
 
 The server's job is to offer a signed build, count what each device reports and stop when devices fail. With **A key kept offline** it can't sign a build at all.

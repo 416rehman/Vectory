@@ -46,7 +46,7 @@ function parse(text: string, format: string) {
 }
 
 it.each(["json", "yaml", "toml"])(
-  "orders %s sections by event flow while preserving values and the input",
+  "orders %s API and pipeline sections while preserving values and the input",
   (format) => {
     const config = {
       future: { enabled: false },
@@ -59,14 +59,22 @@ it.each(["json", "yaml", "toml"])(
       api: { enabled: false, address: "127.0.0.1:8686" },
     };
     const before = JSON.stringify(config);
-    const result = parse(stringifyConfiguration(config, format), format);
+    const text = stringifyConfiguration(config, format);
+    const result = parse(text, format);
     expect(Object.keys(result)).toEqual([
+      "api",
       "sources",
       "transforms",
       "sinks",
       "future",
-      "api",
     ]);
+    if (format === "toml") {
+      expect(text.indexOf("[api]")).toBeLessThan(text.indexOf("[sources"));
+      expect(text.indexOf("[sources")).toBeLessThan(
+        text.indexOf("[transforms"),
+      );
+      expect(text.indexOf("[transforms")).toBeLessThan(text.indexOf("[sinks"));
+    }
     expect(result).toEqual(config);
     expect(Object.keys(result.transforms)).toEqual(["second", "first"]);
     expect(JSON.stringify(config)).toBe(before);
@@ -91,16 +99,18 @@ const withTests = () => ({
   enrichment_tables: { lookup: { type: "file", file: { path: "/x.csv" } } },
   transforms: { keep: { type: "filter", inputs: ["in"], condition: "true" } },
   sources: { in: { type: "demo_logs", format: "json" } },
+  api: { enabled: false },
 });
 
 it.each(["json", "yaml", "toml"])(
-  "writes sources, transforms and sinks first and the pipeline tests last in %s",
+  "writes API then the pipeline sections and tests last in %s",
   (format) => {
     const config = withTests();
     const result = parse(stringifyConfiguration(config, format), format);
     const keys = Object.keys(result);
     // TOML puts root assignments before every table, whatever their order.
     expect(keys.filter((key) => key !== "data_dir")).toEqual([
+      "api",
       "sources",
       "transforms",
       "sinks",
@@ -109,6 +119,7 @@ it.each(["json", "yaml", "toml"])(
     ]);
     if (format !== "toml")
       expect(keys).toEqual([
+        "api",
         "sources",
         "transforms",
         "sinks",
@@ -120,12 +131,12 @@ it.each(["json", "yaml", "toml"])(
   },
 );
 
-it("starts the YAML text at the sources and ends it with the tests", () => {
+it("starts the YAML text at the API and ends it with the tests", () => {
   const text = stringifyConfiguration(withTests(), "yaml");
   const headings = text.split("\n").filter((line) => /^\S/.test(line));
-  expect(headings[0]).toBe("sources:");
+  expect(headings[0]).toBe("api:");
   expect(headings.at(-1)).toBe("tests:");
-  expect(text.startsWith("sources:")).toBe(true);
+  expect(text.startsWith("api:")).toBe(true);
 });
 
 it.each(["json", "yaml", "toml"])(
@@ -154,7 +165,8 @@ it("keeps TOML root assignments outside the ordered section tables", () => {
     Object.keys(parseToml(text)).filter(
       (key) => !["data_dir", "timezone"].includes(key),
     ),
-  ).toEqual(["sources", "transforms", "sinks", "api"]);
+  ).toEqual(["api", "sources", "transforms", "sinks"]);
+  expect(text.indexOf("[api]")).toBeLessThan(text.indexOf("[sources"));
   expect(parseToml(text)).toEqual(config);
 });
 
@@ -166,10 +178,10 @@ it.each(["json", "yaml"])(
     );
     const result = parse(stringifyConfiguration(config, format), format);
     expect(Object.keys(result)).toEqual([
+      "api",
       "sources",
       "sinks",
       "__proto__",
-      "api",
     ]);
     expect(result).toEqual(config);
     expect(Object.hasOwn(result, "__proto__")).toBe(true);

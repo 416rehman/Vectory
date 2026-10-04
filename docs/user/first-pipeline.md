@@ -78,13 +78,13 @@ flowchart LR
 
 Only **Applied** means the new version is running. A download, a written file or a started process alone is not proof.
 
-Vectory never stores your events. To confirm on the host that Vector runs the new version, read Vector's own log:
+Vectory does not store the event stream. Bounded, redacted Vector warnings and errors sent to the server can still contain text derived from an event. To confirm on the host that Vector runs the new version, read Vector's own log:
 
 ```sh
 sudo vectory logs --follow
 ```
 
-Look for `Vector has started.` The console sink writes events to Vector's standard error, which the agent discards so event data never lands in a file. To watch data flow, open the device's **Operational metrics**: the example's exporter feeds them within two check-ins. For your own pipelines, [add monitoring](telemetry.md#enable-real-metrics) the same way.
+Look for `Vector has started.` The console sink writes events to Vector's standard error, which the agent discards instead of saving to its local log. A pipeline's VRL `log()` call can still write event fields to that log. To watch data flow, open the device's **Operational metrics**: the example's exporter feeds them within two check-ins. For your own pipelines, [add monitoring](telemetry.md#enable-real-metrics) the same way.
 
 ## 6. Change it and roll back
 

@@ -457,9 +457,21 @@ try {
       violations: result.violations,
     });
     assert.deepEqual(result.violations, []);
-    // 641px, just above the stacking breakpoint: the table scrolls sideways
-    // and becomes a keyboard stop.
+    // Just above the stacking breakpoint, a table may fit depending on font
+    // metrics. Constrain this one to exercise its sideways-scroll behavior.
     await page.setViewportSize({ width: 641, height: 900 });
+    await expect
+      .poll(async () => {
+        const { stacked, overflow, tabindex } = await state();
+        return {
+          stacked,
+          tabOrderMatchesOverflow: tabindex === (overflow ? "0" : null),
+        };
+      })
+      .toEqual({ stacked: true, tabOrderMatchesOverflow: true });
+    await table.evaluate((element) => {
+      element.style.width = "20rem";
+    });
     await expect
       .poll(state)
       .toEqual({ stacked: true, overflow: true, tabindex: "0" });
@@ -470,6 +482,9 @@ try {
       .poll(() => table.evaluate((element) => element.scrollLeft))
       .toBeGreaterThan(0);
     // 1440px: it fits and leaves the tab order.
+    await table.evaluate((element) => {
+      element.style.removeProperty("width");
+    });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await expect
       .poll(state)

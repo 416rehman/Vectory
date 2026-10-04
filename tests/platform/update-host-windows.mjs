@@ -323,8 +323,7 @@ const psq = (text) => `'${String(text).replaceAll("'", "''")}'`;
 const sleepSync = (ms) =>
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-export function windowsHost() {
-  const programData = process.env.ProgramData || "C:\\ProgramData";
+export function windowsHost({ programData = process.env.ProgramData || "C:\\ProgramData" } = {}) {
   const programFiles = process.env.ProgramFiles || "C:\\Program Files";
   const updateRoot = `${programData}\\Vectory`;
   const stepDir = `${updateRoot}\\update-state`;

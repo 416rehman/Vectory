@@ -105,19 +105,19 @@ export default function SignOutDialog({
     },
     [],
   );
-  // The account menu keeps its plain "Sign out" label: every outcome here is
-  // either resolved or offered again from this dialog.
-  useEffect(() => onReviewChange(false), [onReviewChange]);
   useEffect(() => {
     visible.current = open;
     if (!open) {
       retire();
       setSigningOut(false);
-      setPhase("idle");
+      if (!intent.current) setPhase("idle");
       setSlow(false);
       return;
     }
-    void start();
+    // Review the original session rather than replaying its mutation when
+    // an unfinished attempt is reopened from the account menu.
+    if (!intent.current) void start();
+    else if (phase !== "changed") void check();
   }, [open]);
   useEffect(() => {
     if (phase !== "sending" && phase !== "checking") return;
@@ -129,7 +129,10 @@ export default function SignOutDialog({
   }, [busy, phase]);
 
   function dismiss() {
+    const unfinished = !!intent.current;
+    if (unfinished && active.current) setPhase("unknown");
     retire();
+    onReviewChange(unfinished);
     onClose();
   }
   function claim() {
@@ -153,6 +156,7 @@ export default function SignOutDialog({
     }
     setSigningOut(true);
     intent.current = context();
+    onReviewChange(true);
     await send();
   }
   async function send() {
@@ -164,6 +168,7 @@ export default function SignOutDialog({
       setPhase("changed");
       return;
     }
+    setSigningOut(true);
     setSlow(false);
     setPhase("sending");
     try {
@@ -192,7 +197,14 @@ export default function SignOutDialog({
       active.current = null;
       noteSignedOut();
       rememberSignInEmail(currentUser.current.email);
-      onSignedOut();
+      absent.current = {
+        csrfVersion: getCSRFVersion(),
+        epoch: getSessionEpoch(),
+      };
+      setPhase("signed-out");
+      // Edits may have arrived while the request was in flight. Guard the
+      // actual exit as well as the initial request.
+      leave(onSignedOut, "signed-out");
     } catch (failure) {
       if (!owns(request)) return;
       active.current = null;
@@ -212,6 +224,7 @@ export default function SignOutDialog({
     const original = intent.current;
     const request = claim();
     if (!original || !request) return;
+    setSigningOut(true);
     setSlow(false);
     setPhase("checking");
     try {
@@ -241,9 +254,8 @@ export default function SignOutDialog({
           epoch: getSessionEpoch(),
         };
         setPhase("signed-out");
-        // The session is gone, as asked. Leaving still consults the page's
-        // unsaved-work guard; without unsaved work this is immediate.
-        leave(onSignedOut, "signed-out");
+        // A missing-session read does not authorize leaving the workspace.
+        // Keep the current work mounted until Go to sign in is chosen.
       } else setPhase("unknown");
     } finally {
       if (active.current === request) active.current = null;
@@ -259,13 +271,19 @@ export default function SignOutDialog({
       setPhase("changed");
       return;
     }
-    if (onBeforeSignOut()) action();
-    else dismiss();
+    if (onBeforeSignOut()) {
+      intent.current = null;
+      absent.current = null;
+      onReviewChange(false);
+      action();
+    } else dismiss();
   }
 
   const shown = open && phase !== "idle" && (!busy || slow);
   const title = busy
-    ? "Signing out…"
+    ? phase === "checking"
+      ? "Checking sign-out status…"
+      : "Signing out…"
     : phase === "signed-out"
       ? "You're signed out"
       : phase === "changed"
@@ -343,7 +361,13 @@ export default function SignOutDialog({
               {busy ? "Stop waiting" : "Keep working"}
             </Button>
             {phase === "retry" && (
-              <Button ref={actionRef} onClick={() => void send()}>
+              <Button
+                ref={actionRef}
+                onClick={() => {
+                  if (onBeforeSignOut()) void send();
+                  else dismiss();
+                }}
+              >
                 Try again
               </Button>
             )}

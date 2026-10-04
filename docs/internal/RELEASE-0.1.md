@@ -17,7 +17,7 @@ Designed and recorded for the next release, not built now:
 | Graduated capability tiers, the service sandbox that follows the host's allowances, managed assets | [ADR 0012](../adr/0012-graduated-capability-tiers.md), [ADR 0013](../adr/0013-managed-assets.md), [CAPABILITY-IMPLEMENTATION-PLAN.md](CAPABILITY-IMPLEMENTATION-PLAN.md) |
 | Opt-in event sampling | [ADR 0011](../adr/0011-opt-in-event-sampling.md), [TAP-IMPLEMENTATION-PLAN.md](TAP-IMPLEMENTATION-PLAN.md) |
 | Server capacity (writer profiling, group commit, smaller telemetry) | [WORK-QUEUE.md](WORK-QUEUE.md) item 2, [CAPACITY.md](CAPACITY.md) |
-| Authoring gaps (secrets in headers and URLs, merge-aware conflicts, Vector warnings as problems) | [AUTHORING-GAPS.md](AUTHORING-GAPS.md), [WORK-QUEUE.md](WORK-QUEUE.md) item 8 |
+| Authoring gaps (secrets in headers and URLs, multi-file import, separate-pipeline recovery) | [AUTHORING-GAPS.md](AUTHORING-GAPS.md), [WORK-QUEUE.md](WORK-QUEUE.md) item 8 |
 | Step-up authentication, labels and selectors, single sign-on, Kubernetes | [WORK-QUEUE.md](WORK-QUEUE.md) item 11 |
 | Signed releases, published images and packages | [packaging/README.md](../../packaging/README.md), [HANDOFF.md](HANDOFF.md) |
 
@@ -28,11 +28,11 @@ Every gate is a command or a check anyone can repeat. A gate is **Done** only wi
 | # | Gate | How it is verified | Status |
 | --- | --- | --- | --- |
 | 1 | CI is green on the head: all nine jobs, including `dashboard-browsers` and the account lifecycle step | The `checks` workflow on the final commit | Open |
-| 2 | The release candidate builds and verifies | `release-candidate.yml` on the final commit; download `unsigned-release-candidate`, `sha256sum -c SHA256SUMS`, `python3 packaging/verify-release.py` | Open |
+| 2 | The release candidate builds and verifies | The whole `release-candidate.yml` workflow succeeds on the final commit; download `unsigned-release-candidate` into `candidate`, run `(cd candidate && sha256sum -c SHA256SUMS)` and `python3 packaging/verify-release.py candidate` from the repository root. A partial artifact retained after a failed job is marked `incomplete-diagnostic` and fails the final verifier. | Open |
 | 3 | The pre-release review finds nothing open at P0 or P1 | Review reports per area (shell and navigation, sign-in and accounts, agent install and deploy, the editor, documentation, security) on the final binaries; every P2 is fixed or listed under Known limits | Open |
-| 4 | The open security findings are fixed or listed | [OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) has nothing without a fix, an owner or a line in the user-facing known limits and [SECURITY.md](../../SECURITY.md) | Open |
-| 5 | One version everywhere | `node scripts/check-versions.mjs` (it runs in CI) finds `0.1.0` in `agent/internal/agent/types.go`, `server/Cargo.toml` and its lock file, the dashboard and Help center packages and their lock files, `contracts/openapi.json` and the newest changelog heading; the Help center reads its package; `packaging/build-release.py` refuses a mismatch with the agent | Open |
-| 6 | Documentation matches behavior | `node scripts/check-doc-links.mjs`, `check-requirements.mjs`, `check-ci-table.mjs`, the Help center build and its tests; README, `CHANGELOG.md`, `docs/user/whats-new.md` and the known limits say the same thing | Open |
+| 4 | The open security findings are fixed or listed | [OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) has nothing without a fix, an owner or a line in the user-facing known limits and [SECURITY.md](../../SECURITY.md) | Done |
+| 5 | One version everywhere | `node scripts/check-versions.mjs` (it runs in CI) finds `0.1.0` in `agent/internal/agent/types.go`, `server/Cargo.toml` and its lock file, the dashboard and Help center packages and their lock files, `contracts/openapi.json` and the newest changelog heading; the Help center reads its package; `packaging/build-release.py` refuses a mismatch with the agent | Done |
+| 6 | Documentation matches behavior | `node scripts/check-doc-links.mjs`, `check-requirements.mjs`, `check-ci-table.mjs`, the Help center build and its tests; README, `CHANGELOG.md`, `docs/user/whats-new.md` and the known limits say the same thing | Done |
 | 7 | No private details in the tree or the history | `node scripts/check-writing-rules.mjs` passes; a scan of the final tree and of every commit message for personal paths, links to private pages and internal identifiers; one squashed commit with a single `Co-Authored-By` trailer | Open |
 | 8 | Agent updates are proven and reviewed | `platforms.yml` runs the native phase `tests/platform/agent-update.mjs` in each service job: a real agent service takes the next build with the consent flags Add device generates, takes back a build that fails to start and one that never checks in, never takes a build whose store file was cut short, and refuses a release it already tried without stopping Vector again; the same service then meets a hostile server (offers signed by another key, with a flipped byte, with a replayed counter, expired, for the wrong platform, naming another digest, forking a key, and to a host that did not consent), and its executable, policy, pins and counter floors stay unchanged byte for byte. An operating system whose phase is not green ships saying its hosts update by hand, with its switch (`macosUpdatesInRelease`, `windowsUpdatesInRelease`) set to false in `agent/internal/agent/update_gate.go` (Linux must ship). The `windows` job builds its agents with the Windows line opened in a copy of the source, so a green run proves the step as it ships; `windowsUpdatesInRelease` is true because that job was green. An independent review of the update path finds nothing open at P0 or P1 | Open |
 
@@ -40,7 +40,7 @@ Every gate is a command or a check anyone can repeat. A gate is **Done** only wi
 
 These change the public repository and need the maintainer's explicit go-ahead; they are not done by routine work.
 
-1. Squash the branch into one commit on `main`. The two earliest commits on `main` need a history rewrite before the project is made public; decide that first.
+1. Decide how to handle private details in the two earliest commits on `main` (`2f18fb7` and `c88758e`), including any copies already made: the repository is already public. Then squash the release branch into one commit on `main` only with the maintainer's explicit approval.
 2. Tag `v0.1.0` on that commit.
 3. Run `release-candidate.yml` on the tag, download `unsigned-release-candidate`, verify `SHA256SUMS`.
 4. Create the GitHub release from the tag with the candidate's files, the changelog section as the notes, and the sentence that nothing in it is signed.

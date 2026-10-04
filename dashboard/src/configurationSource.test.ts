@@ -105,6 +105,57 @@ describe("lossless configuration source parsing", () => {
       ),
     ).toThrow(/alias|expan/i);
   });
+  it("resolves YAML merge aliases into component fields before validation", () => {
+    const source = `sources:
+  base: &base
+    type: demo_logs
+    format: json
+  copy:
+    <<: *base
+sinks:
+  out:
+    type: console
+    inputs: [copy]
+    encoding: { codec: json }
+`;
+    const config = parseSource(source, "yaml");
+    expect(config.sources.copy).toEqual(config.sources.base);
+    expect(Object.hasOwn(config.sources.copy, "<<")).toBe(false);
+    expect(assertValidPipelineSource(source, "yaml")).toEqual(config);
+  });
+  it("honors explicit YAML merge overrides and first-map precedence", () => {
+    const source = `sources:
+  first: &first { type: demo_logs, format: json, interval: 1 }
+  second: &second { type: demo_logs, format: shuffle, interval: 2 }
+  merged:
+    <<: [*first, *second]
+    interval: 3
+`;
+    expect(parseSource(source, "yaml").sources.merged).toEqual({
+      type: "demo_logs",
+      format: "json",
+      interval: 3,
+    });
+  });
+  it.each([
+    "sources: {broken: {<<: *missing}}",
+    "defaults: &defaults [demo_logs]\nsources: {broken: {<<: *defaults}}",
+    "sources: {broken: &broken {<<: *broken}}",
+  ])("rejects malformed or cyclic YAML merge aliases: %s", (source) => {
+    expect(() => parseSource(source, "yaml")).toThrow(ConfigurationSourceError);
+  });
+  it("keeps duplicate explicit keys invalid even when a merge is present", () => {
+    const source = `sources:
+  base: &base { type: demo_logs, format: json }
+  copy: { <<: *base, format: json, format: shuffle }
+`;
+    expect(() => parseSource(source, "yaml")).toThrow(/unique/i);
+  });
+  it("keeps a quoted YAML << key as ordinary data", () => {
+    expect(parseSource('future: { "<<": kept }', "yaml")).toEqual({
+      future: { "<<": "kept" },
+    });
+  });
   it.each([
     "x: !!set {a: null}",
     "x: !!binary SGVsbG8=",

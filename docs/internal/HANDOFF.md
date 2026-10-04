@@ -1,8 +1,8 @@
-# Vectory status
+# Vectory status at `a469266` (historical)
 
-This report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. Vectory is a developer preview: it is not production qualified and has no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). The requirement-by-requirement status, with the test behind each claim, is in [REQUIREMENTS.md](REQUIREMENTS.md).
+This historical report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. At that point Vectory was a developer preview, not production qualified, with no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). For current requirement statuses and release gates, see [REQUIREMENTS.md](REQUIREMENTS.md) and [RELEASE-0.1.md](RELEASE-0.1.md#gates).
 
-> **Newer state.** Work has landed since `a469266`. [CONTINUATION.md](CONTINUATION.md) lists what changed, how to verify the current head, what is unstable, and what to do next; the tables below are as of `a469266` and several of their rows are closed (the install command's certificate checks, rollback of a live canary, device CA rotation, enrollment token scope, adoption inventory, apply fault injection, paged fleet reads and the publish gate among them). What is open now is in [WORK-QUEUE.md](WORK-QUEUE.md), [the security findings](../security/OPEN-FINDINGS.md) and [AUTHORING-GAPS.md](AUTHORING-GAPS.md).
+> **Current state.** Work has landed since `a469266`. [CONTINUATION.md](CONTINUATION.md) explains the current checkout and how to verify it. The tables and prerequisites below are historical; several listed defects have since been fixed, and the unsigned release-candidate and platform workflows passed at `a012c1e`. Current open work is in [the release gates](RELEASE-0.1.md#gates), [WORK-QUEUE.md](WORK-QUEUE.md), [the security findings](../security/OPEN-FINDINGS.md) and [AUTHORING-GAPS.md](AUTHORING-GAPS.md).
 
 ## What works, and what proves it
 
@@ -44,7 +44,7 @@ From an audit against the specification and from independent reviews. Each was r
 | P1 | Rollout wording and flow: rollback sentences name the wrong version, Needs you keeps resolved rollbacks for a day, redeploying after a rollback takes two conflict rounds, the publish review says "Checked" beside tests Vector refused (tests never gate publishing), and the Overview does not show what runs where. | `dashboard/src`, `server/src/api.rs` |
 | P2 | Contract drift is not gated in CI; 37 of 60 browser harnesses and 12 of 14 Playwright specs, including the fleet-size and canvas-size checks, are outside CI; Unix settings access preservation is untested; creating an administrator needs no password re-entry. | various |
 
-## Release prerequisites that need the maintainer
+## Release prerequisites identified at `a469266` (historical)
 
 - **Signing identities:** a cosign key for `SHA256SUMS`, an Apple Developer ID and notarization account, and an Authenticode certificate. Until then every download stays labeled unsigned.
 - **Publication:** approved names and hosts for the container images, the APT repository, the Homebrew tap and the MSI, after a check of the Vectory name and package namespaces.

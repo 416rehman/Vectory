@@ -110,6 +110,7 @@ import TargetDialog from "./LazyTargetDialog";
 
 import PipelineSettings from "./PipelineSettings";
 import { secretNamesOf } from "./secretFields";
+import { findPlainCredential } from "./credentialFields";
 import PipelineGlobals from "./PipelineGlobals";
 import PipelineDetails from "./PipelineDetails";
 import PipelineSaveStatus from "./PipelineSaveStatus";
@@ -233,10 +234,25 @@ import {
 import "./pipeline-templates.css";
 import {
   clearRecoveryDraft,
-  readRecoveryDraft,
+  clearRecoveryLease,
+  createRecoveryCopyId,
+  isLegacyRecoveryDraft,
+  listRecoveryDrafts,
+  ownsRecoveryDraft,
+  recoveryCopyActive,
+  recoveryDraftId,
+  renewRecoveryLease,
   storeRecoveryDraft,
   type RecoveryDraft,
+  type RecoveryDraftEntry,
 } from "./draftRecovery";
+import StaleDraftReview from "./StaleDraftReview";
+import {
+  graphPositions,
+  serializeLocalDraftCopy,
+  type DraftContent,
+  type LocalDraftCopy,
+} from "./staleDraftRecovery";
 import {
   PIPELINE_NODE_WIDTH,
   PIPELINE_NODE_BODY_HEIGHT,
@@ -532,6 +548,8 @@ export default function Editor({
       variables: VariableDeclaration[];
       /** The Code text checked before it was applied to the draft. */
       code?: string;
+      /** The applied draft while an unapplied Code candidate was checked. */
+      draftConfig?: Config;
     } | null>(null),
     [checking, setChecking] = useState(false),
     // Why the last requested check could not run. Earlier findings stay.
@@ -556,6 +574,13 @@ export default function Editor({
     [saveNote, setSaveNote] = useState<string | null>(null),
     // Unsaved edits found in this browser, until restored or discarded.
     [recovery, setRecovery] = useState<RecoveryDraft | null>(null),
+    [recoveryKey, setRecoveryKey] = useState<string | null>(null),
+    [recoveryCopies, setRecoveryCopies] = useState<RecoveryDraftEntry[]>([]),
+    [recoveryCopyId] = useState(createRecoveryCopyId),
+    [activeRecoveryCopy, setActiveRecoveryCopy] = useState(false),
+    [conflictStored, setConflictStored] = useState<boolean | null>(null),
+    [conflictServer, setConflictServer] = useState<Configuration | null>(null),
+    [loadingConflictServer, setLoadingConflictServer] = useState(false),
     // What an applied template still needs, until dismissed.
     [templateNeeds, setTemplateNeeds] = useState<{
       title: string;
@@ -586,6 +611,10 @@ export default function Editor({
     // The test (1-based) Pipeline settings opens on, from a failing review.
     [globalsTest, setGlobalsTest] = useState<number | undefined>(),
     [detailsOpen, setDetailsOpen] = useState(false),
+    [pendingMetadataView, setPendingMetadataView] = useState<{
+      name: string;
+      description: string;
+    } | null>(null),
     [discardOpen, setDiscardOpen] = useState(false),
     [message, setMessage] = useState(""),
     [fieldPickerTarget, setFieldPickerTarget] = useState<HTMLDivElement | null>(
@@ -615,6 +644,16 @@ export default function Editor({
     saveUncertain = useRef(false),
     uncertainSaveRevision = useRef<number | null>(null),
     saveNeedsReload = useRef(false),
+    conflictBaseRevision = useRef<number | null>(null),
+    conflictBaseSnapshot = useRef<DraftContent | null>(null),
+    conflictMetadata = useRef<{ name: string; description: string } | null>(
+      null,
+    ),
+    pendingMetadata = useRef<{ name: string; description: string } | null>(
+      null,
+    ),
+    compareEpoch = useRef(0),
+    compareAbort = useRef<AbortController | null>(null),
     discardGate = useRef(false),
     discardReturnFocus = useRef<HTMLButtonElement | null>(null),
     detailsReturnFocus = useRef<HTMLElement | null>(null),
@@ -632,7 +671,7 @@ export default function Editor({
     dragDepth = useRef(0),
     importContext = useRef({ config, code, pending: false, allowed: false });
   // The tab names the pipeline, as a device's page names the device.
-  useTabTitle(doc?.name || null);
+  useTabTitle(pendingMetadataView?.name || doc?.name || null);
   // The draft's own tests, run each time the publish review opens.
   const publishTests = usePublishTests(config, publishOpen && !publishedResult);
   const publishTestsRef = useRef(publishTests);
@@ -949,7 +988,14 @@ export default function Editor({
   const codeChecked = view === "code" && importedCodeDirty.current;
   const draftChanged = useMemo(() => {
     if (!check) return false;
-    if (codeChecked) return check.code !== code;
+    if (codeChecked)
+      return (
+        check.code !== code ||
+        (check.draftConfig !== checkedConfig &&
+          !sameConfiguration(check.draftConfig || check.config, checkedConfig)) ||
+        (check.variables !== checkedVariables &&
+          JSON.stringify(check.variables) !== JSON.stringify(checkedVariables))
+      );
     return (
       (check.config !== checkedConfig &&
         !sameConfiguration(check.config, checkedConfig)) ||
@@ -1006,9 +1052,14 @@ export default function Editor({
   ].filter(Boolean);
   const dropStaleVector = checkStale && missingForCheck.length > 0;
   const problems = useMemo(() => {
+    // Vector findings describe the checked candidate, even after later edits.
     const vector = dropStaleVector
       ? []
-      : checkProblems(check?.result || null, checkedConfig, checkStale);
+      : checkProblems(
+          check?.result || null,
+          check?.config || checkedConfig,
+          checkStale,
+        );
     const program = (
       draft: "checked" | "current",
       component: string,
@@ -1056,6 +1107,10 @@ export default function Editor({
       failed: !!checkError,
     });
   const statusLabel = checkLabel(status, problemCounts.errors);
+  const unappliedCheckNotice =
+    codeChecked && check?.code === code && !checkStale
+      ? " This check reviewed unapplied Code edits. Apply code changes to update the draft."
+      : "";
   const verdict = unseenCheck
     ? unseenCheck.verdict
     : checkError
@@ -1063,22 +1118,26 @@ export default function Editor({
       : checkStale
         ? pendingFieldCount
           ? "Apply or discard the field you're editing, then check again."
-          : autoCheck && missingForCheck.length
-            ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
-            : autoCheck
-              ? "Changed since the last check. Checking again when you pause."
-              : "Changed since the last check."
-        : checkVerdict(check?.result || null, problemCounts.errors);
+          : autoCheck && codeChecked
+            ? "Apply code changes to check automatically."
+            : autoCheck && missingForCheck.length
+              ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
+              : autoCheck
+                ? "Changed since the last check. Checking again when you pause."
+                : "Changed since the last check."
+        : checkVerdict(check?.result || null, problemCounts.errors) +
+          unappliedCheckNotice;
   const autoCheckAttempt = useRef<{
     config: Config;
     variables: VariableDeclaration[];
   } | null>(null);
   // Auto-check waits while a dialog or unfinished field has the user's focus.
+  // Code edits must be applied first, so the automatic result describes the draft.
   const autoCheckReady =
     autoCheck &&
     checkable &&
     !!doc &&
-    view === "canvas" &&
+    (view === "canvas" || (view === "code" && !importedCodeDirty.current)) &&
     !checking &&
     !busy &&
     !historyOpen &&
@@ -1292,21 +1351,23 @@ export default function Editor({
         setError("");
         // Offer edits left unsaved in this browser (a crash, closed tab or
         // lost session) unless they match what the server already has.
-        const stored =
-          can(user, "edit") && !result.archived
-            ? readRecoveryDraft(user.id, id)
-            : null;
-        if (
-          stored &&
-          (!sameConfiguration(stored.config, result.config) ||
+        const copies = listRecoveryDrafts(user.id, id).filter((entry) => {
+          const stored = entry.draft;
+          const differs =
+            !sameConfiguration(stored.config, result.config) ||
             JSON.stringify(stored.variables) !==
-              JSON.stringify(result.variables || []))
-        )
-          setRecovery(stored);
-        else {
-          if (stored) clearRecoveryDraft(user.id, id);
-          setRecovery(null);
-        }
+              JSON.stringify(result.variables || []) ||
+            JSON.stringify(stored.positions) !==
+              JSON.stringify(graphPositions(graph)) ||
+            (stored.metadata !== undefined &&
+              (stored.metadata.name !== result.name ||
+                stored.metadata.description !== result.description));
+          if (!differs) clearRecoveryDraft(user.id, id, entry.id);
+          return differs;
+        });
+        setRecoveryCopies(copies);
+        setRecoveryKey(copies[0]?.id ?? null);
+        setRecovery(copies[0]?.draft ?? null);
         setPublishedVersion(null);
         setPublishedVersionStatus("loading");
         setPublishedVersionError("");
@@ -1442,6 +1503,15 @@ export default function Editor({
     ): Promise<Configuration | null> {
       // Opening the discard dialog suspends queued saves immediately.
       if (discardGate.current) return null;
+      // Every entry point, including Pipeline details, must honor a stale
+      // local copy. A metadata save also sends the whole configuration.
+      if (saveNeedsReload.current) {
+        setError(
+          "The server draft changed. Compare or download your local edits before loading the current server draft.",
+        );
+        setSaveStatus("Save conflict — local edits preserved");
+        return null;
+      }
       if (pendingSave.current) {
         const active = pendingSave.current;
         const saved = await active;
@@ -1456,6 +1526,8 @@ export default function Editor({
       if (!current.doc || !editable) return current.doc;
       const revision = current.doc.revision,
         savedDoc = current.doc;
+      const requestedMetadata =
+        metadata ?? pendingMetadata.current ?? undefined;
       setSaveStatus("Saving…");
       const operation = (async () => {
         try {
@@ -1465,13 +1537,13 @@ export default function Editor({
                 `/configurations/${id}/draft`,
                 {
                   revision,
-                  ...metadata,
+                  ...requestedMetadata,
                   graph: { nodes: current.nodes, edges: current.edges },
                   config: current.config,
                   variables: current.variables,
                   // An explicit save records the author's note, or a
                   // summary of what changed since the saved revision.
-                  message: metadata
+                  message: requestedMetadata
                     ? "Updated pipeline details"
                     : note?.trim() ||
                       (explicit
@@ -1491,6 +1563,13 @@ export default function Editor({
           saveUncertain.current = false;
           uncertainSaveRevision.current = null;
           saveNeedsReload.current = false;
+          conflictBaseRevision.current = null;
+          conflictBaseSnapshot.current = null;
+          conflictMetadata.current = null;
+          pendingMetadata.current = null;
+          setPendingMetadataView(null);
+          setConflictStored(null);
+          invalidateComparison();
           setSaveRefusal(null);
           setDoc(updated);
           latest.current.doc = updated;
@@ -1503,6 +1582,9 @@ export default function Editor({
           if (stillSame) {
             setDirty(false);
             latest.current.dirty = false;
+            const ownRecoveryKey = recoveryDraftId(user.id, id, recoveryCopyId);
+            clearRecoveryDraft(user.id, id, ownRecoveryKey);
+            if (recoveryKey === ownRecoveryKey) offerNextRecovery(recoveryKey);
           }
           setSaveStatus(stillSame ? "All changes saved" : "Unsaved changes");
           if (stillSame) toast.dismissTopic(UNSAVED_TESTS_TOPIC);
@@ -1516,11 +1598,37 @@ export default function Editor({
             saveUncertain.current = false;
             uncertainSaveRevision.current = null;
             saveNeedsReload.current = true;
+            conflictBaseRevision.current = revision;
+            conflictBaseSnapshot.current = {
+              config: savedDoc.config,
+              variables: savedDoc.variables || [],
+              positions: graphPositions(savedDoc.graph),
+              metadata: {
+                name: savedDoc.name,
+                description: savedDoc.description,
+              },
+            };
+            conflictMetadata.current = requestedMetadata || null;
+            if (requestedMetadata) {
+              setPendingMetadataView(requestedMetadata);
+              setDetailsOpen(false);
+            }
+            invalidateComparison();
+            // Do not wait for the debounced browser-recovery effect. A stale
+            // tab can close immediately after the refusal.
+            setConflictStored(keepEditsForLater());
           } else if (!rejected) {
             // A timeout, session interruption, or unreadable success response
             // cannot establish whether the server committed the PUT.
             saveUncertain.current = true;
             uncertainSaveRevision.current ??= revision;
+            if (requestedMetadata) {
+              pendingMetadata.current = requestedMetadata;
+              setPendingMetadataView(requestedMetadata);
+            }
+            // A metadata-only request need not set graph dirty. Back it up
+            // now, before a crash or a ReactFlow measurement can clear it.
+            if (requestedMetadata) keepEditsForLater();
           }
           // A refusal other than a changed draft leaves nothing to reload:
           // the edits stay and the fix is in them.
@@ -1531,14 +1639,14 @@ export default function Editor({
           setSaveRefusal(refusal);
           setError(
             saveNeedsReload.current
-              ? "The server draft changed. Reload it before discarding or saving these local edits."
+              ? "The server draft changed. Your local edits are still here. Compare or download them before choosing whether to discard them."
               : saveUncertain.current
                 ? "The draft save was not confirmed. Your edits are still here. Retry Save draft or reload the server draft."
                 : (refusal?.message ?? (e as Error).message),
           );
           setSaveStatus(
             saveNeedsReload.current
-              ? "Save conflict — reload server draft"
+              ? "Save conflict — local edits preserved"
               : saveUncertain.current
                 ? "Save status unknown — your edits are still here"
                 : "Save failed — your edits are still here",
@@ -1610,6 +1718,10 @@ export default function Editor({
     setSaveStatus("Unsaved changes");
   }
   function undo(redo = false) {
+    if (importedCodeDirty.current) {
+      setError("Apply or discard your Code changes before undoing draft changes.");
+      return;
+    }
     if (pendingSchemaFields.current.size && !closeSettings()) return;
     const from = redo ? future.current : stack.current,
       to = redo ? stack.current : future.current;
@@ -2404,6 +2516,11 @@ export default function Editor({
   function parse(value: string, f = format): Config {
     return parseSource(value, f);
   }
+  function credentialGuidance(path: string) {
+    return /(?:^|\.)(?:uri|url|endpoint|endpoints|headers)(?:\.|$)/i.test(path)
+      ? "Remove it, or use a native Vector secret reference on a full-mode device where supported."
+      : "Remove it, or use a device secret in a supported credential field.";
+  }
   function formatCode() {
     if (!editable) return;
     try {
@@ -2462,6 +2579,19 @@ export default function Editor({
       }
       if (generation !== importGeneration.current) return;
       const parsed = assertValidPipelineSource(text, fileFormat);
+      const credential = findPlainCredential(parsed);
+      if (credential?.kind === "scan_limit")
+        throw Error(
+          `Configuration is nested too deeply at ${credential.path} to check for credentials. Simplify it before importing.`,
+        );
+      if (credential?.kind === "unsupported_reference")
+        throw Error(
+          `Device secret reference at ${credential.path} is not supported in this field in the preview. Use a whole-value device secret only in a generated credential field; headers and URLs need a native Vector reference on a full-mode device where supported. Import was not applied.`,
+        );
+      if (credential)
+        throw Error(
+          `Likely plaintext credential at ${credential.path}. ${credentialGuidance(credential.path)} Import was not applied.`,
+        );
       const current = importContext.current;
       if (
         !current.allowed ||
@@ -2538,7 +2668,8 @@ export default function Editor({
         );
       return;
     }
-    let candidate = latest.current.config;
+    const draftConfig = latest.current.config;
+    let candidate = draftConfig;
     if (view === "code" && importedCodeDirty.current) {
       const diagnosis = diagnoseConfigurationSource(code, format);
       if (!diagnosis.config) {
@@ -2548,8 +2679,7 @@ export default function Editor({
       candidate = diagnosis.config;
     }
     const candidateVariables = latest.current.variables;
-    const candidateCode =
-      candidate === latest.current.config ? undefined : code;
+    const candidateCode = candidate === draftConfig ? undefined : code;
     const generation = ++checkGeneration.current;
     checkInFlight.current = true;
     setChecking(true);
@@ -2568,6 +2698,7 @@ export default function Editor({
         config: candidate,
         variables: candidateVariables,
         code: candidateCode,
+        draftConfig: candidateCode === undefined ? undefined : draftConfig,
       });
       setCheckError("");
     } catch (e) {
@@ -2815,6 +2946,23 @@ export default function Editor({
   // Saving from Code applies code that parses, then saves the draft. A save
   // reads the draft as of the last render, so it waits for the applied draft.
   const saveAfterApply = useRef<Config | null>(null);
+  function refusePlainCode(candidate: Config) {
+    const credential = findPlainCredential(candidate);
+    if (!credential) return false;
+    setError(
+      credential.kind === "scan_limit"
+        ? `Configuration is nested too deeply at ${credential.path} to check for credentials. The code was not applied. Simplify this object before retrying.`
+        : credential.kind === "unsupported_reference"
+          ? `Device secret reference at ${credential.path} is not supported in this field in the preview. The code was not applied. Use a whole-value device secret only in a generated credential field; headers and URLs need a native Vector reference on a full-mode device where supported.`
+          : `Likely plaintext credential at ${credential.path}. The code was not applied. ${credentialGuidance(credential.path)}`,
+    );
+    if (credential.kind !== "scan_limit")
+      setCodeReveal({
+        offset: sourceOffset(code, credential.key),
+        nonce: Date.now(),
+      });
+    return true;
+  }
   function saveCode() {
     const plan = planCodeSave({
       code,
@@ -2827,6 +2975,7 @@ export default function Editor({
       setCodeReveal({ offset: plan.offset, nonce: Date.now() });
       return;
     }
+    if (plan.kind === "apply" && refusePlainCode(plan.config)) return;
     setError("");
     if (plan.kind === "apply") {
       saveAfterApply.current = plan.config;
@@ -3000,37 +3149,153 @@ export default function Editor({
       window.removeEventListener("keydown", onFind);
     };
   }, []);
-  // Unsaved edits live in this browser until saved or discarded. While an
-  // earlier copy awaits Restore or Discard it is not overwritten.
-  const recoveryOpen = useRef(false);
-  recoveryOpen.current = !!recovery;
+  // Each open document owns an independent recovery key. Editing while an
+  // older copy is offered must not overwrite that copy or leave new edits
+  // without a crash backup.
+  useEffect(() => {
+    renewRecoveryLease(user.id, id, recoveryCopyId);
+    const timer = window.setInterval(
+      () => renewRecoveryLease(user.id, id, recoveryCopyId),
+      5_000,
+    );
+    return () => {
+      window.clearInterval(timer);
+      clearRecoveryLease(user.id, id, recoveryCopyId);
+    };
+  }, [user.id, id, recoveryCopyId]);
+  useEffect(() => {
+    const update = () =>
+      setActiveRecoveryCopy(
+        !!recoveryKey &&
+          !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+          recoveryCopyActive(user.id, id, recoveryKey),
+      );
+    update();
+    const timer = window.setInterval(update, 5_000);
+    return () => window.clearInterval(timer);
+  }, [user.id, id, recoveryKey, recoveryCopyId]);
   /** Write the draft now; false when it could not or must not be kept. */
   function keepEditsForLater() {
     const current = latest.current;
-    if (!current.doc || !editable || recoveryOpen.current) return false;
-    return storeRecoveryDraft(user.id, id, {
-      revision: current.doc.revision,
-      config: current.config,
-      variables: current.variables,
-      positions: Object.fromEntries(
-        current.nodes.map((node: { id: string; position: unknown }) => [
-          node.id,
-          node.position,
-        ]),
-      ) as RecoveryDraft["positions"],
-    });
+    if (!current.doc || !editable) return false;
+    if (findPlainCredential(current.config)) {
+      clearRecoveryDraft(
+        user.id,
+        id,
+        recoveryDraftId(user.id, id, recoveryCopyId),
+      );
+      return false;
+    }
+    return storeRecoveryDraft(
+      user.id,
+      id,
+      {
+        revision: conflictBaseRevision.current ?? current.doc.revision,
+        config: current.config,
+        variables: current.variables,
+        positions: graphPositions({ nodes: current.nodes }),
+        metadata: conflictMetadata.current ||
+          pendingMetadata.current || {
+            name: current.doc.name,
+            description: current.doc.description,
+          },
+        base: conflictBaseSnapshot.current || {
+          config: current.doc.config,
+          variables: current.doc.variables || [],
+          positions: graphPositions(current.doc.graph),
+          metadata: {
+            name: current.doc.name,
+            description: current.doc.description,
+          },
+        },
+      },
+      new Date(),
+      recoveryCopyId,
+    );
   }
   useEffect(() => {
-    if (!doc || !editable || recovery) return;
-    if (!dirty) {
-      clearRecoveryDraft(user.id, id);
+    if (!doc || !editable) return;
+    if (
+      !dirty &&
+      !saveNeedsReload.current &&
+      !saveUncertain.current &&
+      !pendingMetadata.current
+    ) {
+      clearRecoveryDraft(
+        user.id,
+        id,
+        recoveryDraftId(user.id, id, recoveryCopyId),
+      );
       return;
     }
     const timer = window.setTimeout(keepEditsForLater, 800);
     return () => window.clearTimeout(timer);
-  }, [dirty, config, variables, nodes, doc?.revision, editable, recovery]);
+  }, [
+    dirty,
+    config,
+    variables,
+    nodes,
+    doc?.revision,
+    editable,
+    pendingMetadataView,
+  ]);
+  function offerNextRecovery(excludeKey: string | null) {
+    const remaining = recoveryCopies.filter((entry) => entry.id !== excludeKey);
+    setRecoveryCopies(remaining);
+    setRecoveryKey(remaining[0]?.id ?? null);
+    setRecovery(remaining[0]?.draft ?? null);
+  }
+  function currentRecoveryCopy(): RecoveryDraft | null {
+    if (!recovery || !recoveryKey) return null;
+    const current = listRecoveryDrafts(user.id, id).find(
+      (entry) => entry.id === recoveryKey,
+    );
+    if (!current) {
+      offerNextRecovery(recoveryKey);
+      setError(
+        "That browser copy is no longer available. Review the remaining copies.",
+      );
+      return null;
+    }
+    if (JSON.stringify(current.draft) !== JSON.stringify(recovery)) {
+      setRecovery(current.draft);
+      setRecoveryCopies((copies) =>
+        copies.map((entry) => (entry.id === current.id ? current : entry)),
+      );
+      setError("This browser copy changed in another tab. Review it again.");
+      return null;
+    }
+    return current.draft;
+  }
+  const restoreBlocked =
+    dirty ||
+    !!pendingMetadataView ||
+    saveNeedsReload.current ||
+    saveUncertain.current ||
+    importedCodeDirty.current ||
+    pendingSchemaFields.current.size > 0;
   function restoreRecovery() {
     if (!recovery || !editable || !closeSettings()) return;
+    if (restoreBlocked) {
+      setError(
+        "Save or discard your current edits before restoring another browser copy.",
+      );
+      return;
+    }
+    const fresh = currentRecoveryCopy();
+    if (!fresh) return;
+    const stale = recovery.revision !== doc.revision;
+    conflictBaseRevision.current = stale ? recovery.revision : null;
+    conflictBaseSnapshot.current = stale ? recovery.base || null : null;
+    conflictMetadata.current = stale ? recovery.metadata || null : null;
+    const restoredMetadata =
+      recovery.metadata &&
+      (recovery.metadata.name !== doc.name ||
+        recovery.metadata.description !== doc.description)
+        ? recovery.metadata
+        : null;
+    pendingMetadata.current = stale ? null : restoredMetadata;
+    setPendingMetadataView(restoredMetadata);
     replace(
       recovery.config,
       {
@@ -3043,23 +3308,116 @@ export default function Editor({
       true,
       recovery.variables,
     );
-    setRecovery(null);
-    notify("Unsaved changes restored. Save to keep them.", {
-      tone: "success",
-    });
+    // Keep the original copy unless the restored edit was safely written to
+    // this document's own key. A second tab's copy is never overwritten.
+    const transferred = storeRecoveryDraft(
+      user.id,
+      id,
+      fresh,
+      new Date(),
+      recoveryCopyId,
+    );
+    if (
+      transferred &&
+      recoveryKey &&
+      isLegacyRecoveryDraft(user.id, id, recoveryKey)
+    )
+      clearRecoveryDraft(user.id, id, recoveryKey);
+    offerNextRecovery(recoveryKey);
+    if (!transferred)
+      setError(
+        "The restored draft could not be kept in browser storage. Save or download it before leaving.",
+      );
+    if (stale) {
+      saveNeedsReload.current = true;
+      invalidateComparison();
+      setConflictStored(true);
+      setSaveStatus("Save conflict — local edits preserved");
+      setError(
+        "These edits began from an older server revision. Compare or download them before loading the current server draft; saving them directly would overwrite another editor's changes.",
+      );
+    } else
+      notify("Unsaved changes restored. Save to keep them.", {
+        tone: "success",
+      });
   }
   function discardRecovery() {
-    clearRecoveryDraft(user.id, id);
-    setRecovery(null);
+    if (!currentRecoveryCopy()) return;
+    if (
+      recoveryKey &&
+      ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+      restoreBlocked
+    ) {
+      setError(
+        "Save or discard your current edits before removing their browser backup.",
+      );
+      return;
+    }
+    const foreign =
+      !!recoveryKey &&
+      !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+      !isLegacyRecoveryDraft(user.id, id, recoveryKey);
+    if (
+      foreign &&
+      recoveryKey &&
+      recoveryCopyActive(user.id, id, recoveryKey)
+    ) {
+      setError(
+        "This copy is open in another tab. Close that tab before discarding it.",
+      );
+      return;
+    }
+    if (
+      foreign &&
+      !confirm(
+        "Discard this browser copy? It may be from another tab. This removes its crash backup. Download it first if you need it.",
+      )
+    )
+      return;
+    // Recheck after the confirmation: the owner may have written a newer copy.
+    if (!currentRecoveryCopy()) return;
+    if (
+      foreign &&
+      recoveryKey &&
+      recoveryCopyActive(user.id, id, recoveryKey)
+    ) {
+      setError(
+        "This copy reopened in another tab. Close that tab before discarding it.",
+      );
+      return;
+    }
+    if (recoveryKey) clearRecoveryDraft(user.id, id, recoveryKey);
+    offerNextRecovery(recoveryKey);
+  }
+  function downloadRecovery() {
+    if (!recovery || !doc) return;
+    const fresh = currentRecoveryCopy();
+    if (!fresh) return;
+    try {
+      download(
+        `${doc.name.replace(/[^a-z0-9_-]/gi, "_")}-local-draft.json`,
+        serializeLocalDraftCopy(fresh),
+        "application/json",
+      );
+    } catch (failure) {
+      setError(
+        `The local draft could not be downloaded: ${(failure as Error).message}`,
+      );
+    }
   }
   function applyTemplate(template: PipelineTemplate) {
-    if (!editable || !isEmptyPipeline(config)) return;
+    if (!editable || importedCodeDirty.current || !isEmptyPipeline(config))
+      return;
     replace(structuredClone(template.config));
     setTemplateNeeds({ title: template.title, needs: template.needs });
   }
   // Vector's own metrics, exported for local scraping, without touching
   // existing steps or their names.
   function addMonitoring() {
+    if (importedCodeDirty.current) {
+      setError("Apply or discard your Code changes before adding monitoring.");
+      return;
+    }
     const next = withMonitoring(config);
     if (!next) {
       notify("This pipeline already exports Vector's internal metrics.", {
@@ -3282,7 +3640,7 @@ export default function Editor({
   // Code that has not been applied to the draft yet; saving applies it first.
   const codeUnapplied = view === "code" && importedCodeDirty.current;
   const displaySaveStatus = saveNeedsReload.current
-    ? "Save conflict — reload server draft"
+    ? "Save conflict — local edits preserved"
     : saveUncertain.current
       ? "Save status unknown — review server draft"
       : (unappliedStatus({
@@ -3366,17 +3724,243 @@ export default function Editor({
       return false;
     }
   }
+  function localDraftCopy(): LocalDraftCopy {
+    const current = latest.current;
+    return {
+      revision: conflictBaseRevision.current ?? current.doc!.revision,
+      config: current.config,
+      variables: current.variables,
+      positions: graphPositions({ nodes: current.nodes }),
+      metadata: conflictMetadata.current ||
+        pendingMetadata.current || {
+          name: current.doc!.name,
+          description: current.doc!.description,
+        },
+      ...(conflictBaseSnapshot.current
+        ? { base: conflictBaseSnapshot.current }
+        : {}),
+      ...(importedCodeDirty.current
+        ? { unappliedCode: { format, text: importContext.current.code } }
+        : {}),
+    };
+  }
+  function downloadLocalDraft() {
+    const current = latest.current;
+    if (!current.doc) return;
+    try {
+      download(
+        `${current.doc.name.replace(/[^a-z0-9_-]/gi, "_")}-local-draft.json`,
+        serializeLocalDraftCopy(localDraftCopy()),
+        "application/json",
+      );
+    } catch (failure) {
+      setError(
+        `The local draft could not be downloaded: ${(failure as Error).message}`,
+      );
+    }
+  }
+  function invalidateComparison() {
+    compareEpoch.current++;
+    compareAbort.current?.abort();
+    compareAbort.current = null;
+    setLoadingConflictServer(false);
+    setConflictServer(null);
+  }
+  async function compareDrafts() {
+    if (busy || compareAbort.current || !saveNeedsReload.current) return;
+    const epoch = ++compareEpoch.current;
+    const controller = new AbortController();
+    compareAbort.current = controller;
+    setLoadingConflictServer(true);
+    try {
+      const result = await withRequestDeadline(
+        (signal) => api<Configuration>(`/configurations/${id}`, { signal }),
+        30000,
+        controller.signal,
+      );
+      if (epoch === compareEpoch.current && saveNeedsReload.current)
+        setConflictServer(result);
+    } catch (failure) {
+      if (epoch === compareEpoch.current && !controller.signal.aborted)
+        setError(
+          `The server draft could not be loaded for comparison: ${(failure as Error).message}`,
+        );
+    } finally {
+      if (epoch === compareEpoch.current) {
+        compareAbort.current = null;
+        setLoadingConflictServer(false);
+      }
+    }
+  }
+  async function applyCombinedDraft(
+    merged: DraftContent,
+    comparedServer: Configuration,
+    comparedLocal: LocalDraftCopy,
+  ): Promise<string | null> {
+    if (busy || pendingSave.current || !saveNeedsReload.current)
+      return "The draft changed while you were comparing. Review it again before combining.";
+    if (pendingSchemaFields.current.size || importedCodeDirty.current) {
+      const reason =
+        "Apply or discard unfinished field and Code edits before combining drafts.";
+      setError(reason);
+      return reason;
+    }
+    setBusy(true);
+    try {
+      const latestServer = await withRequestDeadline(
+        (signal) => api<Configuration>(`/configurations/${id}`, { signal }),
+        30000,
+      );
+      if (
+        latest.current.config !== comparedLocal.config ||
+        latest.current.variables !== comparedLocal.variables ||
+        JSON.stringify(graphPositions({ nodes: latest.current.nodes })) !==
+          JSON.stringify(comparedLocal.positions) ||
+        JSON.stringify(
+          conflictMetadata.current ||
+            pendingMetadata.current || {
+              name: latest.current.doc?.name,
+              description: latest.current.doc?.description,
+            },
+        ) !== JSON.stringify(comparedLocal.metadata)
+      ) {
+        const reason =
+          "Your local draft changed while the server was loading. Compare again before combining.";
+        setError(reason);
+        return reason;
+      }
+      if (latestServer.archived) {
+        const reason =
+          "This pipeline was archived. Download your edits before leaving.";
+        setError(reason);
+        return reason;
+      }
+      if (latestServer.revision !== comparedServer.revision) {
+        setConflictServer(latestServer);
+        const reason =
+          "The server draft changed again. Review the new conflicts before combining.";
+        setError(reason);
+        return reason;
+      }
+      assertExactNumbers(merged.config);
+      const mergedMetadata = merged.metadata || {
+        name: latestServer.name,
+        description: latestServer.description,
+      };
+      if (
+        !mergedMetadata.name.trim() ||
+        mergedMetadata.name.length > 120 ||
+        mergedMetadata.description.length > 2000
+      )
+        throw Error(
+          "The combined pipeline details are invalid. Choose a different copy.",
+        );
+      const metadataChanged =
+        mergedMetadata.name !== latestServer.name ||
+        mergedMetadata.description !== latestServer.description;
+      const savedGraph = toGraph(latestServer.config, latestServer.graph);
+      const mergedGraph = toGraph(merged.config, {
+        nodes: Object.entries(merged.positions).map(([nodeId, position]) => ({
+          id: nodeId,
+          position,
+        })),
+        edges: [],
+      });
+      savedState.current = {
+        config: latestServer.config,
+        variables: latestServer.variables || [],
+        nodes: savedGraph.nodes,
+      };
+      latest.current = {
+        doc: latestServer,
+        config: merged.config,
+        variables: merged.variables,
+        nodes: mergedGraph.nodes,
+        edges: mergedGraph.edges,
+        dirty: true,
+      };
+      setDoc(latestServer);
+      pendingMetadata.current = metadataChanged ? mergedMetadata : null;
+      setPendingMetadataView(metadataChanged ? mergedMetadata : null);
+      setConfig(merged.config);
+      setVariables(merged.variables);
+      graphFromEdit.current = true;
+      setNodes(mergedGraph.nodes);
+      setEdges(mergedGraph.edges);
+      setDirty(true);
+      syncCode(merged.config);
+      setSelected(null);
+      stack.current = [];
+      future.current = [];
+      checkGeneration.current++;
+      setCheck(null);
+      setCheckError("");
+      saveNeedsReload.current = false;
+      conflictBaseRevision.current = null;
+      conflictBaseSnapshot.current = null;
+      conflictMetadata.current = null;
+      setConflictStored(null);
+      setRecovery(null);
+      setSaveRefusal(null);
+      setSaveStatus("Unsaved changes");
+      invalidateComparison();
+      const stored = storeRecoveryDraft(
+        user.id,
+        id,
+        {
+          revision: latestServer.revision,
+          config: merged.config,
+          variables: merged.variables,
+          positions: graphPositions({ nodes: mergedGraph.nodes }),
+          metadata: mergedMetadata,
+          base: {
+            config: latestServer.config,
+            variables: latestServer.variables || [],
+            positions: graphPositions(latestServer.graph),
+            metadata: {
+              name: latestServer.name,
+              description: latestServer.description,
+            },
+          },
+        },
+        new Date(),
+        recoveryCopyId,
+      );
+      setError(
+        stored
+          ? ""
+          : "The combined draft could not be kept in browser storage. Save or download it before leaving.",
+      );
+      notify("Combined draft is ready. Review it, then save it.", {
+        tone: "info",
+      });
+      return null;
+    } catch (failure) {
+      const reason = `The drafts could not be combined: ${(failure as Error).message}`;
+      setError(reason);
+      return reason;
+    } finally {
+      setBusy(false);
+    }
+  }
   async function reloadLatest() {
     if (busy || pendingSave.current) return;
     const unresolved = saveUncertain.current;
+    if (pendingSchemaFields.current.size) {
+      setError(
+        "Apply or discard unfinished field edits before loading the server draft.",
+      );
+      return;
+    }
     if (
       !confirm(
         unresolved
           ? "Reload the server draft and discard local edits? An earlier save may still finish afterward. Export your edits first if you want to keep them."
-          : "Reload the server draft and discard local edits? Export your edits first if you want to keep them.",
+          : "Discard my local edits and load the server draft? This cannot be undone. Download your draft first if you want to keep it.",
       )
     )
       return;
+    invalidateComparison();
     const before = {
       ...latest.current,
       code: importContext.current.code,
@@ -3413,6 +3997,18 @@ export default function Editor({
       saveUncertain.current = earlierSaveCanStillFinish;
       if (!earlierSaveCanStillFinish) uncertainSaveRevision.current = null;
       saveNeedsReload.current = false;
+      conflictBaseRevision.current = null;
+      conflictBaseSnapshot.current = null;
+      conflictMetadata.current = null;
+      pendingMetadata.current = null;
+      setPendingMetadataView(null);
+      clearRecoveryDraft(
+        user.id,
+        id,
+        recoveryDraftId(user.id, id, recoveryCopyId),
+      );
+      setRecovery(null);
+      setConflictStored(null);
       acceptSavedSnapshot(result, graph);
       if (earlierSaveCanStillFinish) {
         setSaveStatus("Save status unknown — earlier save may still finish");
@@ -3577,6 +4173,7 @@ export default function Editor({
   function canFixProblem(problem: Problem) {
     if (
       !editable ||
+      importedCodeDirty.current ||
       !problem.fix ||
       !problem.component ||
       !problem.field ||
@@ -3614,7 +4211,7 @@ export default function Editor({
     notify(`Applied: ${problem.fix!.label}.`, { tone: "success" });
   }
   function saveSampleTests(tests: Config[]) {
-    if (!editable || !tests.length) return;
+    if (!editable || importedCodeDirty.current || !tests.length) return;
     replace({
       ...config,
       tests: [...(Array.isArray(config.tests) ? config.tests : []), ...tests],
@@ -3850,7 +4447,7 @@ export default function Editor({
       onOpenChange={setProblemsOpen}
       verdict={
         problemCounts.errors && !checkError && !checkStale
-          ? "Fix the errors to publish."
+          ? "Fix the errors to publish." + unappliedCheckNotice
           : verdict
       }
       autoCheck={checkable ? autoCheck : undefined}
@@ -4216,19 +4813,19 @@ export default function Editor({
             {historyOpen ? "Back to editor" : "Pipelines"}
           </button>
           <div className="page-title-row">
-            <h1 aria-label={doc.name}>
+            <h1 aria-label={pendingMetadataView?.name ?? doc.name}>
               <button
                 type="button"
                 className="editor-details-trigger editor-name-trigger"
                 ref={detailsTitleRef}
-                aria-label={`${editable ? "Edit" : "View"} pipeline details: ${doc.name}`}
+                aria-label={`${editable ? "Edit" : "View"} pipeline details: ${pendingMetadataView?.name ?? doc.name}`}
                 title={
                   editable ? "Edit pipeline details" : "View pipeline details"
                 }
                 disabled={busy}
                 onClick={(event) => openDetails(event.currentTarget)}
               >
-                <span>{doc.name}</span>
+                <span>{pendingMetadataView?.name ?? doc.name}</span>
                 {editable && <Pencil size={14} aria-hidden="true" />}
               </button>
             </h1>
@@ -4238,11 +4835,12 @@ export default function Editor({
               label="Help for the pipeline editor"
             />
           </div>
-          {(doc.description || editable) && (
+          {((pendingMetadataView?.description ?? doc.description) ||
+            editable) && (
             <p className="editor-description">
               <button
                 type="button"
-                className={`editor-details-trigger editor-description-trigger${doc.description ? "" : " editor-description-empty"}`}
+                className={`editor-details-trigger editor-description-trigger${(pendingMetadataView?.description ?? doc.description) ? "" : " editor-description-empty"}`}
                 aria-label={
                   editable
                     ? "Edit pipeline description"
@@ -4256,7 +4854,8 @@ export default function Editor({
                 disabled={busy}
                 onClick={(event) => openDetails(event.currentTarget)}
               >
-                {doc.description || "Add description"}
+                {(pendingMetadataView?.description ?? doc.description) ||
+                  "Add description"}
               </button>
             </p>
           )}
@@ -4288,15 +4887,38 @@ export default function Editor({
               message={
                 error ||
                 (saveNeedsReload.current
-                  ? "The server draft changed. Reload it before continuing."
+                  ? "The server draft changed. Your edits are still here. Compare or download them before choosing whether to discard them."
                   : saveUncertain.current
                     ? "The draft save was not confirmed. Reload the server draft or retry Save draft."
                     : saveRefusal?.message ||
                       "The draft save failed. Your edits are still here.")
               }
             />
-            {(saveUncertain.current || saveNeedsReload.current) && (
-              <Button variant="secondary" onClick={reloadLatest}>
+            {saveNeedsReload.current && (
+              <>
+                <Button
+                  variant="secondary"
+                  busy={loadingConflictServer}
+                  onClick={() => void compareDrafts()}
+                >
+                  Compare drafts
+                </Button>
+                <Button variant="secondary" onClick={downloadLocalDraft}>
+                  Download my draft
+                </Button>
+                <Button variant="secondary" onClick={() => void reloadLatest()}>
+                  Discard my edits and load server draft
+                </Button>
+                {conflictStored === false && (
+                  <span role="status">
+                    This draft cannot be kept in browser storage. Download a
+                    copy before leaving.
+                  </span>
+                )}
+              </>
+            )}
+            {saveUncertain.current && !saveNeedsReload.current && (
+              <Button variant="secondary" onClick={() => void reloadLatest()}>
                 Reload server draft
               </Button>
             )}
@@ -4820,7 +5442,7 @@ export default function Editor({
             </Button>
           </div>
         )}
-        {recovery && editable && (
+        {recovery && (
           <div className="editor-recovery" role="status">
             <History size={16} aria-hidden="true" />
             <p>
@@ -4828,15 +5450,82 @@ export default function Editor({
                 Unsaved changes from {when(recovery.saved_at)} are still in this
                 browser.
               </strong>{" "}
-              {recovery.revision === doc.revision
-                ? "Restore them to keep editing, or discard them."
-                : `The saved draft changed since then (revision ${recovery.revision} → ${doc.revision}). Restoring replaces it in the editor; review before saving.`}
+              {!editable
+                ? "This pipeline is read-only now. Download your local copy before deciding whether to discard it."
+                : recovery.revision === doc.revision
+                  ? "Restore them to keep editing, or discard them."
+                  : `The saved draft changed since then (revision ${recovery.revision} → ${doc.revision}). Restoring replaces it in the editor; review before saving.`}
             </p>
-            <Button variant="secondary compact" onClick={restoreRecovery}>
-              Restore changes
-            </Button>
-            <Button variant="ghost compact" onClick={discardRecovery}>
-              Discard
+            {recoveryCopies.length > 1 && (
+              <label>
+                Saved copy
+                <select
+                  aria-label="Saved browser copy"
+                  value={recoveryKey ?? ""}
+                  onChange={(event) => {
+                    const selected = recoveryCopies.find(
+                      (entry) => entry.id === event.target.value,
+                    );
+                    setRecoveryKey(selected?.id ?? null);
+                    setRecovery(selected?.draft ?? null);
+                  }}
+                >
+                  {recoveryCopies.map((entry, index) => (
+                    <option key={entry.id} value={entry.id}>
+                      Copy {index + 1} · {when(entry.draft.saved_at)} · revision{" "}
+                      {entry.draft.revision}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {restoreBlocked && editable && (
+              <small>
+                Save or discard current edits before restoring this copy.
+              </small>
+            )}
+            {recoveryKey &&
+              !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+              !isLegacyRecoveryDraft(user.id, id, recoveryKey) && (
+                <small>
+                  {activeRecoveryCopy
+                    ? "This copy may be open in another tab. Restoring makes a separate copy; close the other tab before discarding it."
+                    : "This copy may be from another tab. Discarding it removes that tab's crash backup."}
+                </small>
+              )}
+            {editable ? (
+              <Button
+                variant="secondary compact"
+                disabled={restoreBlocked}
+                onClick={restoreRecovery}
+              >
+                Restore changes
+              </Button>
+            ) : (
+              <Button variant="secondary compact" onClick={downloadRecovery}>
+                Download my draft
+              </Button>
+            )}
+            {editable && (
+              <Button variant="ghost compact" onClick={downloadRecovery}>
+                Download copy
+              </Button>
+            )}
+            <Button
+              variant="ghost compact"
+              disabled={
+                activeRecoveryCopy ||
+                (!!recoveryKey &&
+                  ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+                  restoreBlocked)
+              }
+              onClick={discardRecovery}
+            >
+              {recoveryKey &&
+              !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+              !isLegacyRecoveryDraft(user.id, id, recoveryKey)
+                ? "Discard copy"
+                : "Discard"}
             </Button>
           </div>
         )}
@@ -5646,7 +6335,9 @@ export default function Editor({
                   disabled={!importedCodeDirty.current}
                   onClick={() => {
                     try {
-                      replace(parse(code));
+                      const parsed = parse(code);
+                      if (refusePlainCode(parsed)) return;
+                      replace(parsed);
                       importedCodeDirty.current = false;
                       setError("");
                       notify("Code changes applied to the draft.", {
@@ -5955,7 +6646,7 @@ export default function Editor({
           {unresolvedPublish && !publishNotice && !busy && (
             <ErrorBox message="Review the saved publish request before publishing again." />
           )}
-          <h3>{doc.name}</h3>
+          <h3>{pendingMetadataView?.name ?? doc.name}</h3>
           <p>{pipelineSummary(config)}</p>
           {variables.length > 0 && (
             <p>
@@ -6079,7 +6770,7 @@ export default function Editor({
           open
           onClose={() => setDeployVersion(null)}
           version={deployVersion}
-          pipelineName={doc.name}
+          pipelineName={pendingMetadataView?.name ?? doc.name}
           initialDeviceIds={initialDeviceId ? [initialDeviceId] : []}
           onDone={(message) => notify(message, { tone: "success" })}
         />
@@ -6092,12 +6783,25 @@ export default function Editor({
           onClose={() => setCopyFallback(null)}
         />
       )}
+      {conflictServer && saveNeedsReload.current && (
+        <StaleDraftReview
+          key={conflictServer.revision}
+          local={localDraftCopy()}
+          server={conflictServer}
+          onClose={invalidateComparison}
+          onDownload={downloadLocalDraft}
+          onApply={applyCombinedDraft}
+        />
+      )}
       {detailsOpen && (
         <PipelineDetails
           returnFocusRef={detailsReturnFocus}
           editable={editable}
-          name={doc.name}
-          description={doc.description}
+          preserveAfterFailedSave={
+            saveUncertain.current || saveNeedsReload.current
+          }
+          name={pendingMetadataView?.name ?? doc.name}
+          description={pendingMetadataView?.description ?? doc.description}
           onClose={() => setDetailsOpen(false)}
           onPendingChange={schemaPendingChange}
           onSave={async (name, description) => {
@@ -6112,13 +6816,19 @@ export default function Editor({
           initialTest={globalsSection === "tests" ? globalsTest : undefined}
           config={config}
           variables={variables}
-          onChange={(next) => replace(next)}
-          onVariablesChange={(next) => replace(config, undefined, true, next)}
+          onChange={(next) => {
+            if (!importedCodeDirty.current) replace(next);
+          }}
+          onVariablesChange={(next) => {
+            if (!importedCodeDirty.current)
+              replace(config, undefined, true, next);
+          }}
           onClose={() => {
             setGlobalsOpen(false);
             setGlobalsTest(undefined);
           }}
-          editable={editable}
+          editable={editable && !codeUnapplied}
+          codeChangesPending={codeUnapplied}
         />
       )}
     </div>

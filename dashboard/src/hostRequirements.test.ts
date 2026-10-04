@@ -147,6 +147,40 @@ describe("restricted-host approvals", () => {
       }),
     ).toEqual({ destinations: [], listeners: [], fileRoots: [] });
   });
+
+  it("uses Windows absolute paths, wildcards, trailing separators and UNC shares only on Windows", () => {
+    const config = {
+      data_dir: "C:\\VectorData\\logs\\",
+      sources: {
+        logs: {
+          type: "file",
+          include: [
+            "C:/ProgramData/Vectory/events/*.log",
+            "\\\\fileserver\\shared\\app\\*.log",
+            "/var/log/unix/*.log",
+            "C:relative\\*.log",
+            "\\root-relative\\*.log",
+          ],
+        },
+      },
+    };
+    expect(hostApprovals(config, "windows").fileRoots).toEqual([
+      "C:\\ProgramData\\Vectory\\events",
+      "C:\\VectorData\\logs",
+      "\\\\fileserver\\shared\\app",
+    ]);
+    expect(hostApprovals(config, "linux").fileRoots).toEqual(["/var/log/unix"]);
+    expect(
+      hostApprovals(
+        {
+          sources: {
+            logs: { type: "file", data_dir: "\\\\srv\\share\\logs\\" },
+          },
+        },
+        "windows",
+      ).fileRoots,
+    ).toEqual(["\\\\srv\\share\\logs"]);
+  });
 });
 
 describe("what a pipeline asks of its devices", () => {

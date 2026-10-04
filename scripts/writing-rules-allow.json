@@ -37,6 +37,18 @@
         "scripts/writing-rules-allow.json"
       ],
       "reason": "The rules, their test fixtures and this list have to spell out the words and shapes they forbid."
+    },
+    {
+      "paths": ["docs/evidence/source-inputs.json"],
+      "rules": ["workstream"],
+      "match": "\"path\": \"docs/WORKSTREAMS.md\"",
+      "reason": "The source inventory records the exact historical file path; renaming that path in the inventory would misidentify the input."
+    },
+    {
+      "paths": ["docs/internal/ACCEPTANCE.md", "docs/internal/HANDOFF-2026-09-27.md"],
+      "rules": ["reviewers-said"],
+      "match": "-critic.json",
+      "reason": "These dated records preserve literal evidence filenames, even though the evidence was not committed; rewriting a basename would falsify its provenance."
     }
   ]
 }

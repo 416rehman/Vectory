@@ -115,19 +115,31 @@ export function initials(email: string) {
 /** "sudo cat /srv/vectory/bootstrap" for the setup screen. Never the value. */
 export function setupCommand(hint: SetupHint | undefined) {
   if (!hint || hint.source !== "file" || !hint.path) return null;
+  // A self-hosted server can put its setup file anywhere. Keep that path as
+  // one literal argument when an administrator copies this command; a quote,
+  // space, glob or shell substitution in the path must not become syntax.
+  if (/[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]/u.test(hint.path))
+    return null;
+  // A relative path belongs to the server's working directory, which the
+  // browser cannot know. Do not offer a command for the wrong host or folder.
+  const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\)/.test(hint.path);
+  if (!windowsPath && !hint.path.startsWith("/")) return null;
+  const posixPath = `'${hint.path.replaceAll("'", `'"'"'`)}'`;
   if (hint.container)
     return {
       where: "From your deploy folder, run:",
-      command: `docker compose exec server cat ${hint.path}`,
+      command: `docker compose exec server cat -- ${posixPath}`,
     };
-  if (/^[A-Za-z]:\\/.test(hint.path))
+  if (windowsPath)
     return {
       where: "On the server, run:",
-      command: `Get-Content "${hint.path}"`,
+      // -LiteralPath also prevents PowerShell wildcard expansion. Its four
+      // curly apostrophes parse as quotes, so double them like ASCII ones.
+      command: `Get-Content -LiteralPath '${hint.path.replace(/['\u2018\u2019\u201A\u201B]/g, (mark) => mark + mark)}'`,
     };
   return {
     where: "On the server, run:",
-    command: `sudo cat ${hint.path}`,
+    command: `sudo cat -- ${posixPath}`,
   };
 }
 

@@ -76,6 +76,7 @@ export default function PipelineGlobals({
   onVariablesChange,
   onClose,
   editable,
+  codeChangesPending = false,
   initialSection = "general",
   initialTest,
 }: {
@@ -85,6 +86,7 @@ export default function PipelineGlobals({
   onVariablesChange: (next: VariableDeclaration[]) => void;
   onClose: () => void;
   editable: boolean;
+  codeChangesPending?: boolean;
   initialSection?: PipelineSection;
   /** Opens the Tests section on this test (1-based), as a review found it failing. */
   initialTest?: number;
@@ -220,6 +222,7 @@ export default function PipelineGlobals({
     onChange(next);
   }
   async function runTests() {
+    if (codeChangesPending) return;
     if (pending.current.size) {
       setError("Resolve or apply pending field edits before running tests.");
       return;
@@ -270,6 +273,11 @@ export default function PipelineGlobals({
         <div
           className={`pipeline-global-body ${section !== "general" ? "global-specific" : ""}`}
         >
+          {codeChangesPending && (
+            <p role="status">
+              Apply or discard your Code changes before editing Pipeline settings.
+            </p>
+          )}
           <h3>{details.title}</h3>
           <p>
             {details.description}{" "}
@@ -301,6 +309,7 @@ export default function PipelineGlobals({
                   variant="secondary compact"
                   busy={busy}
                   disabled={
+                    codeChangesPending ||
                     !Array.isArray(config.tests) || config.tests.length === 0
                   }
                   onClick={runTests}

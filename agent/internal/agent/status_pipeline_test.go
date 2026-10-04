@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,10 @@ import (
 func assertStatusGolden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", "status", name+".golden")
+	platformPath := filepath.Join("testdata", "status", name+"-"+runtime.GOOS+".golden")
+	if _, err := os.Stat(platformPath); err == nil {
+		path = platformPath
+	}
 	if os.Getenv("VECTORY_UPDATE_GOLDEN") != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatal(err)
@@ -127,6 +132,49 @@ func TestStatusGoldenFiles(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			assertStatusGolden(t, c.name, RenderStatus(statusView(c.change), statusNow))
 		})
+	}
+}
+
+func TestStoppedAgentStatusOnlyNamesTheLastVerifiedPipeline(t *testing.T) {
+	v := statusView(func(v *StatusView) {
+		named(v, "Edge syslog processing", 3)
+		v.State.Desired, v.State.ApplyState = nil, "unmanaged"
+		v.State.LastGoodSHA256, v.ActualSHA = "feedface", "feedface"
+		v.Service.State, v.Service.PID = "stopped", 0
+	})
+	got := RenderStatus(v, statusNow)
+	if strings.Contains(got, "still running") || strings.Contains(got, "\nRunning ") {
+		t.Fatalf("stopped agent reports its pipeline as running:\n%s", got)
+	}
+	if !strings.Contains(got, "last verified configuration remains on disk") || !strings.Contains(got, "\nVerified   Edge syslog processing") {
+		t.Fatalf("stopped agent doesn't distinguish historical apply from current activity:\n%s", got)
+	}
+	v.Drift = true
+	if got := v.pipeline(); !strings.Contains(got, "differs from the last verified version") {
+		t.Fatalf("unassigned locally edited configuration looks verified: %s", got)
+	}
+}
+
+func TestStatusCommandsFitTheHost(t *testing.T) {
+	path := filepath.Join(DefaultPaths().StateDir, "other agent")
+	v := statusView(func(v *StatusView) {
+		v.StateDir = path
+		v.LocalPaused = true
+	})
+	paused := v.nextStep(statusNow)
+	last := statusNow.Add(-5 * time.Minute)
+	v.LocalPaused = false
+	v.State.LastHeartbeat = &last
+	overdue := v.nextStep(statusNow)
+	if runtime.GOOS == "windows" {
+		if strings.Contains(paused, "sudo") || strings.Contains(overdue, "sudo") || !strings.Contains(paused, "administrator PowerShell") {
+			t.Fatalf("Windows instructions use Unix elevation: paused %q, overdue %q", paused, overdue)
+		}
+	} else if !strings.Contains(paused, "sudo vectory resume") || !strings.Contains(overdue, "sudo vectory doctor") {
+		t.Fatalf("Unix instructions omit elevation: paused %q, overdue %q", paused, overdue)
+	}
+	if !strings.Contains(paused, ShellQuote(path)) || !strings.Contains(overdue, ShellQuote(path)) {
+		t.Fatalf("instructions don't target this installation: paused %q, overdue %q", paused, overdue)
 	}
 }
 

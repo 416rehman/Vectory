@@ -977,18 +977,20 @@ function DeviceResults({
               cell: (t) => (
                 <>
                   {deviceLink(t)}
-                  <small>
-                    {stages.get(t.device_id) && (
-                      <span className="rollout-stage-tag">
-                        {stages.get(t.device_id)}
-                      </span>
-                    )}
-                    {t.last_seen
-                      ? `Checked in ${relativeTime(t.last_seen, now)}`
-                      : "Never checked in"}
-                    {t.check_in_seconds
-                      ? ` · every ${t.check_in_seconds} s`
-                      : ""}
+                  <small className="rollout-device-meta">
+                    <span>
+                      {stages.get(t.device_id) && (
+                        <span className="rollout-stage-tag">
+                          {stages.get(t.device_id)}
+                        </span>
+                      )}
+                      {t.last_seen
+                        ? `Checked in ${relativeTime(t.last_seen, now)}`
+                        : "Never checked in"}
+                    </span>
+                    {t.check_in_seconds ? (
+                      <span>Every {t.check_in_seconds} s</span>
+                    ) : null}
                   </small>
                 </>
               ),

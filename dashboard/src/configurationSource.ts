@@ -185,7 +185,9 @@ export function parseSource(
         strict: true,
         prettyErrors: false,
         resolveKnownTags: false,
-        merge: false,
+        // Vector accepts YAML merge keys. Resolve them before building the
+        // graph so `<<` never becomes an invented component option.
+        merge: format === "yaml",
         logLevel: "silent",
       });
       const problems = [...document.errors, ...document.warnings];

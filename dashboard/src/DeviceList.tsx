@@ -583,7 +583,7 @@ export default function DeviceList({
                 value={search}
                 onChange={setSearch}
                 maxLength={100}
-                placeholder="Search devices, pipelines, versions"
+                placeholder="Search devices, labels, pipelines, versions"
                 label="Search devices"
                 shortcut
               />

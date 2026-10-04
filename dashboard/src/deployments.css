@@ -328,6 +328,14 @@ a.rollout-fix-link {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+.deployment-targets .rollout-device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 7px;
+}
+.deployment-targets .rollout-device-meta > span + span {
+  white-space: nowrap;
+}
 .rollout-stage-tag {
   display: inline-block;
   margin-right: 6px;

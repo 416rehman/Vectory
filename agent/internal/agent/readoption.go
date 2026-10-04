@@ -35,7 +35,11 @@ type adoptionChecks struct {
 // failed-candidate suppression remain untouched; validation is not activation.
 func ReAdopt(ctx context.Context, dir, binary, expected string) (ReAdoptionReport, error) {
 	return reAdopt(ctx, dir, binary, expected, adoptionChecks{ProbeVector, func(ctx context.Context, s Settings, path string) error {
-		return (&VectorDriver{Settings: s}).Validate(ctx, path)
+		// Re-adoption must validate with the same host runtime overlay as an
+		// ordinary apply. A candidate check removes any directory or overlay it
+		// had to create; approving a binary does not start Vector.
+		_, err := (&VectorDriver{Settings: s, Dir: dir}).CheckCandidate(ctx, path, true)
+		return err
 	}})
 }
 

@@ -13,6 +13,7 @@ import {
 } from "./sampleStore";
 import {
   assertionsFor,
+  unitTestsFromSamples,
   unitTestFromSample,
   vrlLiteral,
   vrlString,
@@ -212,6 +213,217 @@ describe("epoch nanoseconds and other big integers", () => {
     expect(JSON.stringify(parsed.samples[0])).toBe(
       '{"id":18446744073709551615}',
     );
+  });
+});
+
+describe("saving repeatable sample tests", () => {
+  it("reruns the same input and leaves changing nanoseconds out of the saved assertions", async () => {
+    const first = parseLosslessJSON(
+      '{"stable":"ok","ns":1790732396945691543,"derived":1790732396945691544,"count":7}',
+    );
+    const second = parseLosslessJSON(
+      '{"stable":"ok","ns":1790732396945691544,"derived":1790732396945691545,"count":7}',
+    );
+    const sample = { message: "input" };
+    const rerun = async (samples: Record<string, unknown>[]) => {
+      expect(samples).toEqual([sample]);
+      return [
+        {
+          sample: 0,
+          outcome: "emitted" as const,
+          outputs: [{ port: "", event: second, timestamps: [] }],
+        },
+      ];
+    };
+    const saved = await unitTestsFromSamples({
+      componentId: "parse",
+      component: {
+        type: "remap",
+        source:
+          '.ns = to_unix_timestamp(now(), unit: "nanoseconds")\n.derived = .ns + 1',
+      },
+      cases: [
+        {
+          sample,
+          result: {
+            sample: 0,
+            outcome: "emitted",
+            outputs: [{ port: "", event: first, timestamps: [] }],
+          },
+          name: "sample 1",
+        },
+      ],
+      rerun,
+    });
+    expect(saved.omittedPaths).toEqual([".ns", ".derived"]);
+    expect(saved.tests[0].outputs[0].conditions[0].source).toBe(
+      'assert_eq!(.stable, "ok")\nassert_eq!(.count, 7)',
+    );
+  });
+
+  it("omits direct volatile assignments even when two runs happen to agree", async () => {
+    const event = {
+      id: "same-uuid",
+      processed_at: "2026-09-29T08:45:37Z",
+      jitter: 1,
+      hostname: "same-host",
+      version_id: "same-v7",
+      nested: { "created at": "2026-09-29T08:45:37Z" },
+      stable: "literal now()",
+    };
+    const result: SampleResult = {
+      sample: 0,
+      outcome: "emitted",
+      outputs: [{ port: "", event, timestamps: ["processed_at"] }],
+    };
+    const saved = await unitTestsFromSamples({
+      componentId: "parse",
+      component: {
+        type: "remap",
+        source: [
+          ".id = uuid_v4()",
+          ".processed_at = now()",
+          ".jitter = random_int!(0, 2)",
+          ".hostname = get_hostname!()",
+          ".version_id = uuid_v7()",
+          '.nested."created at" =',
+          "  now()",
+          '.stable = "literal now()"',
+          "# .comment = uuid_v7()",
+        ].join("\n"),
+      },
+      cases: [{ sample: {}, result, name: "sample 1" }],
+      rerun: async () => [result],
+    });
+    expect(saved.omittedPaths).toEqual([
+      ".id",
+      ".processed_at",
+      ".jitter",
+      ".hostname",
+      ".version_id",
+      '.nested."created at"',
+    ]);
+    expect(saved.tests[0].outputs[0].conditions[0].source).toBe(
+      'assert_eq!(.stable, "literal now()")',
+    );
+  });
+
+  it("omits transitive volatile fields despite matching reruns, without matching literals", async () => {
+    const event = parseLosslessJSON(
+      '{"ns":1790732396945691543,"derived":1790732396945691544,"nested":{"copy":1790732396945691544},"copy":1790732396945691544,"via_temp":1790732396945691545,"literal":".ns and now()","from_literal":".ns","stable":7}',
+    );
+    const result: SampleResult = {
+      sample: 0,
+      outcome: "emitted",
+      outputs: [{ port: "", event, timestamps: [] }],
+    };
+    const saved = await unitTestsFromSamples({
+      componentId: "parse",
+      component: {
+        type: "remap",
+        source: [
+          '.ns = to_unix_timestamp(now(), unit: "nanoseconds")',
+          ".derived = .ns + 1",
+          '.nested."copy" = .derived',
+          '.copy = .nested."copy"',
+          "temp = .derived + 1",
+          ".via_temp = temp",
+          '.literal = ".ns and now()"',
+          '.from_literal = ".ns"',
+          "# .stable = .ns",
+        ].join("\n"),
+      },
+      cases: [{ sample: {}, result, name: "sample 1" }],
+      rerun: async () => [result],
+    });
+    expect(saved.omittedPaths).toEqual([
+      ".ns",
+      ".derived",
+      ".nested.copy",
+      ".copy",
+      ".via_temp",
+    ]);
+    expect(saved.tests[0].outputs[0].conditions[0].source).toBe(
+      'assert_eq!(.literal, ".ns and now()")\nassert_eq!(.from_literal, ".ns")\nassert_eq!(.stable, 7)',
+    );
+  });
+
+  it("omits an array leaf when one indexed element is assigned a volatile value", async () => {
+    const event = { items: [1790732396, 7], copy: 1790732397, stable: true };
+    const result: SampleResult = {
+      sample: 0,
+      outcome: "emitted",
+      outputs: [{ port: "", event, timestamps: [] }],
+    };
+    const saved = await unitTestsFromSamples({
+      componentId: "parse",
+      component: {
+        type: "remap",
+        source: [
+          '.items[0] = to_unix_timestamp(now(), unit: "seconds")',
+          ".copy = .items[0] + 1",
+        ].join("\n"),
+      },
+      cases: [{ sample: {}, result, name: "sample 1" }],
+      rerun: async () => [result],
+    });
+    expect(saved.omittedPaths).toEqual([".items", ".copy"]);
+    expect(saved.tests[0].outputs[0].conditions[0].source).toBe(
+      "assert_eq!(.stable, true)",
+    );
+  });
+
+  it("omits device environment and timezone fields even when the tester host agrees", async () => {
+    const event = {
+      env: "tester-host",
+      timezone: "UTC",
+      stable: "get_env_var() and get_timezone_name() are literal text",
+    };
+    const result: SampleResult = {
+      sample: 0,
+      outcome: "emitted",
+      outputs: [{ port: "", event, timestamps: [] }],
+    };
+    const saved = await unitTestsFromSamples({
+      componentId: "parse",
+      component: {
+        type: "remap",
+        source: [
+          '.env = get_env_var!("HOST")',
+          ".timezone = get_timezone_name!()",
+          '.stable = "get_env_var() and get_timezone_name() are literal text"',
+        ].join("\n"),
+      },
+      cases: [{ sample: {}, result, name: "sample 1" }],
+      rerun: async () => [result],
+    });
+    expect(saved.omittedPaths).toEqual([".env", ".timezone"]);
+    expect(saved.tests[0].outputs[0].conditions[0].source).toBe(
+      'assert_eq!(.stable, "get_env_var() and get_timezone_name() are literal text")',
+    );
+  });
+
+  it("refuses a saved expectation if the second run changes the outcome", async () => {
+    await expect(
+      unitTestsFromSamples({
+        componentId: "route",
+        component: { type: "route", route: { yes: "true" } },
+        cases: [
+          {
+            sample: {},
+            result: {
+              sample: 0,
+              outcome: "emitted",
+              outputs: [
+                { port: "yes", event: { stable: true }, timestamps: [] },
+              ],
+            },
+            name: "sample 1",
+          },
+        ],
+        rerun: async () => [{ sample: 0, outcome: "unmatched", outputs: [] }],
+      }),
+    ).rejects.toThrow(/changed its outcome or output port/);
   });
 });
 

@@ -3,11 +3,12 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { configurationDiff, differencePath } from "./configurationDiff";
 import { assertExactNumbers } from "./configurationNumbers";
 
-/** A pipeline reads in the order events flow: sources, transforms, sinks. */
-const sectionOrder = ["sources", "transforms", "sinks"];
+/** API settings lead, followed by the pipeline in event-flow order. */
+const componentOrder = ["sources", "transforms", "sinks"];
+const sectionOrder = ["api", ...componentOrder];
 /** What follows the pipeline in a file, in this order, after everything else. */
 const trailingSections = ["tests"];
-const componentSections = new Set(sectionOrder);
+const componentSections = new Set(componentOrder);
 const leadingKeys = ["type", "inputs"];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -68,9 +69,9 @@ export function stringifyConfiguration(
   format: string,
 ): string {
   assertExactNumbers(value);
-  // The pipeline's sections in flow order lead; global options and anything
-  // else follow in their own order, and the pipeline tests come last. Nested
-  // values and unknown settings keep their order.
+  // API settings lead the pipeline's sections in flow order. Other options
+  // follow in their own order, and pipeline tests come last. Nested values
+  // and unknown settings keep their order.
   const rest = (key: string) =>
     !sectionOrder.includes(key) && !trailingSections.includes(key);
   const ordered = Object.fromEntries([

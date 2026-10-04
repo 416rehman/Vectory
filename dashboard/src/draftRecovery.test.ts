@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRecoveryDraft,
   holdsPlainCredential,
+  listRecoveryDrafts,
   readRecoveryDraft,
   storeRecoveryDraft,
 } from "./draftRecovery";
@@ -30,20 +31,75 @@ describe("draft recovery", () => {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => void values.set(key, value),
       removeItem: (key: string) => void values.delete(key),
+      key: (index: number) => [...values.keys()][index] ?? null,
+      get length() {
+        return values.size;
+      },
     });
   });
 
   it("keeps unsaved edits per account and pipeline until cleared", () => {
-    expect(storeRecoveryDraft("user-1", "pipe-1", draft)).toBe(true);
+    const withBase = {
+      ...draft,
+      base: {
+        config: structuredClone(draft.config),
+        variables: [],
+        positions: structuredClone(draft.positions),
+      },
+    };
+    expect(storeRecoveryDraft("user-1", "pipe-1", withBase)).toBe(true);
     expect(readRecoveryDraft("user-1", "pipe-1")).toMatchObject({
       revision: 4,
       config: draft.config,
       positions: draft.positions,
+      base: withBase.base,
     });
     expect(readRecoveryDraft("user-2", "pipe-1")).toBeNull();
     expect(readRecoveryDraft("user-1", "pipe-2")).toBeNull();
     clearRecoveryDraft("user-1", "pipe-1");
     expect(readRecoveryDraft("user-1", "pipe-1")).toBeNull();
+  });
+
+  it("keeps two tabs' copies separate and lets the operator select either", () => {
+    const first = {
+      ...draft,
+      config: { ...draft.config, api: { enabled: true } },
+    };
+    const second = {
+      ...draft,
+      config: { ...draft.config, api: { enabled: false } },
+    };
+    expect(
+      storeRecoveryDraft(
+        "user-1",
+        "pipe-1",
+        first,
+        new Date("2026-10-04T10:00:00Z"),
+        "tab-a",
+      ),
+    ).toBe(true);
+    expect(
+      storeRecoveryDraft(
+        "user-1",
+        "pipe-1",
+        second,
+        new Date("2026-10-04T10:01:00Z"),
+        "tab-b",
+      ),
+    ).toBe(true);
+    const copies = listRecoveryDrafts("user-1", "pipe-1");
+    expect(copies).toHaveLength(2);
+    expect(copies.map(({ draft }) => draft.config.api)).toEqual([
+      { enabled: false },
+      { enabled: true },
+    ]);
+    clearRecoveryDraft("user-1", "pipe-1", copies[0].id);
+    expect(listRecoveryDrafts("user-1", "pipe-1")).toMatchObject([
+      { draft: { config: first.config } },
+    ]);
+    // A key from another account cannot be cleared through this pipeline.
+    clearRecoveryDraft("user-2", "pipe-1", copies[1].id);
+    expect(listRecoveryDrafts("user-1", "pipe-1")).toHaveLength(1);
   });
 
   it("never writes plain credentials to browser storage", () => {
@@ -59,9 +115,73 @@ describe("draft recovery", () => {
     ).toBe(false);
     expect(
       holdsPlainCredential({
-        auth: { user: "svc", password: "vectory-secret:ingest" },
+        sinks: {
+          out: {
+            type: "splunk_hec_logs",
+            default_token: "vectory-secret:INGEST",
+          },
+        },
       }),
     ).toBe(false);
+    const unsafeUrl = structuredClone(draft);
+    unsafeUrl.config.sinks.out.uri =
+      "https://collector.example/ingest?api_key=plaintext-token";
+    expect(storeRecoveryDraft("user-1", "pipe-1", unsafeUrl)).toBe(false);
+    const unsupportedReference = structuredClone(draft);
+    unsupportedReference.config.sinks.out.uri =
+      "https://collector.example/ingest?api_key=vectory-secret:INGEST";
+    expect(storeRecoveryDraft("user-1", "pipe-1", unsupportedReference)).toBe(
+      false,
+    );
+    const unsafeBase = {
+      ...draft,
+      base: {
+        config: structuredClone(draft.config),
+        variables: [],
+        positions: draft.positions,
+      },
+    };
+    unsafeBase.base.config.sinks.out.auth.token = "plain-base-token";
+    expect(storeRecoveryDraft("user-1", "pipe-1", unsafeBase)).toBe(true);
+    expect(readRecoveryDraft("user-1", "pipe-1")?.base).toBeUndefined();
+    expect(readRecoveryDraft("user-1", "pipe-1")?.config).toEqual(draft.config);
+  });
+
+  it("keeps current edits without a large merge base and clears an obsolete copy when even current edits do not fit", () => {
+    const largeVariables = [
+      {
+        name: "v".repeat(800_000),
+        path: "sources.app.host",
+        type: "string" as const,
+      },
+    ];
+    const large = {
+      ...draft,
+      variables: largeVariables,
+      base: {
+        config: draft.config,
+        variables: largeVariables,
+        positions: draft.positions,
+      },
+    };
+    expect(storeRecoveryDraft("user-1", "pipe-1", large)).toBe(true);
+    expect(readRecoveryDraft("user-1", "pipe-1")?.base).toBeUndefined();
+    expect(
+      readRecoveryDraft("user-1", "pipe-1")?.variables[0].name.length,
+    ).toBe(800_000);
+
+    const tooLarge = {
+      ...large,
+      variables: [
+        {
+          name: "v".repeat(1_600_000),
+          path: "sources.app.host",
+          type: "string" as const,
+        },
+      ],
+    };
+    expect(storeRecoveryDraft("user-1", "pipe-1", tooLarge)).toBe(false);
+    expect(readRecoveryDraft("user-1", "pipe-1")).toBeNull();
   });
 
   it("ignores damaged or foreign stored values", () => {
@@ -78,9 +198,31 @@ describe("draft recovery", () => {
         saved_at: "2026-09-29T10:00:00Z",
         positions: { app: { x: "1", y: 2 } },
       }),
+      JSON.stringify({
+        ...draft,
+        saved_at: "2026-09-29T10:00:00Z",
+        base: {
+          config: {},
+          variables: [],
+          positions: { app: { x: NaN, y: 2 } },
+        },
+      }),
     ]) {
       localStorage.setItem("vectory.draft.v1:user-1:pipe-1", value);
       expect(readRecoveryDraft("user-1", "pipe-1")).toBeNull();
     }
+  });
+
+  it("clears an older stored draft containing a newly recognized credential", () => {
+    const old = structuredClone(draft);
+    old.config.sinks.out.uri =
+      "https://discord.com/api/webhooks/123/long-webhook-token";
+    const storageKey = "vectory.draft.v1:user-1:pipe-1";
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ ...old, saved_at: new Date().toISOString() }),
+    );
+    expect(readRecoveryDraft("user-1", "pipe-1")).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBeNull();
   });
 });

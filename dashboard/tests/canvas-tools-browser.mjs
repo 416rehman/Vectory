@@ -482,6 +482,67 @@ try {
   );
 
   await check(
+    "a delayed sample-test save preserves unrelated pipeline edits made while it checks",
+    async () => {
+      const document = baseDocument();
+      document.config.transforms.parse = {
+        type: "remap",
+        inputs: ["seed"],
+        source: ".a = 1",
+      };
+      const response =
+        '{"valid":true,"compiled":true,"output":null,"errors":[],"results":[{"sample":0,"outcome":"emitted","outputs":[{"port":"","event":{"message":"x","a":1},"timestamps":[]}]}]}';
+      await load({
+        document,
+        samples: {
+          version: 1,
+          sets: [
+            {
+              id: "default",
+              name: "Sample events",
+              text: JSON.stringify({ message: "x" }),
+            },
+          ],
+          active: {},
+        },
+        vrl: response,
+      });
+      await button("Code").click();
+      await page
+        .getByLabel("Vector configuration code")
+        .fill(
+          JSON.stringify({ ...document.config, data_dir: "/tmp/temporary" }),
+        );
+      await button("Apply code changes").click();
+      await button("Graph").click();
+      await node("parse").click();
+      await expect(inspector().locator(".sample-result")).toHaveCount(1);
+      let release, entered;
+      const gate = new Promise((resolve) => (release = resolve));
+      const captured = new Promise((resolve) => (entered = resolve));
+      await page.route("**/api/v1/vrl/test", async (route) => {
+        entered();
+        await gate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: response,
+        });
+      });
+      try {
+        await inspector().getByRole("button", { name: "Save as test" }).click();
+        await captured;
+        await button("Undo").click();
+      } finally {
+        release();
+      }
+      await expect(inspector().getByText("Saved 1 test.")).toBeVisible();
+      await saved((doc) => doc.config.tests?.length === 1);
+      expect(fixture.document.config.data_dir).toBeUndefined();
+    },
+  );
+
+  await check(
     "a route's samples run through the steps before it and show where each one went, on the tester and on the canvas",
     async () => {
       const document = baseDocument();
@@ -951,7 +1012,7 @@ try {
     expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
     expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
   });
-  expect(results).toHaveLength(15);
+  expect(results).toHaveLength(16);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

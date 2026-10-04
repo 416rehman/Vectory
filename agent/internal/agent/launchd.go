@@ -3,9 +3,11 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -196,6 +198,9 @@ type launchdJob struct {
 	// service-uninstall do. The update step's host looks for the process itself, so its
 	// jobs leave this unset.
 	alive func(pid int) bool
+	// uninstallGuard remembers processes booted out by service-stop or uninstall
+	// across CLI invocations, so a retry cannot remove the definition while one drains.
+	uninstallGuard *launchdStopGuard
 	// leaving, when it is set, is called just before launchctl is asked to boot the job out,
 	// with the process `print` listed for the job (0 when it listed none), and a bootout
 	// whose call returns an error is not asked for at all. The update step's host keeps a
@@ -204,6 +209,98 @@ type launchdJob struct {
 	// returned is never made when the step is stopped, or dies, while launchctl waits for the
 	// agent to drain.
 	leaving func(pid int) error
+}
+
+type launchdStopRecord struct {
+	PID      int    `json:"pid"`
+	Identity string `json:"identity"`
+}
+
+type launchdStopGuard struct {
+	path     string
+	identity func(pid int) (identity string, exists bool, err error)
+}
+
+func (g *launchdStopGuard) records() ([]launchdStopRecord, error) {
+	var records []launchdStopRecord
+	if err := ReadJSON(g.path, &records); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, errors.New("the previous launchd stop record is invalid; keep the service definition and inspect it")
+	}
+	for _, record := range records {
+		if record.PID <= 0 || record.Identity == "" {
+			return nil, errors.New("the previous launchd stop record is invalid; keep the service definition and inspect it")
+		}
+	}
+	return records, nil
+}
+
+func (g *launchdStopGuard) writeRecords(records []launchdStopRecord) error {
+	data, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+	return AtomicWrite(g.path, data)
+}
+
+func (g *launchdStopGuard) remember(pid int) error {
+	if pid == 0 {
+		return nil // A valid launchctl print can describe a loaded job without a process.
+	}
+	if pid < 0 {
+		return errors.New("launchd did not identify the process to stop; run service-stop and retry uninstall")
+	}
+	identity, exists, err := g.identity(pid)
+	if err != nil {
+		return err
+	}
+	if !exists || identity == "" {
+		return errors.New("the launchd process changed before its stop could be recorded; retry uninstall")
+	}
+	records, err := g.records()
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.PID == pid && record.Identity == identity {
+			return nil
+		}
+	}
+	return g.writeRecords(append(records, launchdStopRecord{PID: pid, Identity: identity}))
+}
+
+func (g *launchdStopGuard) ensureGone() error {
+	records, err := g.records()
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	var remaining []launchdStopRecord
+	for _, record := range records {
+		identity, exists, err := g.identity(record.PID)
+		if err != nil {
+			return err
+		}
+		if exists && identity == record.Identity {
+			remaining = append(remaining, record)
+		}
+	}
+	if len(remaining) == 0 {
+		return os.Remove(g.path)
+	}
+	if len(remaining) != len(records) {
+		if err := g.writeRecords(remaining); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("the agent process %d from an earlier launchd stop is still running; keep its service definition and retry after it exits", remaining[0].PID)
 }
 
 func (j launchdJob) name() string {
@@ -273,6 +370,63 @@ func (j launchdJob) control(action string) error {
 	return j.controlContext(context.Background(), action)
 }
 
+// stopWithGuard records the identity of every process that launchd was asked
+// to boot out. A later CLI invocation must still confirm its exit, even when
+// launchd no longer lists the job. A different new process does not erase an
+// earlier unresolved one.
+func (j launchdJob) stopWithGuard() error {
+	if j.uninstallGuard != nil {
+		j.leaving = j.uninstallGuard.remember
+	}
+	if err := j.control("stop"); err != nil {
+		return err
+	}
+	if j.uninstallGuard != nil {
+		if err := j.uninstallGuard.ensureGone(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Removing a definition is safe only after launchd no longer lists its job
+// and every process previously booted out is gone. Keep the definition when
+// stop fails so the next operator attempt can still address the running service.
+func (j launchdJob) uninstallDefinition(remove func() error) error {
+	if err := j.stopWithGuard(); err != nil {
+		return err
+	}
+	return remove()
+}
+
+// A fixed service lock must cover the entire operation, including removing the
+// update helper and the plist. Otherwise another CLI can start the job after
+// uninstall confirms it stopped but before uninstall removes its definition.
+func controlLaunchdService(action string, job launchdJob, lock func() (func(), error), removeUpdate, removeDefinition func() error) error {
+	release, err := lock()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if action == "stop" {
+		return job.stopWithGuard()
+	}
+	if action == "uninstall" {
+		if err := removeUpdate(); err != nil {
+			return err
+		}
+		return job.uninstallDefinition(removeDefinition)
+	}
+	if (action == "start" || action == "restart") && job.uninstallGuard != nil {
+		// A timed-out stop may have left an agent process alive after launchd
+		// forgot its job. Starting another one would run two workloads.
+		if err := job.uninstallGuard.ensureGone(); err != nil {
+			return err
+		}
+	}
+	return job.control(action)
+}
+
 // controlContext is control, which stops waiting when ctx ends: the privileged
 // step stops and starts the agent through it.
 func (j launchdJob) controlContext(ctx context.Context, action string) error {
@@ -302,6 +456,19 @@ func (j launchdJob) controlContext(ctx context.Context, action string) error {
 		result := j.launchctl(ctx, launchdStatusLimit, "print", j.target())
 		if launchdNotLoaded(result) {
 			return nil
+		}
+		if j.uninstallGuard != nil {
+			if result.status != 0 {
+				return launchctlFailure([]string{"print", j.target()}, result)
+			}
+			printed, err := parseLaunchdPrint(result.stdout)
+			if err != nil {
+				return err
+			}
+			if printed.State == "running" && printed.PID <= 0 {
+				return errors.New("launchctl says the agent is running but did not identify its process; keep the service definition and retry")
+			}
+			return j.bootoutFrom(ctx, printed.PID)
 		}
 		return j.bootoutFrom(ctx, j.listedPID(result))
 	}

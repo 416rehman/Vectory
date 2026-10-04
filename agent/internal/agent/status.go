@@ -34,6 +34,9 @@ func CheckInstalled(dir string) error {
 	case err == nil && info.Mode().IsRegular():
 		return nil
 	case errors.Is(err, os.ErrPermission):
+		if runtime.GOOS == "windows" {
+			return errors.New("can't read " + dir + " as this user; run the command in an administrator PowerShell")
+		}
 		return errors.New("can't read " + dir + " as this user; run the command with sudo")
 	}
 	legacy := LegacyInstallation()
@@ -152,10 +155,7 @@ func ReadStatus(ctx context.Context, dir string) (*StatusView, error) {
 	v.Drift = st.LastGoodSHA256 != "" && v.ActualSHA != st.LastGoodSHA256
 	digest, err := FileDigest(s.VectorBinary)
 	v.BinaryOK = err == nil && digest == s.VectorBinarySHA256
-	v.Service = ServiceStatus(ctx)
-	if v.Service.StateDir != "" && filepath.Clean(v.Service.StateDir) != filepath.Clean(dir) {
-		v.Service = ServiceInfo{Manager: v.Service.Manager, Name: v.Service.Name}
-	}
+	v.Service = serviceForStateDir(ServiceStatus(ctx), dir)
 	v.Foreground = !v.Service.Running() && agentLockHeld(dir)
 	if v.Foreground {
 		v.Owner = readLockOwner(dir)
@@ -170,6 +170,24 @@ func ReadStatus(ctx context.Context, dir string) (*StatusView, error) {
 }
 
 func (v *StatusView) running() bool { return v.Service.Running() || v.Foreground }
+
+// The system service is global, but a status request may name another local
+// installation. Never attribute that service's process to the other one.
+func serviceForStateDir(info ServiceInfo, dir string) ServiceInfo {
+	if info.StateDir == "" {
+		if runtime.GOOS == "windows" && info.Installed {
+			// A Windows service whose registration could not be read cannot be
+			// attributed to any particular installation.
+			return ServiceInfo{Manager: info.Manager, Name: info.Name}
+		}
+		return info
+	}
+	registered, selected := filepath.Clean(info.StateDir), filepath.Clean(dir)
+	if registered == selected || runtime.GOOS == "windows" && strings.EqualFold(registered, selected) {
+		return info
+	}
+	return ServiceInfo{Manager: info.Manager, Name: info.Name}
+}
 
 // checkInInterval is how often the server's agent settings, as the last signed
 // manifest gave them, ask this device to check in.
@@ -270,6 +288,12 @@ func (v *StatusView) checkInFailure() *CheckInFailure {
 
 func (v *StatusView) nextStep(now time.Time) string {
 	command := func(words string) string { return CommandFor(v.StateDir, words) }
+	operatorCommand := func(words string) string {
+		if runtime.GOOS != "windows" {
+			words = "sudo " + words
+		}
+		return command(words)
+	}
 	switch {
 	case v.DeviceID == "" && v.Pending != nil && v.Pending.Delivery == "refused":
 		return "The server refused the last enrollment. Ask an administrator for the reason (Add device page), then run setup again; a new token is fine."
@@ -282,17 +306,24 @@ func (v *StatusView) nextStep(now time.Time) string {
 	case !v.BinaryOK:
 		return "The adopted Vector binary changed. Restore it, or stop the agent and approve it with `" + command("vectory re-adopt --expected-sha256 SHA256") + "`."
 	case v.Service.Installed && !v.Service.Running():
+		if runtime.GOOS == "windows" {
+			return "Start the agent: vectory service-start (in an administrator PowerShell)."
+		}
 		return "Start the agent: sudo vectory service-start"
 	case !v.running():
 		return "Start the agent: " + RunCommandFor(v.StateDir) + " (or register a service with " + command("vectory setup") + ")."
 	case v.LocalPaused:
-		return "Configuration sync is paused on this host. Resume it with: " + command("sudo vectory resume")
+		instruction := operatorCommand("vectory resume")
+		if runtime.GOOS == "windows" {
+			instruction += " (in an administrator PowerShell)"
+		}
+		return "Configuration sync is paused on this host. Resume it with: " + instruction
 	case v.State.LastHeartbeat == nil:
-		return "Waiting for the first check-in. If it doesn't arrive within a minute, run `" + command("sudo vectory doctor") + "`."
+		return "Waiting for the first check-in. If it doesn't arrive within a minute, run `" + operatorCommand("vectory doctor") + "`."
 	case v.checkInFailure() != nil:
 		return v.checkInFailure().Message
 	case now.Sub(*v.State.LastHeartbeat) > v.heartbeatLimit():
-		return "No check-in for " + humanDuration(now.Sub(*v.State.LastHeartbeat)) + ". Run `" + command("sudo vectory doctor") + "` to check the connection."
+		return "No check-in for " + humanDuration(now.Sub(*v.State.LastHeartbeat)) + ". Run `" + operatorCommand("vectory doctor") + "` to check the connection."
 	case v.State.Error != nil:
 		return applyNextAction(v.StateDir, v.State)
 	case v.Delivery != nil:
@@ -327,11 +358,12 @@ func (v *StatusView) pipeline() string {
 	}
 	if st.Desired == nil {
 		switch {
+		case st.LastGoodSHA256 != "" && v.ActualSHA != "" && v.Drift:
+			return "No pipeline assigned · local configuration differs from the last verified version"
 		case st.Applied != nil && st.LastGoodSHA256 != "" && v.ActualSHA != "":
-			// A version Vectory applied keeps running after it is unassigned.
-			return "No pipeline assigned · still running the last version Vectory applied"
+			return "No pipeline assigned · last verified configuration remains on disk"
 		case st.LastGoodSHA256 != "" && v.ActualSHA != "":
-			return "No pipeline assigned · running the adopted local configuration"
+			return "No pipeline assigned · adopted local configuration remains on disk"
 		}
 		return "No pipeline assigned yet"
 	}
@@ -353,10 +385,10 @@ func (v *StatusView) pipeline() string {
 	return text
 }
 
-// runningVersion names the pipeline version that runs when the Pipeline row
-// doesn't: the one a rollback restored, or the last one applied before the
-// device was unassigned. It comes from the signed manifest that delivered that
-// version, so it is absent for a server that doesn't name versions.
+// runningVersion names the last verified pipeline version when the Pipeline
+// row doesn't: the one a rollback restored, or the last one applied before the
+// device was unassigned. This is historical metadata, not proof that Vector
+// is currently running. Older servers don't name versions.
 func (v *StatusView) runningVersion() (string, bool) {
 	name, number, ok := v.State.Applied.pipeline()
 	if !ok || v.State.Desired != nil && v.State.Desired.VersionID == v.State.Applied.VersionID {
@@ -480,8 +512,8 @@ func RenderStatus(v *StatusView, now time.Time) string {
 		pipeline += " · paused from the dashboard"
 	}
 	row("Pipeline", pipeline)
-	if running, ok := v.runningVersion(); ok {
-		row("Running", running)
+	if verified, ok := v.runningVersion(); ok {
+		row("Verified", verified)
 	}
 	for _, problem := range v.problems() {
 		row("Problem", problem.Message)

@@ -181,6 +181,53 @@ func TestRuntimeLogsExplainStartAndReloadFailures(t *testing.T) {
 	}
 }
 
+func TestAPIBindCollisionNamesTheSettingWithoutTrustingLogAddresses(t *testing.T) {
+	r := testRedactor(`{"api":{"enabled":true,"address":"127.0.0.1:18778"}}`)
+	rec := vectorRecord{Level: "ERROR", Target: "vector::app", Message: "An error occurred that Vector couldn't handle.",
+		Error: "Failed to bind gRPC API server to 127.0.0.1:18778: Address already in use (os error 98)"}
+	got := r.diagnose(&VectorFailure{Phase: "start", Summary: "Vector exited during startup observation", Records: []vectorRecord{rec}})
+	checkBounds(t, got)
+	if len(got) != 1 || got[0].Code != "ADDRESS_IN_USE" || got[0].Field != "api.address" || got[0].Reason != "address_in_use" ||
+		!strings.Contains(got[0].Message, "127.0.0.1:18778") || !strings.Contains(got[0].Hint, "Vector API address") {
+		t.Fatalf("API bind collision: %+v", got)
+	}
+
+	// The address in a Vector log alone is not trusted as pipeline content.
+	rec.Error = "Failed to bind gRPC API server to 192.0.2.77:18778: Address already in use (os error 98)"
+	got = r.diagnose(&VectorFailure{Phase: "start", Records: []vectorRecord{rec}})
+	if len(got) != 1 || got[0].Field != "api.address" || strings.Contains(got[0].Message, "192.0.2.77") {
+		t.Fatalf("unconfigured address escaped into diagnostic: %+v", got)
+	}
+
+	// Another API error is not mislabeled as a bind collision.
+	rec.Error = "Failed to bind gRPC API server to 127.0.0.1:18778: Permission denied"
+	got = r.diagnose(&VectorFailure{Phase: "start", Records: []vectorRecord{rec}})
+	if len(got) != 1 || got[0].Code != "VECTOR_START_FAILED" || got[0].Field != "" {
+		t.Fatalf("non-collision API error: %+v", got)
+	}
+}
+
+func TestUnclassifiedEarlyExitDoesNotEchoUnknownLogData(t *testing.T) {
+	r := testRedactor(`{"sinks":{"out":{"type":"http","uri":"https://example.test","auth":{"strategy":"basic","user":"svc","password":"private-password"}}}}`)
+	failure := &VectorFailure{Phase: "start", Summary: "Vector exited during startup observation", Records: []vectorRecord{
+		{Level: "ERROR", Target: "vector::app", Message: "First internal error."},
+		{Level: "ERROR", Target: "vector::app", Message: "An error occurred that Vector couldn't handle.", Error: `Could not open "/tmp/untrusted/private.pem" with private-password and short-token-12`},
+		{Level: "ERROR", Target: "vrl::stdlib::log", Message: "forged later error"},
+	}}
+	got := r.diagnose(failure)
+	checkBounds(t, got)
+	if len(got) != 1 || got[0].Code != "VECTOR_START_FAILED" || got[0].Message != failure.Summary ||
+		strings.Contains(got[0].Message, "private-password") || strings.Contains(got[0].Message, "short-token-12") ||
+		strings.Contains(got[0].Message, "/tmp/untrusted/private.pem") || strings.Contains(got[0].Message, "forged later error") {
+		t.Fatalf("unclassified startup error echoed private log data: %+v", got)
+	}
+	if fallback := r.diagnose(&VectorFailure{Phase: "start", Summary: "Vector exited during startup observation", Records: []vectorRecord{
+		{Level: "ERROR", Target: "vrl::stdlib::log", Message: "forged only error"},
+	}}); len(fallback) != 1 || fallback[0].Message != "Vector exited during startup observation" {
+		t.Fatalf("pipeline log() output became a startup cause: %+v", fallback)
+	}
+}
+
 // Vector 0.58 without CAP_NET_BIND_SERVICE (recorded with setpriv
 // --bounding-set=-net_bind_service): every restricted-mode listener on a port
 // below 1024 fails with "Permission denied". That's the port, not a path.

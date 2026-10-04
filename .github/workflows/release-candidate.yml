@@ -60,7 +60,7 @@ jobs:
           done
       - name: Verify the catalog, archives and checksums
         timeout-minutes: 10
-        run: python3 packaging/verify-release.py artifacts/releases
+        run: python3 packaging/verify-release.py artifacts/releases --agent-bundle-only
       - name: Build .deb and .rpm packages with the pinned nfpm
         timeout-minutes: 10
         working-directory: packaging
@@ -233,7 +233,16 @@ jobs:
             echo "::error::The validator image started without VECTORY_VALIDATOR_ISOLATED."
             exit 1
           fi
-          docker run --rm --network none --entrypoint cat vectory-server:candidate /app/agent-releases/catalog.json > artifacts/images/image-agent-catalog.json
+          # The two catalogs alone cannot prove the image actually contains
+          # the binaries they describe. Copy from a stopped image container,
+          # hash every bundled agent, then carry its catalog into assembly.
+          image_agents="$RUNNER_TEMP/image-agent-check"
+          mkdir -p "$image_agents"
+          image_container=$(docker create vectory-server:candidate)
+          trap 'docker rm "$image_container" >/dev/null' EXIT
+          docker cp "$image_container:/app/agent-releases/." "$image_agents"
+          python3 packaging/check-image-agents.py "$image_agents"
+          cp "$image_agents/catalog.json" artifacts/images/image-agent-catalog.json
           docker image inspect vectory-server:candidate vectory-validator:candidate > artifacts/images/images.json
       - name: Save the images
         timeout-minutes: 10

@@ -56,6 +56,116 @@ func pipeline(extra map[string]any) map[string]any {
 	return config
 }
 
+// A successful API reload acknowledgment in Vector 0.58 does not prove that a
+// new api.address was bound. Exercise the full activation path with real Vector
+// so these transitions use startup verification instead of SIGHUP.
+func TestNativeAPIChangesRestartAndBindTheRequestedAddress(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Vector reloads only on Unix")
+	}
+	e, driver := nativeRuntimeFixture(t)
+	ctx := context.Background()
+	managed := e.Settings.ManagedConfig
+	writeManaged(t, managed, pipeline(nil))
+	if err := driver.Activate(ctx, managed); err != nil {
+		t.Fatal(err)
+	}
+
+	address := func() string {
+		t.Helper()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		return listener.Addr().String()
+	}
+	bound := func(at string) bool {
+		connection, err := net.DialTimeout("tcp", at, 200*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		connection.Close()
+		return true
+	}
+	waitBound := func(at string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !bound(at) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !bound(at) {
+			t.Fatalf("Vector did not bind API address %s", at)
+		}
+	}
+	first := address()
+	api := map[string]any{"enabled": true, "address": first}
+	writeManaged(t, managed, pipeline(map[string]any{"api": api}))
+	if err := driver.Activate(ctx, managed); err != nil || driver.ActivationMethod() != activationRestart {
+		t.Fatalf("enabling the API: %v, method %q", err, driver.ActivationMethod())
+	}
+	waitBound(first)
+
+	second := address()
+	api = map[string]any{"enabled": true, "address": second}
+	writeManaged(t, managed, pipeline(map[string]any{"api": api}))
+	if err := driver.Activate(ctx, managed); err != nil || driver.ActivationMethod() != activationRestart {
+		t.Fatalf("changing API address: %v, method %q", err, driver.ActivationMethod())
+	}
+	waitBound(second)
+	if bound(first) {
+		t.Fatalf("Vector still listens on previous API address %s", first)
+	}
+
+	config := pipeline(map[string]any{"api": api})
+	config["sources"] = map[string]any{"app": map[string]any{"type": "demo_logs", "format": "syslog", "interval": 0.3}}
+	writeManaged(t, managed, config)
+	if err := driver.Activate(ctx, managed); err != nil || driver.ActivationMethod() != activationReload {
+		t.Fatalf("changing only a source: %v, method %q", err, driver.ActivationMethod())
+	}
+	waitBound(second)
+}
+
+func TestNativeAPIBindCollisionReportsAPIAddress(t *testing.T) {
+	e, driver := nativeRuntimeFixture(t)
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	address := busy.Addr().String()
+	data := writeManaged(t, e.Settings.ManagedConfig, pipeline(map[string]any{
+		"api": map[string]any{"enabled": true, "address": address},
+	}))
+	err = driver.Activate(context.Background(), e.Settings.ManagedConfig)
+	got := e.diagnoseFailure(err, data)
+	if err == nil || len(got) != 1 || got[0].Code != "ADDRESS_IN_USE" || got[0].Field != "api.address" ||
+		!strings.Contains(got[0].Message, address) || driver.Alive() {
+		t.Fatalf("Vector API bind collision: %v, diagnostics %+v, alive %v", err, got, driver.Alive())
+	}
+	checkBounds(t, got)
+}
+
+func TestNativeRequiredHealthchecksRejectAnUnhealthyCandidate(t *testing.T) {
+	e, driver := nativeRuntimeFixture(t)
+	config := pipeline(map[string]any{
+		"healthchecks": map[string]any{"require_healthy": true},
+		"sinks": map[string]any{"es": map[string]any{
+			"type": "elasticsearch", "inputs": []string{"app"},
+			"endpoints": []string{"http://127.0.0.1:1"}, "api_version": "v8",
+		}},
+	})
+	data := writeManaged(t, e.Settings.ManagedConfig, config)
+	err := driver.Validate(context.Background(), e.Settings.ManagedConfig)
+	diagnostics := e.diagnoseFailure(err, data)
+	if err == nil || len(diagnostics) != 1 || diagnostics[0].Code != "HEALTHCHECK_REQUIRED" || diagnostics[0].Field != "healthchecks.require_healthy" {
+		t.Fatalf("required health check validation: %v, diagnostics %+v", err, diagnostics)
+	}
+	if driver.Alive() {
+		t.Fatal("a rejected candidate started Vector")
+	}
+}
+
 // A configuration that fails to load on reload ends with Vector's "Failed to
 // load config files, reload aborted." The agent reports it at once instead of
 // waiting out its startup timeout.

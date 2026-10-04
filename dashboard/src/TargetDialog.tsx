@@ -45,10 +45,14 @@ import { shortDigest } from "./enrollmentCommands";
 import {
   fullModeRequirements,
   hasHostApprovals,
-  hostApprovals,
   type AgentCatalog,
+  type HostApprovals,
 } from "./hostRequirements";
-import { hostApprovalCommands, namedDevices } from "./hostApprovalCommands";
+import {
+  hostApprovalCommandsByDevice,
+  namedDevices,
+} from "./hostApprovalCommands";
+import { hostApprovalsByDevice } from "./hostApprovalVariables";
 import {
   approvalBasis,
   approvalEvidence,
@@ -119,6 +123,16 @@ function blockerRowLabel(code: string): string {
       return "Deployment blocked";
   }
 }
+function sameHostApprovals(a: HostApprovals, b: HostApprovals): boolean {
+  return (
+    a.destinations.length === b.destinations.length &&
+    a.destinations.every((value, index) => value === b.destinations[index]) &&
+    a.listeners.length === b.listeners.length &&
+    a.listeners.every((value, index) => value === b.listeners[index]) &&
+    a.fileRoots.length === b.fileRoots.length &&
+    a.fileRoots.every((value, index) => value === b.fileRoots[index])
+  );
+}
 /**
  * A restricted host refuses destinations, listeners and paths it hasn't
  * allowed, and Vectory can't see what a host allows. So say which ones this
@@ -129,12 +143,14 @@ function blockerRowLabel(code: string): string {
  * is left out of the condition and named after it.
  */
 function HostApprovalNote({
-  approvals,
+  approvalsByDevice,
+  perDeviceValues,
   devices,
   passed,
   runs,
 }: {
-  approvals: ReturnType<typeof hostApprovals>;
+  approvalsByDevice: ReadonlyMap<string, HostApprovals>;
+  perDeviceValues: boolean;
   /** Restricted devices that may still be refused. */
   devices: Device[];
   /** Restricted devices a check passed on. */
@@ -153,14 +169,31 @@ function HostApprovalNote({
         <p>{passedSentence(passed.length)}</p>
       </div>
     );
-  const blocks = hostApprovalCommands(approvals, devices);
+  const blocks = hostApprovalCommandsByDevice(approvalsByDevice, devices);
   const unreported = devices.filter((device) => !device.state_dir);
+  const commonApprovals = approvalsByDevice.get(devices[0].id);
   return (
     <div className="control-note target-approval-note" role="status">
       <strong>{approvalHeadline(devices.map((device) => device.name))}</strong>
-      {approvalParagraphs(approvals, devices.length).map((text) => (
-        <p key={text}>{text}</p>
-      ))}
+      {perDeviceValues ? (
+        <>
+          <p>
+            Each device's destinations, listeners and paths below reflect the
+            version rendered for that host. It may refuse this version unless
+            its host already allows those exact values.
+          </p>
+          <p>
+            Vectory can't see a host's allowances. Check on devices in the
+            review shows whether each host accepts them; only the host operator
+            can add an allowance.
+          </p>
+        </>
+      ) : (
+        commonApprovals &&
+        approvalParagraphs(commonApprovals, devices.length).map((text) => (
+          <p key={text}>{text}</p>
+        ))
+      )}
       {evidence && <p>{evidence}</p>}
       <details className="target-approval-steps">
         <summary>Commands for the host</summary>
@@ -685,6 +718,7 @@ export default function TargetDialog({
     // Never refill a value someone cleared on purpose.
     applied.forEach((key) => prefilledKeys.current.add(key));
     setBindingInputs(next);
+    setHostCheck(null);
     const origins = new Set(
       [...touched].map((device) => {
         const source = result.sources?.[device];
@@ -741,44 +775,97 @@ export default function TargetDialog({
   );
   const capabilityBlocked =
     requirements.length > 0 && restrictedTargets.length > 0;
-  // Restricted devices also refuse destinations, listeners and paths their
-  // host doesn't allow. Nothing here sees a host's allowances, so the review
-  // names what this version uses as a condition. It drops the condition for a
-  // device that a check in this review passed on, and for one whose verified
-  // running version already uses all of it: that applied, so its host allows
-  // it. Addresses that differ by device can't be compared across versions.
-  const approvals = useMemo(
-    () => (version ? hostApprovals(version.config) : null),
-    [version],
+  // A variable can make a rendered device require Full Vector mode even when
+  // the published base does not. The server's per-device preview is decisive.
+  const fullModeBlocked = new Set(
+    blockers
+      .filter(
+        (blocker) =>
+          blocker.resource === "configuration" &&
+          blocker.code === "FULL_VECTOR_MODE_REQUIRED",
+      )
+      .flatMap((blocker) => blocker.device_ids),
   );
-  const wantsApproval =
-    !capabilityBlocked && !!approvals && hasHostApprovals(approvals);
-  const comparable = declarations.length === 0;
-  const [passedOnHost, setPassedOnHost] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  // Restricted hosts approve the rendered values they will actually receive.
+  // Until all bindings are valid, a base-version command could name the wrong
+  // port, destination or path, so do not show any approval command.
+  const restrictedHostsKey = JSON.stringify(
+    restrictedTargets.map((device) => ({ id: device.id, os: device.os })),
   );
+  const approvalsByDevice = useMemo(
+    () =>
+      version && !bindingResult.errors.length
+        ? hostApprovalsByDevice(
+            version.config,
+            declarations,
+            bindingResult.bindings,
+            JSON.parse(restrictedHostsKey) as Pick<Device, "id" | "os">[],
+          )
+        : null,
+    [version?.config, version?.variables, bindingResult, restrictedHostsKey],
+  );
+  const approvalTargets = approvalsByDevice
+    ? restrictedTargets.filter(
+        (device) =>
+          !fullModeBlocked.has(device.id) &&
+          hasHostApprovals(approvalsByDevice.get(device.id)!),
+      )
+    : [];
+  const wantsApproval = !capabilityBlocked && approvalTargets.length > 0;
+  const commonApprovals = approvalTargets.length
+    ? approvalsByDevice!.get(approvalTargets[0].id)!
+    : null;
+  const perDeviceValues =
+    declarations.length > 0 ||
+    (commonApprovals !== null &&
+      [
+        ...new Set(
+          approvalTargets.map((device) => approvalsByDevice!.get(device.id)!),
+        ),
+      ].some((approvals) => !sameHostApprovals(approvals, commonApprovals)));
+  // Running versions are extracted with Unix path rules. Never use that proof
+  // for Windows, or one host's required allowances to certify another host.
+  const comparable =
+    declarations.length === 0 &&
+    !perDeviceValues &&
+    approvalTargets.every(
+      (device) => device.os === "linux" || device.os === "darwin",
+    );
+  // A check is evidence only for the version, selected hosts and exact binding
+  // input instance it checked. Comparing the input instance also invalidates a
+  // pass when someone changes a value and later types the old value again.
+  const [hostCheck, setHostCheck] = useState<{
+    versionId: string | undefined;
+    bindingInputs: BindingInputs;
+    selection: ReadonlySet<string>;
+    passed: ReadonlySet<string>;
+  } | null>(null);
+  const passedOnHost =
+    hostCheck?.versionId === version?.id &&
+    hostCheck?.bindingInputs === bindingInputs &&
+    hostCheck?.selection === effective
+      ? hostCheck.passed
+      : new Set<string>();
   const runningUse = useRunningApprovals(
     wantsApproval && comparable
-      ? restrictedTargets.flatMap((device) =>
+      ? approvalTargets.flatMap((device) =>
           device.running_version?.id ? [device.running_version.id] : [],
         )
       : [],
   );
   const approvalKnown =
-    wantsApproval && approvals
-      ? approvalBasis(approvals, restrictedTargets, {
+    wantsApproval && commonApprovals
+      ? approvalBasis(commonApprovals, approvalTargets, {
           passed: passedOnHost,
           running: runningUse.held,
           comparable,
         })
       : new Map<string, "passed" | "runs">();
-  const unconfirmed = restrictedTargets.filter(
+  const unconfirmed = approvalTargets.filter(
     (device) => !approvalKnown.has(device.id),
   );
   const confirmedBy = (basis: "passed" | "runs") =>
-    restrictedTargets.filter(
-      (device) => approvalKnown.get(device.id) === basis,
-    );
+    approvalTargets.filter((device) => approvalKnown.get(device.id) === basis);
   // A running version still being read could take the claim back.
   const needsApproval = wantsApproval && !runningUse.pending;
   const showApprovalNote =
@@ -800,6 +887,7 @@ export default function TargetDialog({
   /** Selection changes invalidate the review and any replacement chosen for it. */
   function resetReview() {
     setPreview(null);
+    setHostCheck(null);
     if (adoption) {
       if (!priorityTouched) setPriority(adoption.previousPriority);
       if (!modeTouched) setMode(adoption.previousMode);
@@ -1114,8 +1202,8 @@ export default function TargetDialog({
       ? null
       : capabilityBlocked
         ? "refused: needs Full Vector mode"
-        : needsApproval && approvals && unconfirmedIds.has(device.id)
-          ? refusalCondition(approvals)
+        : needsApproval && unconfirmedIds.has(device.id)
+          ? refusalCondition(approvalsByDevice!.get(device.id)!)
           : null;
     if (!outcome?.takes || !refusal) return outcome;
     return {
@@ -1523,9 +1611,21 @@ export default function TargetDialog({
             )}
           </div>
         )}
-        {showApprovalNote && approvals && (
+        {!!version &&
+          !!declarations.length &&
+          !capabilityBlocked &&
+          restrictedTargets.length > 0 &&
+          !approvalsByDevice && (
+            <div className="control-note target-approval-note" role="status">
+              Enter valid values for every declared variable before host
+              approval commands can be calculated. No base-version commands are
+              shown because a device's listener, destination or path may differ.
+            </div>
+          )}
+        {showApprovalNote && approvalsByDevice && (
           <HostApprovalNote
-            approvals={approvals}
+            approvalsByDevice={approvalsByDevice}
+            perDeviceValues={perDeviceValues}
             devices={unconfirmed}
             passed={confirmedBy("passed")}
             runs={confirmedBy("runs")}
@@ -1666,6 +1766,7 @@ export default function TargetDialog({
                   persistent={persistent}
                   onChange={(next) => {
                     setBindingInputs(next);
+                    setHostCheck(null);
                     setPreview(null);
                     setError("");
                   }}
@@ -1930,12 +2031,12 @@ export default function TargetDialog({
                     : 0
                 }
                 onPassed={(ids) =>
-                  setPassedOnHost((previous) =>
-                    previous.size === ids.size &&
-                    [...ids].every((id) => previous.has(id))
-                      ? previous
-                      : ids,
-                  )
+                  setHostCheck({
+                    versionId: version.id,
+                    bindingInputs,
+                    selection: effective,
+                    passed: ids,
+                  })
                 }
               />
             )}

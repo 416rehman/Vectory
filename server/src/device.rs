@@ -390,13 +390,18 @@ pub async fn renew(
     Extension(peer): Extension<PeerCertificate>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let _guard = crate::db::writer(&s).await;
+    // Enrollment shares this TLS listener, so a request without a device
+    // certificate must never wait for the shared SQLite writer here either.
     let id = authenticated(&s, &peer).await?;
     s.limit(
         format!("renew:{id}"),
         8,
         std::time::Duration::from_secs(86400),
     )?;
+    let _guard = crate::db::writer(&s).await;
+    if authenticated(&s, &peer).await? != id {
+        return Err(ApiError::unauthorized());
+    }
     let issued = s.keys.issue(&id, db::string(&v, "csr_pem", 16384)?)?;
     let mut tx = db::begin_write(&s.pool).await?;
     let overlap =
@@ -666,13 +671,21 @@ pub async fn heartbeat(
     Extension(peer): Extension<PeerCertificate>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let _guard = crate::db::writer(&s).await;
+    // The listener permits anonymous TLS for enrollment. Refuse unauthenticated
+    // heartbeats before they can queue at the process-wide SQLite writer, and
+    // charge a known device's request budget before it joins that queue too.
     let id = authenticated(&s, &peer).await?;
     s.limit(
         format!("heartbeat:{id}"),
         30,
         std::time::Duration::from_secs(60),
     )?;
+    let _guard = crate::db::writer(&s).await;
+    // Revocation or identity recovery can commit while we wait for the lock.
+    // The initial read is only an early rejection, never the writer's permit.
+    if authenticated(&s, &peer).await? != id {
+        return Err(ApiError::unauthorized());
+    }
     let mode = configuration_mode(&v)?;
     if v["protocol_version"] != 1 {
         return Err(ApiError::invalid("Unsupported protocol"));

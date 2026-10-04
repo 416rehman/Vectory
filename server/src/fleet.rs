@@ -296,7 +296,7 @@ struct Entry {
     vector_version: Option<String>,
     /// The agent version as the device reported it.
     agent_version: Option<String>,
-    /// Lowercased search text: the device's own fields, then its groups.
+    /// Lowercased search text: the device's own fields and labels, then its groups.
     search: String,
     /// Length of the device's own part of `search`.
     own: usize,
@@ -353,7 +353,7 @@ impl Entry {
         let pipeline = version_label(row);
         let field = |key: &str| row[key].as_str().filter(|value| !value.is_empty());
         // The Devices page's search text: name, platform, pipeline, Vector
-        // and agent versions, then group names.
+        // and agent versions, bounded enrollment labels, then group names.
         let mut search = [
             field("name"),
             field("os"),
@@ -367,6 +367,36 @@ impl Entry {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase();
+        if let Some(labels) = row["labels"].as_object() {
+            // Labels normally come from a bounded enrollment scope. Recheck
+            // stored rows so a legacy or malformed record cannot turn every
+            // fleet projection into an unbounded search index.
+            for (key, value) in labels
+                .iter()
+                .filter_map(|(key, value)| {
+                    let value = value.as_str()?;
+                    // UTF-8 uses at most four bytes per character. Reject
+                    // oversized stored values before scanning their text.
+                    if key.len() > crate::enrollment_scope::MAX_LABEL_KEY
+                        || value.len() > crate::enrollment_scope::MAX_LABEL_VALUE * 4
+                    {
+                        return None;
+                    }
+                    Some((
+                        crate::enrollment_scope::label_key(key)?,
+                        crate::enrollment_scope::label_value(value)?,
+                    ))
+                })
+                .take(crate::enrollment_scope::MAX_LABELS)
+            {
+                if !search.is_empty() {
+                    search.push(' ');
+                }
+                search.push_str(&key);
+                search.push('=');
+                search.push_str(&value.to_ascii_lowercase());
+            }
+        }
         let own = search.len();
         for group in &groups {
             if !search.is_empty() {
@@ -1677,6 +1707,22 @@ mod tests {
         let bare = entry(json!({"desired_version":{"number":null,"configuration_name":null}}));
         assert_eq!(bare.pipeline.as_deref(), Some("Assigned version"));
         assert_eq!(entry(json!({"desired_version_id":null})).pipeline, None);
+    }
+
+    #[test]
+    fn stored_labels_cannot_grow_the_search_projection_without_bound() {
+        let mut labels = serde_json::Map::new();
+        for n in 0..10 {
+            labels.insert(format!("k{n}"), json!(format!("value-{n}")));
+        }
+        labels.insert("bad key".into(), json!("not indexed"));
+        labels.insert("oversized".into(), json!("x".repeat(4096)));
+        let indexed = entry(json!({"labels":labels}));
+        assert!(indexed.search.contains("k0=value-0"));
+        assert!(indexed.search.contains("k7=value-7"));
+        assert!(!indexed.search.contains("k8=value-8"));
+        assert!(!indexed.search.contains("not indexed"));
+        assert!(!indexed.search.contains("oversized"));
     }
 
     #[test]

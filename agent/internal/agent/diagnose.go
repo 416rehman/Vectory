@@ -83,6 +83,9 @@ type componentRef struct{ Kind, Type string }
 type redactor struct {
 	safe    map[string]bool
 	secrets []string
+	// apiAddress comes from the effective configuration, not Vector's log.
+	// Only a configured address may be echoed in an API bind diagnostic.
+	apiAddress string
 	// Credentials under four bytes can't be replaced wherever they appear
 	// without mangling ordinary text, so only whole words are redacted.
 	shortSecrets []string
@@ -120,6 +123,7 @@ func newRedactor() *redactor {
 	}
 	r.safe[vectorDefaultDataDir] = true
 	r.safe[strings.TrimSuffix(vectorDefaultDataDir, "/")] = true
+	r.safe["healthchecks.require_healthy"] = true
 	return r
 }
 
@@ -211,6 +215,9 @@ func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
 	decoder.UseNumber()
 	if decoder.Decode(&root) != nil {
 		return
+	}
+	if api, ok := root["api"].(map[string]any); ok {
+		r.apiAddress, _ = api["address"].(string)
 	}
 	for section, kind := range map[string]string{"sources": "source", "transforms": "transform", "sinks": "sink"} {
 		components, _ := root[section].(map[string]any)
@@ -1135,6 +1142,17 @@ func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
 		case rec.Message == "Configuration error." && rec.Error != "":
 			lines := strings.Split(rec.Error, "\n")
 			set.add(r.finalize(r.classifyValidationError(strings.TrimSpace(lines[0]), lines[1:])))
+		case rec.Level == "ERROR" && rec.Target == "vector::app" && rec.Message == "An error occurred that Vector couldn't handle." &&
+			strings.HasPrefix(rec.Error, "Failed to bind gRPC API server to ") && classifyNetwork(rec.Error) == "address_in_use":
+			// Vector 0.58 acknowledges startup before it tries to bind its API.
+			// The ensuing app error has no component ID, so the component rule
+			// below cannot explain the early exit.
+			message := "Another process is already listening on the Vector API address."
+			if r.apiAddress != "" && strings.Contains(rec.Error, "to "+r.apiAddress+":") {
+				message = "Another process is already listening on the Vector API address " + r.apiAddress + "."
+			}
+			set.add(r.finalize(Diagnostic{Code: "ADDRESS_IN_USE", Field: "api.address", Reason: "address_in_use", Message: message,
+				Hint: "Stop the other process, or change the Vector API address."}))
 		case rec.Message == "Healthcheck failed.":
 			set.add(r.finalize(healthDiagnostic(rec.ComponentKind, rec.ComponentID, rec.Error)))
 		case rec.Message == "Sinks unhealthy.":
