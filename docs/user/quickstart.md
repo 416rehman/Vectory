@@ -15,6 +15,7 @@ Run Vectory on one Linux or macOS machine, connect that same machine as a device
 | `node --version` | Node.js 22.12 or newer |
 | `cargo --version` | Rust 1.94 or newer |
 | `go version` | Go 1.26 (an older Go fetches 1.26 automatically) |
+| `python3 --version` | Python 3.11 or newer, to build the agent downloads served by the preview |
 
 ## 1. Build Vectory
 
@@ -136,16 +137,36 @@ node scripts/demo.mjs --stop   # if you started the demo fleet
 scripts/preview.sh stop
 ```
 
-To remove the agent and Vector from this machine, first revoke the device in the dashboard: open it and choose **Revoke device identity…** under **Device access** (the host can't revoke its own identity). Then stop and unregister the agent's service, delete its state, and remove the files and account setup created:
+To remove the agent and Vector from this machine, first revoke the device in the dashboard: open it and choose **Revoke device identity…** under **Device access** (the host can't revoke its own identity). Then stop and unregister the agent's service:
 
 ```sh
 sudo vectory service-stop
 sudo vectory service-uninstall
+```
+
+Delete its state and the files installed for this trial. If setup created the default service account, remove that account too:
+
+<!-- tabs:platform -->
+#### Linux
+
+```sh
 sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
 sudo rm -f /usr/local/bin/vectory /usr/local/bin/vector
 sudo rm -rf /etc/vectory/managed
 sudo userdel vectory
 ```
+
+#### macOS
+
+```sh
+sudo vectory uninstall --purge --state-dir "/Library/Application Support/Vectory/agent"
+sudo rm -f /usr/local/bin/vectory /usr/local/bin/vector
+sudo rm -rf "/Library/Application Support/Vectory/managed"
+service_account=_vectory
+sudo dscl . -delete "/Users/$service_account"
+sudo dscl . -delete "/Groups/$service_account"
+```
+<!-- /tabs -->
 
 State, logs and the test certificate authority stay in `.local/` until you delete that folder.
 

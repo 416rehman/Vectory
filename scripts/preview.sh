@@ -105,7 +105,8 @@ if [[ ! -f "$bundled/catalog.json" || -n "$(find "$root/agent" -name '*.go' -new
     rm -rf "$bundled"
     python3 "$root/packaging/build-release.py" --no-archives --out "$bundled" ${targets[@]+"${targets[@]}"} >/dev/null
   else
-    echo "Go or Python is missing; the preview has no bundled agents." >&2
+    echo "Go or Python 3 is missing; the preview has no bundled agents." >&2
+    echo "Add device cannot install an agent. Install Go 1.26 and Python 3.11 or newer, then restart the preview to build agent downloads." >&2
   fi
 fi
 if [[ ! -f "$preview/bootstrap.secret" ]]; then
