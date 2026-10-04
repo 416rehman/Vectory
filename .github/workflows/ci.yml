@@ -128,6 +128,11 @@ jobs:
           node --test scripts/check-workflow-scripts.test.mjs
           node scripts/check-workflow-scripts.mjs
         working-directory: .
+      - name: Check synthetic screenshot telemetry readiness
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: node --test scripts/capture-screenshots.test.mjs
+        working-directory: .
       - name: Check every part of the product says the same version
         timeout-minutes: 10
         if: ${{ !cancelled() }}
