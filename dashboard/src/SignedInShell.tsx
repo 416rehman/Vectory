@@ -660,7 +660,10 @@ export default function SignedInShell({
         >
           {arrival}
         </div>
+        {/* A changed role or account gets a fresh search panel: its previous
+            directory may include people this session can no longer list. */}
         <CommandPalette
+          key={`${user.id}:${user.role}`}
           open={commandOpen}
           onOpenChange={setCommandOpen}
           returnFocusRef={shellModalReturnFocus}

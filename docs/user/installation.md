@@ -29,7 +29,7 @@ The agent checks in and waits. Vector starts only after you [deploy a published 
 Prepare the handover while the old Vector is still running:
 
 <!-- steps -->
-1. In Vectory, open **Pipelines → Create pipeline**, then **Actions → Import configuration file** and choose the running config (YAML, TOML or JSON; combine several files into one first). Fix anything the import flags.
+1. In Vectory, open **Pipelines → Create pipeline**, then **Actions → Import configuration file** and choose the running configuration files (YAML, TOML or JSON; up to 32 files and 1 MiB combined). Choose the files individually rather than a directory, then fix anything the import flags.
 2. In **Code** view, choose **JSON**, then **Actions → Export configuration**.
 3. Copy the exported file to the host as the agent's managed configuration, for example `/etc/vectory/managed/vector.json`. Provision everything it reads: files, credentials, `data_dir`, and in restricted mode the [allowances](#configure-restricted-allowances) it needs.
 4. With the old Vector still running, run the install command from [Install and enroll](#install-and-enroll). Setup never takes over a running Vector: it records how it was started, copies every configuration file it loads and stops, telling you what to do next. If it names files the agent won't manage, see [Adopt a Vector that already runs](agents.md#adopt-a-vector-that-already-runs).

@@ -500,6 +500,50 @@ try {
   );
 
   await check(
+    "several mixed-format files form one reviewed pipeline without dropping an existing draft",
+    async () => {
+      const files = [
+        {
+          name: "03-sink.toml",
+          text: '[sinks.out]\ntype = "blackhole"\ninputs = ["sample"]\n',
+        },
+        {
+          name: "01-source.json",
+          text: JSON.stringify({
+            sources: { demo: { type: "demo_logs", format: "json" } },
+          }),
+        },
+        {
+          name: "02-transform.yaml",
+          text: "transforms:\n  sample:\n    type: sample\n    inputs: [demo]\n    rate: 10\n",
+        },
+      ];
+      const assembled = {
+        sources: { demo: { type: "demo_logs", format: "json" } },
+        transforms: { sample: { type: "sample", inputs: ["demo"], rate: 10 } },
+        sinks: { out: { type: "blackhole", inputs: ["sample"] } },
+      };
+      await load({ document: emptyDocument() });
+      await drop(files);
+      await expect(replacement()).toHaveCount(0);
+      await saved(assembled);
+      await expect(page.locator(".react-flow__node")).toHaveCount(3);
+      await load();
+      const before = structuredClone(fixture.document.config);
+      await drop(files);
+      await expect(replacement()).toBeVisible();
+      await expect(replacement()).toContainText("3 configuration files");
+      expect(fixture.document.config).toEqual(before);
+      await replacement()
+        .getByRole("button", { name: "Replace pipeline", exact: true })
+        .click();
+      await saved(assembled);
+      await button("Undo").click();
+      await saved(before);
+    },
+  );
+
+  await check(
     "malformed, duplicate, unsafe and non-pipeline files explain refusal and leave draft bytes unchanged",
     async () => {
       await load();
@@ -655,7 +699,7 @@ try {
   );
 
   await check(
-    "delayed reads cannot overwrite newer code and multiple, oversized or unsupported files are refused",
+    "delayed reads cannot overwrite newer code and conflicting, oversized or unsupported files are refused",
     async () => {
       await load({ document: emptyDocument() });
       await openCode();
@@ -691,10 +735,10 @@ try {
       for (const [files, reason] of [
         [
           [
-            { name: "a.json", text: "{}" },
-            { name: "b.json", text: "{}" },
+            { name: "a.json", text: '{"api":{"enabled":false}}' },
+            { name: "b.json", text: '{"api":{"enabled":true}}' },
           ],
-          /one|single/i,
+          /api.*also defined|global option/i,
         ],
         [[{ name: "large.json", size: 1048577 }], /1 MiB|large|size/i],
         [
@@ -796,7 +840,7 @@ try {
       }
     },
   );
-  expect(results).toHaveLength(10);
+  expect(results).toHaveLength(11);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

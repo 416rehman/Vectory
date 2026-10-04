@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { guessConfigurationFormat } from "./configurationSource";
-import { readStartImport, readStartText } from "./PipelineStartChoice";
+import {
+  readStartFiles,
+  readStartImport,
+  readStartText,
+} from "./PipelineStartChoice";
 
 describe("pasted Vector configurations", () => {
   it("recognizes the format from the text", () => {
@@ -41,7 +45,49 @@ describe("pasted Vector configurations", () => {
     const imported = await readStartImport(file);
     expect(imported.config).toBeUndefined();
     expect(imported.error).toBe(
-      "The file is not valid UTF-8. Save it as UTF-8 and try again.",
+      "demo.yaml: the file is not valid UTF-8. Save it as UTF-8 and try again.",
+    );
+  });
+
+  it("joins mixed-format Vector fragments before checking and naming a new pipeline", async () => {
+    const imported = await readStartFiles([
+      new File(
+        ['[sinks.out]\ntype = "blackhole"\ninputs = ["sample"]\n'],
+        "03-sink.toml",
+      ),
+      new File(
+        ['{"sources":{"demo":{"type":"demo_logs","format":"json"}}}'],
+        "01-source.json",
+      ),
+      new File(
+        [
+          "transforms:\n  sample:\n    type: sample\n    inputs: [demo]\n    rate: 10\n",
+        ],
+        "02-transform.yaml",
+      ),
+    ]);
+    expect(imported.error).toBeUndefined();
+    expect(imported.name).toBe("3 configuration files");
+    expect(imported.suggestedName).toBeUndefined();
+    expect(imported.summary).toMatch(/^3 steps/);
+    expect(imported.config?.sinks.out.inputs).toEqual(["sample"]);
+    expect(imported.config?.transforms.sample.rate).toBe(10);
+  });
+
+  it("refuses a conflicting fragment without silently replacing a component", async () => {
+    const imported = await readStartFiles([
+      new File(
+        ["sources:\n  demo: {type: demo_logs, format: json}\n"],
+        "a.yaml",
+      ),
+      new File(
+        ["sources:\n  demo: {type: demo_logs, format: syslog}\n"],
+        "b.yaml",
+      ),
+    ]);
+    expect(imported.config).toBeUndefined();
+    expect(imported.error).toMatch(
+      /b\.yaml: sources\.demo is also defined in a\.yaml/,
     );
   });
 

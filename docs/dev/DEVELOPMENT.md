@@ -84,6 +84,8 @@ node scripts/capture-screenshots.mjs              # or name screens: editor over
 
 It signs in as the demo administrator, changes nothing but its own session and local form selections, and signs out again. It writes 1440-pixel-wide light screenshots of the demo pipeline in the editor, Overview, Devices, a device, the pipeline's rollout, Add device and the Help center, plus a dark editor for the README, to `docs/screenshots/product-*.png`. Most images are 900 pixels tall; Overview captures the complete page, while the device and Add device frames are taller to show complete sections. For Add device, it selects Linux and restricted mode but does not create an install command or token. It first verifies that the instance contains only demo records, exactly one demo enrollment token, and devices matching local demo agents. It waits for the demo devices to verify application, for the rollout to finish and for page loading indicators to clear, and refuses an editor capture until Vector accepts the pipeline. It refuses to save **Add device** if opening it issued an enrollment token.
 
+For a fresh Linux capture without a local Linux toolchain, dispatch the `product screenshots (synthetic demo)` GitHub Actions workflow. It starts an isolated demo, runs the same capture guard, and uploads the images as a short-lived artifact. Review all eight images before replacing the tracked screenshots; a successful capture is evidence of the demo state, not an automatic visual approval.
+
 | Variable | Use |
 | --- | --- |
 | `VECTORY_PREVIEW_DIR`, `VECTORY_PREVIEW_WEB_PORT` | The same preview settings as `scripts/preview.sh`. |

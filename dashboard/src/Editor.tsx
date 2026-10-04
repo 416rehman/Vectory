@@ -167,12 +167,9 @@ import {
   parseSource,
   diagnoseConfiguration,
   diagnoseConfigurationSource,
-  assertValidPipelineSource,
-  detectConfigurationFormat,
   diagnosticCounts,
   isEmptyPipeline,
-  MAX_CONFIGURATION_BYTES,
-  sourceErrorMessage,
+  readConfigurationFiles,
   sourceOffset,
 } from "./configurationSource";
 import { planCodeSave, unappliedStatus } from "./codeSave";
@@ -992,7 +989,10 @@ export default function Editor({
       return (
         check.code !== code ||
         (check.draftConfig !== checkedConfig &&
-          !sameConfiguration(check.draftConfig || check.config, checkedConfig)) ||
+          !sameConfiguration(
+            check.draftConfig || check.config,
+            checkedConfig,
+          )) ||
         (check.variables !== checkedVariables &&
           JSON.stringify(check.variables) !== JSON.stringify(checkedVariables))
       );
@@ -1719,7 +1719,9 @@ export default function Editor({
   }
   function undo(redo = false) {
     if (importedCodeDirty.current) {
-      setError("Apply or discard your Code changes before undoing draft changes.");
+      setError(
+        "Apply or discard your Code changes before undoing draft changes.",
+      );
       return;
     }
     if (pendingSchemaFields.current.size && !closeSettings()) return;
@@ -2545,7 +2547,7 @@ export default function Editor({
     if (toolsRef.current) toolsRef.current.open = false;
     setView(next);
   }
-  async function importFile(file: File) {
+  async function importFiles(files: readonly File[]) {
     const generation = ++importGeneration.current;
     const before = importContext.current;
     if (!before.allowed) {
@@ -2564,21 +2566,10 @@ export default function Editor({
       );
       return;
     }
-    let text = "";
     try {
-      const fileFormat = detectConfigurationFormat(file.name);
-      if (file.size > MAX_CONFIGURATION_BYTES)
-        throw Error("Configuration files must be 1 MiB or smaller.");
-      const bytes = await file.arrayBuffer();
-      try {
-        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      } catch {
-        throw Error(
-          "The file is not valid UTF-8. Save it as UTF-8 and try again.",
-        );
-      }
+      const imported = await readConfigurationFiles(files);
       if (generation !== importGeneration.current) return;
-      const parsed = assertValidPipelineSource(text, fileFormat);
+      const parsed = imported.config;
       const credential = findPlainCredential(parsed);
       if (credential?.kind === "scan_limit")
         throw Error(
@@ -2610,9 +2601,9 @@ export default function Editor({
         return;
       }
       const candidate = {
-        name: file.name,
-        format: fileFormat,
-        text,
+        name: imported.name,
+        format: imported.format,
+        text: imported.text,
         config: parsed,
         before: current.config,
       };
@@ -2620,7 +2611,7 @@ export default function Editor({
       else setImportCandidate(candidate);
     } catch (failure) {
       if (generation === importGeneration.current)
-        notify(`Import failed: ${sourceErrorMessage(text, failure)}`, {
+        notify(`Import failed: ${(failure as Error).message}`, {
           tone: "error",
         });
     }
@@ -4865,9 +4856,11 @@ export default function Editor({
         ref={fileRef}
         type="file"
         hidden
+        multiple
         accept=".json,.yaml,.yml,.toml"
         onChange={(e) => {
-          if (e.target.files?.[0]) void importFile(e.target.files[0]);
+          if (e.target.files?.length)
+            void importFiles(Array.from(e.target.files));
           e.target.value = "";
         }}
       />
@@ -5052,19 +5045,14 @@ export default function Editor({
           event.stopPropagation();
           dragDepth.current = 0;
           setDraggingFile(false);
-          if (event.dataTransfer.files.length !== 1) {
-            importGeneration.current++;
-            notify("Drop one YAML, JSON, or TOML file at a time.", refusal);
-            return;
-          }
-          void importFile(event.dataTransfer.files[0]);
+          void importFiles(Array.from(event.dataTransfer.files));
         }}
       >
         {draggingFile && (
           <div className="editor-file-drop-hint" aria-hidden="true">
             <Upload size={26} />
-            <strong>Drop a pipeline file</strong>
-            <span>YAML, JSON, or TOML · up to 1 MiB</span>
+            <strong>Drop pipeline files</strong>
+            <span>YAML, JSON, or TOML · up to 1 MiB together</span>
           </div>
         )}
         <div className="editor-toolbar" aria-label="Pipeline toolbar">
@@ -5211,7 +5199,7 @@ export default function Editor({
                         onClick={() => tool(() => fileRef.current?.click())}
                       >
                         <Upload size={16} aria-hidden="true" />
-                        Import configuration file
+                        Import configuration files
                       </button>
                     </>
                   )}

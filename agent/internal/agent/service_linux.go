@@ -158,16 +158,16 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 	if err = os.Chown(s.ManagedConfig, uid, gid); err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
-	if registration == ServiceUnchanged {
-		return registration, nil
-	}
-	if err = AtomicWrite(serviceDefinition, []byte(unit)); err != nil {
-		return "", err
-	}
-	if err = os.Chmod(serviceDefinition, 0644); err != nil {
-		return "", err
-	}
-	return registration, systemctl("daemon-reload")
+	return finishServiceRegistration(registration, func() error {
+		return AtomicWrite(serviceDefinition, []byte(unit))
+	}, func() error {
+		// AtomicWrite can have succeeded before chmod or daemon-reload failed.
+		// Both operations must run on an identical-file retry as well.
+		if err := os.Chmod(serviceDefinition, 0644); err != nil {
+			return err
+		}
+		return systemctl("daemon-reload")
+	})
 }
 
 func systemctl(args ...string) error {

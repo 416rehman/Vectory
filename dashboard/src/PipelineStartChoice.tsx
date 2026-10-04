@@ -9,6 +9,8 @@ import "./pipeline-templates.css";
 
 export type StartImport = {
   name: string;
+  checking?: boolean;
+  suggestedName?: string;
   config?: Config;
   summary?: string;
   error?: string;
@@ -38,6 +40,24 @@ export async function readStartText(
     if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
       throw Error("Configurations must be 1 MiB or smaller.");
     const config = assertValidPipelineSource(text, format);
+    return checkedStartImport(name, config);
+  } catch (error) {
+    const message = sourceErrorMessage(text, error);
+    return {
+      name,
+      error: message.includes("Only credential fields can hold a device secret")
+        ? `${message} This preview does not support device secrets in headers or URLs. Use a native Vector secret or environment reference on a full-mode device, or remove this value.`
+        : message,
+    };
+  }
+}
+
+function checkedStartImport(
+  name: string,
+  config: Config,
+  fileCount = 0,
+): StartImport {
+  try {
     const credential = findPlainCredential(config);
     if (credential) {
       const outboundLocation =
@@ -56,10 +76,13 @@ export async function readStartText(
     return {
       name,
       config,
+      ...(fileCount === 1
+        ? { suggestedName: name.replace(/\.(?:ya?ml|json|toml)$/i, "") }
+        : {}),
       summary: `${steps} ${steps === 1 ? "step" : "steps"}, checked locally. Vector checks it in the editor.`,
     };
   } catch (error) {
-    const message = sourceErrorMessage(text, error);
+    const message = (error as Error).message;
     return {
       name,
       error: message.includes("Only credential fields can hold a device secret")
@@ -69,31 +92,26 @@ export async function readStartText(
   }
 }
 
-/** Read a Vector configuration file for a new pipeline. */
-export async function readStartImport(file: File): Promise<StartImport> {
+/** Read a set of Vector files as one new pipeline. */
+export async function readStartFiles(
+  files: readonly File[],
+): Promise<StartImport> {
+  const name =
+    files.length === 1 ? files[0].name : `${files.length} configuration files`;
   try {
-    const { detectConfigurationFormat, MAX_CONFIGURATION_BYTES } =
-      await loadSource();
-    if (file.size > MAX_CONFIGURATION_BYTES)
-      throw Error("Configuration files must be 1 MiB or smaller.");
-    const format = detectConfigurationFormat(file.name);
-    const bytes = await file.arrayBuffer();
-    let text: string;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch {
-      throw Error(
-        "The file is not valid UTF-8. Save it as UTF-8 and try again.",
-      );
-    }
-    return await readStartText(file.name, text, format);
+    const { readConfigurationFiles } = await loadSource();
+    const result = await readConfigurationFiles(files);
+    return checkedStartImport(result.name, result.config, files.length);
   } catch (error) {
     return {
-      name: file.name,
-      error: (error as Error).message || "This file could not be read.",
+      name,
+      error: (error as Error).message || "These files could not be read.",
     };
   }
 }
+
+/** Keep the single-file API for callers that already have one File. */
+export const readStartImport = (file: File) => readStartFiles([file]);
 
 const others = pipelineTemplates.filter(
   (template) => template.id !== "synthetic-demo",
@@ -129,12 +147,19 @@ export default function PipelineStartChoice({
   const pasteId = useId();
   const [pasting, setPasting] = useState(false);
   const [pasted, setPasted] = useState("");
-  // The name being checked; only the newest check's answer is shown.
-  const [checking, setChecking] = useState<string | null>(null);
   const check = useRef(0);
+  // A closed dialog must not let an old file read update a later one.
+  useEffect(
+    () => () => {
+      check.current++;
+    },
+    [],
+  );
   async function read(name: string, run: () => Promise<StartImport>) {
     const ticket = ++check.current;
-    setChecking(name);
+    // Revoke the previous valid import before reading another file. Creating
+    // during this check must never submit that previous configuration.
+    onImport({ name, checking: true });
     let result: StartImport;
     try {
       result = await run();
@@ -146,7 +171,6 @@ export default function PipelineStartChoice({
       };
     }
     if (ticket !== check.current) return;
-    setChecking(null);
     onImport(result);
   }
   const chosen = pipelineTemplates.find((template) => template.id === value);
@@ -165,13 +189,14 @@ export default function PipelineStartChoice({
         name="pipeline-start"
         disabled={disabled}
         checked={value === id}
-        onChange={() =>
+        onChange={() => {
+          check.current++;
           onChange(
             id,
             pipelineTemplates.find((template) => template.id === id)?.title ??
               "",
-          )
-        }
+          );
+        }}
         aria-describedby={value === id && chosen ? needsId : undefined}
       />
       <span>
@@ -198,7 +223,7 @@ export default function PipelineStartChoice({
         {option(
           "import",
           "Import a Vector config",
-          "Start from a YAML, JSON or TOML file, or paste one.",
+          "Choose one or several YAML, JSON or TOML files, or paste one.",
         )}
       </div>
       {value === "import" && (
@@ -207,12 +232,18 @@ export default function PipelineStartChoice({
             ref={file}
             type="file"
             hidden
+            multiple
             accept=".json,.yaml,.yml,.toml"
             onChange={(event) => {
-              const chosenFile = event.target.files?.[0];
+              const chosenFiles = Array.from(event.target.files || []);
               event.target.value = "";
-              if (chosenFile)
-                void read(chosenFile.name, () => readStartImport(chosenFile));
+              if (chosenFiles.length)
+                void read(
+                  chosenFiles.length === 1
+                    ? chosenFiles[0].name
+                    : `${chosenFiles.length} configuration files`,
+                  () => readStartFiles(chosenFiles),
+                );
             }}
           />
           <Button
@@ -222,7 +253,7 @@ export default function PipelineStartChoice({
             disabled={disabled}
             onClick={() => file.current?.click()}
           >
-            {imported ? "Choose another file" : "Choose file"}
+            {imported ? "Choose other files" : "Choose files"}
           </Button>
           <Button
             type="button"
@@ -272,9 +303,9 @@ export default function PipelineStartChoice({
               </Button>
             </div>
           )}
-          {checking ? (
+          {imported?.checking ? (
             <p className="pipeline-start-import-result" role="status">
-              <code>{checking}</code> Checking…
+              <code>{imported.name}</code> Checking…
             </p>
           ) : (
             imported && (

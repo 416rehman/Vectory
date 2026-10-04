@@ -31,6 +31,14 @@ Runs only when dispatched; [packaging/README.md](../../packaging/README.md#relea
 | `verify` | The uploaded candidate, downloaded again the way a reader of the release page gets it, passes `sha256sum -c SHA256SUMS` and `packaging/verify-release.py` without refreshing the sums | The candidate's contents beyond what `verify-release.py` reads |
 | `attest` | GitHub build provenance for `SHA256SUMS`, only with `attest` and a configured `release` environment | Anything about the candidate's contents |
 
+## product-screenshots.yml
+
+Runs only when dispatched. The job starts with fresh local state and uploads images for human review; it does not replace tracked screenshots or publish anything.
+
+| Job | A green run shows | It does not show |
+| --- | --- | --- |
+| `capture` | The Linux demo built and enrolled real agents running Vector 0.58.0 against synthetic events; the screenshot guard found only the expected demo records, verified the rollout, and captured eight images without loading indicators | Visual approval of the layout, other operating systems, or a production fleet |
+
 ## platforms.yml
 
 Runs when dispatched (`gh workflow run platforms.yml --ref <branch>`) and when the workflow or a script it runs changes, not on every push. A newer run cancels the Linux and browser jobs it replaces; a Windows or macOS job that is under way finishes and the newest one waits for its turn, because those proofs take longer than changes come. Each job keeps its evidence as the `platforms-<job>` artifact: one JSON file per phase (the checks in order, how long each took, what it observed) and the logs. The scripts are in `tests/platform/`; `node --test tests/platform/lib.test.mjs`, an early step of each service job, unit-tests the parsers they rely on against the text the tools print.

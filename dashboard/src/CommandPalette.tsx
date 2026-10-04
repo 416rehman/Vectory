@@ -538,14 +538,14 @@ export default function CommandPalette({
           href: `#/deployments/${deployment.id}`,
         },
       })),
-      ...directory.people.map((person): Item => ({
+      ...(can(user, "admin") ? directory.people : []).map((person): Item => ({
         key: `person:${person.id}`,
         kind: "person",
         title: person.name || person.email,
         subtitle: `${person.email} · ${person.role[0].toUpperCase()}${person.role.slice(1)}`,
         keywords: person.email,
         icon: UserRound,
-        href: "#/users",
+        href: `#/users?find=${encodeURIComponent(person.email)}`,
       })),
     ];
     // Verbs on what was found appear when the words typed ask for one ("pause

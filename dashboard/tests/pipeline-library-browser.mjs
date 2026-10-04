@@ -61,8 +61,23 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 page.setDefaultTimeout(10000);
+await context.addInitScript(() => {
+  window.__pendingFileReads = [];
+  const originalRead = File.prototype.arrayBuffer;
+  File.prototype.arrayBuffer = function () {
+    if (this.name.startsWith("delayed-"))
+      return new Promise((resolve) =>
+        window.__pendingFileReads.push({
+          name: this.name,
+          resolve: () => originalRead.call(this).then(resolve),
+        }),
+      );
+    return originalRead.call(this);
+  };
+});
 const errors = [],
   requests = [],
+  creationPosts = [],
   unexpected = [],
   results = [];
 page.on("pageerror", (error) => errors.push(error.message));
@@ -166,6 +181,20 @@ await context.route("**/api/v1/**", async (route) => {
     return reply(slimOverview([], { configurations_total: 26 }));
   // The Overview's first-run checklist asks whether agent downloads exist.
   if (path === "/releases") return reply([]);
+  if (path.startsWith("/configurations/requests/") && method === "GET")
+    return reply({ request_id: path.split("/").at(-1), found: false });
+  if (path === "/configurations" && method === "POST") {
+    creationPosts.push(JSON.parse(route.request().postData()));
+    return reply(
+      {
+        error: {
+          code: "VALIDATION_FAILED",
+          message: "Synthetic create request captured without saving",
+        },
+      },
+      400,
+    );
+  }
   // An administrator's Overview asks whether a notification channel exists.
   if (path === "/notifications/channels") return reply(configuredChannels);
   if (path === "/configurations/library" && method === "GET") {
@@ -393,9 +422,139 @@ try {
         dialog.locator(".pipeline-start-import-result[role=status]"),
       ).toContainText("Pasted JSON");
       await expect(dialog).not.toContainText(complaint);
+      await dialog.locator('input[type="file"]').setInputFiles([
+        {
+          name: "source.yaml",
+          mimeType: "text/yaml",
+          buffer: Buffer.from(
+            "sources:\n  a:\n    type: demo_logs\n    format: json\n",
+          ),
+        },
+        {
+          name: "sink.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(
+            '{"sinks":{"out":{"type":"blackhole","inputs":["a"]}}}',
+          ),
+        },
+      ]);
+      await expect(
+        dialog.locator(".pipeline-start-import-result[role=status]"),
+      ).toContainText("2 configuration files");
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue(
+        "From a file",
+      );
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(dialog).toHaveCount(0);
       expect(unexpected).toEqual([]);
+    },
+  );
+  await check(
+    "replacing a valid import blocks Create until the newest read finishes and submits only the new configuration",
+    async () => {
+      await page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      const submit = dialog.getByRole("button", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      const files = dialog.locator('input[type="file"]');
+      const config = (source) =>
+        JSON.stringify({
+          sources: { [source]: { type: "demo_logs", format: "json" } },
+          sinks: { output: { type: "blackhole", inputs: [source] } },
+        });
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await files.setInputFiles({
+        name: "previous.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(config("previous")),
+      });
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).toContainText("previous.json");
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue("previous");
+      const before = creationPosts.length;
+      await files.setInputFiles({
+        name: "delayed-newer.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(config("newer")),
+      });
+      await expect
+        .poll(() => page.evaluate(() => window.__pendingFileReads.length))
+        .toBe(1);
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).toContainText("delayed-newer.json");
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).not.toContainText("previous.json");
+      await expect(submit).toBeDisabled();
+      expect(creationPosts.length).toBe(before);
+      await page.evaluate(() => window.__pendingFileReads.shift().resolve());
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).toContainText("checked locally");
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue(
+        "delayed-newer",
+      );
+      await expect(submit).toBeEnabled();
+      await submit.click();
+      await expect.poll(() => creationPosts.length).toBe(before + 1);
+      expect(creationPosts.at(-1).config.sources).toHaveProperty("newer");
+      expect(creationPosts.at(-1).config.sources).not.toHaveProperty(
+        "previous",
+      );
+      await expect(dialog).toContainText(
+        "Synthetic create request captured without saving",
+      );
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+    },
+  );
+  await check(
+    "switching start choice invalidates a pending file read and cannot restore it later",
+    async () => {
+      await page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await dialog.locator('input[type="file"]').setInputFiles({
+        name: "delayed-late.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(
+          '{"sources":{"late":{"type":"demo_logs","format":"json"}},"sinks":{"output":{"type":"blackhole","inputs":["late"]}}}',
+        ),
+      });
+      await expect
+        .poll(() => page.evaluate(() => window.__pendingFileReads.length))
+        .toBe(1);
+      await dialog
+        .getByText("Try a synthetic example", { exact: true })
+        .click();
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue(
+        "Synthetic demo",
+      );
+      await page.evaluate(() => window.__pendingFileReads.shift().resolve());
+      await delay(100);
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await expect(dialog.locator(".pipeline-start-import-result")).toHaveCount(
+        0,
+      );
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue("");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
     },
   );
   await check(

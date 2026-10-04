@@ -237,14 +237,14 @@ export default function PipelineLibrary({
   // The name follows what you start from until you type your own.
   function chooseStart(id: string, templateName: string) {
     setTemplate(id);
+    if (id !== "import") setImported(null);
     clearStaleError();
     if (!nameEdited) setName(templateName);
   }
   function importStart(value: StartImport | null) {
     setImported(value);
     clearStaleError();
-    if (!nameEdited && value?.config && !value.name.startsWith("Pasted "))
-      setName(value.name.replace(/\.(?:ya?ml|json|toml)$/i, ""));
+    if (!nameEdited && value?.config) setName(value.suggestedName || "");
   }
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -789,7 +789,15 @@ export default function PipelineLibrary({
             >
               {notice ? "Close and review request" : "Cancel"}
             </Button>
-            <Button type="submit" busy={busy} disabled={!!notice || unresolved}>
+            <Button
+              type="submit"
+              busy={busy}
+              disabled={
+                !!notice ||
+                unresolved ||
+                (template === "import" && !!imported?.checking)
+              }
+            >
               Create pipeline
             </Button>
           </div>

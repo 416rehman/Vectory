@@ -929,6 +929,132 @@ try {
     },
   );
   await check(
+    "A live admin downgrade removes cached People results from the open palette and its next opening",
+    async () => {
+      await view();
+      await open();
+      await search().fill("Robin");
+      await expect(
+        palette().getByRole("group", { name: "People" }),
+      ).toContainText("Robin Reviewer");
+      const peopleReads = requests.filter(
+        (request) => request.path === "/users",
+      ).length;
+
+      user.role = "viewer";
+      user.revision++;
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(page.locator(".account-button-role")).toHaveText("Viewer");
+      await expect(
+        palette().getByRole("group", { name: "People" }),
+      ).toHaveCount(0);
+      await search().fill("Robin");
+      await expect(
+        palette().getByRole("group", { name: "People" }),
+      ).toHaveCount(0);
+      await search().press("Escape");
+
+      await open();
+      await search().fill("Robin");
+      await expect(
+        palette().getByRole("group", { name: "People" }),
+      ).toHaveCount(0);
+      await search().press("Escape");
+      expect(
+        requests.filter((request) => request.path === "/users"),
+      ).toHaveLength(peopleReads);
+      user.role = "admin";
+      user.revision++;
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(page.locator(".account-button-role")).toHaveText(
+        "Administrator",
+      );
+      await open();
+      await search().fill("Robin");
+      await expect(
+        palette().getByRole("group", { name: "People" }),
+      ).toContainText("Robin Reviewer");
+      await search().press("Escape");
+    },
+  );
+  await check(
+    "A person result and direct link locate and focus that account on desktop and mobile",
+    async () => {
+      await view();
+      await open();
+      await search().fill("Robin");
+      await palette()
+        .getByRole("option", { name: "Robin Reviewer", exact: true })
+        .click();
+      await expect(page).toHaveURL(/#\/users$/);
+      await expect(
+        page.locator(".people-table tr.person-highlight"),
+      ).toContainText("Robin Reviewer");
+      await expect(
+        page.getByRole("button", { name: "Edit access for Robin Reviewer" }),
+      ).toBeFocused();
+
+      await view(
+        `users?find=${encodeURIComponent(colleague.email.toUpperCase())}`,
+      );
+      await expect(
+        page.locator(".people-table tr.person-highlight"),
+      ).toContainText("Robin Reviewer");
+      await expect(
+        page.getByRole("button", { name: "Edit access for Robin Reviewer" }),
+      ).toBeFocused();
+
+      await page.setViewportSize({ width: 375, height: 812 });
+      await view(`users?find=${encodeURIComponent(colleague.email)}`);
+      await expect(
+        page.locator(".people-cards li.person-highlight"),
+      ).toContainText("Robin Reviewer");
+      await expect(
+        page.getByRole("button", { name: "Edit access for Robin Reviewer" }),
+      ).toBeFocused();
+      await page.setViewportSize({ width: 1440, height: 960 });
+    },
+  );
+  await check(
+    "A stale person link explains the miss without exposing a name or giving viewers a directory oracle",
+    async () => {
+      const missing = "missing@example.test";
+      await view(`users?find=${encodeURIComponent(missing)}`);
+      const notFound = page
+        .getByRole("status")
+        .filter({ hasText: "We couldn’t find that person" });
+      await expect(notFound).toBeVisible();
+      await expect(notFound).not.toContainText(missing);
+      await expect(
+        page.locator(".people-table tr.person-highlight"),
+      ).toHaveCount(0);
+      await expect(page).toHaveURL(/#\/users\?find=missing%40example\.test$/);
+
+      user.role = "viewer";
+      user.revision++;
+      const peopleReads = requests.filter(
+        (request) => request.path === "/users",
+      ).length;
+      await view(`users?find=${encodeURIComponent(colleague.email)}`);
+      await expect(
+        page.getByRole("heading", { name: "Workspace access" }),
+      ).toHaveCount(0);
+      await expect(page.getByText("Robin Reviewer")).toHaveCount(0);
+      await view(`users?find=${encodeURIComponent(missing)}`);
+      await expect(
+        page
+          .getByRole("status")
+          .filter({ hasText: "We couldn’t find that person" }),
+      ).toHaveCount(0);
+      expect(
+        requests.filter((request) => request.path === "/users"),
+      ).toHaveLength(peopleReads);
+      user.role = "admin";
+      user.revision++;
+      await view();
+    },
+  );
+  await check(
     "899px and 375px light/dark stay contained, return focus and pass Axe",
     async () => {
       for (const width of [899, 375]) {

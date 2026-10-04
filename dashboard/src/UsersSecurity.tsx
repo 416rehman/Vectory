@@ -49,6 +49,29 @@ function readIntent() {
       : null;
 }
 
+/** A palette result can take an administrator to one person in the list. */
+function readLocatedEmail() {
+  const email = new URLSearchParams(location.hash.split("?")[1] || "")
+    .get("find")
+    ?.trim();
+  return email && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email)
+    ? email
+    : null;
+}
+
+function consumeLocatedEmail() {
+  const [path, query = ""] = location.hash.slice(2).split("?");
+  if (path !== "users") return;
+  const params = new URLSearchParams(query);
+  if (!params.has("find")) return;
+  params.delete("find");
+  history.replaceState(
+    history.state,
+    "",
+    `#/users${params.size ? `?${params}` : ""}`,
+  );
+}
+
 export function UsersSecurity({
   user,
   notify,
@@ -69,7 +92,7 @@ export function UsersSecurity({
   const mfa = useResource<MfaStatus>("/mfa", { enabled: false });
   const [links, setLinks] = useState<Record<string, HeldLink>>({});
   const [savedPerson, setSavedPerson] = useState<User | null>(null);
-  const [locateEmail, setLocateEmail] = useState<string | null>(null);
+  const [locateEmail, setLocateEmail] = useState(readLocatedEmail);
   const [intent, setIntent] = useState(readIntent);
   const mfaActions = useRef<MfaActionsHandle>(null);
   const addPerson = useRef<AddPersonHandle>(null);
@@ -92,7 +115,10 @@ export function UsersSecurity({
 
   // Links from the first-run checklist open the step they name, once.
   useEffect(() => {
-    const changed = () => setIntent(readIntent());
+    const changed = () => {
+      setIntent(readIntent());
+      setLocateEmail(readLocatedEmail());
+    };
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
@@ -106,6 +132,15 @@ export function UsersSecurity({
     history.replaceState(null, "", "#/users");
   }, [intent, mfa.loading, mfa.data.enabled, mfa.error, admin]);
 
+  const linkedEmail = readLocatedEmail();
+  const linkMissing =
+    admin &&
+    linkedEmail &&
+    !people.loading &&
+    !people.error &&
+    !people.data.some(
+      (person) => person.email.toLowerCase() === linkedEmail.toLowerCase(),
+    );
   const RoleIcon = roleIcons[user.role];
   return (
     <div className="control-page account-page">
@@ -136,6 +171,13 @@ export function UsersSecurity({
           />
         )}
       </PageHeader>
+
+      {linkMissing && (
+        <p className="control-note" role="status">
+          We couldn’t find that person in this workspace. They may have been
+          removed. Check the access list below.
+        </p>
+      )}
 
       {admin && (
         <SecureChecklist
@@ -223,7 +265,10 @@ export function UsersSecurity({
             onShowLink={(id) => resets.current?.show(id)}
             onNewLink={(person) => resets.current?.open(person)}
             locateEmail={locateEmail}
-            onEmailLocated={() => setLocateEmail(null)}
+            onEmailLocated={() => {
+              setLocateEmail(null);
+              consumeLocatedEmail();
+            }}
           />
         ))}
       {admin && (

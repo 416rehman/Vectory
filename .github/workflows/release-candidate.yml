@@ -197,7 +197,12 @@ jobs:
         timeout-minutes: 10
         with:
           name: candidate-msi
-          path: artifacts/msi
+          # WiX also writes a .wixpdb debugging database. The candidate
+          # inventory intentionally contains only the installer and test logs.
+          path: |
+            artifacts/msi/*.msi
+            artifacts/msi/install.log
+            artifacts/msi/uninstall.log
           if-no-files-found: error
   images:
     runs-on: ubuntu-24.04

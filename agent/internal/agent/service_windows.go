@@ -90,8 +90,11 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		if e = checkServiceConfig(cfg, exe, dir); e != nil {
 			return "", e
 		}
-		// Creation may have succeeded on an earlier setup while configuring
-		// recovery failed. Reconcile it on every retry before reporting success.
+		// Creation may have succeeded before an ACL grant or recovery setup
+		// failed. Reconcile both before reporting success on a retry.
+		if e = grantWindowsServiceAccess(dir, s.ManagedConfig); e != nil {
+			return "", e
+		}
 		return finishWindowsServiceRegistration(existing, ServiceUnchanged)
 	}
 	if user != "" && user != "NT SERVICE\\Vectory" {
@@ -102,10 +105,17 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		return "", err
 	}
 	defer service.Close()
-	sid, _, _, err := windows.LookupSID("", "NT SERVICE\\Vectory")
-	if err != nil {
+	if err = grantWindowsServiceAccess(dir, s.ManagedConfig); err != nil {
 		_ = service.Delete()
 		return "", err
+	}
+	return finishWindowsServiceRegistration(service, ServiceCreated)
+}
+
+func grantWindowsServiceAccess(dir, managedConfig string) error {
+	sid, _, _, err := windows.LookupSID("", "NT SERVICE\\Vectory")
+	if err != nil {
+		return err
 	}
 	grant := func(path string, directory bool) error {
 		if err := SafePath(path); err != nil {
@@ -134,29 +144,32 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		}
 		return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, u.User.Sid, nil, acl, nil)
 	}
-	if err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+	return grantWindowsServiceFiles(dir, managedConfig, grant)
+}
+
+// A matching SCM registration is not proof that the service account can read
+// its state or managed configuration. Repeat the grants after an interrupted
+// first installation, including files added before a later setup retry.
+func grantWindowsServiceFiles(dir, managedConfig string, grant func(path string, directory bool) error) error {
+	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		return grant(path, entry.IsDir())
 	}); err != nil {
-		_ = service.Delete()
-		return "", err
+		return err
 	}
-	if err = grant(filepath.Dir(s.ManagedConfig), true); err != nil {
-		_ = service.Delete()
-		return "", err
+	if err := grant(filepath.Dir(managedConfig), true); err != nil {
+		return err
 	}
-	if _, err = os.Stat(s.ManagedConfig); err == nil {
-		if err = grant(s.ManagedConfig, false); err != nil {
-			_ = service.Delete()
-			return "", err
+	if _, err := os.Stat(managedConfig); err == nil {
+		if err := grant(managedConfig, false); err != nil {
+			return err
 		}
 	} else if !os.IsNotExist(err) {
-		_ = service.Delete()
-		return "", err
+		return err
 	}
-	return finishWindowsServiceRegistration(service, ServiceCreated)
+	return nil
 }
 
 type windowsRecoveryService interface {

@@ -10,6 +10,7 @@ import {
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
   ConfigurationSourceError,
+  readConfigurationFiles,
 } from "./configurationSource";
 import { stringifyConfiguration } from "./configurationFormats";
 
@@ -222,6 +223,58 @@ sinks:
 });
 
 describe("local source diagnostics and import gate", () => {
+  it("keeps a compact single JSON file even when YAML would exceed the merged-file limit", async () => {
+    const config = {
+      sources: { incoming: { type: "demo_logs", format: "json" } },
+      transforms: {
+        keep: {
+          type: "remap",
+          inputs: ["incoming"],
+          source: ". = .\n" + "#\n".repeat(150_000),
+        },
+      },
+      sinks: { output: { type: "blackhole", inputs: ["keep"] } },
+    };
+    const text = JSON.stringify(config);
+    expect(new TextEncoder().encode(text).length).toBeLessThan(
+      MAX_CONFIGURATION_BYTES,
+    );
+    expect(
+      new TextEncoder().encode(stringifyConfiguration(config, "yaml")).length,
+    ).toBeGreaterThan(MAX_CONFIGURATION_BYTES);
+
+    const file = new File([text], "compact.json", {
+      type: "application/json",
+    });
+    const single = await readConfigurationFiles([file]);
+    expect(single.text).toBe(text);
+    expect(single.format).toBe("json");
+    expect(single.config.transforms.keep.source).toBe(
+      config.transforms.keep.source,
+    );
+    await expect(
+      readConfigurationFiles([
+        file,
+        new File(["api: {enabled: false}\n"], "api.yaml"),
+      ]),
+    ).rejects.toThrow("The combined configuration exceeds the 1 MiB limit.");
+  });
+
+  it("explains when compact source bytes fit but the publish artifact cannot", async () => {
+    const text = JSON.stringify({
+      sources: {
+        incoming: { type: "file", include: Array(100_000).fill("/a") },
+      },
+      sinks: { output: { type: "blackhole", inputs: ["incoming"] } },
+    });
+    expect(new TextEncoder().encode(text).length).toBeLessThan(
+      MAX_CONFIGURATION_BYTES,
+    );
+    await expect(
+      readConfigurationFiles([new File([text], "compact.json")]),
+    ).rejects.toThrow("The rendered pipeline exceeds the 1 MiB publish limit.");
+  });
+
   it("shows a required node field once while retaining its node identity", () => {
     const config = {
       sources: { incoming: { type: "demo_logs", format: "json" } },

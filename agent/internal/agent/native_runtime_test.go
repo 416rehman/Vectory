@@ -60,9 +60,6 @@ func pipeline(extra map[string]any) map[string]any {
 // new api.address was bound. Exercise the full activation path with real Vector
 // so these transitions use startup verification instead of SIGHUP.
 func TestNativeAPIChangesRestartAndBindTheRequestedAddress(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Vector reloads only on Unix")
-	}
 	e, driver := nativeRuntimeFixture(t)
 	ctx := context.Background()
 	managed := e.Settings.ManagedConfig
@@ -120,7 +117,11 @@ func TestNativeAPIChangesRestartAndBindTheRequestedAddress(t *testing.T) {
 	config := pipeline(map[string]any{"api": api})
 	config["sources"] = map[string]any{"app": map[string]any{"type": "demo_logs", "format": "syslog", "interval": 0.3}}
 	writeManaged(t, managed, config)
-	if err := driver.Activate(ctx, managed); err != nil || driver.ActivationMethod() != activationReload {
+	expectedMethod := activationReload
+	if runtime.GOOS == "windows" {
+		expectedMethod = activationRestart
+	}
+	if err := driver.Activate(ctx, managed); err != nil || driver.ActivationMethod() != expectedMethod {
 		t.Fatalf("changing only a source: %v, method %q", err, driver.ActivationMethod())
 	}
 	waitBound(second)

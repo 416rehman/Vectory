@@ -22,6 +22,21 @@ const (
 	ServiceUnchanged ServiceRegistration = "unchanged"
 )
 
+// A service definition may have been written before the manager rejected its
+// final reconciliation step. Retry that step even when the file now matches;
+// unchanged bytes alone do not mean the manager loaded them.
+func finishServiceRegistration(registration ServiceRegistration, write, reconcile func() error) (ServiceRegistration, error) {
+	if registration != ServiceUnchanged {
+		if err := write(); err != nil {
+			return "", err
+		}
+	}
+	if err := reconcile(); err != nil {
+		return "", err
+	}
+	return registration, nil
+}
+
 // serviceStopLimit bounds a stop or restart, which waits for Vector's
 // longest graceful drain (300 s) and the agent's margin.
 const serviceStopLimit = 6 * time.Minute

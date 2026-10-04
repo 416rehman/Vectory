@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   KeyRound,
@@ -260,6 +260,7 @@ export function WorkspaceAccess({
   });
   const [updatedPerson, setUpdatedPerson] = useState<User | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const [focusPerson, setFocusPerson] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [role, setRole] = useState<User["role"]>("viewer");
   const [enabled, setEnabled] = useState(true);
@@ -358,7 +359,9 @@ export function WorkspaceAccess({
     const wanted = saved
       ? people.find((p) => p.id === saved.id && p.revision >= saved.revision)
       : locateEmail
-        ? people.find((p) => p.email === locateEmail)
+        ? people.find(
+            (p) => p.email.toLowerCase() === locateEmail.toLowerCase(),
+          )
         : undefined;
     if (!wanted) return;
     const keepSearch = matchesPerson(wanted, search, {});
@@ -393,7 +396,10 @@ export function WorkspaceAccess({
     if (saved) {
       setUpdatedPerson(null);
       onPersonLocated();
-    } else onEmailLocated?.();
+    } else {
+      setFocusPerson(wanted.id);
+      onEmailLocated?.();
+    }
   }, [
     savedPerson,
     updatedPerson,
@@ -408,6 +414,20 @@ export function WorkspaceAccess({
     const timer = setTimeout(() => setHighlight(null), 2600);
     return () => clearTimeout(timer);
   }, [highlight]);
+  useLayoutEffect(() => {
+    if (!focusPerson) return;
+    const target = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button[data-person-id]"),
+    ).find(
+      (button) =>
+        button.dataset.personId === focusPerson &&
+        button.getClientRects().length > 0,
+    );
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: "center", inline: "nearest" });
+    setFocusPerson(null);
+  }, [focusPerson, page, people]);
 
   const matches = sortTableRows(
     people.filter((person) => matchesPerson(person, search, columnFilters)),
@@ -568,6 +588,7 @@ export function WorkspaceAccess({
         <Button
           variant="secondary compact"
           aria-label={`Edit access for ${person.name}`}
+          data-person-id={person.id}
           onClick={() => open(person)}
         >
           Edit

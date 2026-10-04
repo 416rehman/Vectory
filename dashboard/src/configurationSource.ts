@@ -297,6 +297,166 @@ export function parseSource(
   return config;
 }
 
+const mergeableSections = new Set([
+  "sources",
+  "transforms",
+  "sinks",
+  "enrichment_tables",
+]);
+export const MAX_CONFIGURATION_FILES = 32;
+
+/**
+ * Import several Vector files as one draft. Component sections are
+ * joined by ID and tests are appended; every other root option has one owner.
+ * A collision is refused rather than silently taking a value from whichever
+ * file the browser happened to enumerate last.
+ */
+export async function readConfigurationFiles(files: readonly File[]): Promise<{
+  name: string;
+  text: string;
+  format: ConfigurationFormat;
+  config: Config;
+}> {
+  if (!files.length) throw Error("Choose a Vector configuration file.");
+  if (files.length > MAX_CONFIGURATION_FILES)
+    throw Error(
+      `Choose at most ${MAX_CONFIGURATION_FILES} configuration files.`,
+    );
+  const ordered = [...files].sort((a, b) =>
+    (a.webkitRelativePath || a.name).localeCompare(
+      b.webkitRelativePath || b.name,
+    ),
+  );
+  if (
+    ordered.reduce((bytes, file) => bytes + file.size, 0) >
+    MAX_CONFIGURATION_BYTES
+  )
+    throw Error("Configuration files together must be 1 MiB or smaller.");
+  const merged: Config = {};
+  const owners = new Map<string, string>();
+  const testNames = new Map<string, string>();
+  let actualBytes = 0;
+  let onlyText = "";
+  let onlyFormat: ConfigurationFormat = "yaml";
+  for (const file of ordered) {
+    const name = file.webkitRelativePath || file.name;
+    let format: ConfigurationFormat;
+    try {
+      format = detectConfigurationFormat(file.name);
+    } catch (error) {
+      throw Error(`${name}: ${(error as Error).message}`);
+    }
+    const bytes = await file.arrayBuffer();
+    actualBytes += bytes.byteLength;
+    if (actualBytes > MAX_CONFIGURATION_BYTES)
+      throw Error("Configuration files together must be 1 MiB or smaller.");
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw Error(
+        `${name}: the file is not valid UTF-8. Save it as UTF-8 and try again.`,
+      );
+    }
+    let fragment: Config;
+    try {
+      fragment = parseSource(text, format);
+    } catch (error) {
+      throw Error(`${name}: ${sourceErrorMessage(text, error)}`);
+    }
+    if (ordered.length === 1) {
+      onlyText = text;
+      onlyFormat = format;
+    }
+    for (const [key, value] of Object.entries(fragment)) {
+      if (mergeableSections.has(key)) {
+        if (!Object.hasOwn(merged, key))
+          Object.defineProperty(merged, key, {
+            value: {},
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        for (const [id, component] of Object.entries(value as Config)) {
+          const ownerKey = `${key}.${id}`;
+          const previous = owners.get(ownerKey);
+          if (previous)
+            throw Error(
+              `${name}: ${ownerKey} is also defined in ${previous}. Rename or remove one copy.`,
+            );
+          owners.set(ownerKey, name);
+          Object.defineProperty(merged[key], id, {
+            value: component,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        }
+        continue;
+      }
+      if (key === "tests") {
+        if (
+          !Array.isArray(value) ||
+          (merged.tests && !Array.isArray(merged.tests))
+        )
+          throw Error(`${name}: tests must be a list in every file.`);
+        const tests = (merged.tests ||= []);
+        for (const test of value) {
+          const testName = typeof test?.name === "string" ? test.name : null;
+          if (testName) {
+            const previous = testNames.get(testName);
+            if (previous)
+              throw Error(
+                `${name}: test ${testName} is also defined in ${previous}. Rename or remove one copy.`,
+              );
+            testNames.set(testName, name);
+          }
+          tests.push(test);
+        }
+        continue;
+      }
+      const previous = owners.get(key);
+      if (previous)
+        throw Error(
+          `${name}: ${key} is also defined in ${previous}. Keep this global option in one file.`,
+        );
+      owners.set(key, name);
+      Object.defineProperty(merged, key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
+  // A lone file keeps its exact text and format. YAML serialization can be
+  // much larger than compact JSON or TOML, so only merged files need this
+  // additional output-size check.
+  const serialized =
+    ordered.length > 1 ? stringifyConfiguration(merged, "yaml") : onlyText;
+  if (
+    ordered.length > 1 &&
+    new TextEncoder().encode(serialized).length > MAX_CONFIGURATION_BYTES
+  )
+    throw Error("The combined configuration exceeds the 1 MiB limit.");
+  const diagnosis = diagnoseConfiguration(merged);
+  const first = diagnosis.diagnostics.find((item) => item.severity === "error");
+  if (first) throw Error(first.message);
+  return ordered.length === 1
+    ? {
+        name: ordered[0].name,
+        text: onlyText,
+        format: onlyFormat,
+        config: merged,
+      }
+    : {
+        name: `${ordered.length} configuration files`,
+        text: serialized,
+        format: "yaml",
+        config: merged,
+      };
+}
+
 const nativeReference = (value: unknown) =>
   typeof value === "string" &&
   /\$(?:\{|[A-Za-z_])|SECRET\[[^.\[\]\s]+\.[^\[\]\s]+\]|^vectory-secret:/.test(
@@ -572,9 +732,9 @@ export function diagnoseConfiguration(
     const text = stringifyConfiguration(config, "json");
     if (
       text.length * 3 > MAX_CONFIGURATION_BYTES &&
-      new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES
+      new TextEncoder().encode(text).length + 1 > MAX_CONFIGURATION_BYTES
     )
-      return failed("The configuration exceeds the 1 MiB file limit.");
+      return failed("The rendered pipeline exceeds the 1 MiB publish limit.");
     if (!record(config)) return failed("The configuration must be an object.");
     for (const section of sections) {
       if (!own(config, section)) continue;
