@@ -29,6 +29,7 @@ const out = path.resolve(
 );
 const viewport = { width: 1440, height: 900 };
 const settleTimeout = 20_000;
+const telemetryTimeout = 240_000;
 const demoNames = new Set([
   "edge-nyc-01",
   "edge-nyc-02",
@@ -366,6 +367,119 @@ async function waitForEditorCheck(page) {
   await settle(page);
 }
 
+// The first successful metrics scrape has no previous counter sample, so the
+// editor can report a live device while every graph rate still says "no data".
+// The synthetic pipeline has two sources and several connected steps. One
+// inactive route output may legitimately lack a counter; the rest must show
+// real rates, including at least one nonzero flow.
+export function editorTelemetryReady(root) {
+  const doc = root || document;
+  const live = doc.querySelector('.editor-live-toggle[aria-pressed="true"]');
+  const status = doc.querySelector(".editor-live-status");
+  const nodes = [...doc.querySelectorAll(".pipeline-node-live")];
+  const edges = [...doc.querySelectorAll(".pipeline-edge-rate")];
+  const positive = (text) => {
+    const value = (text || "").trim();
+    return (
+      value.startsWith("<0.1") ||
+      Number.parseFloat(value.replaceAll(",", "")) > 0
+    );
+  };
+  const nodeRates = nodes.map((node) =>
+    [...node.querySelectorAll(".pipeline-node-live-stat b")].map(
+      (rate) => rate.textContent,
+    ),
+  );
+  const knownNodes = nodes.filter(
+    (node, index) =>
+      !node.hasAttribute("data-empty") &&
+      nodeRates[index].some((rate) => /^(\d|<0\.1)/.test(rate?.trim() || "")),
+  ).length;
+  const knownEdges = edges.filter((edge) => !edge.hasAttribute("data-empty"));
+  return Boolean(
+    live &&
+    ["live", "partial"].includes(status?.getAttribute("data-tone")) &&
+    nodes.length >= 6 &&
+    knownNodes >= nodes.length - 1 &&
+    edges.length >= 4 &&
+    knownEdges.length >= edges.length - 1 &&
+    knownEdges.some((edge) => positive(edge.textContent)),
+  );
+}
+
+// Running rates alone do not guarantee a useful Overview screenshot. The
+// fleet chart needs two completed, populated time buckets as well.
+export function overviewTelemetryReady(root) {
+  const doc = root || document;
+  const rows = [...doc.querySelectorAll(".running-now .overview-running-item")];
+  const throughput = doc.querySelector(
+    ".throughput .overview-throughput-stats > div:first-child dd",
+  );
+  const chart = doc.querySelector(".throughput .fleet-chart-frame");
+  return Boolean(
+    rows.length >= 2 &&
+    rows.every((row) => {
+      const rate = row.querySelector(".overview-running-rate");
+      return rate && !rate.hasAttribute("data-missing");
+    }) &&
+    throughput &&
+    !throughput.hasAttribute("data-missing") &&
+    Number.parseFloat(throughput.textContent?.replaceAll(",", "")) > 0 &&
+    chart &&
+    chart.getClientRects().length > 0,
+  );
+}
+
+async function waitForEditorTelemetry(page) {
+  try {
+    await page.waitForFunction(editorTelemetryReady, null, {
+      timeout: telemetryTimeout,
+      polling: 1_000,
+    });
+  } catch {
+    const state = await page.evaluate(() => ({
+      status: document
+        .querySelector(".editor-live-status")
+        ?.textContent?.trim(),
+      nodes: document.querySelectorAll(".pipeline-node-live").length,
+      emptyNodes: document.querySelectorAll(".pipeline-node-live[data-empty]")
+        .length,
+      edges: document.querySelectorAll(".pipeline-edge-rate").length,
+      emptyEdges: document.querySelectorAll(".pipeline-edge-rate[data-empty]")
+        .length,
+    }));
+    fail(
+      `The demo editor had no complete live graph after 4 minutes (status: ${state.status || "none"}; nodes: ${state.nodes}, empty: ${state.emptyNodes}; connections: ${state.edges}, empty: ${state.emptyEdges}). No editor screenshot was saved.`,
+    );
+  }
+}
+
+async function waitForOverviewTelemetry(page) {
+  try {
+    await page.waitForFunction(overviewTelemetryReady, null, {
+      timeout: telemetryTimeout,
+      polling: 1_000,
+    });
+  } catch {
+    const state = await page.evaluate(() => ({
+      rows: document.querySelectorAll(".running-now .overview-running-item")
+        .length,
+      missingRows: document.querySelectorAll(
+        ".running-now .overview-running-rate[data-missing]",
+      ).length,
+      throughput: document
+        .querySelector(
+          ".throughput .overview-throughput-stats > div:first-child dd",
+        )
+        ?.textContent?.trim(),
+      chart: !!document.querySelector(".throughput .fleet-chart-frame"),
+    }));
+    fail(
+      `The demo Overview had no complete live telemetry after 4 minutes (running versions: ${state.rows}, missing rates: ${state.missingRows}; fleet input: ${state.throughput || "none"}; completed chart: ${state.chart ? "yes" : "no"}). No Overview screenshot was saved.`,
+    );
+  }
+}
+
 async function waitForDemoDeviceRates(page) {
   try {
     await page.waitForFunction(
@@ -412,7 +526,11 @@ async function capture(browser, screen, theme, { get, session }) {
     const tokens = screen.noNewTokens ? (await get("/tokens")).length : 0;
     await page.goto(web + screen.path);
     await settle(page, screen.ready);
-    if (screen.name === "editor") await waitForEditorCheck(page);
+    if (screen.name === "editor") {
+      await waitForEditorCheck(page);
+      await waitForEditorTelemetry(page);
+    }
+    if (screen.name === "overview") await waitForOverviewTelemetry(page);
     if (screen.name === "devices") await waitForDemoDeviceRates(page);
     if (screen.name === "add-device") {
       await page.locator('input[name="enroll-os"][value="linux"]').check();
