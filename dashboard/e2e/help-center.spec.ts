@@ -168,7 +168,7 @@ test("a guide without pipeline context opens a chooser then the exact requested 
     );
     await expect(
       page.getByRole("button", {
-        name: "Import configuration file",
+        name: "Import configuration files",
         exact: true,
       }),
     ).toBeVisible();

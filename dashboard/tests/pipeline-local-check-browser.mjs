@@ -13,9 +13,13 @@ const repository = resolve(dashboard, "..");
 const focus = process.env.VECTORY_PIPELINE_CODE_CHECK_FOCUS || "";
 if (
   focus &&
-  !["before", "after", "auto-code", "settings-overlap", "candidate-attribution"].includes(
-    focus,
-  )
+  ![
+    "before",
+    "after",
+    "auto-code",
+    "settings-overlap",
+    "candidate-attribution",
+  ].includes(focus)
 )
   throw new Error("Unknown code-check focus");
 const output = resolve(
@@ -698,10 +702,12 @@ try {
           transforms: { sample: { rate: 20 } },
         });
       await button("Save").click();
-      await expect.poll(() => fixture.document.config).toMatchObject({
-        data_dir: "/var/lib/vector",
-        transforms: { sample: { rate: 20 } },
-      });
+      await expect
+        .poll(() => fixture.document.config)
+        .toMatchObject({
+          data_dir: "/var/lib/vector",
+          transforms: { sample: { rate: 20 } },
+        });
       expect(fixture.document.config.sources).toEqual(
         baseDocument().config.sources,
       );

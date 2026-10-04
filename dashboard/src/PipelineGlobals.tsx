@@ -275,7 +275,8 @@ export default function PipelineGlobals({
         >
           {codeChangesPending && (
             <p role="status">
-              Apply or discard your Code changes before editing Pipeline settings.
+              Apply or discard your Code changes before editing Pipeline
+              settings.
             </p>
           )}
           <h3>{details.title}</h3>
@@ -310,7 +311,8 @@ export default function PipelineGlobals({
                   busy={busy}
                   disabled={
                     codeChangesPending ||
-                    !Array.isArray(config.tests) || config.tests.length === 0
+                    !Array.isArray(config.tests) ||
+                    config.tests.length === 0
                   }
                   onClick={runTests}
                 >

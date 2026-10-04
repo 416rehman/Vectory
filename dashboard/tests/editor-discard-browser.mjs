@@ -756,7 +756,7 @@ try {
         .getByRole("button", { name: "Close component settings", exact: true })
         .click();
       page.once("dialog", (dialog) => dialog.accept());
-      await button("Reload server draft").click();
+      await button("Discard my edits and load server draft").click();
       await expectClean();
       await selectSample();
       await expect(rateInput()).toHaveValue("11");
@@ -805,7 +805,7 @@ try {
       ).toBeVisible();
       fixture.holdReload = true;
       page.once("dialog", (dialog) => dialog.accept());
-      await button("Reload server draft").click();
+      await button("Discard my edits and load server draft").click();
       await expect.poll(() => fixture.pendingReloads.length).toBe(1);
       await expect(page.locator(".editor-draft-workspace")).toHaveAttribute(
         "inert",

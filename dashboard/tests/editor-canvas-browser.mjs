@@ -1829,7 +1829,7 @@ try {
     const state = async (value) => {
       await expect(control()).toHaveAttribute("data-check-state", value);
     };
-    const pass = async () => {
+    const pass = async (unappliedCode = false) => {
       fixture.validationValid = true;
       fixture.validationNative = false;
       fixture.validationError = false;
@@ -1838,7 +1838,10 @@ try {
       await state("device");
       await expect(control()).toHaveAccessibleName("Check pipeline: Checked");
       await expect(verdict()).toHaveText(
-        "Vector 0.58 accepted this pipeline. Each device checks environment variables before applying it.",
+        "Vector 0.58 accepted this pipeline. Each device checks environment variables before applying it." +
+          (unappliedCode
+            ? " This check reviewed unapplied Code edits. Apply code changes to update the draft."
+            : ""),
       );
     };
     const sample = async () => {
@@ -2060,7 +2063,7 @@ try {
           })
           .fill(JSON.stringify(next));
         await state("stale");
-        await pass();
+        await pass(true);
         // The check reviewed the unapplied Code text, not the saved draft.
         expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
           30,
