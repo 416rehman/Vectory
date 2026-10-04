@@ -9,7 +9,7 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 ### Highlights
 
 - Visual pipeline editor for the 128 component types of Vector 0.58.0, with YAML, TOML and JSON import and export, VRL and pipeline tests, and immutable history with diffs.
-- Publishing checked by an isolated Vector validator that fails closed; checks that need the device run on the device.
+- Publishing checks the pipeline structure and uses an isolated Vector validator where safe; configuration providers and other device-only checks run on the device before it applies.
 - Deployments to devices and groups with previews, priorities, canaries, schedules, pause, cancel and rollback.
 - Outbound-only agents with mutual TLS, per-device signed manifests, protection against older configurations, drift repair and automatic restore of the last working configuration.
 - Restricted and full modes, local allowances and device-local secret bindings, all controlled on the host.

@@ -433,6 +433,11 @@ try {
       const before = reads();
       await open();
       await expect.poll(reads).toBe(before + 1);
+      // A request that has merely started is not cached. Wait for its result
+      // before closing the palette, since closing aborts unfinished reads.
+      await expect(
+        palette().locator('.palette-search svg[aria-label="Loading results"]'),
+      ).toHaveCount(0);
       await search().press("Escape");
       await expect(palette()).toHaveCount(0);
       await open();

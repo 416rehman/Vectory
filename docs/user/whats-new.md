@@ -5,7 +5,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 ## Highlights
 
 - **Visual pipeline editor** for all 128 component types of Vector 0.58.0, with typed settings, a code view (YAML, TOML or JSON), import and export of one or several selected files, VRL and pipeline tests, and immutable history with diffs.
-- **Safe publishing.** Every version is checked by a sandboxed Vector before it can be published.
+- **Checked publishing.** Publication checks the pipeline structure and uses a sandboxed Vector where safe. Configuration providers and other device-only checks run on each device before it applies the version.
 - **Controlled rollouts.** Target devices and groups with a preview, set priorities, release as a canary or on a schedule, pause, cancel and roll back.
 - **Agent updates.** Roll out a signed agent build from the dashboard to hosts that agreed to it, a canary first, and each host takes a failed build back by itself. A host is visited once, to agree.
 - **Outbound-only agents.** Mutual TLS, per-device signed configurations, protection against rollback to older versions, and automatic restore of the last working configuration.

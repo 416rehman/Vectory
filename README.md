@@ -19,7 +19,7 @@ Vectory is an open-source control plane for [Vector](https://vector.dev/). Build
 
 | | |
 | --- | --- |
-| **A visual editor for real Vector** | Schema-driven settings for all 128 component types of Vector 0.58, eight starter pipelines that pass Vector 0.58.0's own validation, VRL with sample tests, and YAML, TOML or JSON import and export. Every version is checked by an isolated Vector 0.58 validator; checks that need the device run on the device before it applies. |
+| **A visual editor for real Vector** | Schema-driven settings for all 128 component types of Vector 0.58, eight starter pipelines that pass Vector 0.58.0's own validation, VRL with sample tests, and YAML, TOML or JSON import and export. Publication checks the pipeline structure and uses an isolated Vector 0.58 validator where safe; configuration providers and other device-only checks run on each device before it applies. |
 | **Rollouts you can trust** | Immutable versions with diffs, device and group targeting with a preview, canaries that advance only when devices confirm, schedules and one-step rollback. |
 | **Outbound-only agents** | The agent dials out over TLS 1.3 with mutual TLS. Nothing on your hosts listens for Vectory. |
 | **Your data stays yours** | Events flow from Vector to your destinations, never through Vectory. Credentials stay on each host as `vectory-secret:NAME` references. |

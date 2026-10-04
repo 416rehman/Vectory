@@ -96,7 +96,7 @@ Everything else stays on Compose's internal networks. The validator has no route
 
 | Container | Runs as | Isolation |
 | --- | --- | --- |
-| `proxy` (Caddy) | UID 10001 | Read-only filesystem, no capabilities, no admin API. Serves TLS 1.3 only and never forwards `/agent/` paths. |
+| `proxy` (Caddy) | UID 10001 | Read-only filesystem, only `NET_BIND_SERVICE`, no admin API. Serves TLS 1.3 only and never forwards `/agent/` paths. |
 | `server` | UID 10001 | Read-only filesystem, no capabilities. Keeps all state in the `data` volume. |
 | `validator` | UID 10002 | Internal network with no internet route, no host ports, no secrets, read-only filesystem, 512 MiB memory, 1 CPU and 64 processes. |
 
