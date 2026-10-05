@@ -1488,6 +1488,33 @@ const CLIENT_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// How long a slot may wait for a free handshake, and a handshake may take
 /// once its ClientHello is in.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+// hyper-util's protocol detection happens before its HTTP/1 header timer,
+// and HTTP/2 may wait beyond its preface for SETTINGS or request headers.
+// Bound the entire TLS-to-first-request interval, then allow the established
+// connection to keep serving requests as before.
+const FIRST_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+struct FirstRequest<S> {
+    inner: S,
+    seen: std::sync::atomic::AtomicBool,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl<S, R> hyper::service::Service<R> for FirstRequest<S>
+where
+    S: hyper::service::Service<R>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn call(&self, request: R) -> Self::Future {
+        if !self.seen.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.notify.notify_one();
+        }
+        self.inner.call(request)
+    }
+}
 
 /// Handshakes in progress at once, from the connection limit. They finish in
 /// milliseconds, so the limit is reached only by a flood of valid hellos.
@@ -1616,11 +1643,16 @@ pub async fn serve_tls_on<A: Accept>(
             );
             // The TCP peer, for enrollment audits and download throttling.
             // Nothing proxies this listener, so forwarded headers are ignored.
-            let service = hyper_util::service::TowerToHyperService::new(
-                router
-                    .layer(Extension(peer))
-                    .layer(Extension(axum::extract::ConnectInfo(address))),
-            );
+            let first_request = std::sync::Arc::new(tokio::sync::Notify::new());
+            let service = FirstRequest {
+                inner: hyper_util::service::TowerToHyperService::new(
+                    router
+                        .layer(Extension(peer))
+                        .layer(Extension(axum::extract::ConnectInfo(address))),
+                ),
+                seen: std::sync::atomic::AtomicBool::new(false),
+                notify: first_request.clone(),
+            };
             let mut builder =
                 hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
             builder
@@ -1631,9 +1663,19 @@ pub async fn serve_tls_on<A: Accept>(
                 .http2()
                 .max_concurrent_streams(16)
                 .max_header_list_size(16384);
-            let _ = builder
-                .serve_connection(hyper_util::rt::TokioIo::new(tls), service)
-                .await;
+            let connection = builder.serve_connection(hyper_util::rt::TokioIo::new(tls), service);
+            tokio::pin!(connection);
+            let deadline = tokio::time::sleep(FIRST_REQUEST_TIMEOUT);
+            tokio::pin!(deadline);
+            tokio::select! {
+                biased;
+                _ = &mut connection => return,
+                // Poll the connection before the deadline: it may dispatch the
+                // first request and notify us in this same scheduler turn.
+                _ = first_request.notified() => {}
+                _ = &mut deadline => return,
+            }
+            let _ = connection.await;
         });
     }
 }

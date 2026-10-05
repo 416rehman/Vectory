@@ -419,7 +419,13 @@ async fn running_out_of_descriptors_never_ends_the_server() {
     let pki = server_pki(temp.path());
     let secret = temp.path().join("bootstrap");
     std::fs::write(&secret, SECRET).unwrap();
-    let (web, agent) = (free_port(), free_port());
+    // Keep both ephemeral ports reserved together while choosing them. Calling
+    // free_port twice can return the same port after the first socket closes.
+    let web_reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let agent_reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let web = web_reservation.local_addr().unwrap().port();
+    let agent = agent_reservation.local_addr().unwrap().port();
+    drop((web_reservation, agent_reservation));
     let log = temp.path().join("server.log");
     let output = std::fs::File::create(&log).unwrap();
     let child = std::process::Command::new("sh")
@@ -443,41 +449,100 @@ async fn running_out_of_descriptors_never_ends_the_server() {
         .spawn()
         .unwrap();
     let mut server = Server { child, log };
+    let probe = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
     let status = || async {
-        reqwest::Client::new()
+        probe
             .get(format!("http://127.0.0.1:{web}/api/v1/status"))
-            .timeout(Duration::from_secs(3))
+            .header(reqwest::header::CONNECTION, "close")
             .send()
             .await
             .map(|response| response.status().as_u16())
     };
-    let mut ready = false;
-    for _ in 0..200 {
+    // This process migrates a fresh database. On a heavily loaded CI host,
+    // startup can take longer than the descriptor-pressure phase itself.
+    let startup = std::time::Instant::now();
+    loop {
         if let Ok(200) = status().await {
-            ready = true;
             break;
         }
+        assert!(
+            server.child.try_wait().unwrap().is_none(),
+            "the server exited during startup: {}",
+            server.log()
+        );
+        assert!(
+            startup.elapsed() < Duration::from_secs(90),
+            "the server did not start within 90 seconds: {}",
+            server.log()
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(ready, "the server did not start: {}", server.log());
+    // The dashboard starts just before the agent listener. Wait for both so a
+    // scheduler pause at that boundary cannot turn the flood into refusals.
+    let agent_probe = client(&pki, None);
+    let agent_startup = std::time::Instant::now();
+    loop {
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            agent_probe
+                .get(format!("https://127.0.0.1:{agent}/agent/v1/identity"))
+                .header(reqwest::header::CONNECTION, "close")
+                .send(),
+        )
+        .await;
+        if let Ok(Ok(response)) = response {
+            if response.status().as_u16() == 401 {
+                break;
+            }
+        }
+        assert!(
+            server.child.try_wait().unwrap().is_none(),
+            "the server exited before the agent listener was ready: {}",
+            server.log()
+        );
+        assert!(
+            agent_startup.elapsed() < Duration::from_secs(10),
+            "the agent listener did not start: {}",
+            server.log()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
-    // Hold far more connections than the process has descriptors for. Once the
-    // accept queue is full a connect waits, so stop at a few refusals.
+    // A silent TCP peer is dropped at the client-hello deadline. Complete TLS
+    // without sending an HTTP request so the server keeps each accepted socket
+    // open while the burst exhausts its descriptor limit.
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(pki.ca.clone()).unwrap();
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(tls));
+    let name = rustls::pki_types::ServerName::IpAddress(std::net::Ipv4Addr::LOCALHOST.into());
     let address: std::net::SocketAddr = ([127, 0, 0, 1], agent).into();
-    let mut held = Vec::new();
-    let mut refused = 0;
+    let started = std::time::Instant::now();
+    let mut attempts = tokio::task::JoinSet::new();
     for _ in 0..300 {
-        match std::net::TcpStream::connect_timeout(&address, Duration::from_millis(300)) {
-            Ok(socket) => {
-                held.push(socket);
-                refused = 0;
-            }
-            Err(_) => {
-                refused += 1;
-                if refused >= 5 {
-                    break;
-                }
-            }
+        let connector = connector.clone();
+        let name = name.clone();
+        attempts.spawn(async move {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let socket = tokio::net::TcpStream::connect(address).await?;
+                connector.connect(name, socket).await
+            })
+            .await
+        });
+    }
+    let mut held = Vec::new();
+    while let Some(result) = attempts.join_next().await {
+        if let Ok(Ok(Ok(connection))) = result {
+            held.push(connection);
         }
     }
     let mut exhausted = false;
@@ -490,7 +555,9 @@ async fn running_out_of_descriptors_never_ends_the_server() {
     }
     assert!(
         exhausted,
-        "the test never ran the server out of descriptors: {}",
+        "the test held {} TLS connections over {:?} but never ran the server out of descriptors: {}",
+        held.len(),
+        started.elapsed(),
         server.log()
     );
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -509,18 +576,17 @@ async fn running_out_of_descriptors_never_ends_the_server() {
 
     // Once the connections go, the dashboard listener answers again.
     drop(held);
-    let mut answered = false;
-    for _ in 0..150 {
+    let recovery = std::time::Instant::now();
+    loop {
         if let Ok(200) = status().await {
-            answered = true;
             break;
         }
+        assert!(
+            recovery.elapsed() < Duration::from_secs(20),
+            "/api/v1/status never answered again: {}",
+            server.log()
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(
-        answered,
-        "/api/v1/status never answered again: {}",
-        server.log()
-    );
     assert!(server.child.try_wait().unwrap().is_none());
 }

@@ -126,6 +126,50 @@ async fn usage(db: &mut SqliteConnection, tokens: Value) -> Result<Value> {
     )
     .fetch_all(&mut *db)
     .await?;
+    // Keep the first creation audit in the query's original order. Recovery
+    // authorizations are already ordered by time; retaining equal-time entries
+    // makes the last matching audit the same one the reverse scan selected.
+    let mut created_by_token = HashMap::new();
+    for (target, actor, _) in created {
+        if let Some(target) = target {
+            created_by_token.entry(target).or_insert(actor);
+        }
+    }
+    let mut authorized_by_device: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+    for (target, actor, when) in authorized {
+        if let Some(target) = target {
+            authorized_by_device
+                .entry(target)
+                .or_default()
+                .push((when, actor));
+        }
+    }
+    struct Usage {
+        count: usize,
+        last_used_at: Value,
+        devices: Vec<Value>,
+    }
+    let mut usage_by_token: HashMap<String, Usage> = HashMap::new();
+    for (token_id, device, name, revoked, at) in enrolled {
+        let usage = usage_by_token.entry(token_id).or_insert_with(|| Usage {
+            count: 0,
+            last_used_at: Value::Null,
+            devices: Vec::new(),
+        });
+        if usage.count == 0 {
+            usage.last_used_at = json!(at);
+        }
+        usage.count += 1;
+        if usage.devices.len() < 20 {
+            // A recovered device's old record keeps its name with a marker.
+            let name = name
+                .split_once("#retired-")
+                .map_or(name.as_str(), |(n, _)| n);
+            usage
+                .devices
+                .push(json!({"id":device,"name":name,"revoked":revoked != 0,"enrolled_at":at}));
+        }
+    }
     let person = |actor: &Option<String>| {
         actor.as_ref().map_or(
             Value::Null,
@@ -137,34 +181,28 @@ async fn usage(db: &mut SqliteConnection, tokens: Value) -> Result<Value> {
         let creator = if let Some(device) = token["recovery_device_id"].as_str() {
             // Recovery tokens are issued by the administrator who authorized recovery.
             let at = api::text(token, "created_at");
-            authorized
-                .iter()
-                .rev()
-                .find(|(target, _, when)| target.as_deref() == Some(device) && when.as_str() <= at)
-                .map(|(_, actor, _)| person(actor))
-        } else {
-            created
-                .iter()
-                .find(|(target, ..)| target.as_deref() == Some(id.as_str()))
-                .map(|(_, actor, _)| person(actor))
-        };
-        let devices: Vec<Value> = enrolled
-            .iter()
-            .filter(|(token_id, ..)| *token_id == id)
-            .map(|(_, device, name, revoked, at)| {
-                // A recovered device's old record keeps its name with a marker.
-                let name = name
-                    .split_once("#retired-")
-                    .map_or(name.as_str(), |(n, _)| n);
-                json!({"id":device,"name":name,"revoked":*revoked != 0,"enrolled_at":at})
+            authorized_by_device.get(device).and_then(|events| {
+                events
+                    .get(
+                        events
+                            .partition_point(|(when, _)| when.as_str() <= at)
+                            .checked_sub(1)?,
+                    )
+                    .map(|(_, actor)| person(actor))
             })
-            .collect();
+        } else {
+            created_by_token.get(&id).map(person)
+        };
         token["created_by"] = creator.unwrap_or(Value::Null);
-        token["last_used_at"] = devices
-            .first()
-            .map_or(Value::Null, |d| d["enrolled_at"].clone());
-        token["device_count"] = json!(devices.len());
-        token["devices"] = json!(devices.into_iter().take(20).collect::<Vec<_>>());
+        if let Some(usage) = usage_by_token.get(&id) {
+            token["last_used_at"] = usage.last_used_at.clone();
+            token["device_count"] = json!(usage.count);
+            token["devices"] = json!(usage.devices);
+        } else {
+            token["last_used_at"] = Value::Null;
+            token["device_count"] = json!(0);
+            token["devices"] = json!([]);
+        }
     }
     Ok(Value::Array(tokens))
 }

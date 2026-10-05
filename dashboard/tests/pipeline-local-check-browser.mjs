@@ -346,8 +346,18 @@ async function showTip() {
 async function hideTip() {
   await page.mouse.move(0, 0);
 }
-async function runCheck(expected) {
+async function requestCheck() {
+  const alreadyChecked = (
+    await checkButton().getAttribute("aria-label")
+  )?.startsWith("Open Problems");
   await checkButton().click();
+  if (alreadyChecked) {
+    await expect(tip()).toBeVisible();
+    await tip().getByRole("button", { name: "Check again" }).click();
+  }
+}
+async function runCheck(expected) {
+  await requestCheck();
   await state(expected);
   await showTip();
 }
@@ -409,7 +419,7 @@ try {
       await size().fill("-");
       await state("stale");
       // A field still being edited blocks the check where it is edited.
-      await checkButton().click();
+      await requestCheck();
       await state("stale");
       await expect(
         page.getByText("Resolve or apply pending field changes").first(),
@@ -497,8 +507,7 @@ try {
         .toContain("candidate_only");
       candidate.transforms.candidate_only.source = ".message = 2";
       await code().fill(JSON.stringify(candidate, null, 2));
-      await expect(checkButton()).toHaveAttribute(
-        "title",
+      await expect(tip().locator(".problems-verdict")).toContainText(
         "Changed since the last check.",
       );
       await expect(item.locator("..")).toHaveAttribute("data-stale", "true");
@@ -546,7 +555,7 @@ try {
         await sink().click();
         await expect(size()).toHaveValue("268435488");
         fixture.holdValidation = true;
-        await checkButton().click();
+        await requestCheck();
         await state("checking");
         await expect.poll(() => fixture.pendingValidations.length).toBe(1);
         // Models a queued native input callback. Normal pointer edits are inert
@@ -566,7 +575,7 @@ try {
         await showTip();
         await expect(tip()).not.toContainText("checks passed");
         fixture.holdValidation = false;
-        await checkButton().click();
+        await requestCheck();
         await state("stale");
         expect(fixture.validations).toHaveLength(1);
         await expect(size()).toHaveValue(value);

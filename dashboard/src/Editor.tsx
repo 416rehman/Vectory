@@ -4052,7 +4052,7 @@ export default function Editor({
         );
         return;
       }
-      const graph = toGraph(result.config, result.graph);
+      const graph = initialGraph(result.config, result.graph);
       const earlierSaveCanStillFinish =
         unresolved &&
         uncertainSaveRevision.current !== null &&

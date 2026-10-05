@@ -766,6 +766,7 @@ try {
       await load();
       await page.clock.install();
       fixture.holdSave = true;
+      const initialLayout = await transforms();
       await selectSample();
       await rateInput().fill("12");
       await saveDraft();
@@ -787,6 +788,7 @@ try {
       ).toBeVisible();
       await selectSample();
       await expect(rateInput()).toHaveValue("10");
+      expect(await transforms()).toEqual(initialLayout);
       fixture.pendingSaves.shift().release(true);
       fixture.holdSave = false;
       await button("Confirm server draft").click();

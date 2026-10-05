@@ -117,10 +117,9 @@ const config = {
   sources: { seed: { type: "demo_logs", format: "json" } },
   sinks: { discard: { type: "blackhole", inputs: ["seed"] } },
 };
-// What the note says about a pipeline with an `api` block (the same sentence
-// the unit test pins as `localApiReason`).
-const apiReason =
-  "Global setting: api (Vector's local API has no authentication; any local user could read live events)";
+// The capability note names the required setting. An enabled API has its own
+// exposure warning and acknowledgement in the deploy review.
+const apiReason = "Global setting: api";
 // What it says about an AWS sink with a credentials file and no keys (the
 // sentences the unit test pins).
 const awsReasons =
@@ -1449,7 +1448,14 @@ try {
           exact: true,
         }),
       ).toBeVisible();
-      await expect(dialog().getByText(apiReason)).toBeVisible();
+      await expect(
+        dialog().getByText(apiReason, { exact: false }),
+      ).toBeVisible();
+      await expect(
+        dialog().getByRole("alert").filter({ hasText: "Vector API exposure" }),
+      ).toContainText(
+        "Vector's API is enabled at 127.0.0.1:8686 without authentication",
+      );
       await expect(dialog().getByText(/All selected devices/)).toHaveCount(0);
       await page
         .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
@@ -1459,7 +1465,9 @@ try {
           exact: true,
         }),
       ).toBeVisible();
-      await expect(dialog().getByText(apiReason)).toBeVisible();
+      await expect(
+        dialog().getByText(apiReason, { exact: false }),
+      ).toBeVisible();
       await expect(
         dialog().getByText(
           /All selected devices currently report full Vector mode/,
@@ -1469,9 +1477,14 @@ try {
         dialog().getByText(/have the host operator enable it/),
       ).toHaveCount(0);
       await preview();
-      await expect(
-        dialog().getByRole("button", { name: "Deploy to devices" }),
-      ).toBeEnabled();
+      const deploy = dialog().getByRole("button", {
+        name: "Deploy to devices",
+      });
+      await expect(deploy).toBeDisabled();
+      await dialog()
+        .getByRole("checkbox", { name: "Confirm Vector API exposure" })
+        .check();
+      await expect(deploy).toBeEnabled();
       expect(state.creates).toHaveLength(0);
     },
   );
@@ -1567,7 +1580,9 @@ try {
           { exact: true },
         ),
       ).toBeVisible();
-      await expect(dialog().getByText(apiReason)).toBeVisible();
+      await expect(
+        dialog().getByText(apiReason, { exact: false }),
+      ).toBeVisible();
       await expect(
         dialog().getByText(/have the host operator enable it/),
       ).toBeVisible();

@@ -98,6 +98,7 @@ const childEnvironment = {
   VECTORY_HELP_URL: origin,
   VECTORY_UI_URL: origin,
   VECTORY_HELP_STORAGE_STATE: storage,
+  ...(includeAccounts ? { VECTORY_PREVIEW_DIR: temporary } : {}),
   VECTORY_HELP_TEST_OUTPUT: output,
   VECTORY_HELP_EVIDENCE: path.join(output, "public-help.json"),
   VECTORY_HELP_ARTIFACTS: path.join(output, "public-artifacts"),
@@ -156,18 +157,33 @@ try {
       false,
       "Fixture must start with an empty private database",
     );
+    const bootstrapPassword = randomBytes(32).toString("hex");
     const response = await api.post("/api/v1/bootstrap", {
       data: {
         bootstrap_secret: bootstrap,
         name: "Synthetic help reviewer",
         email: "help-ci@example.test",
-        password: randomBytes(32).toString("hex"),
+        password: bootstrapPassword,
       },
     });
     assert(
       response.ok(),
       `Fixture bootstrap failed: HTTP ${response.status()}`,
     );
+    if (includeAccounts) {
+      // Account lifecycle checks reauthenticate as this isolated seed user.
+      // Keep its credentials inside the disposable fixture, never in artifacts.
+      const credentials = path.join(temporary, "credentials.json");
+      await fs.writeFile(
+        credentials,
+        JSON.stringify({
+          email: "help-ci@example.test",
+          password: bootstrapPassword,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.chmod(credentials, 0o600);
+    }
     // The server has already protected its state directory; store only this test's session there.
     await api.storageState({ path: storage });
     await fs.chmod(storage, 0o600);

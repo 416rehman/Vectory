@@ -180,6 +180,7 @@ try {
         email: `${role}@example.test`,
         password,
         role,
+        current_password: password,
       },
       admin,
     );
