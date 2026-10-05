@@ -23,13 +23,13 @@ Designed and recorded for the next release, not built now:
 
 ## Gates
 
-Every gate is a command or a check anyone can repeat. A gate is **Done** only with the evidence named.
+Every gate is a command or a check anyone can repeat. A gate is **Done** only with the evidence named. Gates 1, 2, 3 and 8 qualify the last pre-publication commit on the release branch. Publication makes a new commit on `main`; its checks and tag candidate are repeated in the maintainer steps below.
 
 | # | Gate | How it is verified | Status |
 | --- | --- | --- | --- |
-| 1 | CI is green on the head: all nine jobs, including `dashboard-browsers` and the account lifecycle step | The `checks` workflow on the final commit | Done |
-| 2 | The release candidate builds and verifies | The whole `release-candidate.yml` workflow succeeds on the final commit; download `unsigned-release-candidate` into `candidate`, run `(cd candidate && sha256sum -c SHA256SUMS)` and `python3 packaging/verify-release.py candidate` from the repository root. A partial artifact retained after a failed job is marked `incomplete-diagnostic` and fails the final verifier. | Done |
-| 3 | The pre-release review finds nothing open at P0 or P1 | [Review report](RELEASE-REVIEW-0.1.md) per area on the final candidate; every P2 is fixed or listed under Known limits | Done |
+| 1 | CI is green on the release-branch head: all nine jobs, including `dashboard-browsers` and the account lifecycle step | The `checks` workflow on the last pre-publication branch commit | Done |
+| 2 | The unsigned branch candidate builds and verifies | The whole `release-candidate.yml` workflow succeeds on the last pre-publication branch commit; download `unsigned-release-candidate` into `candidate`, run `(cd candidate && sha256sum -c SHA256SUMS)` and `python3 packaging/verify-release.py candidate` from the repository root. A partial artifact retained after a failed job is marked `incomplete-diagnostic` and fails the final verifier. | Done |
+| 3 | The pre-release review finds nothing open at P0 or P1 | [Review report](RELEASE-REVIEW-0.1.md) per area on the runnable code of the final branch candidate; every P2 is fixed or listed under Known limits | Done |
 | 4 | The open security findings are fixed or listed | [OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) has nothing without a fix, an owner or a line in the user-facing known limits and [SECURITY.md](../../SECURITY.md) | Done |
 | 5 | One version everywhere | `node scripts/check-versions.mjs` (it runs in CI) finds `0.1.0` in `agent/internal/agent/types.go`, `server/Cargo.toml` and its lock file, the dashboard and Help center packages and their lock files, `contracts/openapi.json` and the newest changelog heading; the Help center reads its package; `packaging/build-release.py` refuses a mismatch with the agent | Done |
 | 6 | Documentation matches behavior | `node scripts/check-doc-links.mjs`, `check-requirements.mjs`, `check-ci-table.mjs`, the Help center build and its tests; README, `CHANGELOG.md`, `docs/user/whats-new.md` and the known limits say the same thing | Done |
@@ -41,10 +41,11 @@ Every gate is a command or a check anyone can repeat. A gate is **Done** only wi
 These change the public repository and need the maintainer's explicit go-ahead; they are not done by routine work.
 
 1. Decide how to handle local home paths in the three existing `main` commits (`2f18fb7`, `d1dd1d3`, and `c88758e`) and private session URLs in 376 published branch-only commit messages, including any copies already made: the repository is already public. The current tree has neither detail. A squash makes the new `main` history smaller but does not erase the three old `main` commits or already published branch history. Then squash the release branch into one commit on `main` only with the maintainer's explicit approval.
-2. Tag `v0.1.0` on that commit.
-3. Run `release-candidate.yml` on the tag, download `unsigned-release-candidate`, verify `SHA256SUMS`.
-4. Create the GitHub release from the tag with the candidate's files, the changelog section as the notes, and the sentence that nothing in it is signed.
-5. Check the release page's downloads against `SHA256SUMS`, and run the quickstart from the README on a clean machine.
+2. Compare the new `main` tree with the reviewed release-branch tree: only the release-record update that closes gate 7 may differ. A runnable change restarts the review. Confirm all nine `checks` jobs pass on the new commit.
+3. Tag `v0.1.0` on that commit.
+4. Run `release-candidate.yml` on the tag, download `unsigned-release-candidate`, verify `SHA256SUMS` and `packaging/verify-release.py`.
+5. Create the GitHub release from the tag with the candidate's files, the changelog section as the notes, and the sentence that nothing in it is signed.
+6. Check the release page's downloads against `SHA256SUMS`, and run the quickstart from the README on a clean machine.
 
 ## After the release
 
