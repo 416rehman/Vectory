@@ -19,7 +19,7 @@ Nothing on a device listens for Vectory: every connection starts at the agent.
 **Server host**
 
 - Inbound: TCP 443 from your users, TCP 8443 from your devices.
-- Outbound: nothing at runtime. Vectory makes no analytics, update or license calls. Building the images needs internet access.
+- Outbound: nothing at runtime. Vectory makes no analytics, update or license calls. The first kit start downloads released image archives and the pinned proxy image; a verified cache or pre-loaded offline release input avoids those downloads.
 
 **Each device**
 

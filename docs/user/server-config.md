@@ -14,12 +14,25 @@ The table below describes the equivalent manual Compose settings. The contributo
 | `VECTORY_TLS_CERT_FILE` | Required | Host path of the TLS certificate chain (PEM). The proxy and the agent listener both serve it. |
 | `VECTORY_TLS_KEY_FILE` | Required | Host path of the certificate's private key. |
 | `VECTORY_BOOTSTRAP_SECRET_FILE` | Required | Host path of the bootstrap secret file. Compose mounts it for the server. |
+| `VECTORY_SERVER_PROJECT` | `vectory` | Compose project and private volume prefix for the prebuilt server kit. Keep the same value when stopping or resuming an instance. |
 | `VECTORY_BIND_IP` | `0.0.0.0` | Host address that ports 443 and 8443 listen on. |
 | `VECTORY_RELEASES_DIRECTORY` | `./releases` | Host folder mounted read-only as the server's agent download mirror. |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | `16384` | Passed to the server; see below. |
 | `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Passed to the server; see below. |
 
 Compose sets the server's own variables (TLS paths, validator URL, data directory, and the proxy as the only peer the HTTP listener accepts) for you. Keep the four required files readable by UID/GID 10001 only.
+
+### Starter-managed values
+
+The prebuilt kits verify their image downloads and write these values themselves. They are not settings to enter during guided setup or edit in the generated files.
+
+| Variable | Written to | Meaning |
+| --- | --- | --- |
+| `VECTORY_SERVER_IMAGE` | Server kit `.env` | Verified server image selected for this release. |
+| `VECTORY_VALIDATOR_IMAGE` | Server kit `.env` | Verified validator image selected for this release. |
+| `VECTORY_SETUP_PROJECT` | Temporary server kit `.setup.env` | Project recorded while first setup completes, so an interrupted setup resumes with the same volumes. The starter removes the journal after setup. |
+| `VECTORY_PREVIEW_SERVER_IMAGE` | Preview kit `.preview.env` | Verified server image selected for the local preview. |
+| `VECTORY_PREVIEW_VALIDATOR_IMAGE` | Preview kit `.preview.env` | Verified validator image selected for the local preview. |
 
 ## Server settings
 

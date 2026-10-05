@@ -12,7 +12,7 @@ The first start downloads the prebuilt server and Vector validator images. Later
 
 1. Open **http://127.0.0.1:8080**.
 2. Paste the setup secret printed at the end of `./start.sh`, then create your administrator. Run `./start.sh setup-secret` if you need to see it again.
-3. Select **Add device** to connect this Linux host. The starter creates `ca.pem` beside this file; choose **Public certificate file** and use its absolute path. Device enrollment still checks TLS and uses a one-time token.
+3. Select **Add device** to connect this Linux host and choose **Pin this server's CA**. The generated command verifies the HTTPS download with the preview's public CA certificate. The verified installer pins that CA's fingerprint during agent setup and keeps the trusted certificate inside the agent's state directory. No CA file path or manual copy is needed; enrollment still checks TLS and uses a one-time token.
 4. Create a pipeline with **Try a synthetic example**, publish it, choose the device and deploy. **Applied** means the agent verified Vector is running that version.
 
 The agent adopts an existing supported Vector installation; it does not install Vector. The [device guide](https://vectory.ahmadz.ai/help/installation/) explains this prerequisite and the generated install command. The validator is already included for server checks.

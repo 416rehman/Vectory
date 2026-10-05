@@ -43,7 +43,7 @@ The agent adopts an existing **Vector 0.58.x** installation. If Vector is missin
 
 1. Open **Devices → Add device** and choose Linux.
 2. Select **Restricted** mode for this synthetic trial.
-3. For server certificate trust, select **Public certificate file** and enter the absolute path of the kit's `ca.pem`. The starter created that public file beside `start.sh`; keep it there for this trial.
+3. For server certificate trust, select **Pin this server's CA**. The generated command verifies the HTTPS download with the preview's public CA certificate. The verified installer pins that CA's fingerprint during agent setup and saves the trusted certificate inside the agent's state directory; you do not need to copy a CA file or enter a file path.
 4. Generate the install command and run it on this host. It verifies the downloaded agent and prompts for the one-time token; copy the token from the same dashboard page when asked.
 5. Keep the page open until the host appears and reports its first check-in.
 

@@ -70,8 +70,8 @@ Checks that need the device itself, such as local files, run on the device befor
 
 ## Server
 
-- **Docker Compose on one Linux host**, with local disk. The images build from source; published images are planned.
-- CI follows the install guide on a clean runner: it builds both images, starts the stack, waits until every service is healthy, creates the first administrator, enrolls a device with the Add device installer and checks that the validator can't reach the network. A customer's host, a public certificate and your network aren't covered, so try it on a staging host first.
+- **Prebuilt kits for Linux x86-64**, with Docker Engine, Compose v2 and local disk. The kits load unsigned Docker image archives from the GitHub release; no compiler or source build is needed. A container registry is not published yet.
+- On every change, CI builds the server stack from source on a clean Ubuntu 24.04 runner, starts it, waits for healthy services, creates the first administrator, enrolls a device with the Add device installer and checks validator isolation. The release candidate workflow also checks the prebuilt preview and server kits against saved image archives. A customer's host, a public certificate and your network aren't covered, so try it on a staging host first.
 - One server per data directory. SQLite doesn't support network filesystems or active-active replicas.
 
 ## Browsers
@@ -80,7 +80,7 @@ The dashboard and this Help center are tested with Chromium on desktop and phone
 
 ## Offline use
 
-The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. Building the images and downloading Vector need internet access. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than 0.58.0.
+The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. The first kit start downloads the released image archives; retain the verified cache to restart offline, or provide the image archives and release checksum inventory through `VECTORY_PREVIEW_RELEASE_DIR`. The server kit also needs its pinned proxy image pre-loaded. Devices need an existing supported Vector installation, which can be supplied offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than 0.58.0.
 
 ## References
 

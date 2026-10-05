@@ -452,6 +452,7 @@ jobs:
           }
           trap cleanup EXIT
           umask 077
+          echo 'Verifying and extracting the server starter.'
           python3 - "$version" <<'PY'
           import runpy
           import sys
@@ -466,6 +467,7 @@ jobs:
           # The verified public proxy config starts unreadable to UID 10001;
           # the starter must restore only that file's intended 0644 mode.
           test "$(stat -c %a "$kit/Caddyfile")" = 600
+          echo 'Creating isolated TLS fixtures.'
           docker volume create --label io.vectory.ci=true "${project}_fixture" > /dev/null
           fixture_mount="type=volume,src=${project}_fixture,dst=/var/lib/vectory"
           helper=(docker run --rm --network none --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount "$fixture_mount" --entrypoint /app/operations/vectory-local-pki vectory-server:candidate)
@@ -477,6 +479,17 @@ jobs:
           "${exporter[@]}" /var/lib/vectory/pki/ca.pem >> "$fixture_dir/chain.pem"
           "${exporter[@]}" /var/lib/vectory/pki/server-key.pem > "$fixture_dir/key.pem"
           "${exporter[@]}" /var/lib/vectory/wrong/ca.pem > "$fixture_dir/wrong-ca.pem"
+          if cmp -s "$fixture_dir/ca.pem" "$fixture_dir/wrong-ca.pem"; then
+            echo '::error::The trusted and unrelated CA fixtures are identical.'
+            exit 1
+          fi
+          openssl x509 -in "$fixture_dir/ca.pem" -noout > /dev/null
+          openssl x509 -in "$fixture_dir/wrong-ca.pem" -noout > /dev/null
+          openssl verify -CAfile "$fixture_dir/ca.pem" "$fixture_dir/chain.pem" > /dev/null
+          if openssl verify -CAfile "$fixture_dir/wrong-ca.pem" "$fixture_dir/chain.pem" > /dev/null 2>&1; then
+            echo '::error::The unrelated CA unexpectedly verified the server certificate.'
+            exit 1
+          fi
           test "$(stat -c %a "$fixture_dir/key.pem")" = 600
           export VECTORY_SERVER_PROJECT="$project"
           export VECTORY_HOSTNAME=localhost
@@ -486,6 +499,7 @@ jobs:
           export VECTORY_PREVIEW_RELEASE_DIR="$RUNNER_TEMP/preview-release"
           # The guided starter prints the bootstrap secret. Keep all its output
           # private, including stop and resume, and never upload the fixture.
+          echo 'Starting the server kit from verified candidate images.'
           if ! "$kit/start.sh" start >> "$log" 2>&1; then
             # Report only fixed diagnostic categories. The private log can
             # contain the first-account setup secret, so never print its lines.
@@ -518,6 +532,7 @@ jobs:
           test "$(stat -c %a "$kit/Caddyfile")" = 644
           test "$(stat -c %a "$kit/releases")" = 755
           test "$(stat -c %a "$kit/.env")" = 600
+          echo 'Starter permissions passed; checking trusted TLS.'
           server_compose=(docker compose --project-name "$project" --env-file "$kit/.env" -f "$kit/compose.yaml")
           curl --noproxy '*' --fail --silent --show-error --retry 6 --retry-delay 2 --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 https://localhost/api/v1/status > "$fixture_dir/status.json"
           python3 - "$fixture_dir/status.json" <<'PY'
@@ -529,9 +544,14 @@ jobs:
           PY
           # The agent listener must present the expected CA and reject another.
           curl --noproxy '*' --silent --show-error --cacert "$fixture_dir/ca.pem" --resolve localhost:8443:127.0.0.1 https://localhost:8443/ -o /dev/null
+          echo 'Trusted agent TLS passed; checking rejection of an unrelated CA.'
           wrong_ca_result=0
           curl --noproxy '*' --silent --show-error --cacert "$fixture_dir/wrong-ca.pem" --resolve localhost:8443:127.0.0.1 https://localhost:8443/ -o /dev/null 2> "$fixture_dir/wrong-ca-error.txt" || wrong_ca_result=$?
-          test "$wrong_ca_result" = 60
+          # Depending on the TLS handshake, curl reports either certificate
+          # verification failure (60) or an SSL connect error (35). The
+          # otherwise identical request with the trusted CA just succeeded.
+          case "$wrong_ca_result" in 35|60) ;; *) echo '::error::Wrong-CA probe did not fail with a TLS rejection.'; exit 1 ;; esac
+          echo 'Wrong CA rejected; checking bootstrap and retained state.'
           "${server_compose[@]}" exec -T server cat /run/secrets/bootstrap > "$fixture_dir/setup-secret.txt"
           python3 - "$fixture_dir/setup-secret.txt" "$fixture_dir/bootstrap.json" <<'PY'
           import json
