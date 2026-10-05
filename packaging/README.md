@@ -1,6 +1,6 @@
 # Release engineering
 
-This tree prepares unsigned development outputs. No release, APT repository, Homebrew tap, MSI, Apple signing identity, or public package namespace is claimed to exist. Native OS acceptance in [COMPATIBILITY](../docs/COMPATIBILITY.md) is independent of cross-compilation.
+This tree prepares unsigned development outputs. The candidate workflow publishes no release, APT repository, Homebrew tap, container registry, or public package namespace; the release checklist covers publication separately. No Apple signing identity is configured. Native OS acceptance in [COMPATIBILITY](../docs/COMPATIBILITY.md) is independent of cross-compilation.
 
 ## Build
 
@@ -65,7 +65,7 @@ The local source-input inventory records tracked and nonignored untracked file h
 
 Repeat the build from the same source/toolchain in a fresh directory and compare every binary, archive and catalog digest. Additional source SBOM metadata must be generated consistently before comparing complete checksum inventories. `-trimpath`, disabled VCS stamping, a fixed empty Go build ID, conservative `GOAMD64=v1`, CGO disabled, and normalized archive times make this comparison useful. The verifier parses Linux ELF headers and rejects PT_INTERP or DT_NEEDED; `readelf -l` and `readelf -d` provide an additional native inspection path. Offline builds require preloaded module and npm/Cargo caches and container base images. The final local candidate's two same-host builds matched all eleven binary/archive/catalog files; this is not independent-builder provenance.
 
-`release-candidate.yml` runs only when manually dispatched (see [Release candidate workflow](#release-candidate-workflow)). An earlier unsigned candidate passed at `a012c1e`; the final release head still needs a complete run and downloaded-artifact verification. `ci.yml` runs on every push; [docs/internal/CI.md](../docs/internal/CI.md) lists what each job proves and what it does not. Resolve every scanner finding; run `packaging/audit-rust.py`, `packaging/audit-npm.py`, `govulncheck ./...`, and an image scanner on the exact release inputs. The Rust gate retains full findings and admits only the specifically proven inactive optional dependency described in [DEPENDENCY-AUDIT](../docs/internal/DEPENDENCY-AUDIT.md). The npm gate retains both raw audits and admits only the advisories in `npm-audit-exceptions.json`, each until its expiry date; `python3 packaging/test_audit_npm.py` tests it against a stub `npm`. These checks require a current vulnerability database and are not performed by the agent at runtime.
+`release-candidate.yml` runs only when manually dispatched (see [Release candidate workflow](#release-candidate-workflow)). The final release head needs a complete run and downloaded-artifact verification. `ci.yml` runs on every push; [docs/internal/CI.md](../docs/internal/CI.md) lists what each job proves and what it does not. Resolve every scanner finding; run `packaging/audit-rust.py`, `packaging/audit-npm.py`, `govulncheck ./...`, and an image scanner on the exact release inputs. The Rust gate retains full findings and admits only the specifically proven inactive optional dependency described in [DEPENDENCY-AUDIT](../docs/internal/DEPENDENCY-AUDIT.md). The npm gate retains both raw audits and admits only the advisories in `npm-audit-exceptions.json`, each until its expiry date; `python3 packaging/test_audit_npm.py` tests it against a stub `npm`. These checks require a current vulnerability database and are not performed by the agent at runtime.
 
 ## Sign and package
 
@@ -79,6 +79,6 @@ On Windows install WiX (the workflow uses `dotnet tool install wix --version 5.0
 
 `build-apt-repository.sh <debs> <new-directory> <gpg-key-id>` uses dpkg-scanpackages, apt-ftparchive and a real GPG key to create signed repository metadata locally. Publication requires an approved hostname/storage endpoint and namespace review. After publication, operators independently obtain the keyring, check its fingerprint, save it under `/etc/apt/keyrings`, add `deb [signed-by=/etc/apt/keyrings/vectory.gpg] https://<approved-host> stable main`, then run `apt update` and `apt install vectory`. A bare `apt install vectory` is not promised before repository configuration.
 
-## Before public release
+## Before publication
 
-Before public release, check Vectory name/trademark and package/repository namespaces, fill the private vulnerability-reporting destination, review third-party license inventory, complete native gates and sign using real credentials. Vectory is independent of Datadog and the Vector project.
+For the unsigned 0.1 developer preview, follow the [release checklist](../docs/internal/RELEASE-0.1.md): check Vectory name/trademark and package/repository namespaces, fill the private vulnerability-reporting destination, review the third-party license inventory and complete the native gates. State plainly that its artifacts are unsigned. A future signed distribution needs real signing credentials and separate signature verification. Vectory is independent of Datadog and the Vector project.

@@ -34,6 +34,9 @@ COPY packaging/build-release.py ./packaging/build-release.py
 RUN python3 packaging/build-release.py --no-archives --out /out
 
 FROM timberio/vector:0.58.0-debian@sha256:1c1ea358c617ea0b23003d5af87f7a678b30f8f7096437e680380c47fc13d2d9 AS validator
+# The pinned Vector image can lag Debian security updates; refresh its installed packages.
+USER root
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY --from=server /src/server/target/release/vector-validator /usr/local/bin/vector-validator
 USER 10002:10002
 WORKDIR /tmp
@@ -41,8 +44,9 @@ ENV VECTORY_VECTOR_BINARY=/usr/bin/vector VECTORY_VALIDATOR_ADDR=0.0.0.0:8081
 EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/vector-validator"]
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 \
+# Keep the Bookworm build target while running on a patched Debian 13 base.
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates curl python3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 vectory && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin vectory \
     && mkdir -p /var/lib/vectory /app/dashboard /app/operations /app/releases \
