@@ -563,20 +563,23 @@ func (r *setupRun) applyUpdates(plan *updatePlan, dir string) error {
 	if plan.amend {
 		return r.amendUpdates(plan, dir)
 	}
-	existing, err := ReadUpdatePolicy()
-	if err != nil {
-		existing = DefaultUpdatePolicy()
-	}
-	// The flags decide the level, the track, the windows and the pins. A pause is a
-	// person's decision on this host, so running setup again doesn't lift it.
-	policy := existing
-	policy.Consent, policy.Track, policy.Windows = plan.consent, plan.track, slices.Clone(plan.windows)
-	policy.SetPinnedKeys(plan.pins)
 	saved := "The agent is installed and enrolled, but updates weren't turned on"
-	if !sameUpdatePolicy(existing, policy) {
-		if err := WriteUpdatePolicy(policy); err != nil {
-			return r.refuseUpdates(saved+": the update policy couldn't be written ("+strings.TrimSuffix(sentence(err.Error()), ".")+").", "Fix the cause, then run the same command again; setup resumes where it stopped.")
+	// The explicit flags replace consent, track, windows and pins. The local
+	// pause comes from the policy read under the write lock, so a concurrent
+	// pause or pin rollover cannot be undone by a stale setup snapshot.
+	var policy UpdatePolicy
+	err := changeUpdatePolicy(func(existing *UpdatePolicy) error {
+		policy = *existing
+		policy.Consent, policy.Track, policy.Windows = plan.consent, plan.track, slices.Clone(plan.windows)
+		policy.SetPinnedKeys(plan.pins)
+		if sameUpdatePolicy(*existing, policy) {
+			return errAmendNothing
 		}
+		*existing = policy
+		return nil
+	}, true)
+	if err != nil && !errors.Is(err, errAmendNothing) {
+		return r.refuseUpdates(saved+": the update policy couldn't be written ("+strings.TrimSuffix(sentence(err.Error()), ".")+").", "Fix the cause, then run the same command again; setup resumes where it stopped.")
 	}
 	words := UpdatePolicyWords(policy) + " (pinned)"
 	if policy.Paused {

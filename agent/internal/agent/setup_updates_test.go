@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -764,6 +765,89 @@ func TestSetupAgainReplacesThePinSetAndKeepsAPause(t *testing.T) {
 	}
 }
 
+// Setup must read the pause while holding the policy write lock. Otherwise a
+// pause made just before its write could be replaced by setup's stale snapshot.
+func TestSetupPolicyEditKeepsAPauseCommittedWhileItWaitsForTheLock(t *testing.T) {
+	requireRootOwnedWriter(t)
+	paths := useUpdateRoots(t)
+	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	unlock, err := lockUpdatePolicy(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(unlock)
+	defer release()
+
+	plan := &updatePlan{consent: UpdateConsentAuto, track: UpdateTrackMinor, pins: []ReleaseKey{testKey(t, nextKeyLine)}}
+	run := &setupRun{}
+	stateDir := t.TempDir()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- run.applyUpdates(plan, stateDir)
+	}()
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("setup completed while the policy lock was held: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	current, basis, err := readUpdatePolicy(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Paused = true
+	data, err := prepareUpdatePolicy(current, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeUpdatePolicyInDir(dir, data, &basis); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := waitForPolicyWrite(t, done, "setup"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadUpdatePolicy()
+	if err != nil || !got.Paused || got.Track != UpdateTrackMinor || len(got.Keys) != 1 || got.Keys[0].Key.Fingerprint() != nextFingerprint {
+		t.Fatalf("setup should keep the newly committed pause: %+v, %v", got, err)
+	}
+	if run.updateStep == nil || !run.updateStep.updates.Paused || !strings.Contains(run.updateStep.words, "paused on this host") {
+		t.Fatalf("setup should report the committed pause: %+v", run.updateStep)
+	}
+}
+
+func TestSetupCanRepairAMalformedPolicyUnderThePolicyLock(t *testing.T) {
+	requireRootOwnedWriter(t)
+	paths := useUpdateRoots(t)
+	dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if err := dir.WriteFile(updatePolicyFile, []byte(`{"schema":"vectory.update-policy.v1","consent":"yes"}`), rootReadable); err != nil {
+		t.Fatal(err)
+	}
+	plan := &updatePlan{consent: UpdateConsentAuto, track: UpdateTrackPatch, pins: []ReleaseKey{testKey(t, teamKeyLine)}}
+	var run setupRun
+	if err := run.applyUpdates(plan, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadUpdatePolicy()
+	if err != nil || got.Consent != UpdateConsentAuto || len(got.Keys) != 1 || got.Keys[0].Key.Fingerprint() != teamFingerprint {
+		t.Fatalf("explicit setup should repair malformed consent: %+v, %v", got, err)
+	}
+}
+
 // Setup keeps the time a key was pinned for a key that stays.
 func TestSetupKeepsWhenAKeyThatStaysWasPinned(t *testing.T) {
 	f := newConsentFixture(t)
@@ -1115,6 +1199,21 @@ func TestTheListOfKeysIsReadAsTheSharedVectorsSayAndPinsOnlyByComputedFingerprin
 
 // ---------------------------------------------------------------- withdrawing
 
+func TestWithdrawingWithNoPolicyLeavesPolicyFileAbsent(t *testing.T) {
+	requireRootOwnedWriter(t)
+	paths := useUpdateRoots(t)
+	done, err := withdrawUpdatesReporting("", func() (bool, error) { return false, nil })
+	if err != nil || done.PolicyOff || done.KeysKept != 0 {
+		t.Fatalf("a host with no update policy: %+v, %v", done, err)
+	}
+	if _, err := os.Stat(paths.Policy); !os.IsNotExist(err) {
+		t.Fatalf("withdrawal created policy.json: %v", err)
+	}
+	if _, err := os.Stat(paths.PolicyDir); !os.IsNotExist(err) {
+		t.Fatalf("withdrawal created a policy directory on a host that never enabled updates: %v", err)
+	}
+}
+
 // withdrawUpdates is WithdrawUpdates with a removal of the step that says nothing of a rollback.
 func withdrawUpdates(dir string, removeStep func() error) (UpdateWithdrawal, error) {
 	return withdrawUpdatesReporting(dir, func() (bool, error) { return false, removeStep() })
@@ -1137,6 +1236,141 @@ func TestWithdrawingUpdatesFromAnInvalidPolicyWritesOne(t *testing.T) {
 	}
 	if policy, err := ReadUpdatePolicy(); err != nil || policy.Consent != UpdateConsentOff {
 		t.Fatalf("%+v %v", policy, err)
+	}
+}
+
+func TestWithdrawingAMalformedPolicyKeepsAConcurrentSetupRepair(t *testing.T) {
+	requireRootOwnedWriter(t)
+	paths := useUpdateRoots(t)
+	dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if err := dir.WriteFile(updatePolicyFile, []byte(`{"schema":"vectory.update-policy.v1","consent":"yes"}`), rootReadable); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockUpdatePolicy(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(unlock)
+	defer release()
+	started := make(chan struct{})
+	results := make(chan struct {
+		withdrawal UpdateWithdrawal
+		err        error
+	}, 1)
+	stateDir := t.TempDir()
+	go func() {
+		close(started)
+		withdrawal, err := withdrawUpdatesReporting(stateDir, func() (bool, error) { return false, nil })
+		results <- struct {
+			withdrawal UpdateWithdrawal
+			err        error
+		}{withdrawal, err}
+	}()
+	<-started
+	select {
+	case result := <-results:
+		t.Fatalf("withdrawal completed while the policy lock was held: %+v, %v", result.withdrawal, result.err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	repaired := samplePolicy(t)
+	repaired.Paused = true
+	data, err := prepareUpdatePolicy(repaired, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeUpdatePolicyInDir(dir, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case result := <-results:
+		if result.err != nil || !result.withdrawal.PolicyOff || result.withdrawal.KeysKept != 1 {
+			t.Fatalf("withdrawal should keep the concurrent pins: %+v, %v", result.withdrawal, result.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("withdrawal did not finish")
+	}
+	got, err := ReadUpdatePolicy()
+	if err != nil || got.Consent != UpdateConsentOff || !got.Paused || len(got.Keys) != 1 || got.Keys[0].Key.Fingerprint() != teamFingerprint {
+		t.Fatalf("withdrawal should preserve repaired pins and pause: %+v, %v", got, err)
+	}
+}
+
+func TestWithdrawalChecksForNewConsentAfterWaitingForThePolicyLock(t *testing.T) {
+	for _, alreadyOff := range []bool{false, true} {
+		name := "no policy"
+		if alreadyOff {
+			name = "off policy"
+		}
+		t.Run(name, func(t *testing.T) {
+			requireRootOwnedWriter(t)
+			paths := useUpdateRoots(t)
+			if alreadyOff {
+				p := samplePolicy(t)
+				p.Consent = UpdateConsentOff
+				if err := writeUpdatePolicy(paths, p, time.Now(), nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dir.Close()
+			unlock, err := lockUpdatePolicy(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			release := sync.OnceFunc(unlock)
+			defer release()
+			started := make(chan struct{})
+			results := make(chan struct {
+				withdrawal UpdateWithdrawal
+				err        error
+			}, 1)
+			stateDir := t.TempDir()
+			go func() {
+				close(started)
+				withdrawal, err := withdrawUpdatesReporting(stateDir, func() (bool, error) { return false, nil })
+				results <- struct {
+					withdrawal UpdateWithdrawal
+					err        error
+				}{withdrawal, err}
+			}()
+			<-started
+			select {
+			case result := <-results:
+				t.Fatalf("withdrawal decided before acquiring the policy lock: %+v, %v", result.withdrawal, result.err)
+			case <-time.After(250 * time.Millisecond):
+			}
+			// Commit setup's new consent while the lock is still held, then let
+			// withdrawal observe and turn off that exact policy.
+			data, err := prepareUpdatePolicy(samplePolicy(t), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeUpdatePolicyInDir(dir, data, nil); err != nil {
+				t.Fatal(err)
+			}
+			release()
+			select {
+			case result := <-results:
+				if result.err != nil || !result.withdrawal.PolicyOff || result.withdrawal.KeysKept != 1 {
+					t.Fatalf("withdrawal should see the new consent: %+v, %v", result.withdrawal, result.err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("withdrawal did not finish")
+			}
+			got, err := ReadUpdatePolicy()
+			if err != nil || got.Consent != UpdateConsentOff || len(got.Keys) != 1 {
+				t.Fatalf("new consent should be withdrawn, keeping pins: %+v, %v", got, err)
+			}
+		})
 	}
 }
 

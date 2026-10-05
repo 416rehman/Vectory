@@ -259,7 +259,7 @@ While the preview server is still running, revoke this trial's device in the das
   sudo /usr/local/bin/vectory uninstall --purge --state-dir /var/lib/vectory-agent
   sudo rm -f /usr/local/bin/vectory /etc/vectory/managed/vector.json
   sudo rmdir /etc/vectory/managed 2>/dev/null || true
-  sudo rm -f /etc/vectory/updates/policy.json
+  sudo rm -f /etc/vectory/updates/policy.json /etc/vectory/updates/policy.lock
   sudo rmdir /etc/vectory/updates 2>/dev/null || true
   if id vectory >/dev/null 2>&1; then
     if command -v userdel >/dev/null 2>&1; then
@@ -296,7 +296,7 @@ While the preview server is still running, revoke this trial's device in the das
     --state-dir "/Library/Application Support/Vectory/agent"
   sudo rm -f /usr/local/bin/vectory "/Library/Application Support/Vectory/managed/vector.json"
   sudo rmdir "/Library/Application Support/Vectory/managed" 2>/dev/null || true
-  sudo rm -f "/Library/Application Support/Vectory/updates/policy.json"
+  sudo rm -f "/Library/Application Support/Vectory/updates/policy.json" "/Library/Application Support/Vectory/updates/policy.lock"
   sudo rmdir "/Library/Application Support/Vectory/updates" 2>/dev/null || true
   service_account=_vectory
   if id "$service_account" >/dev/null 2>&1; then

@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+var errWithdrawPolicyUnchanged = errors.New("the update policy is already off or absent")
+
 // Withdrawing consent is the same act wherever it is asked for: `vectory update
 // off` and `vectory setup --updates off`. The policy says off (the pinned keys
 // stay, so that turning updates on again with the same key needs no new pin), what
@@ -255,24 +257,41 @@ func withdrawUpdatesReporting(dir string, removeStep func() (endedARollback bool
 		return done, err
 	}
 	paths := UpdateLocations()
-	policy, basis, err := readUpdatePolicy(paths)
-	switch {
-	case errors.Is(err, ErrUpdatePolicyInvalid):
-		// A policy no reader accepts says off already; replacing it makes that true
-		// for the next person who reads it.
-		if err := WriteUpdatePolicy(DefaultUpdatePolicy()); err != nil {
-			return done, err
-		}
-		done.PolicyOff = true
-	case err != nil:
+	// A host that never enabled updates has no policy directory. Observe that
+	// absence without creating one: withdrawal linearizes before any concurrent
+	// setup that creates it. Once the directory exists, take the persistent
+	// lock before deciding whether its policy is absent, off or enabled.
+	policyDir, err := openRootOwned(paths.PolicyDir, rootOwnedDirectory)
+	policyDirAbsent := notExist(err)
+	if err != nil && !policyDirAbsent {
 		return done, err
-	case basis != "" && policy.Consent != UpdateConsentOff:
-		if err := ChangeUpdatePolicy(func(p *UpdatePolicy) error { p.Consent = UpdateConsentOff; return nil }); err != nil {
+	}
+	if policyDir != nil {
+		_ = policyDir.Close()
+	}
+	if !policyDirAbsent {
+		// Decide under the same lock used by setup and the privileged update step.
+		// A missing policy remains absent; a malformed one is replaced with a valid
+		// off policy. A concurrent setup or pin rollover is read here, not from a
+		// stale snapshot taken before waiting for the lock.
+		keysKept := 0
+		shouldWrite := false
+		err = changeUpdatePolicyWithState(func(p *UpdatePolicy, exists, malformed bool) error {
+			keysKept = len(p.Keys)
+			shouldWrite = false
+			if !exists || p.Consent == UpdateConsentOff && !malformed {
+				return errWithdrawPolicyUnchanged
+			}
+			p.Consent = UpdateConsentOff
+			shouldWrite = true
+			return nil
+		}, true)
+		if err != nil && !errors.Is(err, errWithdrawPolicyUnchanged) {
 			return done, err
 		}
-		done.PolicyOff = true
+		done.KeysKept = keysKept
+		done.PolicyOff = shouldWrite && err == nil
 	}
-	done.KeysKept = len(policy.Keys)
 	if dir != "" {
 		discarded, left, err := removeUpdateExchange(dir)
 		if err != nil {

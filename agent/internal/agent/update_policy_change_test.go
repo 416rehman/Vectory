@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -63,23 +64,110 @@ func TestChangeUpdatePolicyOnAHostWithNoPolicyEditsTheDefault(t *testing.T) {
 	}
 }
 
-// Two writers must not undo each other: a person's `off` and the step's pins.
-func TestChangeUpdatePolicyRepeatsAnEditThatAnotherWriterOverlapped(t *testing.T) {
+// A person's pause and the step's pin edit must see one another's changes,
+// even when both writers start editing at the same time.
+func TestChangeUpdatePolicySerializesConcurrentEdits(t *testing.T) {
 	requireRootOwnedWriter(t)
 	paths := useUpdateRoots(t)
 	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
+	next := testKey(t, nextKeyLine)
+	firstEditing := make(chan struct{})
+	finishFirst := make(chan struct{})
+	releaseFirst := sync.OnceFunc(func() { close(finishFirst) })
+	defer releaseFirst()
+	firstDone := make(chan error, 1)
+	var firstEntered sync.Once
+	go func() {
+		firstDone <- ChangeUpdatePolicy(func(p *UpdatePolicy) error {
+			firstEntered.Do(func() { close(firstEditing) })
+			<-finishFirst
+			p.Paused = true
+			return nil
+		})
+	}()
+	select {
+	case <-firstEditing:
+	case err := <-firstDone:
+		t.Fatalf("first writer returned before editing: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("first writer did not enter its edit")
+	}
+	secondCalling := make(chan struct{})
+	secondEditing := make(chan struct{})
+	secondDone := make(chan error, 1)
+	var secondEntered sync.Once
+	go func() {
+		close(secondCalling)
+		secondDone <- ChangeUpdatePolicy(func(p *UpdatePolicy) error {
+			secondEntered.Do(func() { close(secondEditing) })
+			p.SetPinnedKeys([]ReleaseKey{p.Keys[0].Key, next})
+			return nil
+		})
+	}()
+	<-secondCalling
+	select {
+	case <-secondEditing:
+		releaseFirst()
+		t.Fatal("another writer entered its edit while the first held the policy lock")
+	case <-time.After(250 * time.Millisecond):
+	}
+	releaseFirst()
+	if err := waitForPolicyWrite(t, firstDone, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForPolicyWrite(t, secondDone, "second"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadUpdatePolicy()
+	if err != nil || !got.Paused || len(got.Keys) != 2 || got.Keys[1].Key.Fingerprint() != next.Fingerprint() {
+		t.Errorf("the pause and pin edit must both survive: %+v, %v", got, err)
+	}
+}
+
+func waitForPolicyWrite(t *testing.T, done <-chan error, label string) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the %s policy writer did not finish", label)
+		return nil
+	}
+}
+
+// The digest still detects a root writer that bypasses the cooperative lock
+// before the basis check, so ChangeUpdatePolicy retries from the new policy.
+func TestChangeUpdatePolicyRepeatsAnEditAfterOutOfBandReplacement(t *testing.T) {
+	requireRootOwnedWriter(t)
+	paths := useUpdateRoots(t)
+	if err := writeUpdatePolicy(paths, samplePolicy(t), time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	replaceWithoutLock := func(p UpdatePolicy) {
+		t.Helper()
+		data, err := prepareUpdatePolicy(p, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dir.Close()
+		if err := dir.WriteFile(updatePolicyFile, data, rootReadable); err != nil {
+			t.Fatal(err)
+		}
+	}
 	calls := 0
 	err := ChangeUpdatePolicy(func(p *UpdatePolicy) error {
 		calls++
 		if calls == 1 {
-			// Another writer replaces the policy after this one read it.
+			// An uncooperative root writer replaces the policy after this read.
 			other := samplePolicy(t)
 			other.Track = UpdateTrackMinor
-			if err := writeUpdatePolicy(paths, other, time.Now(), nil); err != nil {
-				t.Fatal(err)
-			}
+			replaceWithoutLock(other)
 		}
 		p.Paused = true
 		return nil
@@ -98,9 +186,7 @@ func TestChangeUpdatePolicyRepeatsAnEditThatAnotherWriterOverlapped(t *testing.T
 		calls++
 		other := samplePolicy(t)
 		other.Windows = []string{fmt.Sprintf("daily 0%d:00-0%d:30", calls, calls)}
-		if err := writeUpdatePolicy(paths, other, time.Now(), nil); err != nil {
-			t.Fatal(err)
-		}
+		replaceWithoutLock(other)
 		p.Consent = UpdateConsentOff
 		return nil
 	})

@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -216,9 +217,52 @@ func TestPathsWithSpacesQuotesAndPercentSignsAreWrittenAsTheUnitReadsThemAndRead
 	}
 }
 
-// systemd-analyze reads unit files offline. Its exit status is 0 for a unit it only
-// warns about, so the test holds its output to nothing at all, and a unit that it does
-// warn about shows that the output is what counts.
+// systemd-analyze may also warn about installed host units pulled in as
+// dependencies. Only diagnostics naming one of our generated units assess the
+// generated text; a host's unrelated warning cannot make this test fail.
+func stepUnitDiagnostics(output string) string {
+	var own []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.Contains(line, updateServiceUnit) || strings.Contains(line, updateTimerUnit) {
+			own = append(own, line)
+		}
+	}
+	return strings.Join(own, "\n")
+}
+
+func stepUnitVerifyProblem(output string, commandErr error) error {
+	if commandErr != nil {
+		return fmt.Errorf("systemd-analyze verify failed: %w\n%s", commandErr, strings.TrimSpace(output))
+	}
+	if own := stepUnitDiagnostics(output); own != "" {
+		return fmt.Errorf("systemd-analyze verify says:\n%s", own)
+	}
+	return nil
+}
+
+func TestStepUnitDiagnosticsIgnoresUnrelatedHostWarnings(t *testing.T) {
+	host := "/lib/systemd/system/snapd.service:23: Unknown key name 'RestartMode' in section 'Service', ignoring."
+	own := "/tmp/vectory-update.service:12: Failed to parse ProtectSystem=bogus"
+	if got := stepUnitDiagnostics(host + "\n" + own); got != own {
+		t.Errorf("%q, want %q", got, own)
+	}
+	if got := stepUnitDiagnostics(host); got != "" {
+		t.Errorf("unrelated installed-unit warning: %q", got)
+	}
+	if err := stepUnitVerifyProblem(host, nil); err != nil {
+		t.Errorf("successful verify should ignore unrelated warning: %v", err)
+	}
+	if err := stepUnitVerifyProblem(host, errors.New("exit status 1")); err == nil || !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("failed verify must not be hidden by the filter: %v", err)
+	}
+	if err := stepUnitVerifyProblem(own, nil); err == nil || !strings.Contains(err.Error(), own) {
+		t.Errorf("our generated-unit warning must be reported: %v", err)
+	}
+}
+
+// systemd-analyze reads unit files offline. Its exit status is 0 for a unit it
+// only warns about, so the test checks the generated units' diagnostics, and an
+// intentionally broken unit must still produce one.
 func TestSystemdAcceptsTheStepsUnitsAndHasNothingToSayAboutThem(t *testing.T) {
 	analyze, err := exec.LookPath("systemd-analyze")
 	if err != nil {
@@ -231,7 +275,7 @@ func TestSystemdAcceptsTheStepsUnitsAndHasNothingToSayAboutThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verify := func(service, timer string) string {
+	verify := func(service, timer string) (string, error) {
 		t.Helper()
 		for name, text := range map[string]string{updateServiceUnit: service, updateTimerUnit: timer} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
@@ -239,14 +283,19 @@ func TestSystemdAcceptsTheStepsUnitsAndHasNothingToSayAboutThem(t *testing.T) {
 			}
 		}
 		command := exec.Command(analyze, "verify", "--man=no", filepath.Join(dir, updateServiceUnit), filepath.Join(dir, updateTimerUnit))
-		out, _ := command.CombinedOutput()
-		return strings.TrimSpace(string(out))
+		out, err := command.CombinedOutput()
+		return string(out), err
 	}
-	if out := verify(service, timer); out != "" {
-		t.Errorf("systemd-analyze verify says:\n%s", out)
+	out, verifyErr := verify(service, timer)
+	if err := stepUnitVerifyProblem(out, verifyErr); err != nil {
+		t.Fatal(err)
 	}
 	broken := strings.Replace(service, "ProtectSystem=strict", "ProtectSystem=bogus", 1)
-	if out := verify(broken, timer); !strings.Contains(out, "bogus") {
+	out, verifyErr = verify(broken, timer)
+	if !strings.Contains(stepUnitDiagnostics(out), "bogus") {
+		if verifyErr != nil {
+			t.Fatalf("the broken generated unit failed verification without a diagnostic about that unit: %v\n%s", verifyErr, out)
+		}
 		t.Skipf("this systemd-analyze doesn't warn about an unknown ProtectSystem value, so its silence proves nothing here: %q", out)
 	}
 }

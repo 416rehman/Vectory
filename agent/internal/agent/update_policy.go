@@ -36,6 +36,9 @@ const (
 	// maxUpdatePolicy bounds the file: four keys and seven windows are about 1.5 KiB.
 	maxUpdatePolicy = 8 * 1024
 	maxPinnedKeys   = 4
+	// The lock file is persistent: removing it would let another writer lock a
+	// different inode while the first writer still holds the old one.
+	updatePolicyLockFile = "policy.lock"
 )
 
 // ErrUpdatePolicyInvalid is what a policy file that is not what the contract
@@ -272,62 +275,83 @@ const changeAttempts = 4
 // and only root can change. It refuses to write below a directory that isn't
 // root's alone, and a policy a reader would refuse. UpdatedAt is set to now, and a
 // key with no PinnedAt is pinned now; the policy a caller read keeps the time
-// each key was pinned. It replaces whatever is there, so it is for a caller that
-// decides the whole policy (setup); a caller that edits what is there uses
-// ChangeUpdatePolicy.
+// each key was pinned. It replaces whatever is there, so it is for a caller
+// that intentionally resets the whole policy; a caller that edits what is
+// there uses ChangeUpdatePolicy.
 func WriteUpdatePolicy(p UpdatePolicy) error {
 	return writeUpdatePolicy(UpdateLocations(), p, time.Now(), nil)
 }
 
-// ChangeUpdatePolicy edits the policy as root: it reads it, calls change on the
-// copy, and writes the result, as WriteUpdatePolicy does, but only over the file
-// it read. If another writer replaced the policy in between (a person running
-// `vectory update` while the privileged step writes the pins of a rollover, say),
-// the edit is made again on what is there now, so that neither writer's change is
-// lost: a lost change could undo a person's `vectory update off`. change may be
-// called more than once and must make the same edit each time; an error from it
-// writes nothing. After four attempts the answer is ErrUpdatePolicyChanged. A
-// host with no policy file is edited from the default policy. Used by `vectory
-// update pause`, `resume` and `off`, and by the privileged step after a rollover
-// (the pins only).
+// ChangeUpdatePolicy edits the policy as root. The persistent policy lock spans
+// the read, change, basis check, atomic rename and directory sync, so another
+// cooperating writer cannot overwrite the edit. The digest check also detects
+// an out-of-band replacement made before the check; in that case change is
+// repeated on the new policy, at most four times. change must make the same
+// edit each time; an error from it leaves policy.json unchanged. A host with no policy file
+// is edited from the default policy. Used by `vectory update pause`, `resume`
+// and `off`, and by the privileged step after a rollover (the pins only).
 func ChangeUpdatePolicy(change func(*UpdatePolicy) error) error {
+	return changeUpdatePolicy(change, false)
+}
+
+// Explicit setup and withdrawal may repair a malformed policy by replacing it
+// from the default. Ordinary local edits still refuse malformed input.
+func changeUpdatePolicy(change func(*UpdatePolicy) error, repairMalformed bool) error {
+	return changeUpdatePolicyWithState(func(p *UpdatePolicy, _, _ bool) error { return change(p) }, repairMalformed)
+}
+
+// changeUpdatePolicyWithState also tells the edit whether policy.json existed
+// and whether its contents needed repair. A callback may return a sentinel to
+// leave an absent or already-off policy untouched after the locked read.
+func changeUpdatePolicyWithState(change func(*UpdatePolicy, bool, bool) error, repairMalformed bool) error {
 	if !canWriteRootOwned() {
 		return errUpdatePolicyNeedsRoot
 	}
 	paths := UpdateLocations()
+	dir, err := ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	unlock, err := lockUpdatePolicy(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	for attempt := 0; attempt < changeAttempts; attempt++ {
 		policy, basis, err := readUpdatePolicy(paths)
+		basisToCheck := &basis
+		malformed := errors.Is(err, ErrUpdatePolicyInvalid) || errors.Is(err, errRootOwnedTooLarge)
+		exists := basis != "" || malformed
+		if repairMalformed && malformed {
+			policy = DefaultUpdatePolicy()
+			basisToCheck = nil
+			err = nil
+		}
 		if err != nil {
 			return err
 		}
-		if err := change(&policy); err != nil {
+		if err := change(&policy, exists, malformed); err != nil {
 			return err
 		}
-		if err := writeUpdatePolicy(paths, policy, time.Now(), &basis); !errors.Is(err, ErrUpdatePolicyChanged) {
+		data, err := prepareUpdatePolicy(policy, time.Now())
+		if err != nil {
+			return err
+		}
+		if err := writeUpdatePolicyInDir(dir, data, basisToCheck); !errors.Is(err, ErrUpdatePolicyChanged) {
 			return err
 		}
 	}
 	return ErrUpdatePolicyChanged
 }
 
-// writeUpdatePolicy writes p at the time now. With a basis, the file that is
-// there must be the one the basis names (its SHA-256, or "" for no file), or
-// nothing is written and the answer is ErrUpdatePolicyChanged; the check and the
-// rename that follows it are two steps, so a writer that doesn't use this
-// function can still slip between them for as long as it takes to rename a file.
+// writeUpdatePolicy writes a full replacement under the same lock used by
+// ChangeUpdatePolicy. With a basis, the file there must have the basis digest.
 func writeUpdatePolicy(paths UpdatePaths, p UpdatePolicy, now time.Time, basis *string) error {
 	if !canWriteRootOwned() {
 		return errUpdatePolicyNeedsRoot
 	}
-	now = now.UTC().Truncate(time.Second)
-	p.UpdatedAt = now
-	p.Keys = slices.Clone(p.Keys)
-	for i := range p.Keys {
-		if p.Keys[i].PinnedAt.IsZero() {
-			p.Keys[i].PinnedAt = now
-		}
-	}
-	data, err := MarshalUpdatePolicy(p)
+	data, err := prepareUpdatePolicy(p, now)
 	if err != nil {
 		return err
 	}
@@ -336,6 +360,29 @@ func writeUpdatePolicy(paths UpdatePaths, p UpdatePolicy, now time.Time, basis *
 		return err
 	}
 	defer dir.Close()
+	unlock, err := lockUpdatePolicy(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return writeUpdatePolicyInDir(dir, data, basis)
+}
+
+func prepareUpdatePolicy(p UpdatePolicy, now time.Time) ([]byte, error) {
+	now = now.UTC().Truncate(time.Second)
+	p.UpdatedAt = now
+	p.Keys = slices.Clone(p.Keys)
+	for i := range p.Keys {
+		if p.Keys[i].PinnedAt.IsZero() {
+			p.Keys[i].PinnedAt = now
+		}
+	}
+	return MarshalUpdatePolicy(p)
+}
+
+// Caller holds policy.lock for the entire transaction. Only an uncooperative
+// root writer can change policy.json between this basis check and the rename.
+func writeUpdatePolicyInDir(dir *rootOwned, data []byte, basis *string) error {
 	if basis != nil {
 		current, err := dir.ReadFileAt(updatePolicyFile, maxUpdatePolicy)
 		digest := ""

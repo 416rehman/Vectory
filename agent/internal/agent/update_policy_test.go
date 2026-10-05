@@ -335,13 +335,13 @@ func TestWriteUpdatePolicyThenReadItBack(t *testing.T) {
 		t.Error("writing a policy changed the caller's copy")
 	}
 	if runtime.GOOS != "windows" {
-		for path, want := range map[string]os.FileMode{paths.PolicyDir: 0o755, paths.Policy: 0o644} {
+		for path, want := range map[string]os.FileMode{paths.PolicyDir: 0o755, paths.Policy: 0o644, filepath.Join(paths.PolicyDir, updatePolicyLockFile): 0o600} {
 			if info, err := os.Stat(path); err != nil || info.Mode().Perm() != want {
 				t.Errorf("%s: %v, %v; want %04o", path, info, err, want)
 			}
 		}
 	}
-	// Writing again replaces the file and leaves nothing beside it.
+	// Writing again replaces the file and leaves only the persistent lock beside it.
 	p.Paused = true
 	if err := writeUpdatePolicy(paths, p, written.Add(time.Hour), nil); err != nil {
 		t.Fatal(err)
@@ -350,7 +350,7 @@ func TestWriteUpdatePolicyThenReadItBack(t *testing.T) {
 		t.Errorf("after a second write: %+v, %v", again, err)
 	}
 	entries, err := os.ReadDir(paths.PolicyDir)
-	if err != nil || len(entries) != 1 || entries[0].Name() != "policy.json" {
+	if err != nil || len(entries) != 2 || entries[0].Name() != "policy.json" || entries[1].Name() != updatePolicyLockFile {
 		t.Errorf("the policy directory holds %v, %v", entries, err)
 	}
 }
