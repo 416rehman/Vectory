@@ -532,9 +532,7 @@ try {
         name: "Review pipeline request",
         exact: true,
       });
-      await expect(review).toContainText(
-        "No completed request was found yet",
-      );
+      await expect(review).toContainText("No completed request was found yet");
       await review
         .getByRole("button", { name: "Dismiss reminder", exact: true })
         .click();
