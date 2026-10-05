@@ -587,7 +587,6 @@ export default function Editor({
       title: string;
       needs: string[];
     } | null>(null),
-    // Why the server definitively refused the last publish attempt.
     // The version just published, offered for deployment next.
     [publishedResult, setPublishedResult] = useState<Version | null>(null),
     // Where this pipeline's versions are assigned, for the publish review.
@@ -2855,7 +2854,11 @@ export default function Editor({
       if (operation) {
         setPublishNotice("uncertain");
       }
-      reportPublicationError((failure as Error).message);
+      reportPublicationError(
+        failure instanceof APIError && failure.code === "TESTS_FAILED"
+          ? "The pipeline tests didn't pass. Review the saved publish request to confirm the result."
+          : (failure as Error).message,
+      );
     } finally {
       if (publishActive.current === controller) publishActive.current = null;
       if (publishMounted.current) setBusy(false);

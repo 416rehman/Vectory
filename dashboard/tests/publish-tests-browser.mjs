@@ -847,7 +847,7 @@ try {
   });
 
   await run(
-    "tests that changed after the review: the refusal shows the new verdict and Publish anyway sends the flag",
+    "tests that changed after the review: the refusal shows the new verdict and keeps the saved request",
     async () => {
       const s = await start(state({ raceOnPublish: true }));
       try {
@@ -857,30 +857,44 @@ try {
           .getByRole("button", { name: "Publish version", exact: true })
           .click();
         await expect(reviewDialog(s.page).getByRole("alert")).toContainText(
-          "The pipeline tests didn't pass. Nothing was published.",
+          "The pipeline tests didn't pass. Review the saved publish request to confirm the result.",
         );
         await expect(reviewDialog(s.page)).not.toContainText(
           "acknowledge_test_failures",
         );
-        // The tests ran again, and the footer follows them.
+        await expect(reviewDialog(s.page)).toContainText(
+          "Publish result needs confirmation",
+        );
+        // The tests ran again, but this tab cannot dismiss the saved request:
+        // another tab may have committed the same key before this refusal.
         await expect(testsRegion(s.page)).toContainText(
           "Tests: 1 of 3 tests failed",
         );
         await expect(footer(s.page)).toHaveText([
-          "Back to draft",
-          "Open tests",
+          "Close and review request",
           "Publish anyway",
         ]);
+        await expect(
+          reviewDialog(s.page).getByRole("button", {
+            name: "Publish anyway",
+            exact: true,
+          }),
+        ).toBeDisabled();
         expect(s.f.versions).toHaveLength(0);
         expect(s.f.tests).toHaveLength(2);
-        await reviewDialog(s.page)
-          .getByRole("button", { name: "Publish anyway", exact: true })
-          .click();
-        await expect(
-          s.page.getByRole("dialog", { name: "Version 1 published" }),
-        ).toBeVisible();
-        expect(s.f.posts).toHaveLength(2);
-        expect(s.f.posts[1].body.acknowledge_test_failures).toBe(true);
+        expect(s.f.posts).toHaveLength(1);
+        expect(s.f.posts[0].body).not.toHaveProperty(
+          "acknowledge_test_failures",
+        );
+        const savedRequests = await s.page.evaluate(() =>
+          Object.entries(localStorage).filter(([key]) =>
+            key.startsWith("vectory:publish-operation:"),
+          ),
+        );
+        expect(savedRequests).toHaveLength(1);
+        expect(JSON.parse(savedRequests[0][1]).request.request_id).toBe(
+          s.f.posts[0].body.request_id,
+        );
         clean(s.f);
       } finally {
         await s.close();

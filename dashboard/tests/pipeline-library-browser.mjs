@@ -514,8 +514,38 @@ try {
       await expect(dialog).toContainText(
         "Synthetic create request captured without saving",
       );
-      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      // A generic 400 does not prove another tab's identical request was not
+      // saved. Review and dismiss the exact browser reminder before creating
+      // a different pipeline in the next scenario.
+      await expect(dialog).toContainText("Creation result needs confirmation");
+      await dialog
+        .getByRole("button", { name: "Close and review request", exact: true })
+        .click();
       await expect(dialog).toHaveCount(0);
+      const saved = page.getByRole("dialog", {
+        name: "Saved pipeline requests",
+        exact: true,
+      });
+      await expect(saved).toContainText("delayed-newer");
+      await saved.getByRole("button", { name: /delayed-newer/ }).click();
+      const review = page.getByRole("dialog", {
+        name: "Review pipeline request",
+        exact: true,
+      });
+      await expect(review).toContainText(
+        "No completed request was found yet",
+      );
+      await review
+        .getByRole("button", { name: "Dismiss reminder", exact: true })
+        .click();
+      await page
+        .getByRole("dialog", {
+          name: "Dismiss this pipeline reminder?",
+          exact: true,
+        })
+        .getByRole("button", { name: "Dismiss reminder", exact: true })
+        .click();
+      await expect(review).toHaveCount(0);
     },
   );
   await check(
