@@ -13,7 +13,10 @@ use http_body_util::BodyExt;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde_json::{Value, json};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 use tower::ServiceExt;
 use vectory_server::{Settings, State, api, db, device, initialize};
 
@@ -68,18 +71,50 @@ async fn call(
     (status, out, cookie)
 }
 /// The shipped backup tool needs Python 3.11 or later (hashlib.file_digest).
-fn python() -> &'static str {
-    for candidate in ["python3", "python"] {
-        let usable = Command::new(candidate)
+fn python() -> PathBuf {
+    let mut attempts = Vec::new();
+    let candidates = vec![PathBuf::from("python3"), PathBuf::from("python")];
+    // On Windows, CreateProcess can fail to search later PATH entries when an
+    // unrelated entry contains an unmatched quote. Resolve existing Python
+    // executables ourselves so this integration test still runs the shipped
+    // backup tool in that environment.
+    #[cfg(windows)]
+    let candidates = {
+        let mut candidates = candidates;
+        if let Some(path) = std::env::var_os("PATH") {
+            for directory in path.to_string_lossy().split(';') {
+                let directory = directory.trim().trim_matches('"');
+                if directory.is_empty() {
+                    continue;
+                }
+                for name in ["python3.exe", "python.exe"] {
+                    let candidate = Path::new(directory).join(name);
+                    if candidate.is_file() {
+                        candidates.push(candidate);
+                    }
+                }
+            }
+        }
+        candidates
+    };
+    for candidate in candidates {
+        match Command::new(&candidate)
             .args(["-c", "import sys, hashlib; sys.exit(0 if sys.version_info >= (3, 11) and hasattr(hashlib, 'file_digest') else 1)"])
-            .status()
-            .is_ok_and(|status| status.success());
-        if usable {
-            return candidate;
+            .output()
+        {
+            Ok(output) if output.status.success() => return candidate,
+            Ok(output) => attempts.push(format!(
+                "{}: {} {}",
+                candidate.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => attempts.push(format!("{}: {error}", candidate.display())),
         }
     }
     panic!(
-        "This test runs deploy/backup.py: put Python 3.11 or later on PATH as python3 or python."
+        "This test runs deploy/backup.py: put Python 3.11 or later on PATH as python3 or python. Tried: {}",
+        attempts.join("; ")
     );
 }
 fn backup_tool(args: &[&str]) {

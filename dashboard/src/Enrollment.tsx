@@ -47,7 +47,7 @@ import {
 } from "./agentUpdateConsent";
 import { useAgentUpdates } from "./useAgentUpdates";
 import {
-  ModeCards,
+  ModePicker,
   SecurityReceipt,
   TrustChoices,
   isAbsoluteLocalFilePath,
@@ -858,7 +858,7 @@ export function Enrollment({
               </label>
             ))}
           </fieldset>
-          <ModeCards value={mode} onChange={setMode} disabled={busy} />
+          <ModePicker value={mode} onChange={setMode} disabled={busy} />
           <details className="enroll-advanced">
             <summary>
               Advanced

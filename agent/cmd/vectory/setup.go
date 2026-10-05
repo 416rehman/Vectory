@@ -83,6 +83,7 @@ func defineSetup(c *cli) func() int {
 	tokenStdin := c.Bool("token-stdin", "Read the enrollment token from standard input")
 	dashboard := c.HiddenString("dashboard-url", "dashboard address for the device link (set by the installer)")
 	agentPath := c.HiddenString("agent-path", "where the service runs the agent from (set by the installer)")
+	installerPreflight := c.HiddenString("installer-preflight", "staged candidate checked by the installer before replacing the agent")
 	dryRun := c.Bool("dry-run", "Check everything and show the plan without changing anything")
 	noWake := c.Bool("no-wake", noWakeHelp)
 	updates := c.String("updates", "", "LEVEL", "Agent updates this host takes from the dashboard: auto, ask (wait for sudo vectory update apply) or off; leave it out to keep what the host agreed to")
@@ -91,6 +92,10 @@ func defineSetup(c *cli) func() int {
 	updateWindows := c.Strings("update-window", "SPEC", "When an update may start, such as 'Mon-Fri 02:00-04:00' or 'daily 01:00-03:00 UTC'; repeat for up to 7, leave it out for any time; without --updates it replaces only the windows of a host that already agreed")
 	c.JSON("Print one JSON document instead of progress lines")
 	return func() int {
+		if c.supplied("installer-preflight") && *installerPreflight == "" {
+			fmt.Fprintln(c.stderr, "vectory setup: --installer-preflight needs the absolute staged candidate path")
+			return exitUsage
+		}
 		if *pin != "" && c.supplied("ca-file") {
 			fmt.Fprintln(c.stderr, "vectory setup: choose one of --ca-sha256 or --ca-file")
 			return exitUsage
@@ -105,7 +110,7 @@ func defineSetup(c *cli) func() int {
 		}
 		options := agent.SetupOptions{
 			Server: *server, CASHA256: *pin, Name: *name, Mode: *mode, Service: *service,
-			CreateUser: *createUser, KeepExistingVector: *keep, AdoptExisting: *adopt, DashboardURL: *dashboard, DryRun: *dryRun,
+			CreateUser: *createUser, KeepExistingVector: *keep, AdoptExisting: *adopt, DashboardURL: *dashboard, DryRun: *dryRun, InstallerPreflight: *installerPreflight,
 			Updates: *updates, UpdateKeys: *updateKeys, UpdateTrack: *updateTrack, UpdateWindows: *updateWindows,
 		}
 		if err := options.CheckUpdates(); err != nil {
@@ -169,7 +174,7 @@ func defineSetup(c *cli) func() int {
 			_ = f.Close()
 		}
 		if human {
-			fmt.Fprintf(c.stdout, "Vectory agent setup %s%s\n", agent.Version, map[bool]string{true: " (dry run: nothing will change)"}[*dryRun])
+			fmt.Fprintf(c.stdout, "Vectory agent setup %s%s\n", agent.Version, map[bool]string{true: " (dry run: nothing will change)"}[*dryRun || *installerPreflight != ""])
 			options.Progress = func(step agent.SetupStep) { printStep(c.stdout, step, color) }
 		}
 		options.Token = func() (token string, err error) {

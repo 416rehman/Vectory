@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
+import { chooseMode, modeTrigger } from "./enrollment-mode.mjs";
 
 const fleet = fleetReplies({ devices: [], groups: [] });
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -251,8 +252,11 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
     );
   });
   await page.goto(`${origin}/__enrollment-connection#/enrollment`);
+  // This fixture offers only a Linux build; the test host may be Windows.
+  if (role === "operator" || role === "admin")
+    await page.getByRole("radio", { name: "Linux", exact: true }).check();
   const createCommand = async () => {
-    await page.getByRole("radio", { name: /^Restricted/ }).check();
+    await chooseMode(page);
     await page
       .getByRole("button", { name: "Create install command", exact: true })
       .click();
@@ -460,11 +464,12 @@ try {
         // The choices lock while the token is being created.
         let release;
         f.state.hold = new Promise((resolve) => (release = resolve));
-        await f.page.getByRole("radio", { name: /^Restricted/ }).check();
+        await chooseMode(f.page);
         await f.page
           .getByRole("button", { name: "Create install command", exact: true })
           .click();
         await expect.poll(() => f.state.posts).toBe(1);
+        await expect(modeTrigger(f.page)).toBeDisabled();
         for (const radio of await radios.all())
           await expect(radio).toBeDisabled();
         release();
@@ -474,6 +479,7 @@ try {
         ).toBeVisible();
         for (const radio of await radios.all())
           await expect(radio).toBeEnabled();
+        await expect(modeTrigger(f.page)).toBeEnabled();
         // Pinned: the command carries the CA for curl; setup gets the fingerprint.
         let text = await install();
         expect(text).toContain("-----BEGIN CERTIFICATE-----");
@@ -539,7 +545,7 @@ try {
       const f = await fixture();
       try {
         await f.page.locator(".enroll-advanced > summary").click();
-        await f.page.getByRole("radio", { name: /^Restricted/ }).check();
+        await chooseMode(f.page);
         await f.page
           .getByRole("radio", { name: "Windows", exact: true })
           .check();
@@ -591,7 +597,7 @@ try {
       const g = await fixture();
       try {
         await g.page.locator(".enroll-advanced > summary").click();
-        await g.page.getByRole("radio", { name: /^Restricted/ }).check();
+        await chooseMode(g.page);
         await g.page.getByRole("radio", { name: "Linux", exact: true }).check();
         const stateDir = g.page.getByLabel("Agent state directory", {
           exact: true,

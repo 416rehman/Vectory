@@ -116,6 +116,7 @@ async function load({ width = 899, theme = "light" } = {}) {
   if (page) await page.context().close();
   state = {
     people: structuredClone([admin, colleague]),
+    sessionRole: "admin",
     mutations: [],
     creations: new Map(),
     edits: new Map(),
@@ -156,7 +157,10 @@ async function load({ width = 899, theme = "light" } = {}) {
           instance_name: "Synthetic role fixture",
         });
       if (path === "/session")
-        return reply({ user: publicUser(admin), csrf_token: csrf });
+        return reply({
+          user: publicUser({ ...admin, role: current.sessionRole }),
+          csrf_token: csrf,
+        });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic role fixture" });
       if (path === "/mfa")
@@ -459,6 +463,49 @@ try {
       const html = await page.content();
       expect(html.includes(inviteCode)).toBe(false);
       expect(state.mutations).toHaveLength(1);
+    },
+  );
+  await check(
+    "an administrator link is forgotten if access is lost and later restored on the same page",
+    async () => {
+      await load();
+      const modal = await openAdd();
+      await fillPerson(
+        modal,
+        "Synthetic invitee",
+        "invitee@fixture.example.test",
+      );
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      const link = dialog("Invite link for Synthetic invitee");
+      await expect(link).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(link).toHaveCount(0);
+      const invitee = row("invitee@fixture.example.test");
+      await expect(
+        invitee.getByRole("button", { name: "Show link" }),
+      ).toBeVisible();
+
+      state.sessionRole = "viewer";
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(
+        page.getByRole("button", { name: "Add person", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("heading", { name: "Your role" }),
+      ).toBeVisible();
+
+      state.sessionRole = "admin";
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(
+        page.getByRole("button", { name: "Add person", exact: true }),
+      ).toBeVisible();
+      await expect(invitee).toBeVisible();
+      await expect(
+        invitee.getByRole("button", { name: "Show link" }),
+      ).toHaveCount(0);
+      expect((await page.content()).includes(inviteCode)).toBe(false);
     },
   );
   await check(

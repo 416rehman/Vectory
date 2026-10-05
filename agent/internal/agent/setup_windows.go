@@ -27,3 +27,9 @@ func ownerSuffix(info os.FileInfo) string { return "" }
 func accountAccessProblem(ctx context.Context, account, path string, read bool, args ...string) string {
 	return ""
 }
+
+// The installer preflight is currently used by the POSIX shell installer.
+// Windows service access is validated by service registration and its ACLs.
+func stagedAgentAccessProblem(ctx context.Context, account, path string) string {
+	return ""
+}

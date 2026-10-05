@@ -43,6 +43,7 @@ The `release` verbs keep no agent state, so they take neither flag.
 | [`configure-metrics`](#configure-metrics) | Set or clear the local metrics endpoint. | Yes |
 | [`configure-secrets`](#configure-secrets) | Map `vectory-secret:NAME` references to local files. | Yes |
 | [`re-adopt`](#re-adopt) | Approve a Vector binary you replaced on purpose. | Yes |
+| [`trust-server`](#trust-server) | Verify and repair an enrolled device's server CA trust. | Yes |
 | [`recover-enrollment`](#recover-enrollment) | Replace a lost identity with an administrator's recovery token. | Yes |
 | [`update`](#update) | Show where agent updates stand, apply a staged one, pause, resume or turn them off. | No |
 | [`service-install`, `service-start`, `service-stop`, `service-uninstall`](#service-commands) | Manage the agent's operating-system service. | Varies |
@@ -423,6 +424,26 @@ sudo vectory re-adopt --expected-sha256 THE_SHA256
 | --- | --- |
 | `--expected-sha256 HEX` | Required. The SHA-256 of the new executable, from a source you trust. |
 | `--vector-binary PATH` | The new path, if Vector moved. Defaults to the current path. |
+
+## trust-server
+
+Repair an already enrolled host after the **same server** changes its TLS CA. Stop the agent first. Copy the exact enrolled address from `vectory status`; `trust-server` refuses a different address or even a different spelling of that address.
+
+```sh
+sudo vectory service-stop
+sudo vectory trust-server --server https://vectory.example.com:8443 --ca-sha256 THE_64_HEX_DIGITS
+sudo vectory service-start
+sudo vectory doctor
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--server URL` | Required. Exactly the address saved when this device enrolled. It cannot move an identity to another server. |
+| `--ca-sha256 HEX` | A new CA fingerprint obtained through a separately trusted channel. The command verifies the presented chain and hostname against this fingerprint before saving the CA. It sends no HTTP request or device credential during this probe. |
+| `--ca-file PATH` | An approved PEM CA file. The command copies it into protected agent state and proves TLS trust against the saved server before changing settings. Later edits to the source file do not change active trust. |
+| `--ca-file=` | Explicitly use the host's certificate store, after a successful TLS probe to the saved server. |
+
+Choose exactly one CA option. A failed check leaves the existing server trust and device identity in place. Do not use a certificate downloaded from an unknown or failing server as its own proof of trust. The repair keeps local permissions, allowances, pauses and counters; it changes only `ca_file` in settings. See [Repair an enrolled device's server CA trust](agents.md#repair-an-enrolled-devices-server-ca-trust).
 
 ## recover-enrollment
 

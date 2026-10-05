@@ -22,6 +22,10 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 
 ### Dashboard
 
+- **Checks keep their meaning.** The pipeline check status shows its last findings on hover or focus and opens Problems without running a second check. **Check again** in Problems runs a fresh validation; dragging a node then undoing back to the acknowledged draft clears **Unsaved**.
+- **Account uncertainty stays visible.** A lost reply to a browser sign-out does not become a success claim merely because a later session list lacks that browser. Administrator reset-link checks require the status to identify the same request and person, and an old sign-in cannot restore held links after the acting account changes.
+- **Choose device access with context.** Add device uses the described picker used for account roles, with each configuration mode's host permissions in the choice itself.
+
 - **Status claims require evidence.** Overview reserves its green all-clear for devices verified on their assigned version and checking in; newly enrolled, unassigned or unverified devices get a neutral explanation. Effective configuration no longer treats a matching managed-file digest alone as proof that Vector activated the offer.
 - **Interrupted account setup stays uncertain.** A lost first-administrator response now offers a status read and a sign-in attempt without claiming the setup failed or that a later status snapshot proves who created the account. A lost two-factor setup reply no longer claims no setup key was created.
 - **Code auto-check matches its status.** With auto-check on, applying Code changes checks the updated draft after a pause without switching to Graph. Unapplied Code edits ask to be applied before an automatic check.
@@ -169,6 +173,9 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - **A pipeline, deployment, group, saved-settings, token or person name can't forge a line in an alert.** An editor could name a pipeline with a line break and a sentence such as "Resolved on every device", and the next failed rollout sent that line, or reordered text, to Slack, webhooks and email. These names now follow the rule channel names have, and the error says which field to fix. A name saved earlier reads as one line in every alert, the subject of an email included, with each such character shown as a space and runs of spaces collapsed.
 
 ### Fixed during development
+
+- **An installer refusal preserves the previous executable.** The Linux and macOS installer asks its checksum-verified temporary agent to check setup options and the enrolled server before replacing the installed agent. A preflight refusal changes neither the old executable nor setup state. If the final setup fails after replacement, the installer restores the previous executable or removes a new installation; setup may already have changed host state or service status, so the operator must check both before retrying.
+- **A chosen server CA is exclusive.** When an agent has an explicit CA file, it does not also trust unrelated issuers from the host certificate store. An enrolled host can repair its trust for the exact saved server address with an explicit, separately verified CA choice while keeping its device identity.
 
 Agents built before these fixes behave differently. Rebuild agents from this revision.
 

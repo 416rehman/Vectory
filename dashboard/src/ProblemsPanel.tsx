@@ -81,6 +81,7 @@ export default function ProblemsPanel({
   checking,
   canFix,
   status,
+  hasCheckAttempt,
   onCheck,
 }: {
   problems: Problem[];
@@ -97,6 +98,8 @@ export default function ProblemsPanel({
   canFix: (problem: Problem) => boolean;
   /** State of the last Vector check of this draft. */
   status: CheckStatus;
+  /** Whether this editor has already attempted a manual or automatic check. */
+  hasCheckAttempt: boolean;
   /** Omit for people who cannot run checks. */
   onCheck?: () => void;
 }) {
@@ -116,7 +119,7 @@ export default function ProblemsPanel({
       : cleanSummary(status);
   const clean = summary === "No problems";
   const retry =
-    onCheck && !checking && status === "unavailable" ? (
+    onCheck && !checking && hasCheckAttempt ? (
       <button type="button" className="problems-retry" onClick={onCheck}>
         <RefreshCw size={13} aria-hidden="true" />
         Check again
@@ -180,7 +183,6 @@ export default function ProblemsPanel({
         <span className="problems-verdict" aria-live="polite">
           {checking ? "Checking with Vector…" : verdict}
         </span>
-        {retry}
         {autoCheck !== undefined && onAutoCheckChange && (
           <label
             className="problems-auto"
@@ -197,6 +199,7 @@ export default function ProblemsPanel({
       </div>
       {open && (
         <div className="problems-list" id="pipeline-problems-list">
+          {retry}
           {groups.length === 0 ? (
             <p className="problems-empty">
               {clean ? `Nothing to fix. ${verdict}` : verdict}

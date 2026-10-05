@@ -113,7 +113,7 @@ Vectory never raises a priority for you. **No current priority conflict** means 
 | --- | --- |
 | **All at once** | Every target gets the version now. |
 | **Canary, then batches** | A few devices first. After an observation period, if they apply cleanly, the rest follow in batches. **Canary size** is how many go first; you choose which when you review. |
-| **Scheduled** | The deployment starts once, at the time you choose. The target list is fixed when you schedule it. If the server is down at that time, it starts when the server is back, up to an hour late ([the server's late-start window](server-config.md#server-settings)); later than that, it's marked **Schedule missed** and you create a new deployment. |
+| **Scheduled** | The deployment starts once, at the time you choose. The target list is fixed when you schedule it. If the server is down at that time, it starts when the server is back within [the configured late-start window](server-config.md#server-settings) (one hour by default); later than that, it's marked **Schedule missed** and you create a new deployment. |
 
 For a first canary, try one device, a batch size that suits your fleet and a few minutes of observation.
 

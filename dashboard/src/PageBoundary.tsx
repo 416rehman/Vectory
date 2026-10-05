@@ -178,7 +178,7 @@ export function DialogRecovery({
       }
       description={
         kind === "render"
-          ? "An unexpected problem interrupted it. Nothing was sent. Close it and try again, or reload the page."
+          ? "An unexpected problem interrupted this dialog. If you sent a change, its outcome may be unknown. Check Activity before trying again. You can close this dialog or reload the page."
           : "Its files didn’t finish loading, so nothing was sent. Check your connection, then reload the page."
       }
     >

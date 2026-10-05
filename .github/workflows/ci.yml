@@ -253,6 +253,10 @@ jobs:
         run: node tests/sidebar-browser.mjs
         env:
           VECTORY_SIDEBAR_OUTPUT: artifacts/sidebar-navigation
+      - name: Check uncertain account sign-outs and acting-session ownership
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/account-actions-browser.mjs
       - name: Check the command palette, shortcuts and search results
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -269,6 +273,13 @@ jobs:
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas
+      - name: Check dragging then Undo restores the saved draft
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/editor-canvas-browser.mjs
+        env:
+          VECTORY_EDITOR_CANVAS_FOCUS: drag-undo
+          VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-drag-undo
       - name: Check rich code editing and reviewed file import boundaries
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

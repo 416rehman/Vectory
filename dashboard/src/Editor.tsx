@@ -71,6 +71,7 @@ import {
   PublishReceiptSchema,
   PublishRequestLookupSchema,
   withRequestDeadline,
+  boundedPost,
   can,
   download,
   post,
@@ -284,7 +285,6 @@ const FLOW_PRO_OPTIONS = { hideAttribution: true };
 // store, which re-runs every node and edge subscription.
 const connectionLineStyle = { stroke: "var(--accent)", strokeWidth: 2 };
 const fitViewOptions = { padding: 0.12, minZoom: 0.15, maxZoom: 1 };
-const smallFitViewOptions = { padding: 0.12, minZoom: 0.65, maxZoom: 1 };
 const defaultEdgeOptions = {
   type: "pipeline",
   markerEnd: {
@@ -874,7 +874,6 @@ export default function Editor({
     [],
   );
   latest.current = { doc, config, variables, nodes, edges, dirty };
-  if (!dirty) savedState.current = { config, variables, nodes };
   const editable = can(user, "edit") && !!doc && !doc.archived;
   const checkable =
     (editable || can(user, "operate")) && !!doc && !doc.archived;
@@ -1335,9 +1334,15 @@ export default function Editor({
       .then((result) => {
         if (!alive) return;
         const graph = initialGraph(result.config, result.graph);
+        const loadedVariables = result.variables || [];
+        savedState.current = {
+          config: result.config,
+          variables: loadedVariables,
+          nodes: graph.nodes,
+        };
         setDoc(result);
         setConfig(result.config);
-        setVariables(result.variables || []);
+        setVariables(loadedVariables);
         graphFromEdit.current = false;
         setNodes(graph.nodes);
         setEdges(graph.edges);
@@ -1446,6 +1451,7 @@ export default function Editor({
     const unload = (event: BeforeUnloadEvent) => {
       if (
         publishActive.current ||
+        pendingSave.current ||
         dirty ||
         saveUncertain.current ||
         saveNeedsReload.current ||
@@ -1460,6 +1466,13 @@ export default function Editor({
     const navigate = (event: Event) => {
       if (publishActive.current) {
         event.preventDefault();
+        return;
+      }
+      if (pendingSave.current) {
+        event.preventDefault();
+        notify("Wait for the draft save to finish before leaving.", {
+          tone: "info",
+        });
         return;
       }
       const unresolved = saveUncertain.current || saveNeedsReload.current,
@@ -1572,15 +1585,25 @@ export default function Editor({
           setSaveRefusal(null);
           setDoc(updated);
           latest.current.doc = updated;
+          // Keep Undo anchored to the server's acknowledged draft, including
+          // when the local canvas changed while this request was in flight.
+          const acknowledgedGraph = initialGraph(updated.config, updated.graph);
+          const acknowledgedVariables = updated.variables || [];
+          savedState.current = {
+            config: updated.config,
+            variables: acknowledgedVariables,
+            nodes: acknowledgedGraph.nodes,
+          };
           // Measurements and selection change node and edge objects without
-          // changing the draft; only the config, variables and positions do.
+          // changing the draft; compare its content with the server response.
           const stillSame =
-            latest.current.config === current.config &&
-            latest.current.variables === current.variables &&
-            samePositions(latest.current.nodes, current.nodes);
+            sameConfiguration(latest.current.config, updated.config) &&
+            JSON.stringify(latest.current.variables) ===
+              JSON.stringify(acknowledgedVariables) &&
+            samePositions(latest.current.nodes, acknowledgedGraph.nodes);
+          setDirty(!stillSame);
+          latest.current.dirty = !stillSame;
           if (stillSame) {
-            setDirty(false);
-            latest.current.dirty = false;
             const ownRecoveryKey = recoveryDraftId(user.id, id, recoveryCopyId);
             clearRecoveryDraft(user.id, id, ownRecoveryKey);
             if (recoveryKey === ownRecoveryKey) offerNextRecovery(recoveryKey);
@@ -1708,6 +1731,14 @@ export default function Editor({
       );
     if (autoArrange && !graph && topologyChanged)
       nextGraph = arrangeGraph(nextGraph);
+    latest.current = {
+      ...latest.current,
+      config: next,
+      variables: nextVariables,
+      nodes: nextGraph.nodes,
+      edges: nextGraph.edges,
+      dirty: true,
+    };
     setConfig(next);
     setVariables(nextVariables);
     graphFromEdit.current = true;
@@ -1736,13 +1767,15 @@ export default function Editor({
       const saved = savedState.current;
       if (
         saved &&
-        item.config === saved.config &&
-        item.variables === saved.variables &&
+        sameConfiguration(item.config, saved.config) &&
+        JSON.stringify(item.variables) === JSON.stringify(saved.variables) &&
         samePositions(item.graph.nodes, saved.nodes) &&
+        !pendingSave.current &&
         !saveUncertain.current &&
         !saveNeedsReload.current
       ) {
         setDirty(false);
+        latest.current.dirty = false;
         setSaveStatus("All changes saved");
       }
     }
@@ -2685,7 +2718,7 @@ export default function Editor({
       setProblemsOpen(true);
     }
     try {
-      const result = await post<PipelineCheck>(
+      const result = await boundedPost<PipelineCheck>(
         `/configurations/${id}/validate`,
         { config: candidate },
       );
@@ -3124,8 +3157,19 @@ export default function Editor({
       () => renewRecoveryLease(user.id, id, recoveryCopyId),
       5_000,
     );
+    // A hard reload destroys the document without running React's cleanup.
+    // Release its lease so the same tab can discard that browser copy when it
+    // reopens. Keep a page in the back-forward cache protected until it returns.
+    const pagehide = (event: PageTransitionEvent) => {
+      if (!event.persisted) clearRecoveryLease(user.id, id, recoveryCopyId);
+    };
+    const pageshow = () => renewRecoveryLease(user.id, id, recoveryCopyId);
+    window.addEventListener("pagehide", pagehide);
+    window.addEventListener("pageshow", pageshow);
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener("pagehide", pagehide);
+      window.removeEventListener("pageshow", pageshow);
       clearRecoveryLease(user.id, id, recoveryCopyId);
     };
   }, [user.id, id, recoveryCopyId]);
@@ -3419,17 +3463,23 @@ export default function Editor({
     result: Configuration,
     graph = toGraph(result.config, result.graph),
   ) {
+    const acceptedVariables = result.variables || [];
+    savedState.current = {
+      config: result.config,
+      variables: acceptedVariables,
+      nodes: graph.nodes,
+    };
     latest.current = {
       doc: result,
       config: result.config,
-      variables: result.variables || [],
+      variables: acceptedVariables,
       nodes: graph.nodes,
       edges: graph.edges,
       dirty: false,
     };
     setDoc(result);
     setConfig(result.config);
-    setVariables(result.variables || []);
+    setVariables(acceptedVariables);
     graphFromEdit.current = false;
     setNodes(graph.nodes);
     setEdges(graph.edges);
@@ -3545,17 +3595,23 @@ export default function Editor({
       if (stack.current.length > 100) stack.current.shift();
       future.current = [];
       lastEdit.current = null;
+      const restoredVariables = restored.variables || [];
+      savedState.current = {
+        config: restored.config,
+        variables: restoredVariables,
+        nodes: graph.nodes,
+      };
       latest.current = {
         doc: restored,
         config: restored.config,
-        variables: restored.variables || [],
+        variables: restoredVariables,
         nodes: graph.nodes,
         edges: graph.edges,
         dirty: false,
       };
       setDoc(restored);
       setConfig(restored.config);
-      setVariables(restored.variables || []);
+      setVariables(restoredVariables);
       graphFromEdit.current = false;
       setNodes(graph.nodes);
       setEdges(graph.edges);
@@ -4423,6 +4479,7 @@ export default function Editor({
       checking={checking}
       canFix={canFixProblem}
       status={status}
+      hasCheckAttempt={!!check || !!checkError}
       onCheck={checkable ? () => void validate() : undefined}
     />
   );
@@ -4472,9 +4529,7 @@ export default function Editor({
         );
       else
         flow.current?.fitView({
-          padding: 0.12,
-          minZoom: nodes.length <= 8 ? 0.65 : 0.15,
-          maxZoom: 1,
+          ...fitViewOptions,
           duration,
         });
     }, 80);
@@ -5067,9 +5122,12 @@ export default function Editor({
                   description={
                     checking ? "Checking the pipeline with Vector…" : verdict
                   }
+                  problems={problems}
+                  hasCheckAttempt={!!check || !!checkError || checking}
                   feedbackId={checkFeedbackId}
                   disabled={busy}
                   hidden={historyOpen}
+                  onInspect={() => setProblemsOpen(true)}
                   onCheck={() => {
                     setProblemsOpen(true);
                     void validate();
@@ -5792,9 +5850,7 @@ export default function Editor({
                   nodesConnectable={editable}
                   deleteKeyCode={null}
                   fitView
-                  fitViewOptions={
-                    nodes.length <= 8 ? smallFitViewOptions : fitViewOptions
-                  }
+                  fitViewOptions={fitViewOptions}
                   zoomOnDoubleClick={false}
                   minZoom={0.15}
                   maxZoom={2}

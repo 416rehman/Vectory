@@ -867,7 +867,9 @@ const INSTALL_SH: &str = r#"#!/bin/sh
 # `vectory help setup`. With --ca-file PATH (a CA certificate on this host)
 # or --ca-file= (this host's trusted certificates), the download and setup
 # trust the server that way instead of the pin. No option turns off
-# certificate verification.
+# certificate verification. --ca-sha256 HEX changes setup's CA pin, but the
+# download still trusts the CA embedded in this script; if the server's private
+# CA has changed, pass its certificate with --ca-file PATH too.
 #
 # Agent updates are the host's own choice, made here and nowhere else. These
 # four setup options pass through too. Without --updates, the other three amend
@@ -895,7 +897,8 @@ vectory_install() {
 	dashboard=@DASHBOARD@
 	install_dir=@INSTALL_DIR@
 	dry_run=
-	# The operator's own trust choice (--ca-file or --ca-sha256) replaces the pin.
+	# The operator's own trust choice replaces the embedded setup pin. A
+	# --ca-sha256 value alone cannot give curl a new CA certificate.
 	own_trust=
 	ca_file_set=
 	ca_file=
@@ -951,17 +954,32 @@ vectory_install() {
 			own_trust=1
 			set -- ${1+"$@"} "$arg"
 			;;
+		--installer-preflight | --installer-preflight=* | -installer-preflight | -installer-preflight=*)
+			fail Installer "--installer-preflight is reserved for the installer itself."
+			;;
+		--server | --server=* | -server | -server=*)
+			fail Installer "--server is set by this installer. Get the installer from the server this host uses."
+			;;
+		--agent-path | --agent-path=* | -agent-path | -agent-path=*)
+			fail Installer "--agent-path is set by --install-dir."
+			;;
 		-h | --help)
 			printf '%s\n' "Usage: sh vectory-install.sh [--install-dir DIR] [setup options]" \
 				"Downloads the Vectory agent from $server, checks its SHA-256, installs it" \
 				"as DIR/vectory (default @INSTALL_DIR@) and runs vectory setup. Setup options" \
 				"such as --name, --mode, --service, --create-user and --dry-run pass through." \
 				"--ca-file PATH (a CA certificate on this host) or --ca-file= (this host's" \
-				"trusted certificates) replaces the CA pin for the download and for setup."
+				"trusted certificates) replaces the CA pin for the download and for setup." \
+				"--ca-sha256 changes setup's pin only; for a changed private CA, also pass" \
+				"--ca-file PATH so the download can trust the new CA certificate."
 			exit 0
 			;;
 		*)
-			case $arg in --dry-run | --dry-run=true) dry_run=1 ;; esac
+			# Go's boolean flag accepts these spellings and the last one wins.
+			case $arg in
+			--dry-run | -dry-run | --dry-run=1 | -dry-run=1 | --dry-run=t | -dry-run=t | --dry-run=T | -dry-run=T | --dry-run=true | -dry-run=true | --dry-run=TRUE | -dry-run=TRUE | --dry-run=True | -dry-run=True) dry_run=1 ;;
+			--dry-run=0 | -dry-run=0 | --dry-run=f | -dry-run=f | --dry-run=F | -dry-run=F | --dry-run=false | -dry-run=false | --dry-run=FALSE | -dry-run=FALSE | --dry-run=False | -dry-run=False) dry_run= ;;
+			esac
 			set -- ${1+"$@"} "$arg"
 			;;
 		esac
@@ -1001,18 +1019,55 @@ vectory_install() {
 	digest() { $sha_tool "$1" | { read -r sum _ && printf '%s' "$sum"; }; }
 	short=$(printf '%s' "$sha256" | cut -c1-12)
 
+	# Use the same setup options for the preflight and the eventual setup.
+	if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
+	if [ -n "$ca_sha256" ] && [ -z "$own_trust" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
 	target=$install_dir/vectory
 	if [ -z "$dry_run" ] && [ -f "$target" ] && [ "$(digest "$target")" = "$sha256" ]; then
-		# The service account runs this file: keep it executable for everyone.
-		chmod 0755 "$target" 2>/dev/null || true
 		step '[ok]' Agent "$target is already $version for $os/$arch (SHA-256 $short... verified)"
 	else
 		tmp=$(mktemp -d 2>/dev/null || mktemp -d -t vectory) || fail Agent "Can't create a temporary directory."
-		trap 'rm -rf "$tmp"' EXIT
+		candidate=
+		backup_dir= backup= promotion_started= committed=
+		cleanup_install() {
+			cleanup_status=$1
+			trap - EXIT INT TERM HUP
+			rollback_failed=
+			# The candidate path disappears only after the same-directory rename.
+			# Keep the old inode (including its mode and metadata) for any failed
+			# final setup, including a signal while setup is running.
+			if [ -n "$promotion_started" ] && [ -z "$committed" ] && [ ! -e "$candidate" ]; then
+				if [ -n "$backup" ]; then
+					if mv -f "$backup" "$target"; then
+						step '[!!]' Agent "Setup failed; restored the previous executable at $target."
+					else
+						rollback_failed=1
+						step '[!!]' Agent "Setup failed and the previous executable could not be restored."
+						printf '%17s %s\n' '' "The previous executable remains at $backup; restore it before restarting the service." >&2
+						cleanup_status=1
+					fi
+				else
+					if rm -f "$target"; then
+						step '[!!]' Agent "Setup failed; removed the newly installed $target."
+					else
+						rollback_failed=1
+						step '[!!]' Agent "Setup failed and the new executable could not be removed from $target."
+						cleanup_status=1
+					fi
+				fi
+				printf '%17s %s\n' '' "Setup may have changed host state or service status. Check vectory status and the service before retrying." >&2
+			fi
+			if [ -n "$candidate" ]; then rm -f "$candidate" || true; fi
+			if [ -n "$backup_dir" ] && [ -z "$rollback_failed" ]; then rm -rf "$backup_dir" || true; fi
+			rm -rf "$tmp" || true
+			exit "$cleanup_status"
+		}
+		trap 'cleanup_install "$?"' EXIT
 		trap 'exit 130' INT TERM
-		# The download trusts the server the way setup will: the CA file the
-		# operator named, this host's trusted certificates (--ca-file=), or
-		# the CA embedded above (the pin's certificate).
+		trap 'exit 129' HUP
+		# The download uses a named CA file, this host's trusted certificates
+		# (--ca-file=), or the CA embedded above. A --ca-sha256 override changes
+		# setup's pin but cannot supply a different CA certificate to curl.
 		tls_ca=
 		if [ -n "$ca_file_set" ]; then
 			if [ -n "$ca_file" ]; then
@@ -1025,6 +1080,9 @@ vectory_install() {
 		fi
 		url=$server/agent/v1/downloads/$os/$arch
 		unreachable="Check that this host can reach the server's agent address."
+		if [ -n "$own_trust" ] && [ -z "$ca_file_set" ] && [ -n "$ca_pem" ]; then
+			unreachable="$unreachable If the server's private CA changed, pass --ca-file PATH with its new certificate; --ca-sha256 alone changes setup trust, not download trust."
+		fi
 		if command -v curl >/dev/null 2>&1; then
 			# A busy server answers 429 with Retry-After; --retry waits it out.
 			curl_options='-fsSg --proto =https --connect-timeout 20 --retry 6 --retry-max-time 120'
@@ -1049,30 +1107,54 @@ vectory_install() {
 		if [ -n "$dry_run" ]; then
 			can_install "$install_dir" || fail Agent "Can't write to $install_dir." "Run the installer with sudo, or choose a directory with --install-dir."
 			step '[..]' Agent "$version for $os/$arch would be installed at $target (SHA-256 $short... verified)"
-			if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
-			if [ -n "$ca_sha256" ] && [ -z "$own_trust" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
 			status=0
 			# --agent-path names where the real run would put the agent, so the
 			# plan shows the --install-dir the person chose.
 			"$tmp/vectory" setup --server "$server" --agent-path "$target" ${1+"$@"} || status=$?
 			if [ "$status" = 126 ]; then
-				fail Agent "This host doesn't allow running programs from $tmp." "Run the dry run again with TMPDIR set to a directory that does, for example TMPDIR=/var/tmp. A real install doesn't need it."
+				fail Agent "This host doesn't allow running programs from $tmp." "Run the installer again with TMPDIR set to a directory that does, for example TMPDIR=/var/tmp."
 			fi
 			exit "$status"
 		fi
+		# Stage the verified bytes in the final directory without replacing the
+		# stable executable. The agent's installer preflight checks from that
+		# location (including service-account access) without changing host state.
+		# A refused setup removes the stage through the EXIT trap.
 		if ! mkdir -p "$install_dir" 2>/dev/null || [ ! -w "$install_dir" ]; then
 			fail Agent "Can't write to $install_dir." "Run the installer with sudo, or choose a directory with --install-dir."
 		fi
-		# cp creates the file under the caller's umask (027 or 077 on hardened
-		# hosts), which would hide it from the service account: set 0755.
-		cp "$tmp/vectory" "$install_dir/.vectory.new.$$" && chmod 0755 "$install_dir/.vectory.new.$$" && mv -f "$install_dir/.vectory.new.$$" "$target" || fail Agent "Couldn't install $target."
-		rm -rf "$tmp"
-		trap - EXIT INT TERM
-		step '[ok]' Agent "$version for $os/$arch installed at $target (SHA-256 $short... verified)"
+		candidate=$(mktemp "$install_dir/.vectory.new.XXXXXX" 2>/dev/null) || fail Agent "Couldn't prepare an agent in $install_dir."
+		cp "$tmp/vectory" "$candidate" && chmod 0755 "$candidate" || fail Agent "Couldn't prepare an agent in $install_dir."
+		status=0
+		"$tmp/vectory" setup --server "$server" --agent-path "$target" ${1+"$@"} --installer-preflight "$candidate" >"$tmp/setup-preflight.out" || status=$?
+		case $status in
+		0 | 3) ;;
+		126) fail Agent "This host doesn't allow running programs from $tmp." "Run the installer again with TMPDIR set to a directory that does, for example TMPDIR=/var/tmp." ;;
+		*) cat "$tmp/setup-preflight.out" >&2
+			fail Agent "Setup refused this host or its options; $target was not replaced." "Fix the setup error above, then run the installer again." ;;
+		esac
+		[ "$(digest "$candidate")" = "$sha256" ] || fail Agent "The staged agent changed before installation." "The existing $target was not replaced. Inspect who can write to $install_dir, then run the installer again."
+		# A hard link retains the exact old executable and metadata while the
+		# candidate is promoted atomically. Refuse files we cannot safely restore.
+		if [ -e "$target" ] || [ -L "$target" ]; then
+			[ -f "$target" ] && [ ! -L "$target" ] || fail Agent "The existing $target is not a regular file; it was not replaced."
+			backup_dir=$(mktemp -d "$install_dir/.vectory.rollback.XXXXXX" 2>/dev/null) || fail Agent "Couldn't reserve a rollback copy in $install_dir."
+			backup=$backup_dir/vectory
+			ln "$target" "$backup" || fail Agent "Couldn't preserve the previous $target; it was not replaced."
+		fi
+		promotion_started=1
+		mv -f "$candidate" "$target" || fail Agent "Couldn't install $target."
+		status=0
+		"$target" setup --server "$server" --agent-path "$target" ${1+"$@"} || status=$?
+		case $status in
+		0 | 3) committed=1 ;;
+		esac
+		if [ -n "$committed" ]; then
+			step '[ok]' Agent "$version for $os/$arch installed at $target (SHA-256 $short... verified)"
+		fi
+		exit "$status"
 	fi
 
-	if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
-	if [ -n "$ca_sha256" ] && [ -z "$own_trust" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
 	# --agent-path: the service runs the agent from where it was installed.
 	exec "$target" setup --server "$server" --agent-path "$target" ${1+"$@"}
 }

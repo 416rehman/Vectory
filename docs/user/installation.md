@@ -97,7 +97,7 @@ On **Add device**, choose **Windows**, download `vectory.exe` from the page, and
 The installer and `vectory setup` then:
 
 <!-- steps -->
-1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory` (or the **Agent install directory** under **Advanced**, `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
+1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. On Linux and macOS, it stages the checked agent in the install directory and tests the setup options and service-account access before replacing an existing agent. If that check refuses the host or an option, the staged file is removed and the existing executable stays in place. If final setup fails after replacement, the installer restores the old executable or removes a new installation, but setup may already have changed host state or service status; check `vectory status` and the service before retrying. It installs to `/usr/local/bin/vectory` (or the **Agent install directory** under **Advanced**, `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
 2. Find Vector 0.58.x and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
 3. Install in the mode you chose on **Add device**.
 4. Ask for the enrollment token (typing stays hidden) and enroll, checking the server the way you chose on **Add device** (the pinned CA unless you changed it). See [Trust the server certificate](#trust-the-server-certificate).
@@ -198,6 +198,8 @@ Choose how under **Advanced → How the host checks this server** on **Add devic
 | **Pin this server's CA** (the default for a private CA) | Typical self-hosting: the agent listener's certificate comes from your own CA. | `--ca-sha256` with the CA's fingerprint for setup. The install command writes the CA certificate to `vectory-ca.pem` in its private directory, and curl checks the download against it. Nothing to copy first. |
 | **A CA certificate file on the host** | Your team already distributes the CA. Put its certificate (PEM) on the host first. | `--ca-file PATH` for setup, and `curl --cacert PATH` for the download. |
 | **The host's trusted certificates** (the default for a publicly trusted certificate) | A public certificate, or a private CA the host's trust store already contains. | `--ca-file=` (empty: the host's store) for setup; curl uses the same store. |
+
+If the server's private CA changes after you copy an install command, get a fresh command from **Add device**. An older installer still uses its embedded CA certificate for the download; passing a new `--ca-sha256` fingerprint alone does not replace that download certificate. If you already have the new CA certificate on the host, pass `--ca-file PATH` so both the download and setup use it.
 
 On a manual install, pass the same options to `vectory setup` or `vectory enroll`: `--ca-sha256 HEX`, `--ca-file PATH`, or `--ca-file=`. Leaving them out keeps the trust an existing installation already saved.
 

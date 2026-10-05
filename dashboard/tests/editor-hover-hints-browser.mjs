@@ -288,7 +288,8 @@ async function load({
   await expect(page.locator(".react-flow__node").first()).toBeVisible();
   return current;
 }
-const control = () => page.getByRole("button", { name: /^Check pipeline/ });
+const control = () =>
+  page.getByRole("button", { name: /^(?:Check pipeline|Open Problems): / });
 // The old hover popover is gone; results live in the Problems panel.
 const resultsTip = () => page.locator(".editor-checks-popover");
 const problems = () =>
@@ -353,6 +354,10 @@ try {
       expect(fixture.validations).toHaveLength(count);
       fixture.validationValid = false;
       await control().click();
+      expect(fixture.validations).toHaveLength(count);
+      await problems()
+        .getByRole("button", { name: "Check again", exact: true })
+        .click();
       await expect(control()).toHaveAttribute("data-check-state", "problems");
       await expect(problems()).toContainText(
         "Synthetic configuration rejected",
@@ -376,12 +381,16 @@ try {
       fixture.holdValidation = false;
       fixture.validationError = true;
       await control().click();
+      expect(fixture.validations).toHaveLength(1);
+      await problems()
+        .getByRole("button", { name: "Check again", exact: true })
+        .click();
       await expect(control()).toHaveAttribute(
         "data-check-state",
         "unavailable",
       );
       await expect(control()).toHaveAccessibleName(
-        "Check pipeline: Couldn't check",
+        "Open Problems: Couldn't check",
       );
       expect(fixture.validations).toHaveLength(2);
       expect(fixture.mutations).toEqual([]);

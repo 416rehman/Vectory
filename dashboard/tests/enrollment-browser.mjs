@@ -4,6 +4,7 @@ import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
 import { updatesOff } from "./agent-update-replies.mjs";
+import { chooseMode, modeTrigger } from "./enrollment-mode.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -392,11 +393,10 @@ async function fixture({
     exact: true,
   });
   const command = page.getByRole("region", { name: "Install command" });
-  const chooseMode = (label = "Restricted") =>
-    page.getByRole("radio", { name: new RegExp(`^${label}`) }).check();
+  const selectMode = (label = "Restricted") => chooseMode(page, label);
   const advanced = () => page.locator(".enroll-advanced > summary").click();
   const createCommand = async (mode = "Restricted") => {
-    await chooseMode(mode);
+    await selectMode(mode);
     await create.click();
     await expect(page.locator(".enroll-command pre").first()).toBeVisible();
   };
@@ -406,7 +406,7 @@ async function fixture({
     state,
     create,
     command,
-    chooseMode,
+    chooseMode: selectMode,
     advanced,
     createCommand,
     reload,
@@ -428,6 +428,15 @@ try {
       const f = await fixture();
       try {
         await expect(f.create).toBeDisabled();
+        await expect(modeTrigger(f.page)).toContainText("Choose a mode");
+        await modeTrigger(f.page).click();
+        await expect(
+          f.page.getByRole("menuitemradio", { name: "Restricted" }),
+        ).toContainText("Files, destinations and listeners must be approved");
+        await expect(
+          f.page.getByRole("menuitemradio", { name: "Full Vector" }),
+        ).toContainText("get Vector's permissions on this host");
+        await f.page.keyboard.press("Escape");
         await expect(f.page.getByRole("status").first()).toContainText(
           "Choose Restricted or Full Vector first.",
         );
@@ -521,9 +530,7 @@ try {
           await expect(
             f.page.getByRole("radio", { name: label, exact: true }),
           ).toBeDisabled();
-        await expect(
-          f.page.getByRole("radio", { name: /^Full Vector/ }),
-        ).toBeDisabled();
+        await expect(modeTrigger(f.page)).toBeDisabled();
         f.state.releaseToken();
         f.state.releaseToken = null;
         await expect(

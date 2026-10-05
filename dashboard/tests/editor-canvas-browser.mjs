@@ -29,12 +29,20 @@ const editorHeaderLayoutOnly =
   editorHeaderOnly && process.env.VECTORY_EDITOR_HEADER_LAYOUT_ONLY === "true";
 const splitSaveFollowup =
   splitSaveOnly && process.env.VECTORY_EDITOR_SPLIT_SAVE_FOLLOWUP === "true";
+const splitRecoveryOnly =
+  splitSaveOnly &&
+  process.env.VECTORY_EDITOR_SPLIT_SAVE_RECOVERY_ONLY === "true";
 const nodeActionsOnly =
   process.env.VECTORY_EDITOR_CANVAS_FOCUS === "node-actions";
 const variablesOnly = process.env.VECTORY_EDITOR_CANVAS_FOCUS === "variables";
+const dragUndoOnly = process.env.VECTORY_EDITOR_CANVAS_FOCUS === "drag-undo";
+const graphFitOnly = process.env.VECTORY_EDITOR_CANVAS_FOCUS === "graph-fit";
+const dragUndoOutput = dragUndoOnly ? ".local/editor-drag-undo" : null;
 const output = resolve(
   repository,
   process.env.VECTORY_EDITOR_CANVAS_OUTPUT ||
+    (graphFitOnly ? ".local/editor-graph-fit" : null) ||
+    dragUndoOutput ||
     (editorHeaderOnly
       ? ".local/editor-header"
       : connectionStyleOnly
@@ -431,6 +439,7 @@ async function check(name, run) {
     !name.startsWith("split controls")
   )
     return;
+  if (splitRecoveryOnly && !name.startsWith("unsaved edits survive")) return;
   const started = Date.now();
   await run();
   results.push({ name, passed: true, milliseconds: Date.now() - started });
@@ -457,6 +466,45 @@ async function noOverflow(label) {
   }));
   measurements.push({ label, ...dimensions });
   expect(dimensions.scroll, label).toBeLessThanOrEqual(dimensions.viewport + 1);
+}
+async function graphFit() {
+  return page.locator(".react-flow").evaluate((canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const transform = new DOMMatrix(
+      getComputedStyle(canvas.querySelector(".react-flow__viewport")).transform,
+    );
+    const nodes = Array.from(canvas.querySelectorAll(".react-flow__node"));
+    return {
+      canvas: {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+      },
+      zoom: transform.a,
+      nodes: nodes.map((node) => {
+        const bounds = node.getBoundingClientRect();
+        return {
+          id: node.dataset.id,
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom,
+        };
+      }),
+      contained:
+        nodes.length === 5 &&
+        nodes.every((node) => {
+          const bounds = node.getBoundingClientRect();
+          return (
+            bounds.left >= rect.left - 1 &&
+            bounds.right <= rect.right + 1 &&
+            bounds.top >= rect.top - 1 &&
+            bounds.bottom <= rect.bottom + 1
+          );
+        }),
+    };
+  });
 }
 async function axe(label) {
   const scan = await new AxeBuilder({ page })
@@ -513,11 +561,11 @@ async function saved(predicate) {
 const menu = () =>
   page.getByRole("dialog", { name: "Add component", exact: true });
 const button = (name) => page.getByRole("button", { name, exact: true });
-// The Check button's name carries its state: "Check pipeline: 3 problems".
+// Its name states the action and result: "Open Problems: 3 problems" after a check.
 const checkButton = () =>
   page
     .locator('.editor-toolbar[aria-label="Pipeline toolbar"]')
-    .getByRole("button", { name: /^Check pipeline: / });
+    .getByRole("button", { name: /^(?:Check pipeline|Open Problems): / });
 const problemsPanel = () =>
   page.getByRole("region", { name: "Problems", exact: true });
 async function choose(type, category) {
@@ -579,7 +627,179 @@ async function dismissConfirmation(action) {
 }
 
 try {
-  if (editorHeaderOnly) {
+  if (graphFitOnly) {
+    await check(
+      "the loaded graph fits all five nodes at phone widths without a manual Fit action",
+      async () => {
+        for (const width of [375, 390]) {
+          for (const theme of ["light", "dark"]) {
+            await load({ width, height: 900 });
+            await page.evaluate((theme) => {
+              document.documentElement.dataset.theme = theme;
+            }, theme);
+            await expect
+              .poll(async () => (await graphFit()).contained)
+              .toBe(true);
+            const fit = await graphFit();
+            expect(fit.zoom).toBeLessThan(0.65);
+            measurements.push({
+              label: `initial graph fit ${width} ${theme}`,
+              ...fit,
+            });
+            await noOverflow(`initial graph fit ${width} ${theme}`);
+            await page.screenshot({
+              path: resolve(output, `initial-graph-${width}-${theme}.png`),
+              animations: "disabled",
+            });
+            expect(fixture.mutations).toEqual([]);
+          }
+        }
+      },
+    );
+    await check(
+      "the desktop graph remains readable and a selected phone node stays visible",
+      async () => {
+        await load({ width: 1440, height: 900 });
+        await expect.poll(async () => (await graphFit()).contained).toBe(true);
+        const desktop = await graphFit();
+        expect(desktop.zoom).toBeGreaterThanOrEqual(0.65);
+        measurements.push({
+          label: "initial graph fit 1440 light",
+          ...desktop,
+        });
+        await load({ width: 375, height: 900 });
+        await expect.poll(async () => (await graphFit()).contained).toBe(true);
+        await page.locator('.react-flow__node[data-id="sample"]').click();
+        await expect(page.locator(".editor-inspector")).toBeVisible();
+        await expect
+          .poll(async () => {
+            const fit = await graphFit();
+            const node = fit.nodes.find((node) => node.id === "sample");
+            return (
+              node.left >= fit.canvas.left - 1 &&
+              node.right <= fit.canvas.right + 1
+            );
+          })
+          .toBe(true);
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    expect(results).toHaveLength(2);
+  } else if (dragUndoOnly) {
+    await check(
+      "dragging a node then Undo restores the acknowledged saved state",
+      async () => {
+        await load();
+        const node = page.locator('.react-flow__node[data-id="sample"]');
+        const before = await node.getAttribute("style");
+        const bounds = await node
+          .locator(".pipeline-node-summary")
+          .boundingBox();
+        expect(bounds).not.toBeNull();
+        const start = { x: bounds.x + bounds.width / 2, y: bounds.y + 10 };
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(start.x + 70, start.y + 50, { steps: 10 });
+        await page.mouse.up();
+        await expect(node).not.toHaveAttribute("style", before);
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        await button("Undo").click();
+        await expect(node).toHaveAttribute("style", before);
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "saved",
+        );
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    await check(
+      "Undo during a held save blocks departure and keeps the acknowledged server edit distinct from the local undo",
+      async () => {
+        await load();
+        await page.locator('.react-flow__node[data-id="sample"]').click();
+        const rate = page
+          .locator(".editor-inspector")
+          .getByLabel("One in every", { exact: true });
+        await rate.fill("20");
+        fixture.holdSave = true;
+        await button("Save options").click();
+        await page
+          .getByRole("menuitem", { name: "Save draft", exact: true })
+          .click();
+        await expect.poll(() => fixture.pendingSaves.length).toBe(1);
+        await button("Undo").click();
+        await expect(rate).toHaveValue("10");
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        const unloadBlocked = await page.evaluate(() => {
+          const event = new Event("beforeunload", { cancelable: true });
+          window.dispatchEvent(event);
+          return event.defaultPrevented;
+        });
+        expect(unloadBlocked).toBe(true);
+        await page.locator(".editor-back").click();
+        await expect(page).toHaveURL(
+          new RegExp(`/configurations/${pipelineId}$`),
+        );
+        await expect(
+          page.getByText("Wait for the draft save to finish before leaving."),
+        ).toBeVisible();
+        expect(fixture.document.config.transforms.sample.rate).toBe(10);
+
+        fixture.pendingSaves.shift()(false);
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect
+          .poll(() => fixture.document.config.transforms.sample.rate)
+          .toBe(20);
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        await expect(rate).toHaveValue("10");
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              Object.keys(localStorage)
+                .filter((key) => key.startsWith("vectory.draft.v2:"))
+                .map((key) => JSON.parse(localStorage.getItem(key)))
+                .some(
+                  (copy) =>
+                    copy.revision === 2 &&
+                    copy.config.transforms.sample.rate === 10 &&
+                    copy.base.config.transforms.sample.rate === 20,
+                ),
+            ),
+          )
+          .toBe(true);
+        await button("Redo").click();
+        await expect(rate).toHaveValue("20");
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "saved",
+        );
+        await button("Undo").click();
+        await expect(rate).toHaveValue("10");
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        fixture.holdSave = false;
+        await saved(
+          (document) =>
+            document.revision === 3 &&
+            document.config.transforms.sample.rate === 10,
+        );
+        expect(fixture.saveAttempts).toHaveLength(2);
+        expect(fixture.saveAttempts[1].revision).toBe(2);
+      },
+    );
+    expect(results).toHaveLength(2);
+  } else if (editorHeaderOnly) {
     const details = () =>
       page.getByRole("dialog", { name: "Pipeline details", exact: true });
     const nameButton = () =>
@@ -1611,14 +1831,24 @@ try {
         );
         await closeInspector();
         await expect(banner).toContainText(
-          "The server draft changed. Reload it before continuing.",
+          "The server draft changed. Your edits are still here. Compare or download them before choosing whether to discard them.",
         );
         await expect(
-          banner.getByRole("button", { name: "Reload server draft" }),
+          banner.getByRole("button", { name: "Compare drafts" }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", { name: "Download my draft" }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", {
+            name: "Discard my edits and load server draft",
+          }),
         ).toBeVisible();
         await expect(
           banner.getByRole("button", { name: "Go to field" }),
         ).toHaveCount(0);
+        await sample();
+        await expect(rate()).toHaveValue("22");
         expect(prompts).toEqual([]);
         assertSaveOnly();
       },
@@ -1768,6 +1998,14 @@ try {
     await check(
       "unsaved edits survive a reload in this browser and can be restored or discarded",
       async () => {
+        const recoveryKeys = () =>
+          page.evaluate(() =>
+            Object.keys(localStorage).filter((key) =>
+              key.startsWith("vectory.draft.v2:"),
+            ),
+          );
+        const leaseFor = (key) =>
+          key.replace("vectory.draft.v2:", "vectory.draft.lease:");
         await load();
         page.on("dialog", (dialog) => dialog.accept());
         await sample();
@@ -1781,7 +2019,24 @@ try {
             ),
           )
           .toBe(true);
+        const firstCopy = (await recoveryKeys())[0];
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => localStorage.getItem(key),
+              leaseFor(firstCopy),
+            ),
+          )
+          .not.toBeNull();
         await page.reload();
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => localStorage.getItem(key),
+              leaseFor(firstCopy),
+            ),
+          )
+          .toBeNull();
         const banner = page.locator(".editor-recovery");
         await expect(banner).toContainText(
           "are still in this browser. Restore them to keep editing, or discard them.",
@@ -1799,28 +2054,52 @@ try {
         await sample();
         await expect(rate()).toHaveValue("33");
         await page.reload();
+        await expect(banner).toBeVisible();
+        const copies = await recoveryKeys();
+        expect(copies).toHaveLength(2);
+        for (const key of copies)
+          await expect
+            .poll(() =>
+              page.evaluate(
+                (lease) => localStorage.getItem(lease),
+                leaseFor(key),
+              ),
+            )
+            .toBeNull();
         for (let index = 0; index < 3 && (await banner.count()); index++) {
+          const before = (await recoveryKeys()).length;
+          await expect(
+            banner.getByRole("button", { name: /^Discard( copy)?$/ }),
+          ).toBeEnabled();
           await banner
             .getByRole("button", { name: /^Discard( copy)?$/ })
             .click();
+          await expect
+            .poll(async () => (await recoveryKeys()).length)
+            .toBe(before - 1);
         }
         await expect(banner).toHaveCount(0);
-        expect(
-          await page.evaluate(() =>
-            Object.keys(localStorage).filter((key) =>
-              key.startsWith("vectory.draft.v2:"),
-            ),
-          ),
-        ).toEqual([]);
+        expect(await recoveryKeys()).toEqual([]);
         await page.reload();
         await expect(page.locator(".react-flow__node").first()).toBeVisible();
         await expect(banner).toHaveCount(0);
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(splitSaveFollowup ? 2 : 11);
+    expect(results).toHaveLength(
+      splitRecoveryOnly ? 1 : splitSaveFollowup ? 2 : 11,
+    );
   } else if (checkStateOnly) {
     const control = () => checkButton();
+    const retry = () =>
+      problemsPanel().getByRole("button", { name: "Check again", exact: true });
+    const runCheck = async () => {
+      if (fixture.validations.length === 0) await control().click();
+      else {
+        await control().click();
+        await retry().click();
+      }
+    };
     const verdict = () => problemsPanel().locator(".problems-verdict");
     const rate = () =>
       page
@@ -1834,9 +2113,9 @@ try {
       fixture.validationNative = false;
       fixture.validationError = false;
       fixture.holdValidation = false;
-      await control().click();
+      await runCheck();
       await state("device");
-      await expect(control()).toHaveAccessibleName("Check pipeline: Checked");
+      await expect(control()).toHaveAccessibleName("Open Problems: Checked");
       await expect(verdict()).toHaveText(
         "Vector 0.58 accepted this pipeline. Each device checks environment variables before applying it." +
           (unappliedCode
@@ -1873,16 +2152,16 @@ try {
         expect(fixture.validations).toEqual([]);
         await pass();
         fixture.validationNative = true;
-        await control().click();
+        await runCheck();
         await state("passed");
         await expect(verdict()).toHaveText(
           "Vector 0.58 accepted this pipeline.",
         );
         fixture.validationValid = false;
-        await control().click();
+        await runCheck();
         await state("problems");
         await expect(control()).toHaveAccessibleName(
-          "Check pipeline: 1 problem",
+          "Open Problems: 1 problem",
         );
         await expect(problemsPanel()).toContainText(
           "Synthetic configuration rejected.",
@@ -1896,10 +2175,10 @@ try {
           "rate: Synthetic configuration rejected.",
         );
         fixture.validationError = true;
-        await control().click();
+        await runCheck();
         await state("unavailable");
         await expect(control()).toHaveAccessibleName(
-          "Check pipeline: Couldn't check",
+          "Open Problems: Couldn't check",
         );
         await expect(verdict()).toHaveText(
           "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check.",
@@ -1915,6 +2194,159 @@ try {
           ),
         ).toHaveCount(0);
         expect(fixture.validations).toHaveLength(5);
+      },
+    );
+    await check(
+      "check status discloses cached results and opens Problems without validating again",
+      async () => {
+        await load({ width: 375, height: 900 });
+        const summary = () => page.locator(".editor-check-popover");
+        await expect(retry()).toHaveCount(0);
+        await control().hover();
+        await expect(summary()).toBeVisible();
+        await expect(summary()).toHaveAttribute("role", "dialog");
+        await expect(summary()).toContainText(
+          "Run a check to validate this pipeline with Vector.",
+        );
+        await page.mouse.move(1, 850);
+        await expect(summary()).toHaveCount(0);
+
+        await control().click();
+        await state("device");
+        expect(fixture.validations).toHaveLength(1);
+        await problemsPanel().locator(".problems-toggle").click();
+        await expect(retry()).toHaveCount(0);
+
+        await control().hover();
+        await expect(summary()).toContainText(
+          "Vector 0.58 accepted this pipeline.",
+        );
+        await noOverflow("check summary 375px");
+        await axe("checked pipeline summary");
+        await page.screenshot({
+          path: resolve(output, "pipeline-check-summary-375-light.png"),
+          animations: "disabled",
+        });
+        await page.setViewportSize({ width: 390, height: 900 });
+        await control().hover();
+        await page.screenshot({
+          path: resolve(output, "pipeline-check-summary-390-light.png"),
+          animations: "disabled",
+        });
+        await page.evaluate(() => {
+          document.documentElement.dataset.theme = "dark";
+        });
+        await page.screenshot({
+          path: resolve(output, "pipeline-check-summary-390-dark.png"),
+          animations: "disabled",
+        });
+        await noOverflow("dark check summary 390px");
+        await page.evaluate(() => {
+          document.documentElement.dataset.theme = "light";
+        });
+        await page.mouse.move(1, 850);
+        await expect(summary()).toHaveCount(0);
+        await control().focus();
+        await expect(summary()).toBeVisible();
+        await page.keyboard.press("ArrowDown");
+        await expect(summary()).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(summary()).toHaveCount(0);
+        await expect(control()).toBeFocused();
+        await page.keyboard.press("Tab");
+        await control().focus();
+        await expect(summary()).toBeVisible();
+        await page.keyboard.press("Tab");
+        await expect(summary()).toHaveCount(0);
+        await control().focus();
+        await page.keyboard.press("Escape");
+        await expect(summary()).toHaveCount(0);
+        await expect(control()).toBeFocused();
+
+        await control().press("Enter");
+        await expect(retry()).toBeVisible();
+        expect(fixture.validations).toHaveLength(1);
+        fixture.validationValid = false;
+        await retry().click();
+        await state("problems");
+        expect(fixture.validations).toHaveLength(2);
+        await control().hover();
+        await expect(summary()).toContainText(
+          "Synthetic configuration rejected.",
+        );
+        await page.mouse.move(1, 850);
+        await expect(summary()).toHaveCount(0);
+      },
+    );
+    await check(
+      "check summary puts Vector errors ahead of local warnings and marks findings from an earlier check",
+      async () => {
+        const document = baseDocument();
+        for (const name of ["isolated_a", "isolated_b", "isolated_c"])
+          document.config.sources[name] = { type: "demo_logs", format: "json" };
+        await load({ document });
+        fixture.validationDiagnostics = [
+          {
+            severity: "error",
+            section: "transforms",
+            component: "sample",
+            code: "vector_error",
+            message: "Vector rejected the sample step",
+          },
+        ];
+        await expect(problemsPanel()).toContainText("3 warnings");
+        await control().click();
+        await state("problems");
+        const summary = page.locator(".editor-check-popover");
+        await page.mouse.move(1, 850);
+        await control().hover();
+        await expect(summary.locator("li")).toHaveCount(3);
+        await expect(summary).toContainText("1 more finding in Problems.");
+        await expect(summary.locator("li").first()).toContainText(
+          "Vector rejected the sample step.",
+        );
+        await expect(summary.locator("li").first()).toHaveAttribute(
+          "data-severity",
+          "error",
+        );
+        await page.mouse.move(1, 850);
+        await sample();
+        await rate().fill("20");
+        await control().hover();
+        await expect(summary.locator('li[data-stale="true"]')).toContainText(
+          "From an earlier check",
+        );
+        expect(fixture.validations).toHaveLength(1);
+      },
+    );
+    await check(
+      "a stalled Vector response times out, allows retry and cannot replace the newer result",
+      async () => {
+        await load();
+        await page.clock.install();
+        fixture.validationValid = false;
+        fixture.holdValidation = true;
+        await control().click();
+        await state("checking");
+        await expect.poll(() => fixture.pendingValidations.length).toBe(1);
+        await page.clock.fastForward(30_050);
+        await state("unavailable");
+        await expect(control()).toHaveAccessibleName(
+          "Open Problems: Couldn't check",
+        );
+        await expect(verdict()).toHaveText(
+          "Vector's check took too long. It may still be processing; try again.",
+        );
+        await expect(retry()).toBeVisible();
+        fixture.validationValid = true;
+        fixture.holdValidation = false;
+        await retry().click();
+        await state("device");
+        fixture.pendingValidations.shift()();
+        await page.clock.runFor(100);
+        await state("device");
+        expect(fixture.validations).toHaveLength(2);
+        expect(fixture.mutations).toEqual([]);
       },
     );
     await check(
@@ -2000,10 +2432,10 @@ try {
         // The syntax error in the unapplied text is the problem that counts.
         await state("problems");
         await expect(control()).toHaveAccessibleName(
-          "Check pipeline: 1 problem",
+          "Open Problems: 1 problem",
         );
         const before = fixture.validations.length;
-        await control().click();
+        await retry().click();
         await expect(
           page.getByText("Fix the code syntax before checking it.", {
             exact: true,
@@ -2024,7 +2456,7 @@ try {
           "Apply or discard the field you're editing, then check again.",
         );
         const count = fixture.validations.length;
-        await control().click();
+        await retry().click();
         await state("stale");
         expect(fixture.validations).toHaveLength(count);
         await expect(rate()).toHaveValue("-");
@@ -2078,7 +2510,7 @@ try {
         await pass();
         await sample();
         fixture.holdValidation = true;
-        await control().click();
+        await runCheck();
         await state("checking");
         await expect.poll(() => fixture.pendingValidations.length).toBe(1);
         // Checking never locks the editor.
@@ -2162,7 +2594,7 @@ try {
           });
           await axe("checked pipeline " + theme);
           fixture.validationValid = false;
-          await control().click();
+          await runCheck();
           await state("problems");
           colors.problems = await color();
           expect(colors.problems).not.toBe(colors.unchecked);
@@ -2288,7 +2720,7 @@ try {
         }
       },
     );
-    expect(results).toHaveLength(9);
+    expect(results).toHaveLength(12);
   } else if (nodeActionsOnly) {
     const nodeMenu = () =>
       page.getByRole("menu", { name: "Step: sample", exact: true });
@@ -2467,7 +2899,7 @@ try {
         await trigger.click();
         await expect.poll(() => fixture.validations.length).toBe(1);
         await expect(trigger).toHaveAttribute("data-check-state", "problems");
-        await expect(trigger).toHaveAccessibleName("Check pipeline: 1 problem");
+        await expect(trigger).toHaveAccessibleName("Open Problems: 1 problem");
         const list = problemsPanel().locator("#pipeline-problems-list");
         await expect(list).toContainText("Synthetic configuration rejected.");
         for (const width of [375, 899]) {
@@ -3383,27 +3815,29 @@ try {
     JSON.stringify(
       {
         generated_at: new Date().toISOString(),
-        scope: editorHeaderOnly
-          ? editorHeaderLayoutOnly
-            ? "Focused header layout follow-up after title sizing CSS: read-only metadata, computed899/375px geometry, light/dark screenshots and eight accessibility scans. Earlier metadata-write/status/guard groups were not rerun; no real preview/server/device mutations."
-            : "Actual App/editor with isolated synthetic API: metadata entry and CAS failures, pending field/code guards, status transitions, readonly boundaries and responsive accessibility. All writes remain in the disposable in-memory fixture; no real preview/server/device mutations."
-          : connectionStyleOnly
-            ? "Actual App/editor with isolated synthetic API: local connection style path/preview/persistence, unchanged configuration/check state, selected-edge reconnect/undo, readonly preferences and responsive accessibility. Only reconnect/undo writes the disposable in-memory fixture; no preview/server/device mutations."
-            : variablesOnly
-              ? "Actual App/editor with isolated synthetic API: version-variable declaration editing, explicit draft CAS save, discard, read-only boundaries, and focused accessibility scans. All writes remain in the disposable in-memory fixture; no real publication, deployment, or device changes."
-              : splitSaveOnly
-                ? splitSaveFollowup
-                  ? "Final split-save follow-up: held-save failure/retry and 899/800/375px popup geometry/accessibility after nonmodal menu and error-reset changes; other earlier behavioral groups were not rerun. Synthetic in-memory API only."
-                  : "Focused actual App/editor save controls: visible Save, Ctrl/Cmd+S, save options and notes, held/failed saves, role boundaries and browser draft recovery, with isolated synthetic draft CAS and published-version fixtures. No real preview validation, save, publication or deployment requests."
-                : checkStateOnly
-                  ? "Focused actual App/editor check states: labels, stale, pending and Code checks, unavailable checker, auto-check and color contrast, with isolated synthetic validation and draft responses. No real server/preview validation or device/publication mutations."
-                  : nodeActionsOnly
-                    ? "Focused node-action and inspector ownership review using the actual App/editor with isolated synthetic API: duplicate/remove, exact undo, declined pending-field removal, keyboard access, read-only guards and three viewport/theme accessibility scans. No real server, preview or native device mutations."
-                    : checksLayoutOnly
-                      ? "Focused actual-App Problems panel containment, keyboard toggle and problem-to-field navigation at 375px and 899px with a mocked validation response. No real server validation or draft/publication/device mutations; earlier interaction groups were not rerun."
-                      : menuLayoutOnly
-                        ? "Focused CSS follow-up on actual App/editor: S3 icon sizing, compact two-result height, viewport containment and light/dark accessibility. Isolated GET-only synthetic API; the earlier seven interaction groups were not rerun for this CSS follow-up."
-                        : "Actual App/editor with isolated synthetic API and in-memory draft CAS; no preview, publication, enrollment, deployment, or native activation. Accessibility scope is limited to scanned states.",
+        scope: graphFitOnly
+          ? "Focused initial graph fit in the actual App/editor at 375px and 390px in both themes, plus desktop readability and selected-node visibility. Isolated synthetic GET-only API; no preview, save, publication, deployment, or device mutations."
+          : editorHeaderOnly
+            ? editorHeaderLayoutOnly
+              ? "Focused header layout follow-up after title sizing CSS: read-only metadata, computed899/375px geometry, light/dark screenshots and eight accessibility scans. Earlier metadata-write/status/guard groups were not rerun; no real preview/server/device mutations."
+              : "Actual App/editor with isolated synthetic API: metadata entry and CAS failures, pending field/code guards, status transitions, readonly boundaries and responsive accessibility. All writes remain in the disposable in-memory fixture; no real preview/server/device mutations."
+            : connectionStyleOnly
+              ? "Actual App/editor with isolated synthetic API: local connection style path/preview/persistence, unchanged configuration/check state, selected-edge reconnect/undo, readonly preferences and responsive accessibility. Only reconnect/undo writes the disposable in-memory fixture; no preview/server/device mutations."
+              : variablesOnly
+                ? "Actual App/editor with isolated synthetic API: version-variable declaration editing, explicit draft CAS save, discard, read-only boundaries, and focused accessibility scans. All writes remain in the disposable in-memory fixture; no real publication, deployment, or device changes."
+                : splitSaveOnly
+                  ? splitSaveFollowup
+                    ? "Final split-save follow-up: held-save failure/retry and 899/800/375px popup geometry/accessibility after nonmodal menu and error-reset changes; other earlier behavioral groups were not rerun. Synthetic in-memory API only."
+                    : "Focused actual App/editor save controls: visible Save, Ctrl/Cmd+S, save options and notes, held/failed saves, role boundaries and browser draft recovery, with isolated synthetic draft CAS and published-version fixtures. No real preview validation, save, publication or deployment requests."
+                  : checkStateOnly
+                    ? "Focused actual App/editor check states: labels, stale, pending and Code checks, unavailable checker, auto-check and color contrast, with isolated synthetic validation and draft responses. No real server/preview validation or device/publication mutations."
+                    : nodeActionsOnly
+                      ? "Focused node-action and inspector ownership review using the actual App/editor with isolated synthetic API: duplicate/remove, exact undo, declined pending-field removal, keyboard access, read-only guards and three viewport/theme accessibility scans. No real server, preview or native device mutations."
+                      : checksLayoutOnly
+                        ? "Focused actual-App Problems panel containment, keyboard toggle and problem-to-field navigation at 375px and 899px with a mocked validation response. No real server validation or draft/publication/device mutations; earlier interaction groups were not rerun."
+                        : menuLayoutOnly
+                          ? "Focused CSS follow-up on actual App/editor: S3 icon sizing, compact two-result height, viewport containment and light/dark accessibility. Isolated GET-only synthetic API; the earlier seven interaction groups were not rerun for this CSS follow-up."
+                          : "Actual App/editor with isolated synthetic API and in-memory draft CAS; no preview, publication, enrollment, deployment, or native activation. Accessibility scope is limited to scanned states.",
         passed: !failure,
         results,
         accessibility,

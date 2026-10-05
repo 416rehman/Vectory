@@ -7,7 +7,13 @@ import {
 } from "react";
 import { Link2 } from "lucide-react";
 import { z } from "zod";
-import { APIError, api, type Person, type User } from "./api";
+import {
+  APIError,
+  api,
+  withRequestDeadline,
+  type Person,
+  type User,
+} from "./api";
 import { retryDelay } from "./authRequests";
 import {
   useAccountAuthority,
@@ -55,6 +61,29 @@ export function firstName(name: string) {
   return name.trim().split(/\s+/)[0] || name;
 }
 
+/** An old render may doubt a link after a new sign-in has cleared it. */
+export function markCurrentHeldLinksDoubt(
+  current: Record<string, HeldLink>,
+  candidates: Record<string, HeldLink>,
+) {
+  let updated = current;
+  for (const [userId, candidate] of Object.entries(candidates)) {
+    const held = current[userId];
+    if (
+      candidate.doubt &&
+      held &&
+      !held.doubt &&
+      held.code === candidate.code &&
+      held.requestId === candidate.requestId &&
+      held.expiresAt === candidate.expiresAt
+    ) {
+      if (updated === current) updated = { ...current };
+      updated[userId] = { ...held, doubt: candidate.doubt };
+    }
+  }
+  return updated;
+}
+
 const ReceiptSchema = z
   .object({
     request_id: z.uuid(),
@@ -92,6 +121,15 @@ const StatusSchema = z.discriminatedUnion("status", [
 ]);
 type Receipt = z.infer<typeof ReceiptSchema>;
 
+/** A status/cancellation reply is authoritative only for the requested issue. */
+export function assertResetStatusIdentity(
+  status: { request_id: string; user_id: string },
+  request: { id: string; target: { id: string } },
+) {
+  if (status.request_id !== request.id || status.user_id !== request.target.id)
+    throw Error("The server described a different request.");
+}
+
 export type AdminPasswordResetHandle = {
   /** Create a new reset link (or invite link, for someone never signed in). */
   open: (person: Person) => void;
@@ -128,6 +166,7 @@ export default function AdminPasswordResetActions({
   const [password, setPassword] = useState("");
   const [shown, setShown] = useState<string | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
+  const activeCheck = useRef<AbortController | null>(null);
   const [ended, setEnded] = useState<{
     person: Person;
     message: string;
@@ -137,6 +176,9 @@ export default function AdminPasswordResetActions({
   const linksRef = useRef(links);
   linksRef.current = links;
   const authority = useAccountAuthority(user, () => {
+    activeCheck.current?.abort();
+    activeCheck.current = null;
+    setChecking(null);
     issue.authorityChanged();
     setPassword("");
     // A link belongs to the sign-in that created it.
@@ -158,7 +200,7 @@ export default function AdminPasswordResetActions({
         { signal, headers: { "X-CSRF-Token": request.context.csrfToken } },
         StatusSchema,
       );
-      matches(status, request);
+      assertResetStatusIdentity(status, request);
       return status.status === "not_found"
         ? { kind: "pending" }
         : status.status === "issued" && status.active
@@ -182,7 +224,7 @@ export default function AdminPasswordResetActions({
         },
         StatusSchema,
       );
-      matches(status, request);
+      assertResetStatusIdentity(status, request);
       if (status.status !== "cancelled")
         throw Error("The link request wasn't cancelled.");
       return { kind: "retry" } satisfies Resolution<Receipt>;
@@ -211,15 +253,34 @@ export default function AdminPasswordResetActions({
       void reloadPeople();
     },
   });
-  function matches(
-    status: { request_id: string; user_id: string },
-    request: { id: string; target: Person },
-  ) {
+  useEffect(
+    () => () => {
+      activeCheck.current?.abort();
+      activeCheck.current = null;
+    },
+    [],
+  );
+  function claimCheck(link: HeldLink) {
     if (
-      status.request_id !== request.id ||
-      status.user_id !== request.target.id
+      activeCheck.current ||
+      !authority.usable(link.owner, true) ||
+      !stillHeld(link)
     )
-      throw Error("The server described a different request.");
+      return null;
+    const controller = new AbortController();
+    activeCheck.current = controller;
+    setChecking(link.userId);
+    return controller;
+  }
+  function sameHeldLink(current: HeldLink | undefined, link: HeldLink) {
+    return (
+      current?.code === link.code &&
+      current.requestId === link.requestId &&
+      current.expiresAt === link.expiresAt
+    );
+  }
+  function stillHeld(link: HeldLink) {
+    return sameHeldLink(linksRef.current[link.userId], link);
   }
 
   useImperativeHandle(ref, () => ({
@@ -260,7 +321,8 @@ export default function AdminPasswordResetActions({
         changed = true;
       }
     }
-    if (changed) onLinksChange(() => next);
+    if (changed)
+      onLinksChange((current) => markCurrentHeldLinksDoubt(current, next));
     const soonest = Math.min(
       ...Object.values(links)
         .filter((link) => !link.doubt)
@@ -315,7 +377,7 @@ export default function AdminPasswordResetActions({
             { signal, headers },
             StatusSchema,
           );
-          matches(preflight, attempt);
+          assertResetStatusIdentity(preflight, attempt);
           if (preflight.status !== "not_found") throw Error();
         } catch {
           throw new NotSent(
@@ -365,30 +427,50 @@ export default function AdminPasswordResetActions({
   }
 
   async function verify(link: HeldLink) {
-    if (checking) return false;
-    if (!authority.usable(link.owner, true)) return false;
-    setChecking(link.userId);
+    const controller = claimCheck(link);
+    if (!controller) return false;
+    const owns = () =>
+      activeCheck.current === controller &&
+      !controller.signal.aborted &&
+      authority.usable(link.owner, true) &&
+      stillHeld(link);
     try {
       let valid = false;
       let revision = link.verifiedRevision;
       if (link.requestId) {
-        const status = await api(
-          statusPath({ id: link.requestId, target: { id: link.userId } }),
-          { headers: { "X-CSRF-Token": link.owner.csrfToken } },
-          StatusSchema,
+        const request = { id: link.requestId, target: { id: link.userId } };
+        const status = await withRequestDeadline(
+          (signal) =>
+            api(
+              statusPath(request),
+              { signal, headers: { "X-CSRF-Token": link.owner.csrfToken } },
+              StatusSchema,
+            ),
+          30000,
+          controller.signal,
         );
+        assertResetStatusIdentity(status, request);
+        if (!owns()) return false;
         valid =
           status.status === "issued" &&
           status.active &&
           status.expires_at === link.expiresAt;
-        const latest = (await reloadPeople())?.find(
-          (person) => person.id === link.userId,
-        );
+        const latest = (
+          await withRequestDeadline(
+            () => reloadPeople(),
+            30000,
+            controller.signal,
+          )
+        )?.find((person) => person.id === link.userId);
         revision = latest?.revision ?? revision;
       } else {
-        const latest = (await reloadPeople())?.find(
-          (person) => person.id === link.userId,
-        );
+        const latest = (
+          await withRequestDeadline(
+            () => reloadPeople(),
+            30000,
+            controller.signal,
+          )
+        )?.find((person) => person.id === link.userId);
         valid =
           !!latest &&
           latest.enabled &&
@@ -396,16 +478,23 @@ export default function AdminPasswordResetActions({
           latest.invite_expires_at === link.expiresAt;
         revision = latest?.revision ?? revision;
       }
-      if (!authority.usable(link.owner, true) || !linksRef.current[link.userId])
-        return false;
+      if (!owns()) return false;
       if (valid) {
-        onLinksChange((current) => ({
-          ...current,
-          [link.userId]: { ...link, verifiedRevision: revision, doubt: "" },
-        }));
+        onLinksChange((current) =>
+          sameHeldLink(current[link.userId], link)
+            ? {
+                ...current,
+                [link.userId]: {
+                  ...current[link.userId],
+                  verifiedRevision: revision,
+                  doubt: "",
+                },
+              }
+            : current,
+        );
         return true;
       }
-      discard(link.userId);
+      discard(link.userId, link);
       const person = peopleRef.current.find(
         (entry) => entry.id === link.userId,
       );
@@ -416,22 +505,30 @@ export default function AdminPasswordResetActions({
         });
       return false;
     } catch {
-      if (linksRef.current[link.userId])
-        onLinksChange((current) => ({
-          ...current,
-          [link.userId]: {
-            ...link,
-            doubt:
-              "We couldn't check this link. Check your connection and try again.",
-          },
-        }));
+      if (owns())
+        onLinksChange((current) =>
+          sameHeldLink(current[link.userId], link)
+            ? {
+                ...current,
+                [link.userId]: {
+                  ...current[link.userId],
+                  doubt:
+                    "We couldn't check this link. Check your connection and try again.",
+                },
+              }
+            : current,
+        );
       return false;
     } finally {
-      setChecking(null);
+      if (activeCheck.current === controller) {
+        activeCheck.current = null;
+        setChecking(null);
+      }
     }
   }
-  function discard(userId: string) {
+  function discard(userId: string, expected?: HeldLink) {
     onLinksChange((current) => {
+      if (expected && !sameHeldLink(current[userId], expected)) return current;
       const next = { ...current };
       delete next[userId];
       return next;
@@ -439,38 +536,56 @@ export default function AdminPasswordResetActions({
     setShown((value) => (value === userId ? null : value));
   }
   async function revoke(link: HeldLink) {
-    if (!link.requestId || checking) return;
-    if (!authority.usable(link.owner, true)) return;
-    setChecking(link.userId);
+    if (!link.requestId) return;
+    const controller = claimCheck(link);
+    if (!controller) return;
+    const owns = () =>
+      activeCheck.current === controller &&
+      !controller.signal.aborted &&
+      authority.usable(link.owner, true) &&
+      stillHeld(link);
     try {
-      const status = await api(
-        `${statusPath({ id: link.requestId, target: { id: link.userId } })}/cancel`,
-        {
-          method: "POST",
-          body: "{}",
-          headers: { "X-CSRF-Token": link.owner.csrfToken },
-        },
-        StatusSchema,
+      const request = { id: link.requestId, target: { id: link.userId } };
+      const status = await withRequestDeadline(
+        (signal) =>
+          api(
+            `${statusPath(request)}/cancel`,
+            {
+              method: "POST",
+              body: "{}",
+              signal,
+              headers: { "X-CSRF-Token": link.owner.csrfToken },
+            },
+            StatusSchema,
+          ),
+        30000,
+        controller.signal,
       );
+      assertResetStatusIdentity(status, request);
+      if (!owns()) return;
       if (status.status !== "cancelled") throw Error();
-      discard(link.userId);
+      discard(link.userId, link);
       notify(`Link for ${firstName(link.name)} revoked.`, { tone: "success" });
       void reloadPeople();
     } catch {
-      onLinksChange((current) =>
-        current[link.userId]
-          ? {
-              ...current,
-              [link.userId]: {
-                ...link,
-                doubt:
-                  "We couldn't revoke this link. Check your connection and try again.",
-              },
-            }
-          : current,
-      );
+      if (owns())
+        onLinksChange((current) =>
+          sameHeldLink(current[link.userId], link)
+            ? {
+                ...current,
+                [link.userId]: {
+                  ...link,
+                  doubt:
+                    "We couldn't revoke this link. Check your connection and try again.",
+                },
+              }
+            : current,
+        );
     } finally {
-      setChecking(null);
+      if (activeCheck.current === controller) {
+        activeCheck.current = null;
+        setChecking(null);
+      }
     }
   }
 

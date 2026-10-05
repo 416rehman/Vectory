@@ -1,5 +1,6 @@
 import { Layers, ShieldCheck } from "lucide-react";
 import type { AgentInstall } from "./api";
+import DescribedPicker, { type DescribedOption } from "./DescribedPicker";
 import DocLink from "./DocLink";
 import { CopyButton, Field } from "./ui";
 import {
@@ -15,30 +16,25 @@ import {
 } from "./enrollmentCommands";
 import "./enrollment-connection.css";
 
-const modes: {
-  value: Mode;
-  label: string;
-  summary: string;
-  icon: typeof Layers;
-}[] = [
+const modes: DescribedOption<Mode>[] = [
   {
     value: "restricted",
     label: "Restricted",
-    summary:
+    description:
       "Reviewed components only. Files, destinations and listeners must be approved on the host.",
     icon: ShieldCheck,
   },
   {
     value: "full",
     label: "Full Vector",
-    summary:
+    description:
       "Every Vector feature. People who publish pipelines get Vector's permissions on this host.",
     icon: Layers,
   },
 ];
 
-/** The configuration mode as two cards; neither is chosen until the person picks one. */
-export function ModeCards({
+/** The same described choice as account roles, with no preselected host grant. */
+export function ModePicker({
   value,
   onChange,
   disabled,
@@ -48,30 +44,20 @@ export function ModeCards({
   disabled: boolean;
 }) {
   return (
-    <fieldset className="enroll-modes" disabled={disabled}>
-      <legend>How should Vectory manage this device?</legend>
-      <div className="enroll-mode-options">
-        {modes.map(({ value: mode, label, summary, icon: Icon }) => (
-          <label className="enroll-mode" key={mode}>
-            <input
-              type="radio"
-              name="enroll-mode"
-              value={mode}
-              checked={value === mode}
-              onChange={() => onChange(mode)}
-            />
-            <Icon size={18} aria-hidden="true" />
-            <span>
-              <strong>{label}</strong>
-              <small>{summary}</small>
-            </span>
-          </label>
-        ))}
-      </div>
+    <div className="enroll-mode-picker">
+      <DescribedPicker
+        label="How should Vectory manage this device?"
+        menuLabel="Choose configuration mode"
+        placeholder="Choose a mode"
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        options={modes}
+      />
       <DocLink topic="installation" section="choose-configuration-capabilities">
         Compare the modes
       </DocLink>
-    </fieldset>
+    </div>
   );
 }
 

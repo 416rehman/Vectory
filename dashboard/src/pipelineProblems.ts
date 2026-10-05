@@ -504,6 +504,8 @@ export function checkStatus({
 /** Why a check request failed, in words for the Problems panel. */
 export function checkFailureMessage(failure: unknown) {
   const error = failure as { status?: number; code?: string; message?: string };
+  if (error?.code === "REQUEST_TIMEOUT")
+    return "Vector's check took too long. It may still be processing; try again.";
   if (failure instanceof TypeError || error?.status === 0)
     return "Couldn't reach Vectory, so this draft hasn't been checked. Check your connection and try again.";
   if (

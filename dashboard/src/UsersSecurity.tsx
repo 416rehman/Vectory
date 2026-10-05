@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Person, User } from "./api";
+import { useAccountAuthority } from "./accountAuthority";
 import { ErrorBox, IconButton, PageHeader, useResource, Button } from "./ui";
 import { AccountActions } from "./AccountActions";
 import { WorkspaceAccess } from "./AccountAccess";
@@ -91,6 +92,18 @@ export function UsersSecurity({
   const people = useResource<Person[]>(admin ? "/users" : null, []);
   const mfa = useResource<MfaStatus>("/mfa", { enabled: false });
   const [links, setLinks] = useState<Record<string, HeldLink>>({});
+  // The reset dialog unmounts when administrator access goes away. Keep the
+  // authority check above it so a later role/session change cannot remount
+  // that dialog with a link issued under the earlier sign-in.
+  const authority = useAccountAuthority(user, () => setLinks({}));
+  const currentLinks = Object.fromEntries(
+    Object.entries(links).filter(
+      ([, link]) =>
+        user.id === link.owner.userId &&
+        user.role === "admin" &&
+        authority.usable(link.owner, true),
+    ),
+  );
   const [savedPerson, setSavedPerson] = useState<User | null>(null);
   const [locateEmail, setLocateEmail] = useState(readLocatedEmail);
   const [intent, setIntent] = useState(readIntent);
@@ -163,6 +176,7 @@ export function UsersSecurity({
               void people.reload();
             }}
             onInvite={(link) => {
+              if (!authority.usable(link.owner, true)) return;
               setLinks((current) => ({ ...current, [link.userId]: link }));
               resets.current?.show(link.userId);
             }}
@@ -261,7 +275,7 @@ export function UsersSecurity({
             onUserChanged={onUserChanged}
             savedPerson={savedPerson}
             onPersonLocated={() => setSavedPerson(null)}
-            links={links}
+            links={currentLinks}
             onShowLink={(id) => resets.current?.show(id)}
             onNewLink={(person) => resets.current?.open(person)}
             locateEmail={locateEmail}
@@ -277,7 +291,7 @@ export function UsersSecurity({
           user={user}
           people={people.data}
           reloadPeople={reloadPeople}
-          links={links}
+          links={currentLinks}
           onLinksChange={setLinks}
           notify={notify}
         />

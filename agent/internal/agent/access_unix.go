@@ -137,3 +137,21 @@ func accountAccessProblem(ctx context.Context, account, path string, read bool, 
 	}
 	return blocker
 }
+
+// A staged installer candidate must actually start as an existing service
+// account before it replaces the installed binary. This also catches noexec
+// mounts, interpreter failures and access rules beyond Unix mode bits.
+func stagedAgentAccessProblem(ctx context.Context, account, path string) string {
+	ids, ok := lookupAccountIDs(account)
+	if !ok {
+		return "service account cannot be resolved"
+	}
+	blocker, _ := accessBlocker(ids, path, false)
+	if runsAs(ctx, ids, path, "version") {
+		return ""
+	}
+	if blocker != "" {
+		return blocker
+	}
+	return "it could not execute `vectory version` as that account"
+}

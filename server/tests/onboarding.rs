@@ -471,9 +471,47 @@ fn write_catalog(dir: &Path, builds: &[Build]) -> Vec<String> {
     .unwrap();
     digests
 }
-/// A stand-in agent: records how the installer ran it.
+/// A stand-in agent: records how the installer ran it and models setup's
+/// read-only refusals before the installer may replace an enrolled build.
 fn fake_agent(label: &str) -> Vec<u8> {
-    format!("#!/bin/sh\n# {label}\nprintf '%s\\n' \"$@\" > \"$FAKE_AGENT_ARGS\"\n").into_bytes()
+    let mut script = format!("#!/bin/sh\n# {label}\n");
+    script.push_str(
+        r#"printf '%s\n' "$@" > "$FAKE_AGENT_ARGS"
+if [ -n "${FAKE_AGENT_CALLS:-}" ]; then printf '%s\n' "$*" >> "$FAKE_AGENT_CALLS"; fi
+server= next= dry_run= staged=
+for arg do
+    if [ "$next" = server ]; then server=$arg; next=; continue; fi
+    if [ "$next" = preflight ]; then staged=$arg; dry_run=1; next=; continue; fi
+    case $arg in
+        --server) next=server ;;
+        --installer-preflight) next=preflight ;;
+        --dry-run | -dry-run | --dry-run=1 | -dry-run=1 | --dry-run=t | -dry-run=t | --dry-run=T | -dry-run=T | --dry-run=true | -dry-run=true | --dry-run=TRUE | -dry-run=TRUE | --dry-run=True | -dry-run=True) dry_run=1 ;;
+        --dry-run=0 | -dry-run=0 | --dry-run=f | -dry-run=f | --dry-run=F | -dry-run=F | --dry-run=false | -dry-run=false | --dry-run=FALSE | -dry-run=FALSE | --dry-run=False | -dry-run=False) dry_run= ;;
+        --not-a-setup-option) echo 'unknown setup option' >&2; exit 2 ;;
+    esac
+done
+if [ -n "$staged" ]; then
+    [ -x "$staged" ] && cmp -s "$0" "$staged" || { echo 'bad staged agent' >&2; exit 7; }
+    printf '%s\n' "$staged" > "$FAKE_PREFLIGHT_PATH"
+    if [ -f "${FAKE_MUTATE_STAGE_FILE:-/nonexistent}" ]; then echo tampered > "$staged"; fi
+fi
+if [ -f "${FAKE_ENROLLED_SERVER_FILE:-/nonexistent}" ] && [ "$server" != "$(cat "$FAKE_ENROLLED_SERVER_FILE")" ]; then
+    echo 'this host is enrolled with another server' >&2
+    exit 1
+fi
+if [ -n "$dry_run" ] && [ -f "${FAKE_ATTENTION_FILE:-/nonexistent}" ]; then exit 3; fi
+if [ -z "$dry_run" ] && [ -n "${FAKE_SETUP_STATE_FILE:-}" ]; then echo 'setup changed state' > "$FAKE_SETUP_STATE_FILE"; fi
+if [ -z "$dry_run" ] && [ -f "${FAKE_FINAL_SETUP_SIGNAL_FILE:-/nonexistent}" ]; then
+    kill -TERM "$PPID"
+    exit 143
+fi
+if [ -z "$dry_run" ] && [ -f "${FAKE_FINAL_SETUP_FAILURE_FILE:-/nonexistent}" ]; then
+    echo 'service start failed after setup changed state' >&2
+    exit 9
+fi
+"#,
+    );
+    script.into_bytes()
 }
 /// A private agent CA and a server certificate chain that includes it.
 fn chain(host: &str) -> (String, String) {
@@ -788,6 +826,18 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     std::fs::create_dir_all(root.join("bin")).unwrap();
     let path = root.join("vectory-install.sh");
     std::fs::write(&path, &script).unwrap();
+    let help = std::process::Command::new("sh")
+        .arg(&path)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success(), "{help:?}");
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help_text.contains("--ca-sha256 changes setup's pin only")
+            && help_text.contains("--ca-file PATH so the download can trust the new CA"),
+        "{help_text}"
+    );
     for shell in ["sh", "dash", "bash"] {
         if let Ok(status) = std::process::Command::new(shell)
             .arg("-n")
@@ -814,7 +864,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     );
     fake(
         "curl",
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\nif [ -n \"$ca\" ]; then cp \"$ca\" \"$FAKE_CURL_CA\" || exit 60; else echo 'system trust' > \"$FAKE_CURL_CA\"; fi\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\nif [ -n \"$ca\" ]; then cp \"$ca\" \"$FAKE_CURL_CA\" || exit 60; else echo 'system trust' > \"$FAKE_CURL_CA\"; fi\nif [ -f \"$FAKE_CURL_REFUSE_FILE\" ]; then exit 60; fi\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
     );
     let download = root.join("download");
     let run_with = |bytes: &[u8], install_dir: &Path, extra: &[&str]| {
@@ -840,7 +890,22 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             .env("FAKE_CURL_URL", root.join("curl-url"))
             .env("FAKE_CURL_ARGS", root.join("curl-args"))
             .env("FAKE_CURL_CA", root.join("curl-ca.pem"))
+            .env("FAKE_CURL_REFUSE_FILE", root.join("curl-refuse"))
             .env("FAKE_AGENT_ARGS", root.join("agent-args"))
+            .env("FAKE_AGENT_CALLS", root.join("agent-calls"))
+            .env("FAKE_PREFLIGHT_PATH", root.join("preflight-path"))
+            .env("FAKE_MUTATE_STAGE_FILE", root.join("mutate-stage"))
+            .env("FAKE_ENROLLED_SERVER_FILE", root.join("enrolled-server"))
+            .env("FAKE_ATTENTION_FILE", root.join("attention"))
+            .env("FAKE_SETUP_STATE_FILE", root.join("setup-state"))
+            .env(
+                "FAKE_FINAL_SETUP_FAILURE_FILE",
+                root.join("final-setup-failure"),
+            )
+            .env(
+                "FAKE_FINAL_SETUP_SIGNAL_FILE",
+                root.join("final-setup-signal"),
+            )
             .output()
             .unwrap()
     };
@@ -860,6 +925,20 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("installed at"), "{stdout}");
+    let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+    let calls: Vec<&str> = calls.lines().collect();
+    assert_eq!(
+        calls.len(),
+        2,
+        "preflight and real setup must both run: {calls:?}"
+    );
+    assert!(calls[0].contains(" --installer-preflight "), "{calls:?}");
+    assert!(!calls[1].contains("--installer-preflight"), "{calls:?}");
+    let staged = std::fs::read_to_string(root.join("preflight-path")).unwrap();
+    assert!(
+        !Path::new(staged.trim()).exists(),
+        "staged file was not removed"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -903,6 +982,18 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             "--service",
             "none",
         ]
+    );
+    // Go's boolean flags accept numeric values and the last value wins.
+    let false_last = root.join("false-last");
+    let output = run_with(
+        &d.mirror_linux,
+        &false_last,
+        &["-dry-run=1", "-dry-run=false"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read(false_last.join("vectory")).unwrap(),
+        d.mirror_linux
     );
     // The operator's own trust choice replaces the pin, for the download and
     // for setup: a CA certificate file on the host, or its trusted certificates.
@@ -956,6 +1047,30 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         "{output:?}"
     );
     assert!(!root.join("missing-ca").join("vectory").exists());
+    // A fingerprint alone cannot supply curl with a rotated private CA.
+    // The failed download keeps the embedded CA check and explains the
+    // certificate the operator must provide for that trust change.
+    std::fs::write(root.join("curl-refuse"), "1").unwrap();
+    let new_pin = "a".repeat(64);
+    let output = run_with(
+        &d.mirror_linux,
+        &root.join("rotated-ca"),
+        &["--ca-sha256", &new_pin],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--ca-sha256 alone changes setup trust, not download trust"),
+        "{output:?}"
+    );
+    assert!(
+        std::fs::read_to_string(root.join("curl-ca.pem"))
+            .unwrap()
+            .starts_with("-----BEGIN CERTIFICATE-----"),
+        "the SHA-only override bypassed the embedded CA for download"
+    );
+    assert!(!root.join("rotated-ca").join("vectory").exists());
+    std::fs::remove_file(root.join("curl-refuse")).unwrap();
     // A dry run installs nothing and plans for the directory that was chosen,
     // not the default one.
     let planned = root.join("planned");
@@ -1004,11 +1119,240 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("is already 0.2.0"));
     assert!(!root.join("curl-url").exists());
+    // A matching but non-executable target must not be silently chmodded
+    // before setup rejects it; its original mode belongs to the host.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let agent = installed.join("vectory");
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let output = run(b"unused", &installed);
+        assert_eq!(output.status.code(), Some(126), "{output:?}");
+        assert_eq!(
+            std::fs::metadata(&agent).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "the same-SHA path changed the existing executable's mode"
+        );
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     // Upgrade agent (the device page) runs the same installer with only where
     // the device keeps its state and what keeps it running: an older agent is
     // replaced, and setup, which finds the enrolled state, gets no name, mode
     // or token to change.
-    std::fs::write(installed.join("vectory"), fake_agent("older build")).unwrap();
+    let older = fake_agent("older build");
+    std::fs::write(installed.join("vectory"), &older).unwrap();
+    std::fs::write(root.join("setup-state"), "existing state").unwrap();
+    std::fs::remove_file(root.join("agent-calls")).unwrap();
+    let output = run_with(&d.mirror_linux, &installed, &["--dry-run=1"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("would be installed"));
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    assert_eq!(
+        std::fs::read(root.join("setup-state")).unwrap(),
+        b"existing state"
+    );
+    let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "dry run invoked real setup: {calls}"
+    );
+    assert!(calls.contains("--dry-run=1"), "{calls}");
+    for option in ["-dry-run=1", "-dry-run=TRUE"] {
+        std::fs::remove_file(root.join("agent-calls")).unwrap();
+        let output = run_with(&d.mirror_linux, &installed, &[option]);
+        assert!(output.status.success(), "{option}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("would be installed"));
+        assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+        assert_eq!(
+            std::fs::read(root.join("setup-state")).unwrap(),
+            b"existing state"
+        );
+        let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+        assert_eq!(calls.lines().count(), 1, "{option} ran real setup: {calls}");
+    }
+    std::fs::remove_file(root.join("agent-calls")).unwrap();
+    for (option, message) in [
+        (
+            "-installer-preflight=/tmp/untrusted",
+            "reserved for the installer",
+        ),
+        (
+            "--server=https://other.example.test",
+            "set by this installer",
+        ),
+        ("-agent-path=/tmp/untrusted", "set by --install-dir"),
+    ] {
+        let output = run_with(&d.mirror_linux, &installed, &[option]);
+        assert!(!output.status.success(), "{option}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{option}: {output:?}"
+        );
+    }
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    assert!(!root.join("agent-calls").exists());
+    // A candidate changed after the agent's preflight cannot be promoted.
+    std::fs::write(root.join("mutate-stage"), "1").unwrap();
+    let output = run(&d.mirror_linux, &installed);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("staged agent changed"),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    assert_eq!(
+        std::fs::read(root.join("setup-state")).unwrap(),
+        b"existing state"
+    );
+    let staged = std::fs::read_to_string(root.join("preflight-path")).unwrap();
+    assert!(
+        !Path::new(staged.trim()).exists(),
+        "tampered stage was not removed"
+    );
+    std::fs::remove_file(root.join("mutate-stage")).unwrap();
+    std::fs::remove_file(root.join("agent-calls")).unwrap();
+    // An enrolled host's refusal must come from the verified temporary agent
+    // while the old executable is still stable. The same applies to a setup
+    // option the new agent rejects before it can change state.
+    std::fs::write(
+        root.join("enrolled-server"),
+        "https://old.example.test:8443\n",
+    )
+    .unwrap();
+    let output = run(&d.mirror_linux, &installed);
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("enrolled with another server") && stderr.contains("was not replaced"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    assert_eq!(
+        std::fs::read(root.join("setup-state")).unwrap(),
+        b"existing state"
+    );
+    let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+    assert_eq!(calls.lines().count(), 1, "setup ran after refusal: {calls}");
+    assert!(calls.contains("--installer-preflight"), "{calls}");
+    std::fs::remove_file(root.join("enrolled-server")).unwrap();
+    std::fs::remove_file(root.join("agent-calls")).unwrap();
+    let output = run_with(&d.mirror_linux, &installed, &["--not-a-setup-option"]);
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown setup option") && stderr.contains("was not replaced"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    assert_eq!(
+        std::fs::read(root.join("setup-state")).unwrap(),
+        b"existing state"
+    );
+    let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+    assert_eq!(calls.lines().count(), 1, "setup ran after refusal: {calls}");
+    assert!(calls.contains("--installer-preflight"), "{calls}");
+    assert!(
+        std::fs::read_dir(&installed).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".vectory.new.")),
+        "a refused preflight left an install candidate behind"
+    );
+    // A later setup failure can follow partial state/service work. Restore
+    // the exact old executable for the next restart, and tell the operator
+    // to inspect the state and service instead of claiming they rolled back.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            installed.join("vectory"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("final-setup-failure"), "1").unwrap();
+    std::fs::remove_file(root.join("agent-calls")).unwrap();
+    let output = run(&d.mirror_linux, &installed);
+    assert_eq!(output.status.code(), Some(9), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("restored the previous executable"),
+        "{output:?}"
+    );
+    assert!(
+        stderr.contains("Setup may have changed host state or service status"),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(installed.join("vectory"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "rollback did not preserve the previous executable's mode"
+        );
+    }
+    assert_eq!(
+        std::fs::read(root.join("setup-state")).unwrap(),
+        b"setup changed state\n",
+        "the fixture must model the partial mutation this warning describes"
+    );
+    let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+    assert_eq!(calls.lines().count(), 2, "real setup did not run: {calls}");
+    assert!(
+        std::fs::read_dir(&installed).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".vectory.")),
+        "a failed final setup left a staged agent or rollback file"
+    );
+    let failed_first = root.join("failed-first-install");
+    let output = run(&d.mirror_linux, &failed_first);
+    assert_eq!(output.status.code(), Some(9), "{output:?}");
+    assert!(!failed_first.join("vectory").exists());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("removed the newly installed"),
+        "{output:?}"
+    );
+    std::fs::remove_file(root.join("final-setup-failure")).unwrap();
+    // An interrupted final setup also restores the old executable through
+    // the EXIT trap, after the shell has handled the signal.
+    std::fs::write(root.join("final-setup-signal"), "1").unwrap();
+    let output = run(&d.mirror_linux, &installed);
+    assert_eq!(output.status.code(), Some(130), "{output:?}");
+    assert_eq!(std::fs::read(installed.join("vectory")).unwrap(), older);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("restored the previous executable"),
+        "{output:?}"
+    );
+    std::fs::remove_file(root.join("final-setup-signal")).unwrap();
+    // Exit 3 from a dry run means the plan needs a manually managed service;
+    // it is not a refusal, so the installer must still run real setup.
+    std::fs::write(root.join("attention"), "1").unwrap();
+    std::fs::remove_file(root.join("agent-calls")).unwrap();
+    let output = run(&d.mirror_linux, &installed);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read(installed.join("vectory")).unwrap(),
+        d.mirror_linux
+    );
+    let calls = std::fs::read_to_string(root.join("agent-calls")).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        2,
+        "exit 3 stopped installation: {calls}"
+    );
+    std::fs::remove_file(root.join("attention")).unwrap();
+    std::fs::write(installed.join("vectory"), &older).unwrap();
     std::fs::write(&download, &d.mirror_linux).unwrap();
     let output = std::process::Command::new("sh")
         .arg(&path)
@@ -1028,6 +1372,11 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         .env("FAKE_CURL_ARGS", root.join("curl-args"))
         .env("FAKE_CURL_CA", root.join("curl-ca.pem"))
         .env("FAKE_AGENT_ARGS", root.join("agent-args"))
+        .env("FAKE_AGENT_CALLS", root.join("agent-calls"))
+        .env("FAKE_PREFLIGHT_PATH", root.join("preflight-path"))
+        .env("FAKE_MUTATE_STAGE_FILE", root.join("mutate-stage"))
+        .env("FAKE_ENROLLED_SERVER_FILE", root.join("enrolled-server"))
+        .env("FAKE_ATTENTION_FILE", root.join("attention"))
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");

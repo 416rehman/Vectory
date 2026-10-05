@@ -50,6 +50,10 @@ type SetupOptions struct {
 	AdoptExisting bool
 	DashboardURL  string
 	DryRun        bool
+	// InstallerPreflight names the checksum-verified candidate staged beside
+	// AgentPath. It is an installer-only, read-only setup rehearsal that also
+	// enforces checks ordinary --dry-run defers until the real installation.
+	InstallerPreflight string
 	// Token is called only when enrollment is actually needed, after every
 	// check that doesn't need it has passed.
 	Token func() (string, error)
@@ -208,6 +212,9 @@ type serviceHost struct {
 	eligibility    func(dir string) string
 	installUpdates func(dir, executable string) error
 	removeUpdates  func() error
+	// candidateAccess lets tests exercise installer preflight without starting
+	// the Go test executable as a service account.
+	candidateAccess func(context.Context, string, string) string
 	// stateRoot is what setup does about the directory that holds the state directory
 	// under ProgramData on Windows (nil: this host's way, see state_root.go). It looks
 	// before setup changes anything (change false: what it would refuse, and nothing
@@ -221,6 +228,13 @@ func (h serviceHost) isElevated() bool {
 		return h.elevated()
 	}
 	return Elevated()
+}
+
+func (h serviceHost) stagedAgentAccess(ctx context.Context, account, path string) string {
+	if h.candidateAccess != nil {
+		return h.candidateAccess(ctx, account, path)
+	}
+	return stagedAgentAccessProblem(ctx, account, path)
 }
 
 // checkStateRoot is setup's look at, and then its change to, the directory that holds
@@ -483,6 +497,9 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 }
 
 func setupWith(ctx context.Context, options SetupOptions, ops serviceOps, host serviceHost) (SetupResult, error) {
+	if options.InstallerPreflight != "" {
+		options.DryRun = true
+	}
 	r := &setupRun{options: options, host: host}
 	result, err := r.setup(ctx, ops)
 	return r.restartIfStopped(ops, result, err)
@@ -529,7 +546,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	service := choice.kind
 	r.result.Service = service
 	r.add("platform", "ok", "Platform", platform.Summary(), "")
-	if service != "none" && !r.host.isElevated() && !options.DryRun {
+	if service != "none" && !r.host.isElevated() && (!options.DryRun || options.InstallerPreflight != "") {
 		return r.fail("platform", "Privileges", "Setup needs administrator rights.", elevationHint)
 	}
 
@@ -580,6 +597,11 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	case !packagedLocation(executable, defaults.Binary):
 		agentPath = defaults.Binary
 		installBinary = !sameContents(executable, agentPath)
+	}
+	if options.InstallerPreflight != "" {
+		if err := checkInstallerCandidate(options.InstallerPreflight, agentPath, executable, options.AgentPath != ""); err != nil {
+			return r.failErr("agent", "Agent", err, "The installer must stage the verified candidate beside the final agent path, then retry.")
+		}
 	}
 	if !installBinary {
 		r.add("agent", "ok", "Agent", agentPath+" "+Version, "")
@@ -640,7 +662,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if enrolled {
 		trust.caFile = settings.CAFile
 	}
-	if updates != nil && updates.consent != UpdateConsentOff && len(updates.wanted) > 0 && !options.DryRun {
+	if updates != nil && updates.consent != UpdateConsentOff && len(updates.wanted) > 0 && (!options.DryRun || options.InstallerPreflight != "") {
 		if err := r.resolveUpdateKeys(ctx, updates, origin, trust); err != nil {
 			return r.result, err
 		}
@@ -737,7 +759,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		}
 		workload = managed + " (existing workload, adopted)"
 	}
-	if !installed && !Elevated() && !options.DryRun {
+	if !installed && !Elevated() && (!options.DryRun || options.InstallerPreflight != "") {
 		for _, path := range []string{dir, filepath.Dir(managed)} {
 			if !writableLocation(path) {
 				return r.fail("paths", "Privileges", "Setup can't create "+path+" as this user.", elevationHint)
@@ -827,6 +849,11 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 				return r.fail("agent", "Agent", "The service account "+account+" can't run "+agentPath+": "+problem+".", agentAccessFix)
 			}
 		}
+		if options.InstallerPreflight != "" && !createAccount {
+			if problem := r.host.stagedAgentAccess(ctx, account, options.InstallerPreflight); problem != "" {
+				return r.fail("agent", "Agent", "The service account "+account+" can't run the staged agent "+options.InstallerPreflight+": "+problem+".", agentAccessFix)
+			}
+		}
 	}
 	if service != "none" {
 		// Registration refuses a service registered for another executable,
@@ -895,7 +922,11 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 			r.planUpdateStep(updates, dir)
 		}
 		r.result.OK = true
-		r.result.Next = "Run the same command without --dry-run to apply."
+		if options.InstallerPreflight != "" {
+			r.result.Next = "Installer preflight passed; the installer may replace the agent and run setup."
+		} else {
+			r.result.Next = "Run the same command without --dry-run to apply."
+		}
 		return r.result, nil
 	}
 

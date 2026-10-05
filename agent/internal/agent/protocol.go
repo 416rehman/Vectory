@@ -54,21 +54,31 @@ func NormalizeServer(s string) (string, error) {
 	return strings.TrimSuffix(u.String(), "/"), nil
 }
 func NewClient(s Settings, c *Credentials, key []byte) (*Client, error) {
+	return newClientWithSystemRoots(s, c, key, x509.SystemCertPool)
+}
+
+// newClientWithSystemRoots keeps the host's roots out of an explicit CA
+// choice. A CA saved after --ca-sha256 must remain the only trust anchor for
+// enrollment and every later connection, not just for the initial probe.
+func newClientWithSystemRoots(s Settings, c *Credentials, key []byte, systemRoots func() (*x509.CertPool, error)) (*Client, error) {
 	base, e := NormalizeServer(s.Server)
 	if e != nil {
 		return nil, e
 	}
-	roots, e := x509.SystemCertPool()
-	if e != nil {
-		roots = x509.NewCertPool()
-	}
+	var roots *x509.CertPool
 	if s.CAFile != "" {
+		roots = x509.NewCertPool()
 		b, e := os.ReadFile(s.CAFile)
 		if e != nil {
 			return nil, errors.New("cannot read trusted CA file; check the saved path and the agent account's read access")
 		}
 		if !roots.AppendCertsFromPEM(b) {
 			return nil, errors.New("trusted CA file has no certificates; use public CA certificates in PEM format")
+		}
+	} else {
+		roots, e = systemRoots()
+		if e != nil {
+			roots = x509.NewCertPool()
 		}
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots}

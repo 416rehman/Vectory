@@ -261,7 +261,7 @@ func (r *setupRun) preflightWithdraw(dir string) error {
 	if err := updateInProgress(!r.options.DryRun); err != nil {
 		return r.refuseUpdates(sentence(err.Error()), "Run the command again after that.")
 	}
-	if !r.options.DryRun && !r.host.isElevated() {
+	if (!r.options.DryRun || r.options.InstallerPreflight != "") && !r.host.isElevated() {
 		return r.refuseUpdates("Turning agent updates off needs administrator rights.", elevationHint)
 	}
 	return nil
@@ -350,8 +350,8 @@ func missingKeysDetail(missing []string, offered []BundleKey) string {
 // releaseKeyTrust says how the server was trusted: the choice setup verified.
 type releaseKeyTrust struct {
 	// pinned is the server CA that --ca-sha256 named and setup checked: the only
-	// root. Otherwise caFile is a CA file added to the host's roots, or "" for
-	// the host's roots alone.
+	// root. Otherwise caFile is the sole selected CA file, or "" selects only
+	// the host's certificate store.
 	pinned *x509.Certificate
 	caFile string
 }
@@ -373,19 +373,9 @@ func fetchReleaseKeyBundle(ctx context.Context, origin string, trust releaseKeyT
 	if err != nil {
 		return nil, err
 	}
-	roots := x509.NewCertPool()
-	if trust.pinned != nil {
-		roots.AddCert(trust.pinned)
-	} else {
-		if system, err := x509.SystemCertPool(); err == nil {
-			roots = system
-		}
-		if trust.caFile != "" {
-			pem, err := os.ReadFile(trust.caFile)
-			if err != nil || !roots.AppendCertsFromPEM(pem) {
-				return nil, errors.New("can't read the trusted CA file " + trust.caFile + "; check the path and the agent account's read access")
-			}
-		}
+	roots, err := releaseKeyRoots(trust, x509.SystemCertPool)
+	if err != nil {
+		return nil, err
 	}
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -422,6 +412,27 @@ func fetchReleaseKeyBundle(ctx context.Context, origin string, trust releaseKeyT
 		return nil, newUpdateRefusal(codeReleaseKeyInvalid, "the list is longer than %d KiB", maxReleaseKeyBundle/1024)
 	}
 	return body, nil
+}
+
+func releaseKeyRoots(trust releaseKeyTrust, systemRoots func() (*x509.CertPool, error)) (*x509.CertPool, error) {
+	var roots *x509.CertPool
+	if trust.pinned != nil {
+		roots = x509.NewCertPool()
+		roots.AddCert(trust.pinned)
+	} else if trust.caFile != "" {
+		roots = x509.NewCertPool()
+		pem, err := os.ReadFile(trust.caFile)
+		if err != nil || !roots.AppendCertsFromPEM(pem) {
+			return nil, errors.New("can't read the trusted CA file " + trust.caFile + "; check the path and the agent account's read access")
+		}
+	} else {
+		var err error
+		roots, err = systemRoots()
+		if err != nil {
+			roots = x509.NewCertPool()
+		}
+	}
+	return roots, nil
 }
 
 // BundleKey is one entry of the server's list of release keys: a key that

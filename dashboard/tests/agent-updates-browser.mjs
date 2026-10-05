@@ -4,6 +4,7 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import { chooseMode } from "./enrollment-mode.mjs";
 import {
   fleetReplies,
   nothingOffered,
@@ -510,6 +511,10 @@ async function load({
     .getByText("Loading Vectory…")
     .waitFor({ state: "detached", timeout: 180000 })
     .catch(() => undefined);
+  // Enrollment fixtures offer a Linux build; choose it regardless of the
+  // operating system running this browser test. Windows cases switch below.
+  if (path === "enrollment")
+    await page.getByRole("radio", { name: "Linux", exact: true }).check();
 }
 
 // While developing a screen: VECTORY_AGENT_UPDATES_ONLY=review runs only the
@@ -2822,7 +2827,7 @@ try {
           await expect(
             levelCards().getByRole("radio", { name }),
           ).not.toBeChecked();
-        await page.getByRole("radio", { name: /^Restricted/ }).check();
+        await chooseMode(page);
         await expect(
           page.getByRole("button", { name: "Create install command" }),
         ).toBeDisabled();
@@ -2862,7 +2867,7 @@ try {
     async () => {
       const make = async (scenario, choose) => {
         await load({ path: "enrollment", scenario });
-        await page.getByRole("radio", { name: /^Restricted/ }).check();
+        await chooseMode(page);
         await choose();
         await page
           .getByRole("button", { name: "Create install command" })
@@ -2921,7 +2926,7 @@ try {
 
       // A window the agent wouldn't read is said so, and no command is made.
       await load({ path: "enrollment", scenario: onState() });
-      await page.getByRole("radio", { name: /^Restricted/ }).check();
+      await chooseMode(page);
       await levelCards()
         .getByRole("radio", { name: /^Automatic \(recommended\)/ })
         .check();
@@ -2964,7 +2969,7 @@ try {
           exact: false,
         }),
       ).toHaveCount(0);
-      await page.getByRole("radio", { name: /^Restricted/ }).check();
+      await chooseMode(page);
       await expect(
         page.getByRole("button", {
           name: "Create setup command",
@@ -3009,7 +3014,7 @@ try {
       ).toBeVisible();
       await expect(levelCards()).toHaveCount(0);
       // Nothing about updates needs choosing before a command can be made.
-      await page.getByRole("radio", { name: /^Restricted/ }).check();
+      await chooseMode(page);
       await expect(
         page.getByText("Choose how this host takes agent updates first."),
       ).toHaveCount(0);
@@ -3045,7 +3050,7 @@ try {
         await expect(
           page.getByRole("radio", { name: /Automatic \(recommended\)/ }),
         ).toHaveCount(0);
-        await page.getByRole("radio", { name: /^Restricted/ }).check();
+        await chooseMode(page);
         await page
           .getByRole("button", { name: "Create install command" })
           .click();

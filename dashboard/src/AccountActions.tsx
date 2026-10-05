@@ -51,6 +51,10 @@ type Review = {
   fields: Fields;
 };
 type Wait = { action: Action; review: Review; controller: AbortController };
+type RowWait = {
+  context: AccountActionContext;
+  controller: AbortController;
+};
 
 /**
  * Password and browser sessions for the signed-in account. Rows render through
@@ -97,7 +101,11 @@ export function AccountActions({
     refresh,
   );
   const [revoking, setRevoking] = useState<string | null>(null);
+  const rowRequest = useRef<RowWait | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [uncertainRows, setUncertainRows] = useState<Record<string, string>>(
+    {},
+  );
   const [allSessions, setAllSessions] = useState(false);
   const review = action ? reviews[action] : null;
   const busy = review?.phase === "sending";
@@ -139,7 +147,12 @@ export function AccountActions({
     clearSecrets();
   }
   useLayoutEffect(() => {
+    const previousUserId = currentUser.current.id;
     currentUser.current = user;
+    if (previousUserId !== user.id) {
+      setUncertainRows({});
+      setRowErrors({});
+    }
     const request = active.current;
     if (
       request &&
@@ -152,6 +165,12 @@ export function AccountActions({
       if (previous && !canUseAccountActionContext(previous.context, context()))
         changed(visible.current, previous);
     }
+    const row = rowRequest.current;
+    if (row && !canUseAccountActionContext(row.context, context())) {
+      rowRequest.current = null;
+      row.controller.abort();
+      setRevoking(null);
+    }
   }, [user]);
   useLayoutEffect(
     () => () => {
@@ -159,12 +178,17 @@ export function AccountActions({
       const request = active.current;
       active.current = null;
       request?.controller.abort();
+      rowRequest.current?.controller.abort();
+      rowRequest.current = null;
     },
     [],
   );
   useEffect(() => {
     const ended = () => {
       retire();
+      rowRequest.current?.controller.abort();
+      rowRequest.current = null;
+      setRevoking(null);
       const kind = visible.current;
       if (kind && retained.current[kind])
         changed(kind, retained.current[kind]!);
@@ -178,7 +202,7 @@ export function AccountActions({
   }, [action, review?.phase]);
 
   function open(kind: Action, button: HTMLButtonElement) {
-    if (active.current) return;
+    if (active.current || (kind === "sessions" && rowRequest.current)) return;
     opener.current = button;
     clearSecrets();
     setRevealed(false);
@@ -307,6 +331,9 @@ export function AccountActions({
       visible.current = null;
       remember(kind, null);
       setAction(null);
+      // This confirmed action ends every other session, so older row-specific
+      // uncertainty no longer needs to follow the person around.
+      setUncertainRows({});
       if (session) {
         setCSRF(session.csrf_token);
         onUserChanged(session.user);
@@ -327,20 +354,8 @@ export function AccountActions({
       }
       if (isUncertainOutcome(failure)) {
         if (kind === "sessions") {
-          // The list shows the result either way; nothing is resent.
-          const list = await sessions.reloadResult();
-          if (!owns(request)) return;
-          if (list && list.sessions.every((session) => session.current)) {
-            active.current = null;
-            visible.current = null;
-            remember(kind, null);
-            setAction(null);
-            notify(
-              "Signed out of every other browser. This one stays signed in.",
-              { tone: "success" },
-            );
-            return;
-          }
+          // A later list cannot identify which request ended a session.
+          void sessions.reload();
         }
         remember(kind, {
           ...original,
@@ -425,8 +440,17 @@ export function AccountActions({
     } else onReload();
   }
   async function revokeOne(session: SessionSummary) {
-    if (revoking) return;
+    if (rowRequest.current) return;
     const label = describeAgent(session.user_agent).label;
+    const request: RowWait = {
+      context: context(),
+      controller: new AbortController(),
+    };
+    rowRequest.current = request;
+    const ownsRow = () =>
+      rowRequest.current === request &&
+      !request.controller.signal.aborted &&
+      canUseAccountActionContext(request.context, context());
     setRevoking(session.id);
     setRowErrors((errors) => ({ ...errors, [session.id]: "" }));
     try {
@@ -438,28 +462,37 @@ export function AccountActions({
             z.object({ ok: z.literal(true) }),
           ),
         30000,
+        request.controller.signal,
       );
+      if (!ownsRow()) return;
+      setUncertainRows((rows) => {
+        const next = { ...rows };
+        delete next[session.id];
+        return next;
+      });
       notify(`Signed out ${label}.`, { tone: "success" });
     } catch (failure) {
-      if (failure instanceof APIError && failure.code === "SESSION_NOT_FOUND")
+      if (!ownsRow()) return;
+      if (failure instanceof APIError && failure.code === "SESSION_NOT_FOUND") {
+        setUncertainRows((rows) => {
+          const next = { ...rows };
+          delete next[session.id];
+          return next;
+        });
         notify(`${label} was already signed out.`, { tone: "info" });
-      else if (isUncertainOutcome(failure)) {
-        const list = await sessions.reloadResult();
-        if (list && !list.sessions.some((entry) => entry.id === session.id))
-          notify(`Signed out ${label}.`, { tone: "success" });
-        else
-          setRowErrors((errors) => ({
-            ...errors,
-            [session.id]: "We couldn't confirm that. Try again.",
-          }));
+      } else if (isUncertainOutcome(failure)) {
+        setUncertainRows((rows) => ({ ...rows, [session.id]: label }));
       } else
         setRowErrors((errors) => ({
           ...errors,
           [session.id]: (failure as Error).message,
         }));
     } finally {
-      setRevoking(null);
-      void sessions.reload();
+      if (rowRequest.current === request) {
+        rowRequest.current = null;
+        setRevoking(null);
+        void sessions.reload();
+      }
     }
   }
 
@@ -508,10 +541,17 @@ export function AccountActions({
               We couldn't confirm your last sign-out of other sessions.
             </p>
           )}
+          {Object.entries(uncertainRows).map(([id, label]) => (
+            <p className="account-row-warning" role="status" key={id}>
+              We couldn't confirm signing out {label}. The current session list
+              does not prove whether that request succeeded.
+            </p>
+          ))}
         </div>
         {(others > 0 || reviews.sessions) && (
           <Button
             variant="secondary"
+            disabled={!!revoking}
             onClick={(event) => open("sessions", event.currentTarget)}
           >
             {reviews.sessions?.uncertain ? "Review" : "Sign out other sessions"}

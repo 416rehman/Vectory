@@ -110,6 +110,18 @@ sudo vectory install --no-wake=false   # wake-ups back on
 
 `vectory setup --no-wake` saves the same setting. While a deployment waits for a device, the dashboard says **connected, usually a few seconds** only when that device's agent holds the request; otherwise it says the version applies at the next check-in.
 
+### Repair an enrolled device's server CA trust
+
+If the same server changes its TLS certificate authority, an enrolled agent may fail its TLS check before it can check in. Repair its trust on the host without replacing the device identity:
+
+<!-- steps -->
+1. Find the exact enrolled server address with `sudo vectory status`. Obtain the new CA's full SHA-256 fingerprint through a separately trusted channel, such as the authenticated **Add device** page. Do not accept a certificate or fingerprint merely because the failing server connection offers it.
+2. Stop the agent: `sudo vectory service-stop` (or stop your own `vectory run` supervisor).
+3. Run `sudo vectory trust-server --server https://vectory.example.com:8443 --ca-sha256 THE_64_HEX_DIGITS`, using that device's saved address and the independently checked fingerprint. Alternatively, supply an approved PEM CA file with `--ca-file /path/to/new-ca.pem`. If your host's certificate store already trusts the new CA, explicitly choose it with `--ca-file=`.
+4. Start the agent with `sudo vectory service-start` whether the trust check succeeded or refused the candidate. After success, run `sudo vectory doctor` and confirm a fresh check-in for the **same device** in the dashboard. After refusal, the existing trust remains active; inspect the cause and retry during another maintenance window.
+
+`trust-server` requires the agent stopped and refuses any address that differs from the saved one, including a different spelling of the same origin. It verifies the candidate against that saved address before changing settings. A supplied CA file is copied into protected agent state, so later edits to the source file cannot silently change trust. This repair keeps the device identity, counters, pause, restricted-mode allowances and other local settings. It does not move a device to another server; see [unenroll and move a device](cli.md#unenroll).
+
 ## Pause configuration sync
 
 Pause the agent before you edit its managed configuration by hand. Pausing works while the agent runs. Vector keeps running; the agent stops applying new versions until you resume.

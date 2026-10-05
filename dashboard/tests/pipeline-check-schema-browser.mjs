@@ -194,7 +194,7 @@ async function load(config, expectedNodes = 2) {
 
 const button = (name) => page.getByRole("button", { name, exact: true });
 const checkButton = () =>
-  page.getByRole("button", { name: /^Check pipeline: / });
+  page.getByRole("button", { name: /^(?:Check pipeline|Open Problems): / });
 const code = () =>
   page.getByRole("textbox", { name: "Vector configuration code", exact: true });
 const sink = () => page.locator('.react-flow__node[data-id="discard_copy"]');
@@ -259,7 +259,7 @@ try {
         "partial",
       );
       await expect(checkButton()).toHaveAccessibleName(
-        "Check pipeline: Partly checked",
+        "Open Problems: Partly checked",
       );
       expect(current.validations).toHaveLength(1);
       expect(current.validations[0].config).toEqual(pipeline(true));
