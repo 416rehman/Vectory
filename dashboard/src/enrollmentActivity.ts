@@ -143,31 +143,23 @@ export type Progress = {
 };
 
 /**
- * Where this command's device is. The activity record names the device it
- * enrolled; without activity (an older server), a device that wasn't in the
- * inventory before the command was created and has the expected name counts.
+ * Where this command's device is. Only the token-correlated activity record
+ * or this token's usage record may identify it. A new fleet member alone is
+ * never proof that this command enrolled or connected a device.
  */
 export function progress(
   events: EnrollmentEvent[],
   devices: Device[],
   tokenId: string,
-  baseline: Set<string>,
-  expectedName: string,
+  tokenDeviceId: string | null = null,
 ): Progress {
   const mine = eventsFor(events, tokenId);
   const enrolled =
     mine.filter((e) => e.outcome === "success" && e.device_id).at(-1) || null;
-  let device = enrolled
-    ? devices.find((d) => d.id === enrolled.device_id) || null
+  const id = enrolled?.device_id || tokenDeviceId;
+  const device = id
+    ? devices.find((candidate) => candidate.id === id) || null
     : null;
-  if (!enrolled) {
-    const fresh = devices.filter((d) => !baseline.has(d.id));
-    const wanted = expectedName.trim().toLowerCase();
-    const candidates = wanted
-      ? fresh.filter((d) => d.name.toLowerCase() === wanted)
-      : fresh;
-    device = candidates.length === 1 ? candidates[0] : null;
-  }
   const revoked = device?.status === "revoked";
   return {
     events: mine,

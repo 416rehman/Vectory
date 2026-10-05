@@ -723,41 +723,40 @@ describe("enrollment activity", () => {
     const enrolled = [
       event({ outcome: "success", token_id: "t1", device_id: "d1" }),
     ];
-    const waiting = progress(enrolled, [device], "t1", new Set(), "");
+    const waiting = progress(enrolled, [device], "t1");
     expect(waiting.device?.id).toBe("d1");
     expect(waiting.checkedIn).toBe(false);
     const connected = progress(
       enrolled,
       [{ ...(device as object), last_seen: "2026-09-29T10:00:05Z" } as never],
       "t1",
-      new Set(),
-      "",
     );
     expect(connected.checkedIn).toBe(true);
     const refused = progress(
       [event({ reason_code: "NAME_TAKEN", token_id: "t1" })],
       [],
       "t1",
-      new Set(),
-      "",
     );
     expect(refused.refused?.reason_code).toBe("NAME_TAKEN");
   });
 
-  it("without activity, only a new device with the chosen name counts, and revoked is never connected", () => {
-    const baseline = new Set(["d0"]);
-    const old = {
+  it("never attributes an unrelated new device to this token", () => {
+    const unrelated = {
       ...(device as object),
       id: "d0",
       last_seen: "2026-09-29T10:00:00Z",
     } as never;
-    expect(progress([], [old], "t1", baseline, "edge-01").device).toBeNull();
+    expect(progress([], [unrelated], "t1").device).toBeNull();
+    expect(progress([], [unrelated], "t1").checkedIn).toBe(false);
+  });
+
+  it("accepts the exact device ID from this token's usage record, but never reports a revoked device connected", () => {
     const revoked = {
       ...(device as object),
       status: "revoked",
       last_seen: "2026-09-29T10:00:00Z",
     } as never;
-    const state = progress([], [old, revoked], "t1", baseline, "edge-01");
+    const state = progress([], [revoked], "t1", "d1");
     expect(state.revoked).toBe(true);
     expect(state.checkedIn).toBe(false);
   });

@@ -22,28 +22,26 @@ const DEADLINE_MS = 30000;
 /**
  * The devices to follow on one poll. The activity feed names the device the
  * command enrolled, so only that device is read: one small record, not the
- * fleet, every two seconds. A server without the feed can't say which device
- * is new and still lists them all. Null while there is nothing to follow.
+ * fleet, every two seconds. The token list can also supply a correlated ID
+ * when the activity feed is unavailable or its 50-event window has moved on.
+ * Without either ID, do not guess from unrelated devices. Null while there
+ * is nothing to follow.
  */
 export async function readWatchedDevices({
   events,
   tokenId,
-  listAll,
+  tokenDeviceId,
   signal,
 }: {
   /** The activity feed's events; null when this server has no feed. */
   events: EnrollmentEvent[] | null;
   tokenId: string;
-  listAll: boolean;
+  /** An enrolled device ID from this token's usage record, if available. */
+  tokenDeviceId: string | null;
   signal: AbortSignal;
 }): Promise<Device[] | null> {
-  if (listAll)
-    return withRequestDeadline(
-      (inner) => api<Device[]>("/devices", { signal: inner }),
-      DEADLINE_MS,
-      signal,
-    );
-  const id = events ? enrolledDeviceId(events, tokenId) : null;
+  const id =
+    (events ? enrolledDeviceId(events, tokenId) : null) || tokenDeviceId;
   if (!id) return null;
   try {
     return [

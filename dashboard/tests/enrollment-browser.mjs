@@ -186,6 +186,7 @@ const requestKey = (id) =>
 async function fixture({
   initial = [],
   failDevices = false,
+  activityUnavailable = false,
   width = 1280,
   theme = "light",
   install = agentInstall(),
@@ -209,6 +210,7 @@ async function fixture({
   const state = {
     devices: initial,
     failDevices,
+    activityUnavailable,
     tokens,
     events: [],
     install,
@@ -218,8 +220,9 @@ async function fixture({
     releaseToken: null,
     tokenRequest: null,
     activity: [],
-    // Whole-fleet reads, and reads of the one device the activity names.
+    // A whole-fleet read is a regression; typed-name checks are bounded.
     lists: 0,
+    nameLookups: [],
     deviceReads: [],
     revokes: [],
     statuses,
@@ -237,8 +240,44 @@ async function fixture({
         /* The page was closed while this read was pending. */
       }
     };
-    if (path === "/devices") {
-      state.lists++;
+    if (path === "/devices/inventory") {
+      state.nameLookups.push({
+        q: url.searchParams.get("q"),
+        pageSize: url.searchParams.get("page_size"),
+        status: url.searchParams.get("status"),
+      });
+      const query = (url.searchParams.get("q") || "").toLowerCase();
+      const revoked = url.searchParams.get("status") === "revoked";
+      const matched = state.devices.filter(
+        (candidate) =>
+          (candidate.status === "revoked") === revoked &&
+          candidate.name.toLowerCase().includes(query),
+      );
+      const counts = {
+        status: Object.fromEntries(
+          [
+            "applied",
+            "degraded",
+            "held",
+            "updating",
+            "check",
+            "failed",
+            "offline",
+            "paused",
+            "unmanaged",
+            "revoked",
+          ].map((name) => [name, 0]),
+        ),
+        views: Object.fromEntries(
+          [
+            "failing",
+            "not_on_desired",
+            "offline",
+            "paused",
+            "no_telemetry",
+          ].map((name) => [name, 0]),
+        ),
+      };
       return state.failDevices
         ? reply(
             {
@@ -249,7 +288,18 @@ async function fixture({
             },
             503,
           )
-        : reply(state.devices);
+        : reply({
+            items: matched.slice(0, 100),
+            total: matched.length,
+            page: 1,
+            page_size: 100,
+            counts,
+            device_groups: {},
+          });
+    }
+    if (path === "/devices") {
+      state.lists++;
+      return reply(state.devices);
     }
     const single = path.match(/^\/devices\/([^/]+)$/);
     if (single && method === "GET") {
@@ -269,6 +319,11 @@ async function fixture({
       return;
     }
     if (path === "/agent-install/activity") {
+      if (state.activityUnavailable)
+        return reply(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
       state.activity.push({
         at: Date.now(),
         since: url.searchParams.get("since"),
@@ -727,9 +782,8 @@ try {
         const polls = f.state.activity.length - started;
         expect(polls).toBeGreaterThanOrEqual(2);
         expect(polls).toBeLessThanOrEqual(4);
-        // Waiting reads the activity feed, not the fleet: at most the page's
-        // own slow refresh lists the devices, and no device is read yet.
-        expect(f.state.lists - listed).toBeLessThanOrEqual(1);
+        // Waiting reads the activity feed, never the full fleet.
+        expect(f.state.lists - listed).toBe(0);
         expect(f.state.deviceReads).toEqual([]);
         expect(f.state.activity.at(-1).since).toBe(
           f.state.tokens[0].created_at,
@@ -856,6 +910,26 @@ try {
     },
   );
   await check(
+    "a 5,000-device fleet never blocks command creation or downloads the full inventory",
+    async () => {
+      const initial = Array.from({ length: 5000 }, (_, index) =>
+        device({
+          id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+          name: `host-${index}`,
+        }),
+      );
+      const f = await fixture({ initial });
+      try {
+        await f.createCommand();
+        expect(f.state.posts).toBe(1);
+        expect(f.state.lists).toBe(0);
+        expect(f.state.nameLookups).toEqual([]);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
     "an existing device name blocks the command and leads to that device",
     async () => {
       const f = await fixture({ initial: [device({ last_seen: iso() })] });
@@ -880,18 +954,18 @@ try {
     },
   );
   await check(
-    "a failed inventory is not an empty fleet, and retry establishes the baseline",
+    "a failed optional name lookup is explained without downloading the fleet",
     async () => {
       const f = await fixture({ failDevices: true });
       try {
         await f.chooseMode();
-        await expect(f.page.getByRole("alert").first()).toContainText(
-          "Synthetic inventory unavailable",
+        await f.advanced();
+        await f.page.getByLabel("Device name", { exact: true }).fill("edge-01");
+        await expect(f.page.locator(".enroll-advanced-fields")).toContainText(
+          "Existing names couldn't be checked here",
         );
-        await expect(f.create).toBeDisabled();
-        f.state.failDevices = false;
-        await f.page.getByRole("button", { name: "Try again" }).first().click();
         await expect(f.create).toBeEnabled();
+        expect(f.state.lists).toBe(0);
         expect(f.state.posts).toBe(0);
       } finally {
         await f.context.close();
@@ -899,7 +973,53 @@ try {
     },
   );
   await check(
-    "a device revoked after enrolling is never reported as connected",
+    "a new device from another token never makes this command appear connected",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        f.state.devices = [device({ last_seen: iso(2000) })];
+        f.state.events = [
+          event({
+            outcome: "success",
+            token_id: "another-token",
+            device_id: deviceId,
+          }),
+        ];
+        await f.page.waitForTimeout(2300);
+        await expect(
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toHaveCount(0);
+        await expect(f.page.locator(".enroll-secret")).toBeVisible();
+        expect(f.state.deviceReads).toEqual([]);
+        expect(f.state.lists).toBe(0);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "an older server without token-linked activity fails closed",
+    async () => {
+      const f = await fixture({ activityUnavailable: true });
+      try {
+        await f.createCommand();
+        f.state.devices = [device({ last_seen: iso(2000) })];
+        await expect(f.page.locator(".enroll-page")).toContainText(
+          "won't mark it connected without a token-linked record",
+        );
+        await expect(
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toHaveCount(0);
+        await expect(f.page.locator(".enroll-secret")).toBeVisible();
+        expect(f.state.lists).toBe(0);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "a device revoked after connecting stops being reported as connected",
     async () => {
       const f = await fixture();
       try {
@@ -911,13 +1031,57 @@ try {
             reason_code: null,
           }),
         ];
+        f.state.devices = [device({ last_seen: iso(2000) })];
+        await expect(
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toBeVisible();
         f.state.devices = [device({ status: "revoked", last_seen: iso(2000) })];
         await expect(f.page.locator(".enroll-page")).toContainText(
           "edge-01's access is revoked",
+          { timeout: 12000 },
         );
         await expect(
           f.page.getByRole("heading", { name: "edge-01 is connected" }),
         ).toHaveCount(0);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "the connected-device watch pauses in a hidden tab and refreshes on return",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        f.state.events = [
+          event({ outcome: "success", device_id: deviceId, reason_code: null }),
+        ];
+        f.state.devices = [device({ last_seen: iso(2000) })];
+        await expect(
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toBeVisible();
+        await f.page.evaluate(() => {
+          window.__testVisibilityState = "hidden";
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            get: () => window.__testVisibilityState,
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        const reads = f.state.activity.length;
+        await f.page.waitForTimeout(5500);
+        expect(f.state.activity.length).toBe(reads);
+        f.state.devices = [device({ status: "revoked", last_seen: iso(2000) })];
+        await f.page.evaluate(() => {
+          window.__testVisibilityState = "visible";
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await expect(f.page.locator(".enroll-page")).toContainText(
+          "edge-01's access is revoked",
+          { timeout: 5000 },
+        );
+        expect(f.state.activity.length).toBeGreaterThan(reads);
       } finally {
         await f.context.close();
       }
@@ -1187,7 +1351,7 @@ try {
           ];
         });
         await expect(watchRegion(f.page)).toContainText(
-          /lab-full install command enrolled lab-full at \d{1,2}:\d{2}/,
+          /lab-full install command enrolled lab-full (?:at|on .+ at) \d{1,2}:\d{2}/,
         );
         await expect(requestCard(f.page)).toHaveCount(0);
         await expect.poll(() => f.stored()).toEqual([]);
@@ -1307,7 +1471,7 @@ try {
       });
       try {
         await expect(watchRegion(f.page)).toContainText(
-          /lab-full install command enrolled lab-full at \d{1,2}:\d{2}/,
+          /lab-full install command enrolled lab-full (?:at|on .+ at) \d{1,2}:\d{2}/,
         );
         await expect(requestCard(f.page)).toHaveCount(0);
         await expect.poll(() => f.stored()).toEqual([]);
@@ -1330,7 +1494,7 @@ try {
           name: "Check token request",
         });
         await expect(dialog).toContainText(
-          /lab-full install command enrolled lab-full at \d{1,2}:\d{2}.* Its token can't enroll another device, so there is nothing to cancel\./,
+          /lab-full install command enrolled lab-full (?:at|on .+ at) \d{1,2}:\d{2}.* Its token can't enroll another device, so there is nothing to cancel\./,
         );
         await expect(dialog).not.toContainText("cannot be retrieved");
         await expect(

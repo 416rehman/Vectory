@@ -21,6 +21,7 @@ import {
   can,
   withRequestDeadline,
   type Device,
+  type DeviceInventoryPage,
   type EnrollmentEvent,
   type AgentInstall,
   type Release,
@@ -173,6 +174,7 @@ function useEnrollmentWatch(
   command: Command | null,
   active: boolean,
   interval = 2000,
+  tokenDeviceId: string | null = null,
 ) {
   const [watch, setWatch] = useState<Watch>(idle);
   const tokenId = command?.tokenId,
@@ -184,7 +186,7 @@ function useEnrollmentWatch(
       unsupported = false;
     let running: AbortController | null = null;
     const tick = async () => {
-      if (stopped || running) return;
+      if (stopped || running || document.visibilityState === "hidden") return;
       const controller = new AbortController();
       running = controller;
       try {
@@ -200,7 +202,8 @@ function useEnrollmentWatch(
               30000,
               controller.signal,
             ).catch((error) => {
-              // An older server has no activity feed; the inventory still works.
+              // An older server has no activity feed. A token-linked usage
+              // record can still identify a device; otherwise stay unverified.
               if (error instanceof APIError && error.status === 404) {
                 unsupported = true;
                 return null;
@@ -211,7 +214,7 @@ function useEnrollmentWatch(
         const devices = await readWatchedDevices({
           events: activity ? activity.events : null,
           tokenId,
-          listAll: unsupported,
+          tokenDeviceId,
           signal: controller.signal,
         });
         if (!stopped)
@@ -231,14 +234,20 @@ function useEnrollmentWatch(
         if (running === controller) running = null;
       }
     };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") running?.abort();
+      else void tick();
+    };
     void tick();
     const timer = window.setInterval(() => void tick(), interval);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
       running?.abort();
     };
-  }, [tokenId, since, active, interval]);
+  }, [tokenId, since, active, interval, tokenDeviceId]);
   return watch;
 }
 
@@ -368,6 +377,45 @@ function CommandBlock({
   );
 }
 
+/** A small, optional name check; enrollment itself remains the authority. */
+function useExistingDevice(name: string, enabled: boolean) {
+  const normalized = name.trim().toLowerCase();
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!enabled || !normalized) {
+      setQuery("");
+      return;
+    }
+    const timer = window.setTimeout(() => setQuery(normalized), 250);
+    return () => window.clearTimeout(timer);
+  }, [enabled, normalized]);
+  const current = enabled && !!normalized && query === normalized;
+  const path = current
+    ? `/devices/inventory?q=${encodeURIComponent(query)}&page_size=100`
+    : null;
+  const active = useResource<DeviceInventoryPage | null>(path, null, 0, {
+    interval: 0,
+  });
+  const revoked = useResource<DeviceInventoryPage | null>(
+    path ? `${path}&status=revoked` : null,
+    null,
+    0,
+    { interval: 0 },
+  );
+  const existing = [
+    ...(active.data?.items || []),
+    ...(revoked.data?.items || []),
+  ].find((device) => device.name.toLowerCase() === normalized);
+  return {
+    existing,
+    checking:
+      enabled &&
+      !!normalized &&
+      (!current || active.loading || revoked.loading),
+    error: active.error || revoked.error,
+  };
+}
+
 export function Enrollment({
   user,
   notify,
@@ -379,7 +427,6 @@ export function Enrollment({
 }) {
   const details = useResource<unknown>("/agent-install", null);
   const tokens = useResource<Token[]>("/tokens", []);
-  const devices = useResource<Device[]>("/devices", []);
   // Agent updates: while they are on, how this host takes them is a step of
   // its own and its consent goes in the command. While they are off the step
   // doesn't exist and the command is what it always was.
@@ -439,7 +486,6 @@ export function Enrollment({
   // no service keeps its agent running.
   const [firstCheckIn, setFirstCheckIn] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [baseline, setBaseline] = useState<Set<string> | null>(null);
   const [tokenOpen, setTokenOpen] = useState(false);
   // What earlier install commands enrolled, said once when their reminders go.
   const [notes, setNotes] = useState<string[]>([]);
@@ -454,13 +500,6 @@ export function Enrollment({
     prefix: "",
   });
   const tokenFlow = useRef<EnrollmentTokenFlowHandle>(null);
-  useEffect(() => {
-    // Establish the baseline only after a successful inventory read. A failed
-    // read is not an empty fleet, and browser and server clocks may differ.
-    if (baseline === null && !devices.loading && !devices.error)
-      setBaseline(new Set(devices.data.map((device) => device.id)));
-  }, [baseline, devices.loading, devices.error, devices.data]);
-
   const defaults = platformDefaults(os);
   const updatesOn = agentUpdates.on;
   // The choice of how a host takes updates is made only for a system whose
@@ -489,11 +528,11 @@ export function Enrollment({
   const trustChoice = install ? effectiveTrust(install, choices.trust) : null;
   const trimmedName = name.trim();
   const nameValid = !trimmedName || deviceNamePattern.test(trimmedName);
-  const existing = trimmedName
-    ? devices.data.find(
-        (device) => device.name.toLowerCase() === trimmedName.toLowerCase(),
-      )
-    : undefined;
+  const {
+    existing,
+    checking: checkingName,
+    error: nameLookupError,
+  } = useExistingDevice(trimmedName, nameValid && !command);
   const accountValid =
     os === "windows" ||
     service === "none" ||
@@ -550,6 +589,7 @@ export function Enrollment({
     !!install?.agent_url &&
     !!mode &&
     nameValid &&
+    !checkingName &&
     !existing &&
     accountValid &&
     !pathProblem(stateDir) &&
@@ -565,8 +605,6 @@ export function Enrollment({
     !labels.error &&
     usesValid &&
     hoursValid &&
-    baseline !== null &&
-    !devices.error &&
     // With updates on, nothing is chosen for the host: how it takes them is
     // chosen first, even if that is Off.
     (!updatesChoice || (updateRead.chosen && !updateRead.problem));
@@ -576,26 +614,25 @@ export function Enrollment({
   const commandToken = command
     ? tokens.data.find((token) => token.id === command.tokenId)
     : undefined;
+  const tokenDeviceId = commandToken?.devices?.[0]?.id ?? null;
   const [watchSlowly, setWatchSlowly] = useState(false);
-  const watching =
-    !!command &&
-    baseline !== null &&
-    (finished !== command.tokenId || watchSlowly);
+  // Keep following this one device after its first check-in. Its identity or
+  // service may change while this page remains open, including revocation.
+  const watching = !!command;
   const watch = useEnrollmentWatch(
     command,
     watching,
-    watchSlowly ? 5000 : 2000,
+    watchSlowly || finished === command?.tokenId ? 5000 : 2000,
+    tokenDeviceId,
   );
-  const state =
-    command && baseline
-      ? progress(
-          watch.events,
-          watch.devices || devices.data,
-          command.tokenId,
-          baseline,
-          trimmedName,
-        )
-      : null;
+  const state = command
+    ? progress(
+        watch.events,
+        watch.devices || [],
+        command.tokenId,
+        tokenDeviceId,
+      )
+    : null;
   // A device whose agent nothing keeps running checked in only from setup;
   // keep watching (more slowly) for the check-in that shows it runs.
   const kept =
@@ -708,8 +745,6 @@ export function Enrollment({
     setFirstCheckIn(null);
     setShown(false);
     setName("");
-    setBaseline(null);
-    void devices.reload();
     void tokens.reload();
   }
   /** Revoke the displayed command's token, then offer a fresh command. */
@@ -723,8 +758,6 @@ export function Enrollment({
       setFinished(null);
       setFirstCheckIn(null);
       setShown(false);
-      setBaseline(null);
-      void devices.reload();
       notify("The command's token is revoked. Create a new command.", {
         tone: "success",
       });
@@ -872,14 +905,8 @@ export function Enrollment({
             retry={details.reload}
           />
         )}
-        {(tokens.error || devices.error) && (
-          <ErrorBox
-            message={tokens.error || devices.error}
-            retry={() => {
-              void tokens.reload();
-              void devices.reload();
-            }}
-          />
+        {tokens.error && (
+          <ErrorBox message={tokens.error} retry={tokens.reload} />
         )}
 
         <section
@@ -961,6 +988,12 @@ export function Enrollment({
                     Open existing device
                   </Button>
                 </div>
+              )}
+              {nameLookupError && trimmedName && !command && (
+                <p className="control-muted" role="status">
+                  Existing names couldn't be checked here. Setup will refuse
+                  this name if another device already uses it.
+                </p>
               )}
               {shownInstall?.agent_url && (
                 <TrustChoices
@@ -1352,15 +1385,13 @@ export function Enrollment({
                         ? "Choose how this host takes agent updates first."
                         : updatesChoice && updateRead.problem
                           ? updateRead.problem
-                          : devices.error
-                            ? "The device list must load before a command is created."
-                            : baseline === null
-                              ? "Checking existing device names…"
-                              : existing
-                                ? "Choose another device name."
-                                : trustChoice === "file" && !caFile.trim()
-                                  ? "Enter where the CA certificate is on the host, under Advanced."
-                                  : "Check the highlighted settings under Advanced."}
+                          : checkingName
+                            ? "Checking this device name…"
+                            : existing
+                              ? "Choose another device name."
+                              : trustChoice === "file" && !caFile.trim()
+                                ? "Enter where the CA certificate is on the host, under Advanced."
+                                : "Check the highlighted settings under Advanced."}
                   </span>
                 )}
                 {ready && blocked && !busy && operate && (
@@ -1736,6 +1767,13 @@ export function Enrollment({
                 )}
               </ol>
               {watch.error && <ErrorBox message={watch.error} />}
+              {watch.unsupported && !state?.enrolled && !tokenDeviceId && (
+                <p className="control-muted" role="status">
+                  This server can't identify which device used this command's
+                  token yet. Check the device on the Devices page; this page
+                  won't mark it connected without a token-linked record.
+                </p>
+              )}
               {state?.device && state.revoked && (
                 <div className="control-note">
                   <p>

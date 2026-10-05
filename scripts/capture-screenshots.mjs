@@ -333,15 +333,17 @@ async function waitForEditorCheck(page) {
         const panel = document.querySelector(".problems-panel");
         const summary = panel?.querySelector(".problems-toggle strong");
         const check = document.querySelector(".editor-check-button");
+        const feedbackId = check?.getAttribute("aria-describedby");
+        const verdict = feedbackId
+          ? document.getElementById(feedbackId)?.textContent?.trim()
+          : null;
         return (
           panel?.getAttribute("data-state") === "clean" &&
           summary?.textContent?.trim() === "No problems" &&
           ["passed", "device"].includes(
             check?.getAttribute("data-check-state"),
           ) &&
-          check
-            ?.getAttribute("title")
-            ?.startsWith("Vector 0.58 accepted this pipeline.")
+          verdict?.startsWith("Vector 0.58 accepted this pipeline.")
         );
       },
       null,

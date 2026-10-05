@@ -41,12 +41,12 @@ const paths = (fetch: ReturnType<typeof serve>) =>
   fetch.mock.calls.map(([input]) => String(input).replace(/^.*\/api\/v1/, ""));
 const read = (
   events: EnrollmentEvent[] | null,
-  listAll = false,
+  tokenDeviceId: string | null = null,
 ): ReturnType<typeof readWatchedDevices> =>
   readWatchedDevices({
     events,
     tokenId: TOKEN,
-    listAll,
+    tokenDeviceId,
     signal: new AbortController().signal,
   });
 
@@ -83,10 +83,16 @@ describe("what the Add device watch reads", () => {
     expect(paths(fetch)).toEqual([`/devices/${DEVICE}`]);
   });
 
-  it("lists the devices only on a server without the feed", async () => {
+  it("never lists the fleet when the feed is unavailable", async () => {
     const fetch = serve(() => new Response(JSON.stringify([device])));
-    expect(await read(null, true)).toEqual([device]);
-    expect(paths(fetch)).toEqual(["/devices"]);
+    expect(await read(null)).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("follows the exact device in this token's usage record when the feed has no event", async () => {
+    const fetch = serve(() => new Response(JSON.stringify(device)));
+    expect(await read(null, DEVICE)).toEqual([device]);
+    expect(paths(fetch)).toEqual([`/devices/${DEVICE}`]);
   });
 
   it("treats a device that is gone as nothing to follow", async () => {
