@@ -31,7 +31,9 @@ COPY agent/go.mod agent/go.sum ./agent/
 RUN cd agent && go mod download
 COPY agent ./agent
 COPY packaging/build-release.py ./packaging/build-release.py
+COPY packaging/dev-pki ./packaging/dev-pki
 RUN python3 packaging/build-release.py --no-archives --out /out
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /tools/vectory-local-pki ./packaging/dev-pki/main.go
 
 FROM timberio/vector:0.58.0-debian@sha256:1c1ea358c617ea0b23003d5af87f7a678b30f8f7096437e680380c47fc13d2d9 AS validator
 # The pinned Vector image can lag Debian security updates; refresh its installed packages.
@@ -58,6 +60,7 @@ COPY --from=dashboard /src/dashboard/dist /app/dashboard
 # mount over; a mirror entry replaces the bundled build for its platform.
 COPY --from=agents /out /app/agent-releases
 COPY deploy/backup.py /app/operations/backup.py
+COPY --from=agents /tools/vectory-local-pki /app/operations/vectory-local-pki
 USER 10001:10001
 WORKDIR /app
 ENV VECTORY_HTTP_ADDR=0.0.0.0:8080 VECTORY_AGENT_ADDR=0.0.0.0:8443 \

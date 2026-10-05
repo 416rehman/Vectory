@@ -8,10 +8,11 @@ Use Node 22 from the repository root:
 
 ```sh
 (cd help-center && npm ci)
+(cd dashboard && npm ci)
 node site/scripts/build.mjs
 ```
 
-The deployable static directory is `site/dist/`. The build checks local links, and `.github/workflows/public-site.yml` builds it on every push, pull request, and manual run. Only successful builds on `main` deploy. The workflow's `public-site` artifact is available for inspection for seven days.
+The deployable static directory is `site/dist/`. It includes the landing page, all guides at `/help/`, and the browser-only configuration designer at `/designer/`. The build checks local links, and `.github/workflows/public-site.yml` builds it on every push, pull request, and manual run. Only successful builds on `main` deploy. The workflow's `public-site` artifact is available for inspection for seven days.
 
 ## One-time Cloudflare setup
 

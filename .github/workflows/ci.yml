@@ -812,8 +812,8 @@ jobs:
             artifacts/end-to-end
             dashboard/test-results
           if-no-files-found: warn
-  # The Compose quickstart as a first-time operator runs it (docs/user/install-server.md):
-  # a private CA, protected secret files, deploy/.env, build, start, first
+  # The source-build contributor Compose path: a private CA, protected secret
+  # files, deploy/.env, build, start, first
   # administrator, a device enrolled through the published agent port with the
   # agent bundled in the image, and the validator's isolation, probed from inside.
   compose:

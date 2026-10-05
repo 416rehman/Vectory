@@ -9,7 +9,7 @@ next: false
 <p class="home-lead">Build a pipeline. Roll it out safely. Know what to do when something goes wrong.</p>
 
 <div class="help-paths">
-<a href="/help/quickstart/"><strong>Try it in 15 minutes →</strong><span>Run Vectory on one machine, connect it and deploy a pipeline.</span></a>
+<a href="/help/quickstart/"><strong>Try Vectory →</strong><span>Start the prebuilt Docker preview, then connect a test device.</span></a>
 <a href="/help/getting-started/"><strong>Understand Vectory →</strong><span>How the server, agents and Vector fit together, in two minutes.</span></a>
 <a href="/help/installation/"><strong>Connect a device →</strong><span>Install the agent on Linux and macOS with one command, or on Windows from PowerShell.</span></a>
 <a href="/help/pipelines/"><strong>Build pipelines →</strong><span>Work with the graph, component settings, VRL and tests.</span></a>

@@ -348,7 +348,9 @@ class CandidateVerification(unittest.TestCase):
             'vectory-0.1.0-1.x86_64.rpm', 'vectory-0.1.0-1.aarch64.rpm',
         }
         self.msi = f'vectory-{self.version}-windows-amd64.msi'
-        for name in (verifier.REQUIRED_CANDIDATE_FILES - {'catalog.json', 'CANDIDATE.json', 'SHA256SUMS', 'image-agent-catalog.json'}) | self.packages | {self.msi}:
+        self.preview = f'vectory-{self.version}-preview-linux-amd64.tar.gz'
+        self.serverkit = f'vectory-{self.version}-server-linux-amd64.tar.gz'
+        for name in (verifier.REQUIRED_CANDIDATE_FILES - {'catalog.json', 'CANDIDATE.json', 'SHA256SUMS', 'image-agent-catalog.json'}) | self.packages | {self.msi, self.preview, self.serverkit}:
             (self.root / name).write_bytes(self.non_agent_bytes(name))
         self.checksums()
 
@@ -363,6 +365,34 @@ class CandidateVerification(unittest.TestCase):
             return b'\xed\xab\xee\xdb' + bytes(92) + b'\x8e\xad\xe8\x01' + bytes(12)
         if name.endswith('.msi'):
             return b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1' + bytes(504)
+        if name.endswith(('-preview-linux-amd64.tar.gz', '-server-linux-amd64.tar.gz')):
+            stream = io.BytesIO()
+            prefix = name.removesuffix('.tar.gz') + '/'
+            kind = 'preview' if name.endswith('-preview-linux-amd64.tar.gz') else 'server'
+            files = {
+                'compose.yaml': b'services:\n  server:\n    image: vectory-server:candidate\n',
+                'README.md': f'# Vectory {kind} kit\n\nSynthetic fixture.\n'.encode(),
+                'LICENSE': b'license', 'NOTICE': b'notice',
+                'VERSION': b'0.1.0\n',
+            }
+            if kind == 'preview':
+                files['start.sh'] = b'#!/bin/sh\nexit 0\n'
+            else:
+                files['Caddyfile'] = b':443 { reverse_proxy server:8080 }\n'
+                files['.env.example'] = b'VECTORY_HOSTNAME=example.invalid\n'
+                files['start.sh'] = b'#!/bin/sh\nexit 0\n'
+            files['release-images.sh'] = b'#!/bin/sh\n# Shared image loader fixture.\n'
+            files['SHA256SUMS'] = ''.join(
+                f'{hashlib.sha256(files[part]).hexdigest()}  {part}\n'
+                for part in sorted(files)
+            ).encode()
+            with tarfile.open(fileobj=stream, mode='w:gz') as archive:
+                for part, content in files.items():
+                    member = tarfile.TarInfo(prefix + part)
+                    member.mode = 0o755 if part == 'start.sh' else 0o644
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+            return stream.getvalue()
         if name.endswith('-image.tar.gz'):
             stream = io.BytesIO()
             with tarfile.open(fileobj=stream, mode='w:gz') as archive:
@@ -415,7 +445,9 @@ class CandidateVerification(unittest.TestCase):
     def manifest(self, failed_job=None):
         env = os.environ.copy()
         for job, variable in [('packages', 'PACKAGES_RESULT'), ('msi', 'MSI_RESULT'),
-                              ('images', 'IMAGES_RESULT'), ('sbom', 'SBOM_RESULT')]:
+                              ('images', 'IMAGES_RESULT'), ('sbom', 'SBOM_RESULT'),
+                              ('starters', 'STARTERS_RESULT'),
+                              ('preview_smoke', 'PREVIEW_SMOKE_RESULT')]:
             env[variable] = 'failure' if job == failed_job else 'success'
         subprocess.run([sys.executable, str(Path(__file__).with_name('candidate-manifest.py')),
                         str(self.root)], env=env, check=True, capture_output=True, text=True)
@@ -428,8 +460,46 @@ class CandidateVerification(unittest.TestCase):
             for path in sorted(self.root.iterdir()) if path.name != 'SHA256SUMS'
         ), encoding='utf-8')
 
+    def rewrite_preview(self, replace=None, extra=None, symlink=None, mode_change=None):
+        """Mutate only the nested starter, then refresh outer candidate hashes."""
+        path = self.root / self.preview
+        records = []
+        with tarfile.open(path, 'r:gz') as source:
+            for member in source:
+                records.append((member.name, member.mode, source.extractfile(member).read()))
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode='w:gz') as archive:
+            for name, mode, data in records:
+                member = tarfile.TarInfo(name)
+                member.mode = mode
+                if mode_change and name.endswith('/' + mode_change[0]):
+                    member.mode = mode_change[1]
+                if name.endswith('/' + (symlink or '')) and symlink:
+                    member.type = tarfile.SYMTYPE
+                    member.linkname = '../outside'
+                    member.size = 0
+                    archive.addfile(member)
+                    continue
+                if replace and name.endswith('/' + replace[0]):
+                    data = replace[1]
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+            if extra:
+                member = tarfile.TarInfo(self.preview.removesuffix('.tar.gz') + '/' + extra)
+                member.mode = 0o644
+                member.size = 5
+                archive.addfile(member, io.BytesIO(b'large'))
+        path.write_bytes(stream.getvalue())
+        self.checksums()
+
     def test_complete_candidate_passes_strict_offline_verification(self):
-        self.assertEqual(self.manifest()['inventory_status'], 'complete')
+        manifest = self.manifest()
+        self.assertEqual(manifest['inventory_status'], 'complete')
+        self.assertEqual(manifest['parts']['preview'], [self.preview])
+        self.assertEqual(manifest['parts']['serverkit'], [self.serverkit])
+        self.assertEqual(len(manifest['parts']['agents']), 10)
+        self.assertNotIn(self.preview, manifest['parts']['agents'])
+        self.assertNotIn(self.serverkit, manifest['parts']['agents'])
         self.assertEqual(verifier.verify_candidate(self.root), 5)
         result = subprocess.run([sys.executable, str(Path(__file__).with_name('verify-release.py')),
                                  str(self.root)], capture_output=True, text=True)
@@ -438,6 +508,8 @@ class CandidateVerification(unittest.TestCase):
     def test_missing_release_parts_are_diagnostic_and_refused(self):
         for name in [
             'vectory_0.1.0_arm64.deb', self.msi,
+            self.preview,
+            self.serverkit,
             'vectory-server-image.tar.gz', 'vectory-validator-image.spdx.json',
             'vectory-agent.cdx.json', 'license-inventory.json',
             'npm-dependency-audit.json', 'THIRD-PARTY-INVENTORY.md',
@@ -493,12 +565,38 @@ class CandidateVerification(unittest.TestCase):
         with self.assertRaises(ValueError):
             verifier.verify_candidate(self.root)
 
+    def test_preview_rejects_modified_member_and_embedded_images(self):
+        self.assertEqual(self.manifest()['inventory_status'], 'complete')
+        self.rewrite_preview(replace=('README.md', b'# Altered preview\n'))
+        with self.assertRaisesRegex(ValueError, 'preview checksum mismatch: README'):
+            verifier.candidate_inventory(self.root, require_status=False)
+        self.assertEqual(self.manifest()['inventory_status'], 'incomplete-diagnostic')
+
+        (self.root / self.preview).write_bytes(self.non_agent_bytes(self.preview))
+        self.rewrite_preview(extra='vectory-server-image.tar.gz')
+        with self.assertRaisesRegex(ValueError, 'unexpected preview member'):
+            verifier.candidate_inventory(self.root, require_status=False)
+
+    def test_preview_rejects_a_linked_starter(self):
+        self.assertEqual(self.manifest()['inventory_status'], 'complete')
+        self.rewrite_preview(symlink='start.sh')
+        with self.assertRaisesRegex(ValueError, 'unexpected preview member'):
+            verifier.candidate_inventory(self.root, require_status=False)
+
+    def test_preview_rejects_nonexecutable_starter(self):
+        self.assertEqual(self.manifest()['inventory_status'], 'complete')
+        self.rewrite_preview(mode_change=('start.sh', 0o644))
+        with self.assertRaisesRegex(ValueError, 'unsafe or unexpected preview member'):
+            verifier.candidate_inventory(self.root, require_status=False)
+
     def test_empty_or_malformed_non_agent_deliverables_are_refused(self):
         self.assertEqual(self.manifest()['inventory_status'], 'complete')
         for name, bad in [
             ('vectory_0.1.0_amd64.deb', b'not an ar package'),
             ('vectory-0.1.0-1.x86_64.rpm', b'not an rpm package'),
             (self.msi, b'not an MSI'),
+            (self.preview, b'not a preview gzip tar'),
+            (self.serverkit, b'not a server gzip tar'),
             ('vectory-server-image.tar.gz', b'not a gzip tar'),
             ('vectory-agent.cdx.json', b''),
             ('vectory-dashboard.cdx.json', b'{}'),

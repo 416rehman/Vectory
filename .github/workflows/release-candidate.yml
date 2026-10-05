@@ -2,7 +2,8 @@ name: release candidate (no publication)
 # An unsigned development candidate, kept only as workflow artifacts: agents
 # for every target with their archives and catalog, .deb and .rpm packages
 # (installed and removed in containers), an MSI (installed and removed on
-# Windows), the server and validator images, CycloneDX SBOMs for the Rust, Go
+# Windows), small source-free preview and server starters, the server and
+# validator images, CycloneDX SBOMs for the Rust, Go
 # and npm dependencies, the npm advisory audit, a license inventory, and
 # SHA256SUMS over everything.
 # Nothing is signed, pushed or published; every catalog entry says signed:false.
@@ -46,6 +47,9 @@ jobs:
       - name: Reject unsafe or incomplete release archives
         timeout-minutes: 10
         run: python3 packaging/test_verify_release.py
+      - name: Unit-test the local preview certificate helper
+        timeout-minutes: 10
+        run: go test packaging/dev-pki/main.go packaging/dev-pki/main_test.go
       - name: Build the agents, archives and catalog for every target
         timeout-minutes: 10
         run: python3 packaging/build-release.py --out artifacts/releases
@@ -287,6 +291,252 @@ jobs:
           name: candidate-images
           path: artifacts/images
           if-no-files-found: error
+  starters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check interrupted setup and offline restart recovery
+        run: python3 deploy/test-starter-recovery.py
+      - name: Build the small preview and server starter bundles
+        run: python3 packaging/build-preview-bundle.py --out artifacts/starters
+      - name: Verify both starter archives before uploading them
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          import runpy
+          from pathlib import Path
+
+          source = Path('agent/internal/agent/types.go').read_text(encoding='utf-8')
+          version = re.search(r'^const Version = "([^"]+)"$', source, re.MULTILINE).group(1)
+          verify = runpy.run_path('packaging/verify-release.py')['required_starter_bundle']
+          for kind in ('preview', 'server'):
+              verify(Path(f'artifacts/starters/vectory-{version}-{kind}-linux-amd64.tar.gz'), version, kind)
+          PY
+      - name: Check the server kit uses only prebuilt images and an isolated validator
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("agent/internal/agent/types.go").read(), re.M).group(1))')
+          mkdir -p "$RUNNER_TEMP/server-kit-config"
+          tar -xzf "artifacts/starters/vectory-$version-server-linux-amd64.tar.gz" -C "$RUNNER_TEMP/server-kit-config"
+          kit="$RUNNER_TEMP/server-kit-config/vectory-$version-server-linux-amd64"
+          export VECTORY_SERVER_IMAGE=vectory-server:ci-check
+          export VECTORY_VALIDATOR_IMAGE=vectory-validator:ci-check
+          export VECTORY_HOSTNAME=example.invalid
+          export VECTORY_BIND_IP=127.0.0.1
+          export VECTORY_SERVER_PROJECT=vectory-server-check
+          docker compose --project-name "$VECTORY_SERVER_PROJECT" --env-file "$kit/.env.example" -f "$kit/compose.yaml" config --format json > "$RUNNER_TEMP/server-kit-config.json"
+          python3 - "$RUNNER_TEMP/server-kit-config.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          config = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          services = config['services']
+          assert set(services) == {'server', 'validator', 'proxy'}
+          assert all('build' not in service for service in services.values()), 'server kit unexpectedly builds from source'
+          assert services['server']['image'] == 'vectory-server:ci-check'
+          assert services['validator']['image'] == 'vectory-validator:ci-check'
+          assert services['server']['user'] == '10001:10001'
+          assert services['validator']['user'] == '10002:10002'
+          assert config['networks']['validation']['internal'] is True
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: candidate-starters
+          path: artifacts/starters
+          if-no-files-found: error
+  preview-smoke:
+    name: starter smoke (preview and server)
+    needs: [images, starters]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: { name: candidate-images, path: artifacts/images }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: { name: candidate-starters, path: artifacts/starters }
+      - name: Start the released preview using saved candidate images, then check setup
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("agent/internal/agent/types.go").read(), re.M).group(1))')
+          release_dir="$RUNNER_TEMP/preview-release"
+          extract_dir="$RUNNER_TEMP/preview-extract"
+          mkdir -p "$release_dir" "$extract_dir"
+          cp artifacts/images/vectory-server-image.tar.gz artifacts/images/vectory-validator-image.tar.gz "$release_dir/"
+          (cd "$release_dir" && sha256sum vectory-server-image.tar.gz vectory-validator-image.tar.gz > SHA256SUMS)
+          python3 - "$version" <<'PY'
+          import runpy
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          archive = Path(f'artifacts/starters/vectory-{version}-preview-linux-amd64.tar.gz')
+          runpy.run_path('packaging/verify-release.py')['required_starter_bundle'](archive, version, 'preview')
+          PY
+          tar -xzf "artifacts/starters/vectory-$version-preview-linux-amd64.tar.gz" -C "$extract_dir"
+          starter="$extract_dir/vectory-$version-preview-linux-amd64"
+          project="vectoryci${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
+          export VECTORY_PREVIEW_RELEASE_DIR="$release_dir"
+          export VECTORY_PREVIEW_PROJECT="$project"
+          export VECTORY_PREVIEW_WEB_PORT=18080
+          export VECTORY_PREVIEW_AGENT_PORT=18443
+          export VECTORY_PREVIEW_VALIDATOR_PORT=18081
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            if [ -f "$starter/.preview.env" ]; then
+              "$starter/start.sh" stop >> "$RUNNER_TEMP/preview-start.log" 2>&1 || result=1
+              docker compose --project-name "$project" --env-file "$starter/.preview.env" -f "$starter/compose.yaml" down -v >> "$RUNNER_TEMP/preview-start.log" 2>&1 || result=1
+            fi
+            # The PKI volume is external so Compose deliberately retains it.
+            if docker volume inspect "${project}_pki" > /dev/null 2>&1; then
+              docker volume rm "${project}_pki" >> "$RUNNER_TEMP/preview-start.log" 2>&1 || result=1
+            fi
+            rm -f "$starter/setup-secret.txt" "$RUNNER_TEMP/preview-start.log"
+            exit "$result"
+          }
+          trap cleanup EXIT
+          # The guided starter displays a bootstrap secret. Keep its output off
+          # the Actions log and never upload this private temporary file.
+          umask 077
+          if ! "$starter/start.sh" start > "$RUNNER_TEMP/preview-start.log" 2>&1; then
+            echo '::error::The saved candidate images did not start the preview.'
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 6 --retry-delay 2 http://127.0.0.1:18080/api/v1/status > "$RUNNER_TEMP/preview-status.json"
+          curl --fail --silent --show-error --retry 6 --retry-delay 2 http://127.0.0.1:18080/ > "$RUNNER_TEMP/preview-index.html"
+          python3 - "$RUNNER_TEMP/preview-status.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          status = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          assert status['initialized'] is False
+          assert status.get('setup_hint')
+          PY
+          grep -q Vectory "$RUNNER_TEMP/preview-index.html"
+          test -s "$starter/ca.pem"
+          test -s "$starter/setup-secret.txt"
+          test "$(stat -c %a "$starter/setup-secret.txt")" = 600
+          echo 'Candidate images served a healthy loopback preview and reported first-account setup available; no device activation was attempted.'
+      - name: Start the released server kit with verified TLS, bootstrap and resume
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("agent/internal/agent/types.go").read(), re.M).group(1))')
+          project="vectoryserverci${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
+          extract_dir="$RUNNER_TEMP/serverkit-extract-$project"
+          fixture_dir="$RUNNER_TEMP/serverkit-fixture-$project"
+          log="$RUNNER_TEMP/serverkit-$project.log"
+          mkdir -p "$extract_dir" "$fixture_dir"
+          kit="$extract_dir/vectory-$version-server-linux-amd64"
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            if [ -f "$kit/.env" ]; then
+              "$kit/start.sh" stop >> "$log" 2>&1 || result=1
+              docker compose --project-name "$project" --env-file "$kit/.env" -f "$kit/compose.yaml" down -v >> "$log" 2>&1 || result=1
+            fi
+            for suffix in data secrets fixture; do
+              volume="${project}_$suffix"
+              if docker volume inspect "$volume" > /dev/null 2>&1; then
+                docker volume rm "$volume" >> "$log" 2>&1 || result=1
+              fi
+            done
+            rm -f "$fixture_dir"/* "$log"
+            rmdir "$fixture_dir" || result=1
+            exit "$result"
+          }
+          trap cleanup EXIT
+          umask 077
+          python3 - "$version" <<'PY'
+          import runpy
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          archive = Path(f'artifacts/starters/vectory-{version}-server-linux-amd64.tar.gz')
+          runpy.run_path('packaging/verify-release.py')['required_starter_bundle'](archive, version, 'server')
+          PY
+          tar -xzf "artifacts/starters/vectory-$version-server-linux-amd64.tar.gz" -C "$extract_dir"
+          docker volume create --label io.vectory.ci=true "${project}_fixture" > /dev/null
+          fixture_mount="type=volume,src=${project}_fixture,dst=/var/lib/vectory"
+          helper=(docker run --rm --network none --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount "$fixture_mount" --entrypoint /app/operations/vectory-local-pki vectory-server:candidate)
+          exporter=(docker run --rm --network none --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount "$fixture_mount" --entrypoint cat vectory-server:candidate)
+          "${helper[@]}" --out /var/lib/vectory/pki --hosts localhost,127.0.0.1 --days 7 > "$log" 2>&1
+          "${helper[@]}" --out /var/lib/vectory/wrong --hosts localhost,127.0.0.1 --days 7 >> "$log" 2>&1
+          "${exporter[@]}" /var/lib/vectory/pki/ca.pem > "$fixture_dir/ca.pem"
+          "${exporter[@]}" /var/lib/vectory/pki/server.pem > "$fixture_dir/chain.pem"
+          "${exporter[@]}" /var/lib/vectory/pki/ca.pem >> "$fixture_dir/chain.pem"
+          "${exporter[@]}" /var/lib/vectory/pki/server-key.pem > "$fixture_dir/key.pem"
+          "${exporter[@]}" /var/lib/vectory/wrong/ca.pem > "$fixture_dir/wrong-ca.pem"
+          test "$(stat -c %a "$fixture_dir/key.pem")" = 600
+          export VECTORY_SERVER_PROJECT="$project"
+          export VECTORY_HOSTNAME=localhost
+          export VECTORY_BIND_IP=127.0.0.1
+          export VECTORY_TLS_CERT_FILE="$fixture_dir/chain.pem"
+          export VECTORY_TLS_KEY_FILE="$fixture_dir/key.pem"
+          export VECTORY_PREVIEW_RELEASE_DIR="$RUNNER_TEMP/preview-release"
+          # The guided starter prints the bootstrap secret. Keep all its output
+          # private, including stop and resume, and never upload the fixture.
+          if ! "$kit/start.sh" start >> "$log" 2>&1; then
+            echo '::error::The saved candidate images did not start the server kit.'
+            exit 1
+          fi
+          server_compose=(docker compose --project-name "$project" --env-file "$kit/.env" -f "$kit/compose.yaml")
+          curl --noproxy '*' --fail --silent --show-error --retry 6 --retry-delay 2 --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 https://localhost/api/v1/status > "$fixture_dir/status.json"
+          python3 - "$fixture_dir/status.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          assert json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))['initialized'] is False
+          PY
+          # The agent listener must present the expected CA and reject another.
+          curl --noproxy '*' --silent --show-error --cacert "$fixture_dir/ca.pem" --resolve localhost:8443:127.0.0.1 https://localhost:8443/ -o /dev/null
+          wrong_ca_result=0
+          curl --noproxy '*' --silent --show-error --cacert "$fixture_dir/wrong-ca.pem" --resolve localhost:8443:127.0.0.1 https://localhost:8443/ -o /dev/null 2> "$fixture_dir/wrong-ca-error.txt" || wrong_ca_result=$?
+          test "$wrong_ca_result" = 60
+          "${server_compose[@]}" exec -T server cat /run/secrets/bootstrap > "$fixture_dir/setup-secret.txt"
+          python3 - "$fixture_dir/setup-secret.txt" "$fixture_dir/bootstrap.json" <<'PY'
+          import json
+          import secrets
+          import sys
+          from pathlib import Path
+
+          secret = Path(sys.argv[1]).read_text(encoding='utf-8').strip()
+          assert len(secret) >= 24
+          payload = {
+              'name': 'Candidate smoke administrator',
+              'email': 'candidate-smoke@example.invalid',
+              'password': secrets.token_urlsafe(32),
+              'bootstrap_secret': secret,
+          }
+          Path(sys.argv[2]).write_text(json.dumps(payload), encoding='utf-8')
+          PY
+          curl --noproxy '*' --fail --silent --show-error --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 --header 'Content-Type: application/json' --data-binary @"$fixture_dir/bootstrap.json" https://localhost/api/v1/bootstrap > "$fixture_dir/bootstrap-response.json"
+          "${server_compose[@]}" exec -T server curl --fail --silent http://127.0.0.1:8080/api/v1/status > "$fixture_dir/status.json"
+          python3 - "$fixture_dir/status.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          assert json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))['initialized'] is True
+          PY
+          "$kit/start.sh" stop >> "$log" 2>&1
+          "$kit/start.sh" start >> "$log" 2>&1
+          curl --noproxy '*' --fail --silent --show-error --retry 6 --retry-delay 2 --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 https://localhost/api/v1/status > "$fixture_dir/status.json"
+          python3 - "$fixture_dir/status.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          assert json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))['initialized'] is True
+          PY
+          echo 'Saved candidate images and the source-free server kit passed verified TLS, first-admin bootstrap and state-preserving restart; no device activation was attempted.'
   sbom:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -354,7 +604,7 @@ jobs:
           path: artifacts/sbom
           if-no-files-found: error
   assemble:
-    needs: [agents, packages, msi, images, sbom]
+    needs: [agents, packages, msi, images, sbom, starters, preview-smoke]
     if: ${{ !cancelled() && needs.agents.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -371,6 +621,8 @@ jobs:
           MSI_RESULT: ${{ needs.msi.result }}
           IMAGES_RESULT: ${{ needs.images.result }}
           SBOM_RESULT: ${{ needs.sbom.result }}
+          STARTERS_RESULT: ${{ needs.starters.result }}
+          PREVIEW_SMOKE_RESULT: ${{ needs['preview-smoke'].result }}
         run: |
           set -euo pipefail
           out=artifacts/unsigned-release-candidate

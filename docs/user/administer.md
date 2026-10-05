@@ -73,7 +73,7 @@ An administrator can choose **Reset two-factor** for a person who lost both, con
 
 The data volume holds the database and the server's keys, and they only work together. Back them up together with the supplied tool, which uses SQLite's backup API and checks integrity. Copying a running database file can miss recent changes.
 
-With Compose, from the `deploy` folder:
+With Compose, from your server kit folder (or `deploy` for a contributor source build):
 
 ```sh
 docker compose exec server python3 /app/operations/backup.py backup \
@@ -84,7 +84,7 @@ docker compose cp server:/var/lib/vectory/backup-2026-09-29 /srv/backups/
 Use a new folder name for each backup.
 
 - Keep backups encrypted and access-restricted, off the server: they contain the server's private keys. With [agent updates](agent-updates.md) on and **This server signs** chosen, that includes the release key: whoever holds the backup can approve builds that hosts install as root. A key kept offline is never in a backup.
-- Back up your TLS files, `deploy/.env` and any agent download mirror separately.
+- Back up your TLS files, `.env` and any agent download mirror separately. With the prebuilt server kit, the TLS pair and setup secret are in the private `vectory_secrets` volume. Retain that volume alongside the complete data backup, using your own project prefix if you changed it.
 - Avoid rotating signing keys or upgrading while a backup runs. For the strongest guarantee, stop the server first.
 - The backup's manifest lists file hashes. It detects damage; it isn't a signature.
 
@@ -120,9 +120,11 @@ If the server's log says it holds a release key whose sealed private half can't 
 
 <!-- steps -->
 1. [Back up](#back-up-the-complete-state) and test restoring the backup.
-2. Note the current image digests and keep a copy of `deploy/.env`.
+2. Note the current image digests and keep a copy of your server kit's `.env` and Compose configuration.
 3. Try the new version against a copy of the restored state first. Confirm the database migrated, people can sign in and representative devices check in.
-4. Upgrade production: update the source, then `docker compose up -d --build` from `deploy`.
+4. Download and verify the new release's prebuilt images using its [server kit](install-server.md), load them, and update the image references in your existing Compose configuration. From that directory, run `docker compose up -d --wait`. Keep the existing data volume, TLS files, and environment settings.
+
+Server upgrades use prebuilt images; no source checkout or compilation is needed. Cross-release upgrades have not yet been qualified for this first developer preview, so test the exact transition against restored state before changing a consequential installation.
 
 The first start after an upgrade migrates the database before the server answers. Some upgrades build an index over stored telemetry, so that start can take a while when the telemetry table is large. Let it finish.
 

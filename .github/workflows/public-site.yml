@@ -21,18 +21,29 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: help-center/package-lock.json
+          cache-dependency-path: |
+            help-center/package-lock.json
+            dashboard/package-lock.json
       - name: Install Help center dependencies
         run: npm ci
         working-directory: help-center
+      - name: Install standalone designer dependencies
+        run: npm ci
+        working-directory: dashboard
       - name: Build landing page and public documentation
         run: node site/scripts/build.mjs
       - name: Test public content and documentation links
         run: node --test site/tests/site.test.mjs
+      - name: Install the test browser
+        run: npx playwright install --with-deps chromium
+        working-directory: dashboard
+      - name: Check the standalone designer in a browser
+        run: node site/tests/designer-browser.mjs
       - name: Verify deployable entry points
         run: |
           test -s site/dist/index.html
           test -s site/dist/help/index.html
+          test -s site/dist/designer/index.html
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: public-site

@@ -32,9 +32,8 @@ What each part needs, where that is established. "Not yet established" means not
 | Vector on a device | 0.58.0 | Any 0.58.x release is accepted; pre-releases are refused. Vector's own OS requirements aren't recorded here yet: check the [Vector 0.58.0 release notes](https://vector.dev/releases/0.58.0/). |
 | Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
 | Browser | Not yet established | Chromium is tested on every change; Firefox and WebKit run four first-use flows on demand (see [Browsers](#browsers)). |
-| Build the agent from source | Go 1.26.0 | Declared in `agent/go.mod`; builds and tests use Go 1.26.8. |
-| Build the server from source | Rust 1.88 | Declared as `rust-version` in `server/Cargo.toml`; builds and tests use Rust 1.94.0. |
-| Build the dashboard from source | Not yet established | No `engines` field is declared; builds and tests use Node 22. |
+
+The prebuilt Linux x86-64 server and preview kits require Docker Engine with Compose v2. Normal installation needs no Rust, Go, Node, or compiler. Other server architectures and Docker Desktop installations are not qualified yet. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
 
 ## Tested on
 

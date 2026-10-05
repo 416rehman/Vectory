@@ -29,7 +29,7 @@ REQUIRED_CANDIDATE_FILES = {
     'source.spdx.json', 'THIRD-PARTY-INVENTORY.md', 'SOURCE-INPUTS.json',
     'npm-dependency-audit.json', 'install.log', 'uninstall.log',
 }
-REQUIRED_JOBS = ('packages', 'msi', 'images', 'sbom')
+REQUIRED_JOBS = ('packages', 'msi', 'images', 'sbom', 'starters', 'preview_smoke')
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_TEXT_BYTES = 32 * 1024 * 1024
 MAX_AGENT_CATALOG_BYTES = 1024 * 1024
@@ -47,6 +47,14 @@ MAX_IMAGE_MEMBERS = 10_000
 MAX_IMAGE_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_READ_BYTES = 16 * 1024 * 1024
 MAX_IMAGE_PATH_BYTES = 1024
+MAX_PREVIEW_BUNDLE_BYTES = 4 * 1024 * 1024
+MAX_PREVIEW_UNPACKED_BYTES = 8 * 1024 * 1024
+MAX_PREVIEW_MEMBER_BYTES = 1024 * 1024
+STARTER_FILES = {
+    'preview': {'start.sh', 'release-images.sh', 'compose.yaml', 'README.md', 'LICENSE', 'NOTICE', 'VERSION', 'SHA256SUMS'},
+    'server': {'start.sh', 'release-images.sh', 'compose.yaml', 'Caddyfile', '.env.example',
+               'README.md', 'LICENSE', 'NOTICE', 'VERSION', 'SHA256SUMS'},
+}
 
 
 def sha(p):
@@ -386,6 +394,85 @@ def required_msi(path):
             raise ValueError(f'{path.name} is not an MSI compound file')
 
 
+class BoundedPreviewReader:
+    """Bound an untrusted small starter tar before tarfile expands it."""
+
+    def __init__(self, source, name):
+        self.source = source
+        self.name = name
+        self.total = 0
+
+    def read(self, size):
+        if size < 0 or size > 1024 * 1024:
+            raise ValueError(f'{self.name} requests an oversized preview bundle read')
+        chunk = self.source.read(size)
+        self.total += len(chunk)
+        if self.total > MAX_PREVIEW_UNPACKED_BYTES:
+            raise ValueError(f'{self.name} exceeds its expanded preview bundle size limit')
+        return chunk
+
+
+def required_starter_bundle(path, version, kind):
+    """Require a small checksum-bound kit without duplicated image layers."""
+    required_file(path, MAX_PREVIEW_BUNDLE_BYTES)
+    files = STARTER_FILES[kind]
+    prefix = f'vectory-{version}-{kind}-linux-amd64/'
+    expected = {prefix + name for name in files}
+    members = {}
+    try:
+        with gzip.open(path, 'rb') as compressed:
+            source = BoundedPreviewReader(compressed, path.name)
+            with tarfile.open(fileobj=source, mode='r|', tarinfo=BoundedTarInfo) as archive:
+                for member in archive:
+                    if (member.name not in expected or member.name in members
+                            or not member.isfile() or not 0 < member.size <= MAX_PREVIEW_MEMBER_BYTES
+                            or member.mode != (0o755 if member.name == prefix + 'start.sh' else 0o644)):
+                        raise ValueError(f'{path.name} has an unsafe or unexpected {kind} member: {member.name}')
+                    contents = archive.extractfile(member)
+                    if contents is None:
+                        raise ValueError(f'{path.name} has an unreadable {kind} member')
+                    data = contents.read(MAX_PREVIEW_MEMBER_BYTES + 1)
+                    if len(data) != member.size:
+                        raise ValueError(f'{path.name} has an incomplete {kind} member: {member.name}')
+                    members[member.name.removeprefix(prefix)] = (data, member.mode)
+                # Tar iteration can stop before the gzip footer. Drain its end
+                # padding and the source to reject truncated or trailing data.
+                zero_tail = 0
+                for chunk in iter(lambda: archive.fileobj.read(1024 * 1024), b''):
+                    zero_tail += len(chunk)
+                    if chunk.strip(b'\0'):
+                        raise ValueError(f'{path.name} has nonzero data after the {kind} tar end marker')
+                if zero_tail < 512:
+                    raise ValueError(f'{path.name} lacks a complete {kind} tar end marker')
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                if chunk.strip(b'\0'):
+                    raise ValueError(f'{path.name} has nonzero data after the {kind} tar end marker')
+    except (OSError, EOFError, tarfile.TarError) as error:
+        raise ValueError(f'{path.name} is not an intact {kind} gzip tar') from error
+    if set(members) != files:
+        raise ValueError(f'{path.name} {kind} member inventory differs from the release contract')
+    script = 'start.sh'
+    if not members[script][1] & 0o111 or not members[script][0].startswith(b'#!'):
+        raise ValueError(f'{path.name} {kind} starter is not an executable shell script')
+    try:
+        if members['VERSION'][0].decode('utf-8').strip() != version:
+            raise ValueError(f'{path.name} {kind} version differs from release agents')
+        lines = members['SHA256SUMS'][0].decode('utf-8').splitlines()
+    except UnicodeError as error:
+        raise ValueError(f'{path.name} has non-UTF-8 {kind} metadata') from error
+    sums = {}
+    for line in lines:
+        match = re.fullmatch(r'([0-9a-f]{64})  ([A-Za-z0-9._-]+)', line)
+        if match is None or match.group(2) in sums:
+            raise ValueError(f'{path.name} has invalid {kind} checksums')
+        sums[match.group(2)] = match.group(1)
+    if set(sums) != files - {'SHA256SUMS'}:
+        raise ValueError(f'{path.name} {kind} checksum inventory differs')
+    for name, digest in sums.items():
+        if hashlib.sha256(members[name][0]).hexdigest() != digest:
+            raise ValueError(f'{path.name} {kind} checksum mismatch: {name}')
+
+
 class BoundedImageReader:
     """Count every expanded byte, including tar padding and trailing data."""
 
@@ -522,13 +609,15 @@ def required_sbom(path):
         raise ValueError(f'{path.name} has no usable SBOM document and components')
 
 
-def non_agent_contents(directory, debs, rpms, msi):
+def non_agent_contents(directory, debs, rpms, msi, preview, serverkit, version):
     """Check bounded shape and file signatures, not native install behavior."""
     for name in debs:
         required_deb(directory / name)
     for name in rpms:
         required_rpm(directory / name)
     required_msi(directory / msi)
+    required_starter_bundle(directory / preview, version, 'preview')
+    required_starter_bundle(directory / serverkit, version, 'server')
     for name in ('vectory-server-image.tar.gz', 'vectory-validator-image.tar.gz'):
         required_image(directory / name)
     for name in ('vectory-server-image.spdx.json', 'vectory-validator-image.spdx.json',
@@ -578,11 +667,13 @@ def candidate_inventory(directory, require_status=True):
     debs = {f'vectory_{deb_version}_{arch}.deb' for arch in ('amd64', 'arm64')}
     rpms = {f'vectory-{rpm_version}-1.{arch}.rpm' for arch in ('x86_64', 'aarch64')}
     msi = f'vectory-{version}-windows-amd64.msi'
-    expected = REQUIRED_CANDIDATE_FILES | agents | debs | rpms | {msi}
+    preview = f'vectory-{version}-preview-linux-amd64.tar.gz'
+    serverkit = f'vectory-{version}-server-linux-amd64.tar.gz'
+    expected = REQUIRED_CANDIDATE_FILES | agents | debs | rpms | {msi, preview, serverkit}
     missing, extra = expected - names, names - expected
     if missing or extra:
         raise ValueError(f'candidate file inventory differs: missing {sorted(missing)}, extra {sorted(extra)}')
-    non_agent_contents(directory, debs, rpms, msi)
+    non_agent_contents(directory, debs, rpms, msi, preview, serverkit, version)
 
     manifest = required_json(directory / 'CANDIDATE.json')
     if require_status and manifest.get('inventory_status') != 'complete':
@@ -598,6 +689,8 @@ def candidate_inventory(directory, require_status=True):
         'agents': sorted(agents),
         'packages': sorted(debs | rpms),
         'msi': [msi],
+        'preview': [preview],
+        'serverkit': [serverkit],
         'images': ['vectory-server-image.tar.gz', 'vectory-validator-image.tar.gz'],
         'sbom': sorted(name for name in names if name.endswith('.cdx.json')),
         'license_inventory': ['THIRD-PARTY-LICENSES.md'],
@@ -638,4 +731,4 @@ if __name__ == '__main__':
         print(f'Verified {count} target agents, their offline archives, checksums and Linux ELF structure. Remaining release parts have not been verified.')
     else:
         count = verify_candidate(args.directory)
-        print(f'Verified complete unsigned candidate: {count} target agents, package/MSI format headers, Docker-save image structure, SBOMs, license inventory, successful release jobs, checksums and Linux ELF structure. Native installs and docker load remain separate gates.')
+        print(f'Verified complete unsigned candidate: {count} target agents, package/MSI format headers, preview and server starter bundles, Docker-save image structure, SBOMs, license inventory, successful release jobs, checksums and Linux ELF structure. This offline check does not repeat native installs, Docker loading or production TLS deployment.')

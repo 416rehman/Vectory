@@ -1,5 +1,6 @@
 node_modules/
 dashboard/dist/
+dashboard/dist-designer/
 help-center/dist/
 help-center/.astro/
 dashboard/.astro/

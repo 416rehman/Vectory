@@ -1,10 +1,12 @@
 # Server configuration
 
-Every environment variable that `vectory-server`, the validator, Docker Compose and the local preview read. With Compose, set them in `deploy/.env`; most installations only need the four in [Install the server](install-server.md#2-configure).
+Every environment variable that `vectory-server`, the validator, Docker Compose and the local preview read. The [prebuilt server kit](install-server.md) creates its `.env` through guided setup. For a manual source deployment, use `deploy/.env` and the Compose settings below.
 
 ## Compose settings
 
-`deploy/compose.yaml` reads these from `deploy/.env` and passes the right values to each container.
+The prebuilt [server kit](install-server.md) writes `.env` during guided setup and uses image-only Compose. On the first start, it reads your hostname, TLS file paths and bind address, copies the TLS pair into its private Docker volume, and generates the setup secret there. Later starts use the retained files and image settings.
+
+The table below describes the equivalent manual Compose settings. The contributor source Compose file, `deploy/compose.yaml`, reads them from `deploy/.env`; ordinary installation uses the prebuilt kit.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -79,7 +81,19 @@ The validator container (`vector-validator`) reads these.
 
 ## Local preview settings
 
-`scripts/preview.sh` runs a loopback server for development and trials. See the [Quickstart](quickstart.md).
+The prebuilt [preview kit](quickstart.md) needs Docker Compose and verifies its image downloads before starting. Its settings are:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `VECTORY_PREVIEW_PROJECT` | `vectory-preview` | Docker Compose project and private volume prefix. Use the same value when stopping or resuming. |
+| `VECTORY_PREVIEW_WEB_PORT` | `8080` | Dashboard port on 127.0.0.1. |
+| `VECTORY_PREVIEW_AGENT_PORT` | `8443` | TLS agent listener port on 127.0.0.1. |
+| `VECTORY_PREVIEW_VALIDATOR_PORT` | `18081` | Isolated validator's loopback host port. |
+| `VECTORY_PREVIEW_RELEASE_DIR` | None | Optional offline directory containing the two image archives and their release `SHA256SUMS`. |
+
+### Source development preview
+
+Contributors can use `scripts/preview.sh` and the [source quickstart](https://github.com/416rehman/Vectory/blob/main/docs/dev/SOURCE-QUICKSTART.md). These source-build settings do not apply to the prebuilt kit:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

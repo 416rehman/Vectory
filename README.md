@@ -48,9 +48,10 @@ flowchart LR
 
 ## Get started
 
-- **Try it on one machine** (Linux or macOS, about 15 minutes, mostly compiling): [Quickstart](docs/user/quickstart.md). After its first step, `node scripts/demo.mjs` starts a local demo fleet of real agents on synthetic data.
+- **Try it on one machine:** download the prebuilt Linux x86-64 preview kit and run `./start.sh` with Docker Compose. The [Quickstart](docs/user/quickstart.md) walks through administrator setup and connecting a test device. No Rust, Go, Node, or source build is required.
 - **Self-host the developer preview:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
 - **Understand the guarantees:** [Security model](docs/user/security.md).
+- **Create or inspect a configuration in your browser:** the [Vector configuration designer](https://vectory.ahmadz.ai/designer/) imports YAML, JSON, and TOML, reuses Vectory's diagram components, and exports the result without an account.
 
 The [0.1.0 release page](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) has the unsigned agent packages, Docker image archives, checksums and SBOMs. Check [platform coverage](docs/user/compatibility.md) before choosing a download.
 

@@ -16,16 +16,16 @@ import runpy
 from datetime import datetime, timezone
 from pathlib import Path
 
-AGENT = re.compile(r'^vectory-[0-9][^/]*-(linux|darwin|windows)-(amd64|arm64)(\.exe|\.tar\.gz|\.zip)?$')
 PARTS = {
-    'agents': lambda n: bool(AGENT.match(n)),
     'packages': lambda n: n.endswith(('.deb', '.rpm')),
     'msi': lambda n: n.endswith('.msi'),
     'images': lambda n: n.endswith('-image.tar.gz'),
+    'preview': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-preview-linux-amd64\.tar\.gz', n)),
+    'serverkit': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-server-linux-amd64\.tar\.gz', n)),
     'sbom': lambda n: n.endswith('.cdx.json'),
     'license_inventory': lambda n: n == 'THIRD-PARTY-LICENSES.md',
 }
-RESULTS = {'packages': 'PACKAGES_RESULT', 'msi': 'MSI_RESULT', 'images': 'IMAGES_RESULT', 'sbom': 'SBOM_RESULT'}
+RESULTS = {'packages': 'PACKAGES_RESULT', 'msi': 'MSI_RESULT', 'images': 'IMAGES_RESULT', 'sbom': 'SBOM_RESULT', 'starters': 'STARTERS_RESULT', 'preview_smoke': 'PREVIEW_SMOKE_RESULT'}
 TOOLS = ('NFPM_VERSION', 'NFPM_SUM', 'CYCLONEDX_GOMOD_VERSION', 'CYCLONEDX_GOMOD_SUM', 'CARGO_CYCLONEDX_VERSION', 'WIX_VERSION', 'DEBIAN_IMAGE', 'ALMALINUX_IMAGE')
 
 
@@ -59,6 +59,14 @@ def main():
     args = parser.parse_args()
     names = sorted(p.name for p in args.folder.iterdir() if p.is_file())
     env = os.environ
+    verifier = runpy.run_path(str(Path(__file__).with_name('verify-release.py')))
+    try:
+        # A prerelease version may itself contain "preview". Classify agents
+        # from the exact catalog inventory, never by a broad filename regex
+        # that could mistake the separate starter bundle for an agent archive.
+        agent_names = verifier['agent_inventory'](args.folder)[1]
+    except (ValueError, KeyError, TypeError, FileNotFoundError, json.JSONDecodeError):
+        agent_names = set()
     server, repository, run = env.get('GITHUB_SERVER_URL', ''), env.get('GITHUB_REPOSITORY', ''), env.get('GITHUB_RUN_ID', '')
     manifest = {
         'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -68,7 +76,8 @@ def main():
         'ref': env.get('GITHUB_REF'),
         'workflow_run': f'{server}/{repository}/actions/runs/{run}' if run else None,
         'run_attempt': env.get('GITHUB_RUN_ATTEMPT'),
-        'parts': {part: sorted(n for n in names if match(n)) for part, match in PARTS.items()},
+        'parts': {'agents': sorted(set(names) & agent_names),
+                  **{part: sorted(n for n in names if match(n)) for part, match in PARTS.items()}},
         'job_results': {part: env.get(variable) for part, variable in RESULTS.items()},
         'tools': {name.lower(): env.get(name) for name in TOOLS if env.get(name)},
         'image_agents_match_release_agents': reproducibility(args.folder),
@@ -80,7 +89,7 @@ def main():
     # failed. Use the same inventory check as the offline verifier to mark that
     # artifact prominently, without failing assembly before it can be uploaded.
     try:
-        runpy.run_path(str(Path(__file__).with_name('verify-release.py')))['candidate_inventory'](args.folder, require_status=False)
+        verifier['candidate_inventory'](args.folder, require_status=False)
     except (ValueError, KeyError, TypeError, FileNotFoundError, json.JSONDecodeError) as error:
         manifest['inventory_status'] = 'incomplete-diagnostic'
         manifest['inventory_problem'] = str(error)
