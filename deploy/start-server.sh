@@ -136,7 +136,17 @@ else
   finish_setup
 fi
 docker run "${common[@]}" --entrypoint /app/operations/vectory-local-pki "$server_image" --server-cert /var/lib/vectory/server_cert --server-key /var/lib/vectory/server_key --hostname "$hostname"
-mkdir -p releases
+# This exact public template passed the bundle checksum check above. GNU tar
+# applies the caller's umask to it on extraction; Caddy runs as another UID.
+# Make only this verified configuration readable, never any secret or .env.
+chmod 0644 -- "$bundle/Caddyfile"
+if [[ ! -e "$bundle/releases" && ! -L "$bundle/releases" ]]; then
+  # The default empty mirror must be searchable by the server's separate UID.
+  # Existing operator directories retain their permissions and contents.
+  mkdir -m 0755 -- "$bundle/releases"
+else
+  [[ -d "$bundle/releases" && ! -L "$bundle/releases" ]] || fail "The local releases mirror must be a regular directory."
+fi
 compose config --quiet
 say "Starting the server, TLS proxy and isolated Vector validator..."
 if ! compose up -d --wait --wait-timeout 300; then

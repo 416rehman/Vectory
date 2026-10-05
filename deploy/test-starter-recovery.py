@@ -221,12 +221,13 @@ class Fixture:
                 'VECTORY_TLS_KEY_FILE': str(directory / 'key.pem'),
             })
 
-    def run(self, failpoint=''):
+    def run(self, failpoint='', umask=-1):
         env = self.env.copy()
         env['STUB_FAILPOINT'] = failpoint
         return subprocess.run(
             ['/bin/bash', str(self.bundle / 'start.sh')], cwd=self.bundle,
             env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+            umask=umask,
         )
 
     def commands(self):
@@ -286,6 +287,31 @@ class StarterRecoveryTests(unittest.TestCase):
                 self.assert_no_network(fixture)
                 if kind == 'server':
                     self.assert_complete_server_env(fixture)
+
+    def test_server_private_umask_extraction_keeps_secrets_private_and_public_mount_readable(self):
+        fixture = self.fixture('server')
+        for name in ('cert.pem', 'key.pem'):
+            (fixture.root / name).chmod(0o600)
+        self.assertEqual((fixture.bundle / 'Caddyfile').stat().st_mode & 0o777, 0o600)
+        self.assert_success(fixture.run(umask=0o077))
+        self.assertEqual((fixture.bundle / 'Caddyfile').stat().st_mode & 0o777, 0o644)
+        self.assertEqual((fixture.bundle / 'releases').stat().st_mode & 0o777, 0o755)
+        for path in (fixture.root / 'cert.pem', fixture.root / 'key.pem',
+                     fixture.volume / 'server_cert', fixture.volume / 'server_key',
+                     fixture.volume / 'bootstrap', fixture.bundle / '.env'):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600, str(path))
+        self.assert_no_network(fixture)
+
+    def test_server_does_not_widen_existing_operator_mirror(self):
+        fixture = self.fixture('server')
+        mirror = fixture.bundle / 'releases'
+        mirror.mkdir(mode=0o700)
+        private = mirror / 'operator-note'
+        write(private, 'retain these private operator bytes\n')
+        self.assert_success(fixture.run(umask=0o077))
+        self.assertEqual(mirror.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private.read_text(), 'retain these private operator bytes\n')
 
     def test_preview_retry_restores_chain_after_pki_generation(self):
         fixture = self.fixture('preview')

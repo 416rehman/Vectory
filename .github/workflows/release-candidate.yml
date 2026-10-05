@@ -462,6 +462,10 @@ jobs:
           runpy.run_path('packaging/verify-release.py')['required_starter_bundle'](archive, version, 'server')
           PY
           tar -xzf "artifacts/starters/vectory-$version-server-linux-amd64.tar.gz" -C "$extract_dir"
+          # Match a security-conscious operator extracting with umask 077.
+          # The verified public proxy config starts unreadable to UID 10001;
+          # the starter must restore only that file's intended 0644 mode.
+          test "$(stat -c %a "$kit/Caddyfile")" = 600
           docker volume create --label io.vectory.ci=true "${project}_fixture" > /dev/null
           fixture_mount="type=volume,src=${project}_fixture,dst=/var/lib/vectory"
           helper=(docker run --rm --network none --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount "$fixture_mount" --entrypoint /app/operations/vectory-local-pki vectory-server:candidate)
@@ -483,9 +487,37 @@ jobs:
           # The guided starter prints the bootstrap secret. Keep all its output
           # private, including stop and resume, and never upload the fixture.
           if ! "$kit/start.sh" start >> "$log" 2>&1; then
-            echo '::error::The saved candidate images did not start the server kit.'
+            # Report only fixed diagnostic categories. The private log can
+            # contain the first-account setup secret, so never print its lines.
+            python3 - "$log" <<'PY'
+          import sys
+          from pathlib import Path
+
+          output = Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace').lower()
+          phase = ('compose startup' if 'starting the server, tls proxy' in output else
+                   'certificate setup' if 'checking your certificate' in output else
+                   'image loading' if 'loading verified' in output else 'preflight')
+          if 'caddyfile' in output and 'permission denied' in output:
+              cause = 'proxy configuration permission denied'
+          elif 'permission denied' in output:
+              cause = 'file or volume permission denied'
+          elif 'port is already allocated' in output or 'address already in use' in output:
+              cause = 'host port unavailable'
+          elif 'toomanyrequests' in output or 'rate limit' in output or 'pull access denied' in output:
+              cause = 'proxy image download failed'
+          elif 'unhealthy' in output or 'did not become healthy' in output:
+              cause = 'a service did not become healthy'
+          elif 'no space left' in output:
+              cause = 'runner storage exhausted'
+          else:
+              cause = 'unclassified failure'
+          print(f'::error::Server kit failed during {phase}: {cause}. Private startup output was not published.')
+          PY
             exit 1
           fi
+          test "$(stat -c %a "$kit/Caddyfile")" = 644
+          test "$(stat -c %a "$kit/releases")" = 755
+          test "$(stat -c %a "$kit/.env")" = 600
           server_compose=(docker compose --project-name "$project" --env-file "$kit/.env" -f "$kit/compose.yaml")
           curl --noproxy '*' --fail --silent --show-error --retry 6 --retry-delay 2 --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 https://localhost/api/v1/status > "$fixture_dir/status.json"
           python3 - "$fixture_dir/status.json" <<'PY'
