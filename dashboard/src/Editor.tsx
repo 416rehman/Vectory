@@ -110,7 +110,10 @@ import TargetDialog from "./LazyTargetDialog";
 
 import PipelineSettings from "./PipelineSettings";
 import { secretNamesOf } from "./secretFields";
-import { findPlainCredential } from "./credentialFields";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 import PipelineGlobals from "./PipelineGlobals";
 import PipelineDetails from "./PipelineDetails";
 import PipelineSaveStatus from "./PipelineSaveStatus";
@@ -170,6 +173,7 @@ import {
   diagnosticCounts,
   isEmptyPipeline,
   readConfigurationFiles,
+  sourceLineForPath,
   sourceOffset,
 } from "./configurationSource";
 import { planCodeSave, unappliedStatus } from "./codeSave";
@@ -584,10 +588,6 @@ export default function Editor({
       needs: string[];
     } | null>(null),
     // Why the server definitively refused the last publish attempt.
-    [publishRejection, setPublishRejection] = useState<{
-      code: string;
-      message: string;
-    } | null>(null),
     // The version just published, offered for deployment next.
     [publishedResult, setPublishedResult] = useState<Version | null>(null),
     // Where this pipeline's versions are assigned, for the publish review.
@@ -2571,17 +2571,24 @@ export default function Editor({
       if (generation !== importGeneration.current) return;
       const parsed = imported.config;
       const credential = findPlainCredential(parsed);
+      const line =
+        credential && files.length === 1
+          ? sourceLineForPath(imported.text, imported.format, credential.steps)
+          : null;
+      const where = credential
+        ? `${line ? `Line ${line}: ` : ""}${credential.path}`
+        : "";
       if (credential?.kind === "scan_limit")
         throw Error(
-          `Configuration is nested too deeply at ${credential.path} to check for credentials. Simplify it before importing.`,
+          `Configuration is nested too deeply at ${where} to check for credentials. Simplify it before importing.`,
         );
       if (credential?.kind === "unsupported_reference")
         throw Error(
-          `Device secret reference at ${credential.path} is not supported in this field in the preview. Use a whole-value device secret only in a generated credential field; headers and URLs need a native Vector reference on a full-mode device where supported. Import was not applied.`,
+          `Device secret reference at ${where} is not supported in this field in the preview. Use a whole-value device secret only in a generated credential field; headers and URLs need a native Vector reference on a full-mode device where supported. Import was not applied.`,
         );
       if (credential)
         throw Error(
-          `Likely plaintext credential at ${credential.path}. ${credentialGuidance(credential.path)} Import was not applied.`,
+          `Likely plaintext credential at ${where}. ${credentialGuidance(credential.path)} Import was not applied.`,
         );
       const current = importContext.current;
       if (
@@ -2704,31 +2711,6 @@ export default function Editor({
       }
     }
   }
-  // Clears the saved request after the server confirms nothing was
-  // committed under its key; false when that cannot be established.
-  async function rejectedWithoutCommit(
-    operation: PublishOperation,
-    signal: AbortSignal,
-  ) {
-    try {
-      const lookup = await withRequestDeadline(
-        (lookupSignal) =>
-          api(
-            `/configurations/publish-requests/${operation.id}`,
-            { signal: lookupSignal },
-            PublishRequestLookupSchema,
-          ),
-        15000,
-        signal,
-      );
-      if (lookup.request_id !== operation.id || lookup.found !== false)
-        return false;
-      finishPublishOperation(operation);
-      return true;
-    } catch {
-      return false;
-    }
-  }
   function closePublishedResult() {
     setPublishedResult(null);
     setPublishOpen(false);
@@ -2758,11 +2740,12 @@ export default function Editor({
     publishActive.current = controller;
     setBusy(true);
     setError("");
-    setPublishRejection(null);
     let operation: PublishOperation | null = null;
     const current = () =>
       publishMounted.current && publishActive.current === controller;
     try {
+      const credential = findPlainCredential(message, ["message"]);
+      if (credential) throw Error(credentialPreflightMessage(credential));
       if (saveUncertain.current || saveNeedsReload.current)
         throw Error(
           "Review the draft save result before publishing. Reload the server draft or retry Save draft first.",
@@ -2858,29 +2841,16 @@ export default function Editor({
         return;
       }
       setMessage("");
-      setPublishRejection(null);
       setPublishedResult(version);
     } catch (failure) {
       if (!current()) return;
-      // A peer can send this shared intent while our preflight or POST waits,
-      // so a structured rejection alone cannot rule out a committed result
-      // under the same request key. It becomes definitive once the server
-      // confirms that no version was committed under that key. That holds
-      // for a structured 5xx too, such as an unavailable Vector checker.
-      if (
-        operation &&
-        failure instanceof APIError &&
-        failure.serverRejection &&
-        failure.status >= 400 &&
-        failure.code !== "IDEMPOTENCY_CONFLICT" &&
-        (await rejectedWithoutCommit(operation, controller.signal))
-      ) {
-        if (!current()) return;
-        setPublishRejection({ code: failure.code, message: failure.message });
-        if (failure.code === "VALIDATION_FAILED") void validate();
-        if (failure.code === "TESTS_FAILED") void publishTestsRef.current.run();
-        return;
-      }
+      // A found:false read does not fence an earlier same-key POST in another
+      // tab. Keep the reminder for every uncertain send until a committed
+      // receipt is observed or the person explicitly reviews it.
+      if (failure instanceof APIError && failure.code === "VALIDATION_FAILED")
+        void validate();
+      if (failure instanceof APIError && failure.code === "TESTS_FAILED")
+        void publishTestsRef.current.run();
       if (!current()) return;
       if (operation) {
         setPublishNotice("uncertain");
@@ -2940,12 +2910,14 @@ export default function Editor({
   function refusePlainCode(candidate: Config) {
     const credential = findPlainCredential(candidate);
     if (!credential) return false;
+    const line = sourceLineForPath(code, format, credential.steps);
+    const where = `${line ? `Line ${line}: ` : ""}${credential.path}`;
     setError(
       credential.kind === "scan_limit"
-        ? `Configuration is nested too deeply at ${credential.path} to check for credentials. The code was not applied. Simplify this object before retrying.`
+        ? `Configuration is nested too deeply at ${where} to check for credentials. The code was not applied. Simplify this object before retrying.`
         : credential.kind === "unsupported_reference"
-          ? `Device secret reference at ${credential.path} is not supported in this field in the preview. The code was not applied. Use a whole-value device secret only in a generated credential field; headers and URLs need a native Vector reference on a full-mode device where supported.`
-          : `Likely plaintext credential at ${credential.path}. The code was not applied. ${credentialGuidance(credential.path)}`,
+          ? `Device secret reference at ${where} is not supported in this field in the preview. The code was not applied. Use a whole-value device secret only in a generated credential field; headers and URLs need a native Vector reference on a full-mode device where supported.`
+          : `Likely plaintext credential at ${where}. The code was not applied. ${credentialGuidance(credential.path)}`,
     );
     if (credential.kind !== "scan_limit")
       setCodeReveal({
@@ -6652,7 +6624,7 @@ export default function Editor({
             statusLabel={statusLabel}
             verdict={checking ? "Checking the pipeline with Vector…" : verdict}
             problems={problems}
-            rejection={publishRejection}
+            rejection={null}
             tests={publishTests.view}
             onRunTests={() => void publishTests.run()}
             onCheck={checkable ? () => void validate() : undefined}

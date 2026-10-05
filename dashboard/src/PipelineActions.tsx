@@ -20,6 +20,10 @@ import {
   pipelineCopyName,
 } from "./pipelineCreationRequests";
 import { Button, ErrorBox, Field, Modal } from "./ui";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 
 export type PipelineAction = "duplicate" | "archive" | "unarchive";
 
@@ -142,6 +146,13 @@ export default function PipelineActions({
     try {
       let result: Configuration;
       if (action === "duplicate") {
+        const credential =
+          findPlainCredential(name.trim(), ["name"]) ||
+          findPlainCredential(description, ["description"]);
+        if (credential) {
+          setError(credentialPreflightMessage(credential));
+          return;
+        }
         operation = beginPipelineCreationOperation(user.id, {
           operation: "duplicate",
           source_configuration_id: configuration.id,

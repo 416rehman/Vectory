@@ -70,6 +70,39 @@ function location(text: string, name?: string) {
 export function sourceOffset(text: string, name?: string) {
   return location(text, name).from;
 }
+/** Return a source line only when the field can be located without guessing. */
+export function sourceLineForPath(
+  text: string,
+  format: ConfigurationFormat | string,
+  path: readonly (string | number)[],
+): number | null {
+  if (format === "yaml" || format === "json") {
+    try {
+      const document = parseDocument(text, {
+        schema: format === "json" ? "json" : "core",
+        logLevel: "silent",
+      });
+      const node = document.getIn([...path], true) as
+        { range?: readonly number[] } | undefined;
+      const from = node?.range?.[0];
+      if (typeof from === "number")
+        return text.slice(0, from).split("\n").length;
+    } catch {
+      // YAML aliases and TOML have no reliable node range here.
+    }
+  }
+  const key = path.at(-1);
+  if (typeof key !== "string") return null;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [
+    ...text.matchAll(
+      new RegExp(`(?:^|[\\s{,.])(["']?)${escaped}\\1(?=\\s*[:=])`, "gm"),
+    ),
+  ];
+  return matches.length === 1
+    ? text.slice(0, matches[0].index).split("\n").length
+    : null;
+}
 function failure(text: string, message: string, field?: string): never {
   throw new ConfigurationSourceError([
     { ...location(text, field), severity: "error", message },

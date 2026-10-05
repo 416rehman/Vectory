@@ -147,6 +147,69 @@ describe("draft recovery", () => {
     expect(readRecoveryDraft("user-1", "pipe-1")?.config).toEqual(draft.config);
   });
 
+  it("rejects credential-shaped metadata and declarations before writing a recovery copy", () => {
+    const key = "vectory.draft.v2:user-1:pipe-1:tab-a";
+    const safe = {
+      ...draft,
+      metadata: { name: "Pipeline", description: "Receives logs" },
+    };
+    expect(
+      storeRecoveryDraft("user-1", "pipe-1", safe, new Date(), "tab-a"),
+    ).toBe(true);
+    const unsafeMetadata = {
+      ...safe,
+      metadata: {
+        ...safe.metadata,
+        description: "https://user:literal-secret@example.test/ingest",
+      },
+    };
+    expect(
+      storeRecoveryDraft(
+        "user-1",
+        "pipe-1",
+        unsafeMetadata,
+        new Date(),
+        "tab-a",
+      ),
+    ).toBe(false);
+    expect(localStorage.getItem(key)).toBeNull();
+
+    const unsafeDeclaration = {
+      ...safe,
+      variables: [
+        {
+          name: "ghp_syntheticcredential123",
+          path: "sources.app.host",
+          type: "string" as const,
+        },
+      ],
+    };
+    expect(
+      storeRecoveryDraft(
+        "user-1",
+        "pipe-1",
+        unsafeDeclaration,
+        new Date(),
+        "tab-a",
+      ),
+    ).toBe(false);
+    expect(localStorage.getItem(key)).toBeNull();
+
+    const unsafeBase = {
+      ...safe,
+      base: {
+        config: safe.config,
+        positions: safe.positions,
+        variables: [],
+        metadata: unsafeMetadata.metadata,
+      },
+    };
+    expect(
+      storeRecoveryDraft("user-1", "pipe-1", unsafeBase, new Date(), "tab-a"),
+    ).toBe(true);
+    expect(readRecoveryDraft("user-1", "pipe-1")?.base).toBeUndefined();
+  });
+
   it("keeps current edits without a large merge base and clears an obsolete copy when even current edits do not fit", () => {
     const largeVariables = [
       {
@@ -221,6 +284,23 @@ describe("draft recovery", () => {
     localStorage.setItem(
       storageKey,
       JSON.stringify({ ...old, saved_at: new Date().toISOString() }),
+    );
+    expect(readRecoveryDraft("user-1", "pipe-1")).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it("removes an older recovery copy with credential-shaped metadata", () => {
+    const storageKey = "vectory.draft.v1:user-1:pipe-1";
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        ...draft,
+        metadata: {
+          name: "Pipeline",
+          description: "https://collector.example/?api_key=short",
+        },
+        saved_at: new Date().toISOString(),
+      }),
     );
     expect(readRecoveryDraft("user-1", "pipe-1")).toBeNull();
     expect(localStorage.getItem(storageKey)).toBeNull();

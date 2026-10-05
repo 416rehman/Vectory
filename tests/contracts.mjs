@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 const root = path.resolve(import.meta.dirname, ".."),
   require = createRequire(path.join(root, "dashboard/package.json"));
@@ -40,6 +40,36 @@ function validate(name, value) {
 }
 try {
   validate("Session", session);
+  // A keyed creation rejected before storage must identify the offending
+  // field without echoing its value. This exercises the live error response,
+  // not only the generated schema.
+  const testCredential = "synthetic-contract-credential";
+  const refusedCreate = await fetch(base + "/configurations", {
+    method: "POST",
+    headers: {
+      Cookie: cookie,
+      "Content-Type": "application/json",
+      "X-CSRF-Token": session.csrf_token,
+    },
+    body: JSON.stringify({
+      request_id: randomUUID(),
+      name: "Contract credential refusal",
+      description: "Synthetic contract check",
+      config: { sinks: { out: { type: "datadog_logs", default_api_key: testCredential } } },
+      graph: { nodes: [], edges: [] },
+    }),
+  });
+  if (refusedCreate.status !== 400)
+    throw Error(`Plaintext credential creation returned ${refusedCreate.status}, expected 400`);
+  const refusal = await refusedCreate.json();
+  validate("Error", refusal);
+  if (
+    refusal.error?.code !== "INVALID_INPUT" ||
+    refusal.error?.reason !== "plaintext_credential" ||
+    refusal.error?.problems?.[0]?.path !== "sinks.out.default_api_key" ||
+    JSON.stringify(refusal).includes(testCredential)
+  )
+    throw Error("Plaintext credential refusal lacks a safe field-specific problem");
   async function get(endpoint) {
     const r = await fetch(base + endpoint, { headers: { Cookie: cookie } });
     if (!r.ok) throw Error(`${endpoint}: ${r.status}`);

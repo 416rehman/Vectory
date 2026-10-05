@@ -115,9 +115,9 @@ Implemented: `vectory status` names the pipeline and version number from the sig
 
 [AUTHORING-GAPS.md](AUTHORING-GAPS.md) lists the findings and the acceptance for each. In order of how visible they are:
 
-1. Secrets in headers and URLs, and a wider plaintext detector (finding 4). Designed in [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md) and planned in [SECRETS-IMPLEMENTATION-PLAN.md](SECRETS-IMPLEMENTATION-PLAN.md); the detector and the import dialog can ship first.
+1. Secrets in headers and URLs (finding 4). The shared detector and field-specific import refusal are implemented; host-bound uses, agent safeguards and the full release gates remain in [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md) and [SECRETS-IMPLEMENTATION-PLAN.md](SECRETS-IMPLEMENTATION-PLAN.md).
 2. "Save as test" that does not assert volatile values (finding 3).
-3. A refused import stays in the dialog and names the field (finding 5).
+3. A refused credential import stays in the dialog and names the field (finding 5; implemented); other uncertain outcomes still require recovery review.
 4. Complete conflict recovery (finding 1): three-way merge now combines disjoint edits and asks for a choice on collisions; add **Save mine as a new pipeline** with the same durable request recovery as ordinary creation.
 5. Per-device host approval commands (finding 6).
 6. Vector's own config-time warnings as problems (finding 7); a failed `api` bind named as `ADDRESS_IN_USE` (9); `api` changes activate by restart (10); `require_healthy` honored at apply (11).

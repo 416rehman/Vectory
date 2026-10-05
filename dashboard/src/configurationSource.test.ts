@@ -7,6 +7,7 @@ import {
   detectConfigurationFormat,
   diagnosticCounts,
   sourceErrorMessage,
+  sourceLineForPath,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
   ConfigurationSourceError,
@@ -25,6 +26,30 @@ const pipeline = {
 };
 
 describe("lossless configuration source parsing", () => {
+  it("locates a credential field in YAML and JSON without guessing repeated TOML keys", () => {
+    const steps = ["sinks", "out", "request", "headers", "Authorization"];
+    expect(
+      sourceLineForPath(
+        "sinks:\n  out:\n    request:\n      headers:\n        Authorization: Bearer synthetic-value\n",
+        "yaml",
+        steps,
+      ),
+    ).toBe(5);
+    expect(
+      sourceLineForPath(
+        '{\n  "sinks": {"out": {"Authorization": "synthetic-value"}}\n}',
+        "json",
+        ["sinks", "out", "Authorization"],
+      ),
+    ).toBe(2);
+    expect(
+      sourceLineForPath(
+        '[sinks.out]\napi_key = "synthetic-value"\n[sinks.other]\napi_key = "another-value"',
+        "toml",
+        ["sinks", "out", "api_key"],
+      ),
+    ).toBeNull();
+  });
   it.each(["yaml", "json", "toml"])(
     "parses and validates a complete %s pipeline",
     (format) => {

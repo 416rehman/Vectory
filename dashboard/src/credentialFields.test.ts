@@ -1,7 +1,39 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { findPlainCredential } from "./credentialFields";
+import { credentialFindings, findPlainCredential } from "./credentialFields";
+
+const sharedCases = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../vector-catalog/fixtures/credentials/cases.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as {
+  cases: {
+    name: string;
+    config: unknown;
+    findings: { code: string; path: string }[];
+  }[];
+};
 
 describe("plaintext credential detection", () => {
+  it.each(sharedCases.cases)(
+    "matches shared detector case: $name",
+    ({ config, findings }) => {
+      expect(credentialFindings(config).map((found) => found.path)).toEqual(
+        findings.map((finding) => finding.path).sort(),
+      );
+      expect(credentialFindings(config).map((found) => found.kind)).toEqual(
+        findings.map(() => "plaintext"),
+      );
+      const first = findPlainCredential(config)?.path;
+      if (findings.length)
+        expect(findings.map((finding) => finding.path)).toContain(first);
+      else expect(first).toBeUndefined();
+    },
+  );
   it("names the field without copying the credential value", () => {
     for (const [value, path] of [
       [
@@ -243,15 +275,17 @@ describe("plaintext credential detection", () => {
         },
         "sinks.out.request.headers.X-Session-Id",
       ],
-      [
-        {
-          sinks: { out: { request: { headers: { Authorization: "éééééé" } } } },
-        },
-        "sinks.out.request.headers.Authorization",
-      ],
     ] as const) {
       expect(findPlainCredential(config)?.path).toBe(path);
     }
+  });
+
+  it("refuses even short Unicode values in an explicit authorization header", () => {
+    expect(
+      findPlainCredential({
+        sinks: { out: { request: { headers: { Authorization: "éééééé" } } } },
+      })?.path,
+    ).toBe("sinks.out.request.headers.Authorization");
   });
 
   it("does not call placeholders or native references plaintext", () => {
@@ -284,7 +318,12 @@ describe("plaintext credential detection", () => {
     }
   });
 
-  it("refuses short plaintext credentials in named fields, headers, and URLs", () => {
+  it("refuses short values at explicit credential keys, headers and URL parameters", () => {
+    expect(
+      findPlainCredential({
+        sinks: { out: { type: "splunk_hec_logs", default_token: "x" } },
+      })?.path,
+    ).toBe("sinks.out.default_token");
     for (const [config, path] of [
       [
         { sources: { input: { client_secret: "x" } } },
@@ -300,9 +339,8 @@ describe("plaintext credential detection", () => {
         },
         "sinks.out.uri",
       ],
-    ] as const) {
+    ] as const)
       expect(findPlainCredential(config)?.path).toBe(path);
-    }
     expect(
       findPlainCredential({ sources: { input: { client_secret: "" } } }),
     ).toBeNull();

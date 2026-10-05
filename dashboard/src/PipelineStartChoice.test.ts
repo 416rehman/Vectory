@@ -99,7 +99,7 @@ describe("pasted Vector configurations", () => {
     );
     expect(imported.config).toBeUndefined();
     expect(imported.error).toMatch(
-      /^sinks\.out\.request\.headers\.Authorization/,
+      /^Line 12: sinks\.out\.request\.headers\.Authorization/,
     );
     expect(imported.error).not.toContain("hidden");
   });

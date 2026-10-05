@@ -2,10 +2,14 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 import { assertExactNumbers } from "./configurationNumbers";
 import { APIError } from "./api";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 
-// A response from the creation POST with one of these rejection codes means
-// the server refused the request before recording it. Transport failures,
-// malformed responses and recovery-lookup failures remain uncertain.
+// Only a plaintext credential refusal proves the exact immutable payload can
+// never be accepted, including by an earlier same-key POST in another tab.
+// Other refusals describe this attempt, not necessarily that earlier one.
 export function isDefinitivePipelineCreationRejection(
   failure: unknown,
   sent: boolean,
@@ -14,14 +18,40 @@ export function isDefinitivePipelineCreationRejection(
     sent &&
     failure instanceof APIError &&
     failure.serverRejection &&
-    [400, 403, 413, 422].includes(failure.status) &&
-    [
-      "INVALID_INPUT",
-      "FORBIDDEN",
-      "PAYLOAD_TOO_LARGE",
-      "VALIDATION_FAILED",
-    ].includes(failure.code)
+    failure.status === 400 &&
+    failure.code === "INVALID_INPUT" &&
+    failure.reason === "plaintext_credential"
   );
+}
+
+export type PipelineCreationRefusalProblem = {
+  path: string;
+  message: string;
+};
+
+/** Only project bounded, field-level diagnostics from the server refusal. */
+export function pipelineCreationRefusalProblems(
+  failure: unknown,
+): PipelineCreationRefusalProblem[] {
+  if (!(failure instanceof APIError) || !Array.isArray(failure.problems))
+    return [];
+  return failure.problems
+    .slice(0, 20)
+    .filter(
+      (problem): problem is Record<string, unknown> =>
+        !!problem && typeof problem === "object" && !Array.isArray(problem),
+    )
+    .filter(
+      (problem) =>
+        typeof problem.path === "string" &&
+        problem.path.length <= 300 &&
+        typeof problem.message === "string" &&
+        problem.message.length <= 500,
+    )
+    .map((problem) => ({
+      path: problem.path as string,
+      message: problem.message as string,
+    }));
 }
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
@@ -317,6 +347,15 @@ export function beginPipelineCreationOperation(
       input.error.issues[0]?.message ||
         "Review the pipeline details before creating it.",
     );
+  const payload = input.data.request;
+  const credential =
+    findPlainCredential(payload.name, ["name"]) ||
+    findPlainCredential(payload.description, ["description"]) ||
+    (input.data.operation === "create"
+      ? findPlainCredential(input.data.request.config) ||
+        findPlainCredential(input.data.request.graph, ["graph"])
+      : null);
+  if (credential) throw Error(credentialPreflightMessage(credential));
   if (!actorSchema.safeParse(actor).success)
     throw Error("Sign in again before creating a pipeline.");
   const id = crypto.randomUUID();

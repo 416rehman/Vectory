@@ -7,6 +7,7 @@ import {
   dismissPipelineCreationStorageIssue,
   finishPipelineCreationOperation,
   isDefinitivePipelineCreationRejection,
+  pipelineCreationRefusalProblems,
   pipelineNameError,
   pipelineCreationOperationAvailable,
   readPipelineCreationOperations,
@@ -97,6 +98,48 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("durable pipeline creation registry", () => {
+  it("never stores credential-shaped metadata or graph data even when called directly", () => {
+    for (const unsafe of [
+      {
+        ...request,
+        request: { ...request.request, name: "ghp_syntheticcredential123" },
+      },
+      {
+        ...request,
+        request: {
+          ...request.request,
+          description: "https://collector.example/?api_key=short",
+        },
+      },
+      {
+        ...request,
+        request: {
+          ...request.request,
+          graph: {
+            nodes: [{ id: "in", data: { note: "ghp_syntheticcredential123" } }],
+            edges: [],
+          },
+        },
+      },
+    ]) {
+      expect(() => beginPipelineCreationOperation(actor, unsafe)).toThrow(
+        /credential/i,
+      );
+      expect(storage.length).toBe(0);
+    }
+    expect(() =>
+      beginPipelineCreationOperation(actor, {
+        operation: "duplicate",
+        source_configuration_id: source,
+        request: {
+          name: "Safe name",
+          description: "https://collector.example/?api_key=short",
+          revision: 7,
+        },
+      }),
+    ).toThrow(/credential/i);
+    expect(storage.length).toBe(0);
+  });
   it("validates the trimmed creation name against the server's UTF-8 byte limit", () => {
     expect(pipelineNameError("   ")).toBe(
       "Enter a pipeline name to create a draft.",
@@ -107,7 +150,7 @@ describe("durable pipeline creation registry", () => {
     expect(pipelineNameError("🙂".repeat(30))).toBe("");
     expect(pipelineNameError("🙂".repeat(31))).toMatch(/120 UTF-8 bytes/);
   });
-  it("only clears reminders for a definitive rejection from the creation POST", () => {
+  it("only clears reminders for a payload-invariant credential rejection", () => {
     for (const [code, status] of [
       ["INVALID_INPUT", 400],
       ["FORBIDDEN", 403],
@@ -115,7 +158,7 @@ describe("durable pipeline creation registry", () => {
       ["VALIDATION_FAILED", 422],
     ] as const) {
       const rejected = new APIError(code, "Rejected", status, true);
-      expect(isDefinitivePipelineCreationRejection(rejected, true)).toBe(true);
+      expect(isDefinitivePipelineCreationRejection(rejected, true)).toBe(false);
       expect(isDefinitivePipelineCreationRejection(rejected, false)).toBe(
         false,
       );
@@ -135,6 +178,39 @@ describe("durable pipeline creation registry", () => {
     expect(
       isDefinitivePipelineCreationRejection(
         new APIError("NETWORK_UNAVAILABLE", "Connection lost", 0),
+        true,
+      ),
+    ).toBe(false);
+  });
+  it("projects field problems from an authoritative refusal without changing uncertainty", () => {
+    const rejected = new APIError(
+      "INVALID_INPUT",
+      "Credential refused",
+      400,
+      true,
+      undefined,
+      "plaintext_credential",
+      undefined,
+      undefined,
+      [
+        {
+          code: "plaintext_credential",
+          path: "sinks.out.request.headers.Authorization",
+          message: "This field holds what looks like a credential.",
+          fix: "Use a device secret where supported.",
+        },
+      ],
+    );
+    expect(pipelineCreationRefusalProblems(rejected)).toEqual([
+      {
+        path: "sinks.out.request.headers.Authorization",
+        message: "This field holds what looks like a credential.",
+      },
+    ]);
+    expect(isDefinitivePipelineCreationRejection(rejected, true)).toBe(true);
+    expect(
+      isDefinitivePipelineCreationRejection(
+        new APIError("IDEMPOTENCY_CONFLICT", "Unknown result", 409, true),
         true,
       ),
     ).toBe(false);

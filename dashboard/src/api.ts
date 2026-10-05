@@ -58,6 +58,9 @@ export class APIError extends Error {
     public details?: unknown,
     /** How many there are in all when `details` lists only the first few. */
     public detailsTotal?: unknown,
+    /** Field-level reasons for an authoritative configuration refusal. */
+    public problems?: unknown,
+    public truncated?: unknown,
   ) {
     super(message);
   }
@@ -343,6 +346,8 @@ export async function api<T = unknown>(
         typeof data?.error?.reason === "string" ? data.error.reason : undefined,
         data?.error?.details,
         data?.error?.details_total,
+        data?.error?.problems,
+        data?.error?.truncated,
       );
     }
     const expected = schema || responseSchema(path, method);

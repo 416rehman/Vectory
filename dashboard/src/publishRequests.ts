@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 const uuid = z
@@ -198,6 +202,8 @@ export function beginPublishOperation(
       parsed.error.issues[0]?.message ||
         "Review the saved revision and message before publishing.",
     );
+  const credential = findPlainCredential(parsed.data.message, ["message"]);
+  if (credential) throw Error(credentialPreflightMessage(credential));
   if (
     !actorSchema.safeParse(actor).success ||
     !uuid.safeParse(configurationId).success

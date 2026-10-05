@@ -18607,7 +18607,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "GET /session 401 only: why this browser's session ended (expired, signed_out, signed_out_elsewhere, password_changed, access_changed, mfa_changed, mfa_reset, replaced, revoked) or null."
+                "description": "Additive refusal reason. GET /session 401 uses this for why the browser session ended; configuration creation and draft save use plaintext_credential when a likely plaintext credential is refused before any write."
               },
               "details": {
                 "type": "array",
@@ -18621,6 +18621,18 @@
                 "type": "integer",
                 "minimum": 0,
                 "description": "How many collisions the edit creates in all; details lists at most ten of them."
+              },
+              "problems": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "$ref": "#/components/schemas/PlainCredentialProblem"
+                },
+                "description": "Additive on a configuration plaintext_credential refusal; at most 20 field-specific findings, never values."
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "Additive on a plaintext_credential refusal; true when more than 20 findings exist."
               }
             },
             "required": [
@@ -32199,6 +32211,43 @@
         ],
         "additionalProperties": false,
         "description": "One collision a group edit would create. Names and numbers only: never selectors, member lists, payloads or secrets."
+      },
+      "PlainCredentialProblem": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "const": "plaintext_credential"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "component": {
+            "type": "string",
+            "minLength": 1
+          },
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fix": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "code",
+          "path",
+          "field",
+          "message",
+          "fix"
+        ],
+        "additionalProperties": false,
+        "description": "One field-specific plaintext refusal. The path names the configuration location and no field may contain the value itself."
       },
       "GroupMembershipPreview": {
         "type": "object",

@@ -35,6 +35,10 @@ import {
   useResource,
 } from "./ui";
 import type { StartImport } from "./PipelineStartChoice";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 import PipelineStatus, {
   libraryStatus,
   OutcomeLine,
@@ -47,10 +51,12 @@ import {
   beginPipelineCreationOperation,
   finishPipelineCreationOperation,
   isDefinitivePipelineCreationRejection,
+  pipelineCreationRefusalProblems,
   pipelineCreationOperationAvailable,
   pipelineNameError,
   usePipelineCreationOperations,
   type PipelineCreationOperation,
+  type PipelineCreationRefusalProblem,
 } from "./pipelineCreationRequests";
 import PipelineActions, { type PipelineAction } from "./PipelineActions";
 import SelectedDevice, { pipelineRoute } from "./SelectedDevice";
@@ -195,7 +201,10 @@ export default function PipelineLibrary({
     [imported, setImported] = useState<StartImport | null>(null),
     [busy, setBusy] = useState(false),
     [nameError, setNameError] = useState(""),
-    [formError, setFormError] = useState("");
+    [formError, setFormError] = useState(""),
+    [formProblems, setFormProblems] = useState<
+      PipelineCreationRefusalProblem[]
+    >([]);
   const displayedNameError = name.trim() ? pipelineNameError(name) : nameError;
   const [action, setAction] = useState<{
     configuration: PipelineSummary;
@@ -227,12 +236,16 @@ export default function PipelineLibrary({
     setImported(null);
     setNameError("");
     setFormError("");
+    setFormProblems([]);
     setOpen(true);
   }
   // What the last attempt said is about what was chosen then. A different
   // choice makes it stale, unless it is the notice about a saved request.
   function clearStaleError() {
-    if (!notice) setFormError("");
+    if (!notice) {
+      setFormError("");
+      setFormProblems([]);
+    }
   }
   // The name follows what you start from until you type your own.
   function chooseStart(id: string, templateName: string) {
@@ -261,6 +274,7 @@ export default function PipelineLibrary({
     active.current = controller;
     setBusy(true);
     setFormError("");
+    setFormProblems([]);
     const current = () => mounted.current && active.current === controller;
     let operation: PipelineCreationOperation | null = null,
       sent = false;
@@ -285,6 +299,15 @@ export default function PipelineLibrary({
             : pipelineTemplate(template)!.config,
         );
         graph = arrangeGraph(toGraph(config));
+      }
+      const credential =
+        findPlainCredential(name.trim(), ["name"]) ||
+        findPlainCredential(description, ["description"]) ||
+        findPlainCredential(config) ||
+        findPlainCredential(graph, ["graph"]);
+      if (credential) {
+        setFormError(credentialPreflightMessage(credential));
+        return;
       }
       operation = beginPipelineCreationOperation(user.id, {
         operation: "create",
@@ -346,7 +369,13 @@ export default function PipelineLibrary({
       if (operation && isDefinitivePipelineCreationRejection(failure, sent)) {
         try {
           finishPipelineCreationOperation(operation);
-          setFormError(failure.message);
+          const problems = pipelineCreationRefusalProblems(failure);
+          setFormProblems(problems);
+          setFormError(
+            problems.length
+              ? "The server refused this configuration. Fix the fields below and try again."
+              : failure.message,
+          );
           return;
         } catch {
           setNotice("uncertain");
@@ -700,6 +729,26 @@ export default function PipelineLibrary({
         <form onSubmit={create} noValidate>
           <div className="modal-body">
             {formError && <ErrorBox message={formError} />}
+            {formProblems.length > 0 && (
+              <ul
+                className="pipeline-library-problems"
+                aria-label="Configuration problems"
+              >
+                {formProblems.map((problem, index) => (
+                  <li key={`${problem.path}:${index}`}>
+                    {problem.message
+                      .toLowerCase()
+                      .includes(problem.path.toLowerCase()) ? (
+                      problem.message
+                    ) : (
+                      <>
+                        <code>{problem.path}</code>: {problem.message}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
             {notice && (
               <section role="status">
                 <h3>
@@ -729,6 +778,7 @@ export default function PipelineLibrary({
                   setName(e.target.value);
                   setNameEdited(true);
                   setNameError("");
+                  clearStaleError();
                 }}
                 aria-invalid={!!displayedNameError}
                 aria-describedby={
@@ -767,7 +817,10 @@ export default function PipelineLibrary({
                 disabled={busy || !!notice || unresolved}
                 maxLength={2000}
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  clearStaleError();
+                }}
                 placeholder="What is this pipeline for?"
               />
             </Field>

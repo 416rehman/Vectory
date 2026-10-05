@@ -40,7 +40,7 @@ export async function readStartText(
     if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
       throw Error("Configurations must be 1 MiB or smaller.");
     const config = assertValidPipelineSource(text, format);
-    return checkedStartImport(name, config);
+    return checkedStartImport(name, config, 0, text, format);
   } catch (error) {
     const message = sourceErrorMessage(text, error);
     return {
@@ -52,24 +52,32 @@ export async function readStartText(
   }
 }
 
-function checkedStartImport(
+async function checkedStartImport(
   name: string,
   config: Config,
   fileCount = 0,
-): StartImport {
+  source?: string,
+  format?: ConfigurationFormat,
+): Promise<StartImport> {
   try {
     const credential = findPlainCredential(config);
     if (credential) {
+      const { sourceLineForPath } = await loadSource();
+      const line =
+        source && format
+          ? sourceLineForPath(source, format, credential.steps)
+          : null;
+      const where = `${line ? `Line ${line}: ` : ""}${credential.path}`;
       const outboundLocation =
         /(?:^|\.)(?:uri|endpoint|endpoints|headers)(?:\.|$)/i.test(
           credential.path,
         );
       throw Error(
         credential.kind === "scan_limit"
-          ? `Configuration is nested too deeply at ${credential.path} to check for credentials. Simplify it before importing.`
+          ? `Configuration is nested too deeply at ${where} to check for credentials. Simplify it before importing.`
           : credential.kind === "unsupported_reference"
-            ? `${credential.path} uses a device secret outside a supported credential field. This preview does not support device secrets in headers or URLs. Use a native Vector secret or environment reference on a full-mode device, or remove this value.`
-            : `${credential.path} looks like a plaintext credential. ${outboundLocation ? "This preview does not support device secrets in headers or URLs; remove the credential or use a native reference on a full-mode device." : "Replace it with a supported secret reference before importing."}`,
+            ? `${where} uses a device secret outside a supported credential field. This preview does not support device secrets in headers or URLs. Use a native Vector secret or environment reference on a full-mode device, or remove this value.`
+            : `${where} looks like a plaintext credential. ${outboundLocation ? "This preview does not support device secrets in headers or URLs; remove the credential or use a native reference on a full-mode device." : "Replace it with a supported secret reference before importing."}`,
       );
     }
     const steps = count(config);
@@ -101,7 +109,13 @@ export async function readStartFiles(
   try {
     const { readConfigurationFiles } = await loadSource();
     const result = await readConfigurationFiles(files);
-    return checkedStartImport(result.name, result.config, files.length);
+    return checkedStartImport(
+      result.name,
+      result.config,
+      files.length,
+      files.length === 1 ? result.text : undefined,
+      files.length === 1 ? result.format : undefined,
+    );
   } catch (error) {
     return {
       name,

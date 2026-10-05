@@ -1,6 +1,6 @@
 # Device secrets in headers and URLs: implementation plan
 
-Status: proposed, 2026-10-02, for the release after the current one. Nothing here is built. The decision is [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md); the attacker table is in the [threat model](../security/THREAT-MODEL.md#device-secrets-in-headers-and-urls). This plan orders the work, names the files each step changes, states every wire and storage change, lists the tests each step needs and what an independent review must attack. A route or wire change updates `contracts/CONTRACT.md` first.
+Status: partially implemented, 2026-10-04. The smaller detector, structured server refusal and dashboard import/Code preflight are implemented with shared fixtures. Host-bound secret uses, agent substitution and value-based redaction are still planned for a later release; the full release gates below remain open. The decision is [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md); the attacker table is in the [threat model](../security/THREAT-MODEL.md#device-secrets-in-headers-and-urls). This plan orders the work, names the files each step changes, states every wire and storage change, lists the tests each step needs and what an independent review must attack. A route or wire change updates `contracts/CONTRACT.md` first.
 
 ## Start here (for the independent review)
 
@@ -29,7 +29,7 @@ Each question has a one-line answer in the ADR and a test below.
 
 **Release gates, all required:** the generator's `--check` and completeness green; the detector fixtures pass in Rust and TypeScript; the native probe green on Linux; the adversarial tests of Steps 3 and 7 green; the independent review finished with its findings resolved; documentation matches behavior.
 
-**A smaller first step.** The detector, the structured refusal and the import dialog (Step 1 fixtures, the detector half of Step 2, Step 5's import and Apply scan) don't depend on the agent and can ship alone. They close authoring findings 4 (the four plaintext cases) and 5 without opening any new place a secret can go.
+**A smaller first step.** The detector, the structured refusal and the import dialog (Step 1 fixtures, the detector half of Step 2, Step 5's import and Apply scan) do not depend on the agent and are implemented. They refuse the four demonstrated plaintext cases and keep credential import errors in the dialog without opening any new place a secret can go. Finding 4 remains open until host-bound secret uses and their agent safeguards are built.
 
 ## Wire and storage changes
 

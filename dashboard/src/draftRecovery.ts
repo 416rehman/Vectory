@@ -101,6 +101,20 @@ export function holdsPlainCredential(value: unknown): boolean {
   return findPlainCredential(value) !== null;
 }
 
+function unsafeDraftContent(
+  content: Pick<
+    RecoveryDraft,
+    "config" | "positions" | "variables" | "metadata"
+  >,
+): boolean {
+  return (
+    holdsPlainCredential(content.config) ||
+    holdsPlainCredential(content.positions) ||
+    holdsPlainCredential(content.variables) ||
+    holdsPlainCredential(content.metadata)
+  );
+}
+
 /** Store the edits; false when they were not stored (see the rules above). */
 export function storeRecoveryDraft(
   userId: string,
@@ -111,7 +125,7 @@ export function storeRecoveryDraft(
 ): boolean {
   const storageKey = currentKey(userId, pipelineId, copyId);
   try {
-    if (holdsPlainCredential(draft.config)) {
+    if (unsafeDraftContent(draft)) {
       localStorage.removeItem(storageKey);
       return false;
     }
@@ -119,7 +133,7 @@ export function storeRecoveryDraft(
     const savedAt = now.toISOString();
     let text = JSON.stringify({
       ...currentOnly,
-      ...(base && !holdsPlainCredential(base.config) ? { base } : {}),
+      ...(base && !unsafeDraftContent(base) ? { base } : {}),
       saved_at: savedAt,
     });
     // Preserve the current edits when an added merge base would exceed the
@@ -172,8 +186,8 @@ function readStoredCopy(storageKey: string): RecoveryDraft | null {
     )
       return null;
     if (
-      holdsPlainCredential(value.config) ||
-      (value.base && holdsPlainCredential(value.base.config))
+      unsafeDraftContent(value as RecoveryDraft) ||
+      (value.base && unsafeDraftContent(value.base as DraftContent))
     ) {
       // Older clients may have stored a value the current detector recognizes.
       localStorage.removeItem(storageKey);

@@ -758,6 +758,44 @@ pub(crate) fn description(v: &Value) -> Result<String> {
     }
     Ok(d.into())
 }
+
+fn plaintext_credential_error(findings: Vec<validation::CredentialFinding>) -> ApiError {
+    let message = findings[0].message.clone();
+    let truncated = findings.len() > 20;
+    ApiError::invalid(message).with_fields(json!({
+        "reason": "plaintext_credential",
+        "problems": findings.into_iter().take(20).collect::<Vec<_>>(),
+        "truncated": truncated,
+    }))
+}
+
+/// Pipeline metadata is viewer-readable history too. Only strong token and URL
+/// shapes are refused here; ordinary names and prose are never guessed to be
+/// credentials. The scanner itself never includes a candidate value in output.
+pub(crate) fn validate_pipeline_metadata(v: &Value) -> Result<()> {
+    let mut fields = serde_json::Map::new();
+    for name in ["name", "description", "message"] {
+        if let Some(Value::String(value)) = v.get(name) {
+            fields.insert(name.into(), json!(value));
+        }
+    }
+    if let Some(variables) = v.get("variables") {
+        fields.insert("variables".into(), variables.clone());
+    }
+    let metadata = Value::Object(fields);
+    if let Some(path) = validation::credential_scan_limit_paths(&metadata).first() {
+        return Err(ApiError::invalid(format!(
+            "Credential scan limit exceeded at `{path}`. Shorten this field before saving."
+        )));
+    }
+    let findings = validation::credential_findings(&metadata);
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(plaintext_credential_error(findings))
+    }
+}
+
 pub(crate) fn validate_draft(v: &Value) -> Result<()> {
     if !v["config"].is_object()
         || !v["graph"]["nodes"].is_array()
@@ -772,6 +810,7 @@ pub(crate) fn validate_draft(v: &Value) -> Result<()> {
     {
         return Err(ApiError::invalid("Graph exceeds 1000 nodes or 5000 edges"));
     }
+    validate_pipeline_metadata(v)?;
     crate::variables::declarations(&v["config"], v.get("variables").unwrap_or(&json!([])))?;
     for field in ["config", "graph"] {
         let security = validation::validate(&v[field]);
@@ -781,10 +820,42 @@ pub(crate) fn validate_draft(v: &Value) -> Result<()> {
             message.contains("Only credential fields can hold a device secret")
                 || message.contains("must be exactly `vectory-secret:NAME`")
         });
-        let plaintext = messages().find(|message| message.contains("Plaintext credentials"));
-        if let Some(message) = reference.or(plaintext) {
+        if let Some(message) = reference {
             return Err(ApiError::invalid(message));
         }
+    }
+    for section in ["config", "graph"] {
+        if let Some(path) = validation::credential_scan_limit_paths(&v[section]).first() {
+            let path = if section == "graph" {
+                format!("graph.{path}")
+            } else {
+                path.to_owned()
+            };
+            return Err(ApiError::invalid(format!(
+                "Credential scan limit exceeded at `{path}`. Shorten this field before saving."
+            )));
+        }
+    }
+    let findings: Vec<_> = ["config", "graph"]
+        .into_iter()
+        .flat_map(|section| {
+            validation::credential_findings(&v[section])
+                .into_iter()
+                .map(move |mut finding| {
+                    if section == "graph" {
+                        finding.path = format!("graph.{}", finding.path);
+                        finding.field = finding.path.clone();
+                        finding.message = format!(
+                            "Plaintext credentials cannot be stored in `{}`. {}",
+                            finding.path, finding.fix
+                        );
+                    }
+                    finding
+                })
+        })
+        .collect();
+    if !findings.is_empty() {
+        return Err(plaintext_credential_error(findings));
     }
     Ok(())
 }
@@ -795,6 +866,8 @@ pub(crate) async fn revision(
     message: &str,
     source: Option<Value>,
 ) -> Result<()> {
+    validate_pipeline_metadata(c)?;
+    validate_pipeline_metadata(&json!({"message":message}))?;
     let mut entry = json!({"id":db::id(),"configuration_id":c["id"],"revision":c["revision"],"name":c["name"],"description":c["description"],"graph":c["graph"],"config":c["config"],"variables":c.get("variables").cloned().unwrap_or_else(||json!([])),"message":message,"created_at":db::now(),"author":text(actor,"name"),"author_id":text(actor,"id"),"archived":c["archived"]==true});
     if let Some(source) = source {
         entry["source"] = source;
@@ -841,6 +914,9 @@ pub async fn draft(
             .or_else(|| c.get("variables"))
             .unwrap_or(&json!([])),
     )?;
+    // Omitted fields may come from an older saved draft. Check the merged
+    // record before it becomes a new revision, not only the request body.
+    validate_pipeline_metadata(&c)?;
     c["updated_at"] = json!(db::now());
     let message = v["message"].as_str().unwrap_or("");
     if message.len() > 2000 {
@@ -957,6 +1033,7 @@ pub async fn action(
                 "Draft changed; review before publishing",
             ));
         }
+        validate_pipeline_metadata(&configuration)?;
         let accepted = validation::validate_isolated(&s, &configuration["config"]).await?;
         // The tests of a draft Vector accepted. An invalid draft is refused
         // below, with its problems, exactly as before.
@@ -993,6 +1070,7 @@ pub async fn action(
                         "Draft changed; review before publishing",
                     ));
                 }
+                validate_pipeline_metadata(&c)?;
                 let validation = checked.unwrap_or_else(|| validation::validate(&c["config"]));
                 if validation["valid"] != true {
                     return Err(ApiError::new(
@@ -1023,6 +1101,7 @@ pub async fn action(
                 if message.len() > 2000 {
                     return Err(ApiError::invalid("Message is too long"));
                 }
+                validate_pipeline_metadata(&json!({"message":message}))?;
                 let variables = crate::variables::declarations(
                     &c["config"],
                     c.get("variables").unwrap_or(&json!([])),

@@ -188,6 +188,9 @@ pub(crate) fn safe_value(value: &Value, typ: &str) -> bool {
         if text.len() > 4096 || text.chars().any(char::is_control) {
             return false;
         }
+        if validation::strong_credential_shape(text) {
+            return false;
+        }
         let lower = text.to_ascii_lowercase();
         if [
             "vectory-secret:",
@@ -608,6 +611,31 @@ mod tests {
                 true
             )
             .is_err()
+        );
+        for candidate in [
+            "ghp_syntheticvariabletoken123",
+            "https://synthetic-user:synthetic-password@example.test/path",
+            "https://example.test/path?api_key=x",
+        ] {
+            assert!(
+                validate_bindings(
+                    &version,
+                    &json!({"defaults":{"format":candidate},"devices":{}}),
+                    &ids,
+                    true,
+                )
+                .is_err(),
+                "{candidate}"
+            );
+        }
+        assert!(
+            validate_bindings(
+                &version,
+                &json!({"defaults":{"format":"json"},"devices":{}}),
+                &ids,
+                true,
+            )
+            .is_ok()
         );
     }
 }

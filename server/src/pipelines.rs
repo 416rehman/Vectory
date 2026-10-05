@@ -239,6 +239,7 @@ pub(crate) async fn action(
     }
     configuration["revision"] = json!(current_revision.as_u64().unwrap() + 1);
     configuration["updated_at"] = json!(db::now());
+    api::validate_pipeline_metadata(&configuration)?;
     db::update(conn, "configuration", &configuration).await?;
     api::revision(conn, &configuration, actor, &message, source).await?;
     db::audit(

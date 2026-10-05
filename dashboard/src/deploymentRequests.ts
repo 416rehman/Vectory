@@ -7,6 +7,10 @@ import {
   type RollbackPreview,
 } from "./rollbackReview";
 import { APIError, type Policy } from "./api";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 import type { VariableBindings } from "./deploymentVariables";
 
 export type DeploymentCreateRequest = {
@@ -397,6 +401,32 @@ export function beginDeploymentOperation(
   retrySupported: boolean,
   label: string,
 ): DeploymentOperation {
+  const bindings = request.variable_bindings;
+  if (bindings) {
+    const groups: [string, Record<string, string | number | boolean>][] = [
+      ["defaults", bindings.defaults],
+      ...Object.entries(bindings.devices).map(
+        ([device, values]): [
+          string,
+          Record<string, string | number | boolean>,
+        ] => [`devices.${device}`, values],
+      ),
+    ];
+    for (const [group, values] of groups)
+      for (const [name, value] of Object.entries(values)) {
+        if (typeof value !== "string") continue;
+        // Binding names are arbitrary variable names, not credential fields.
+        // Check only strong token and credential-URL shapes in their values.
+        const finding = findPlainCredential(value, ["value"]);
+        if (finding)
+          throw Error(
+            credentialPreflightMessage({
+              ...finding,
+              path: `variable_bindings.${group}.${name}`,
+            }),
+          );
+      }
+  }
   const id = crypto.randomUUID();
   const operation = operationSchema.parse({
     actor_id: actor,

@@ -79,6 +79,17 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("durable publication registry", () => {
+  it("rejects a credential-shaped version note before writing any reminder", () => {
+    for (const message of [
+      "ghp_syntheticcredential123",
+      "https://collector.example/?api_key=short",
+    ]) {
+      expect(() =>
+        beginPublishOperation(actor, pipeline, { ...request, message }),
+      ).toThrow(/credential/i);
+      expect(storage.length).toBe(0);
+    }
+  });
   it("persists exact identity and frozen payload before the caller can send, surviving reload", async () => {
     const input = structuredClone(request);
     const operation = beginPublishOperation(actor, pipeline, input);

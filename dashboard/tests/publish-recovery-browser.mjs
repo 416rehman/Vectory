@@ -547,7 +547,7 @@ async function publish(page, message = "Synthetic original publication note") {
     .click();
 }
 async function run(name, fn) {
-  const focus = process.env.VECTORY_PUBLISH_RECOVERY_FOCUS;
+  const focus = process.env.VECTORY_PUBLISH_RECOVERY_FOCUS || process.argv[2];
   if (focus && !name.includes(focus)) return;
   const started = Date.now();
   try {
@@ -623,6 +623,23 @@ async function recent(page) {
 }
 let failure;
 try {
+  await run(
+    "Credential-shaped publication note never reaches browser storage or POST",
+    async () => {
+      const s = await start(state());
+      try {
+        await publish(s.page, "https://collector.example/?api_key=short");
+        await expect(reviewDialog(s.page).getByRole("alert")).toContainText(
+          "message",
+        );
+        expect(s.f.posts).toHaveLength(0);
+        expect(await storage(s.page)).toEqual({});
+        await noResend(s.f, 0);
+      } finally {
+        await s.close();
+      }
+    },
+  );
   for (const sharedFault of [
     { phase: "preflight", code: "UNAVAILABLE", status: 503 },
     { phase: "preflight", code: "FORBIDDEN", status: 403 },
@@ -1067,37 +1084,39 @@ try {
     },
   );
   await run(
-    "Validation/stale rejections are definitive once no version exists under the key: the review keeps the reason and a fresh intent follows; held publication cannot silently retry after a deadline",
+    "Validation and stale rejections keep the saved intent until reviewed; held publication cannot silently retry after a deadline",
     async () => {
       for (const publishMode of ["invalid", "stale"]) {
         const s = await start(state({ publishMode }));
         try {
           await publish(s.page);
-          const alert = reviewDialog(s.page).getByRole("alert");
-          await expect(alert).toContainText(
+          await uncertain(s.page);
+          await expect(reviewDialog(s.page).getByRole("alert")).toContainText(
             publishMode === "invalid"
-              ? "Vector rejected this version. Nothing was published."
-              : "The draft changed while you reviewed it. Nothing was published.",
+              ? "Synthetic native validation rejected this draft"
+              : "Draft changed; review before publishing",
           );
-          // The server confirmed that no version exists under the request key
-          // before the saved reminder was cleared.
-          await expect
-            .poll(() => s.f.lookups.at(-1)?.requestId)
-            .toBe(s.f.posts[0].body.request_id);
-          expect(s.f.lookups).toHaveLength(2);
-          expect(Object.keys(await storage(s.page))).toHaveLength(0);
-          await expect(
-            reviewDialog(s.page).getByText("Publish result needs confirmation"),
-          ).toHaveCount(0);
+          // A negative lookup after this refusal could race an earlier tab's
+          // same-key POST. Only the preflight lookup has run so far.
+          expect(s.f.lookups).toHaveLength(1);
+          const first = s.f.posts[0].body.request_id;
+          expect((await storage(s.page))[storageKey(first)]).toBeTruthy();
           expect(s.f.versions).toHaveLength(0);
           expect(s.f.posts).toHaveLength(1);
-          const first = s.f.posts[0].body.request_id;
+          await closePublish(s.page);
+          await openRecovery(s.page);
+          await expect(
+            s.page.getByRole("button", {
+              name: "Retry same request",
+              exact: true,
+            }),
+          ).toBeEnabled();
           s.f.publishMode = "normal";
-          await reviewDialog(s.page)
-            .getByRole("button", { name: "Publish version", exact: true })
+          await s.page
+            .getByRole("button", { name: "Retry same request", exact: true })
             .click();
-          await expect(reviewDialog(s.page)).toHaveCount(0);
-          expect(s.f.posts[1].body.request_id).not.toBe(first);
+          await published(s.page);
+          expect(s.f.posts[1].body.request_id).toBe(first);
           expect(s.f.posts[1].body.revision).toBe(1);
           await noResend(s.f, 2);
         } finally {

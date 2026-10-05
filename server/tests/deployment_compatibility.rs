@@ -14,6 +14,7 @@ use vectory_server::{
 };
 
 const VARIABLE_VERSION: &str = "00000000-0000-4000-8000-000000000803";
+const STRING_VARIABLE_VERSION: &str = "00000000-0000-4000-8000-000000000804";
 
 async fn variable_version(state: &State) {
     let config = json!({"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"],"buffer":{"max_events":500,"type":"memory"}}}});
@@ -21,6 +22,39 @@ async fn variable_version(state: &State) {
     let artifact = validation::render(&config).unwrap();
     let mut conn = state.pool.acquire().await.unwrap();
     db::insert(&mut conn,"version",&json!({"id":VARIABLE_VERSION,"configuration_id":"00000000-0000-4000-8000-000000000800","number":3,"config":config,"variables":[{"name":"max_events","path":"/sinks/out/buffer/max_events","type":"integer"}],"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+}
+
+#[tokio::test]
+async fn token_shaped_public_variable_binding_is_refused_before_deployment_storage() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    let config = json!({"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}});
+    assert_eq!(validation::validate(&config)["valid"], true);
+    let artifact = validation::render(&config).unwrap();
+    let mut conn = state.pool.acquire().await.unwrap();
+    db::insert(&mut conn,"version",&json!({"id":STRING_VARIABLE_VERSION,"configuration_id":"00000000-0000-4000-8000-000000000800","number":4,"config":config,"variables":[{"name":"format","path":"/sources/in/format","type":"string"}],"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+    drop(conn);
+
+    let candidate = "ghp_syntheticbindingtoken123";
+    let mut request = request(STRING_VARIABLE_VERSION, &ids[..1], "snapshot");
+    request["variable_bindings"] = json!({"defaults":{"format":candidate},"devices":{}});
+    for path in ["/api/v1/deployments/preview", "/api/v1/deployments"] {
+        let (status, refused) = call(&app, path, request.clone(), &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {refused}");
+        assert_eq!(refused["error"]["code"], "INVALID_INPUT");
+        assert!(!refused.to_string().contains(candidate));
+    }
+    let deployments: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='deployment'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(deployments, 0);
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{candidate}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0);
 }
 
 #[tokio::test]

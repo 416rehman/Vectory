@@ -1,5 +1,6 @@
 use crate::vector_diagnostics::Diagnostic;
 use base64::Engine;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -105,6 +106,8 @@ fn credential_key_name(key: &str) -> bool {
         "passwd",
         "api_key",
         "apikey",
+        "access_keys",
+        "valid_tokens",
         "access_key_id",
         "secret_access_key",
         "token",
@@ -139,7 +142,6 @@ fn credential_header_name(name: &str) -> bool {
         "key",
         "secret",
         "auth",
-        "team",
         "cookie",
         "signature",
         "session",
@@ -166,11 +168,15 @@ fn credential_query_name(name: &str) -> bool {
 }
 
 fn placeholder_word(text: &str) -> bool {
-    let text = text
-        .trim()
-        .strip_prefix("Bearer ")
-        .or_else(|| text.trim().strip_prefix("Basic "))
-        .unwrap_or(text.trim());
+    let text = text.trim();
+    let text = ["Bearer ", "Basic ", "Token "]
+        .into_iter()
+        .find_map(|prefix| {
+            text.get(..prefix.len())
+                .filter(|head| head.eq_ignore_ascii_case(prefix))
+                .map(|_| &text[prefix.len()..])
+        })
+        .unwrap_or(text);
     matches!(
         text.to_ascii_lowercase().as_str(),
         "changeme" | "example" | "redacted" | "xxxxxxxx"
@@ -178,21 +184,33 @@ fn placeholder_word(text: &str) -> bool {
 }
 
 fn credential_literal(text: &str) -> bool {
-    // One cookie-style key=value may hold a native reference. Looking only
-    // after the last '=' would excuse an earlier plaintext cookie or token.
-    let native_value = text.strip_prefix("Token ").or_else(|| {
-        text.split_once('=').and_then(|(key, value)| {
-            (!key.is_empty()
-                && key
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || [b'_', b'-', b'.'].contains(&byte)))
-            .then_some(value)
-        })
+    // Every cookie assignment must be a reference or a documented placeholder.
+    // Looking only after the last '=' could excuse an earlier literal token;
+    // treating an entirely native cookie list as plaintext would be noisy.
+    let native_cookie_values = text.split(';').all(|assignment| {
+        assignment
+            .trim()
+            .split_once('=')
+            .is_some_and(|(key, value)| {
+                !key.is_empty()
+                    && key.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || [b'_', b'-', b'.'].contains(&byte)
+                    })
+                    && (is_native_secret_reference(value.trim()) || placeholder_word(value))
+            })
     });
-    !text.is_empty()
+    let native_token = text
+        .strip_prefix("Token ")
+        .is_some_and(is_native_secret_reference);
+    !text.trim().is_empty()
         && !placeholder_word(text)
         && !is_native_secret_reference(text)
-        && !native_value.is_some_and(is_native_secret_reference)
+        && !native_cookie_values
+        && !native_token
+}
+
+fn substantial_credential_literal(text: &str) -> bool {
+    text.chars().count() >= 8 && credential_literal(text)
 }
 
 fn decoded_url_piece(piece: &str) -> String {
@@ -210,22 +228,20 @@ fn url_credential_candidate(text: &str) -> bool {
         // invalid URL evade the credential check before Vector rejects it.
         return text.split_once("://").is_some_and(|(_, tail)| {
             let authority = tail.split(['/', '?', '#']).next().unwrap_or("");
-            authority
-                .split_once('@')
-                .is_some_and(|(userinfo, _)| !userinfo.split(':').all(is_native_secret_reference))
-                || tail.split_once('?').is_some_and(|(_, query)| {
-                    url::form_urlencoded::parse(query.split('#').next().unwrap_or("").as_bytes())
-                        .any(|(name, value)| {
-                            credential_query_name(&name) && credential_literal(&value)
-                        })
-                })
+            authority.split_once('@').is_some_and(|(userinfo, _)| {
+                userinfo
+                    .split(':')
+                    .any(|piece| credential_literal(&decoded_url_piece(piece)))
+            }) || tail.split_once('?').is_some_and(|(_, query)| {
+                url::form_urlencoded::parse(query.split('#').next().unwrap_or("").as_bytes())
+                    .any(|(name, value)| credential_query_name(&name) && credential_literal(&value))
+            })
         });
     };
-    if (!url.username().is_empty()
-        && !is_native_secret_reference(&decoded_url_piece(url.username())))
-        || url.password().is_some_and(|password| {
-            !password.is_empty() && !is_native_secret_reference(&decoded_url_piece(password))
-        })
+    if credential_literal(&decoded_url_piece(url.username()))
+        || url
+            .password()
+            .is_some_and(|password| credential_literal(&decoded_url_piece(password)))
     {
         return true;
     }
@@ -269,21 +285,31 @@ fn url_credential_candidate(text: &str) -> bool {
     } else {
         None
     };
-    token.is_some_and(|value| credential_literal(value))
+    token.is_some_and(|value| substantial_credential_literal(value))
 }
 
-fn plaintext_url_credential(text: &str) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UrlCredentialScan {
+    Clean,
+    Plaintext,
+    Limit,
+}
+
+fn url_credential_scan(text: &str) -> UrlCredentialScan {
     const MAX_URL_CANDIDATES: usize = 64;
     const MAX_URL_BYTES: usize = 16 * 1024;
     let mut prefix_end = 0;
     let mut quote = None;
     let mut escaped = false;
     let mut candidates = 0;
-    text.match_indices("://").any(|(scheme_end, _)| {
+    let mut limit = false;
+    let found = text.match_indices("://").any(|(scheme_end, _)| {
         candidates += 1;
         if candidates > MAX_URL_CANDIDATES {
             // Avoid repeatedly parsing attacker-controlled nested URLs. An
-            // exceptional field cannot safely enter draft history unchecked.
+            // exceptional field cannot safely enter draft history unchecked,
+            // but it is not evidence that the field holds a credential.
+            limit = true;
             return true;
         }
         let start = text[..scheme_end]
@@ -291,6 +317,11 @@ fn plaintext_url_credential(text: &str) -> bool {
             .rev()
             .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '+' || *ch == '-' || *ch == '.'))
             .map_or(0, |(index, ch)| index + ch.len_utf8());
+        let closing_wrapper = match text[..start].chars().last() {
+            Some('(') => Some(')'),
+            Some('<') => Some('>'),
+            _ => None,
+        };
         // Track an enclosing string across any prose before the URL. A quote
         // inside a direct URL is URL data, while an escaped quote in a VRL
         // string cannot close the URL before a later credential.
@@ -328,7 +359,7 @@ fn plaintext_url_credential(text: &str) -> bool {
         let tail = &text[scheme_end + 3..];
         let mut tail_escaped = false;
         let mut too_long = false;
-        let end = tail
+        let mut end = tail
             .char_indices()
             .find(|(index, ch)| {
                 if *index >= MAX_URL_BYTES {
@@ -350,10 +381,30 @@ fn plaintext_url_credential(text: &str) -> bool {
             })
             .map_or(text.len(), |(index, _)| scheme_end + 3 + index);
         if too_long || end - start > MAX_URL_BYTES {
+            limit = true;
             return true;
         }
+        // A presentation wrapper can end the URL only at the end of its
+        // candidate. Stopping at the first `)` would miss a following literal
+        // in `(...?api_key=example)more`.
+        if let Some(wrapper) = closing_wrapper {
+            if text[start..end].ends_with(wrapper) {
+                end -= wrapper.len_utf8();
+            }
+        }
         url_credential_candidate(&text[start..end])
-    })
+    });
+    if limit {
+        UrlCredentialScan::Limit
+    } else if found {
+        UrlCredentialScan::Plaintext
+    } else {
+        UrlCredentialScan::Clean
+    }
+}
+
+fn plaintext_url_credential(text: &str) -> bool {
+    url_credential_scan(text) == UrlCredentialScan::Plaintext
 }
 
 fn credential_token_shape(text: &str) -> bool {
@@ -408,6 +459,14 @@ fn credential_token_shape(text: &str) -> bool {
             })
         })
 }
+
+/// High-confidence credential patterns for public variable bindings. Binding
+/// values are durable and viewer-readable, but have no semantic field name to
+/// judge; the explicit token shapes and URL credential sites are still unsafe.
+pub fn strong_credential_shape(text: &str) -> bool {
+    credential_token_shape(text) || url_credential_scan(text) != UrlCredentialScan::Clean
+}
+
 fn has_environment_reference(text: &str) -> bool {
     text.as_bytes()
         .windows(2)
@@ -654,11 +713,23 @@ impl FieldLocation<'_> {
         self.component_type
             .is_some_and(|kind| is_secret_field(self.section, kind, self.field))
     }
+    fn secret_field_or_descendant(&self) -> bool {
+        self.component_type.is_some_and(|kind| {
+            (1..=self.field.len())
+                .any(|end| is_secret_field(self.section, kind, &self.field[..end]))
+        })
+    }
     /// `auth.user`, `auth.password` and `auth.token` of any sink: credentials
     /// before the table existed, whatever the sink type.
     fn legacy_sink_auth(&self) -> bool {
         self.section == "sinks"
             && matches!(self.field, [PathStep::Field(auth), PathStep::Field(key)]
+                if auth == "auth" && ["user", "password", "token"].contains(&key.as_str()))
+    }
+    fn legacy_sink_auth_or_descendant(&self) -> bool {
+        self.section == "sinks"
+            && matches!(self.field,
+                [PathStep::Field(auth), PathStep::Field(key), ..]
                 if auth == "auth" && ["user", "password", "token"].contains(&key.as_str()))
     }
 }
@@ -760,7 +831,7 @@ pub fn local_secret_scan(config: &Value) -> (Vec<LocalSecretReference>, Vec<Stri
                         "{prefix}Only credential fields can hold a device secret, and `{field}` isn't one."
                     )),
                 }
-            } else if !text.is_empty() && !is_native_secret_reference(text) {
+            } else if !text.trim().is_empty() && !is_native_secret_reference(text) {
                 if secret_field {
                     errors.push(format!(
                         "{prefix}Plaintext credentials cannot be stored in `{field}`. {DEVICE_SECRET_FIX}"
@@ -777,6 +848,144 @@ pub fn local_secret_scan(config: &Value) -> (Vec<LocalSecretReference>, Vec<Stri
         },
     );
     (references, errors)
+}
+
+/// A plaintext credential finding contains only a location and a fixed fix.
+/// The input value must never be included in validation, API or audit output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CredentialFinding {
+    pub code: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    pub field: String,
+    pub message: String,
+    pub fix: String,
+}
+
+fn is_test_input_event(path: &[PathStep]) -> bool {
+    matches!(path,
+        [PathStep::Field(tests), PathStep::Item, PathStep::Field(inputs), PathStep::Item,
+         PathStep::Field(event), ..]
+        if tests == "tests" && inputs == "inputs"
+            && ["log_fields", "metric", "value"].contains(&event.as_str()))
+}
+
+/// Find plaintext credentials by their semantic field, header or query name,
+/// known webhook shape, or a complete token shape. The same findings drive
+/// validation and the structured draft refusal; test input events are data.
+pub fn credential_findings(config: &Value) -> Vec<CredentialFinding> {
+    const NATIVE_FIX: &str =
+        "Use a native secret or environment reference, such as SECRET[backend.key].";
+    let mut findings = Vec::new();
+    visit_strings(
+        config,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut |text, path, indexes| {
+            if text.trim().is_empty()
+                || is_test_input_event(path)
+                || is_local_secret(text)
+                || is_native_secret_reference(text)
+            {
+                return;
+            }
+            let location = locate(config, path);
+            let secret_field = location
+                .as_ref()
+                .is_some_and(FieldLocation::secret_field_or_descendant);
+            let legacy_auth = location
+                .as_ref()
+                .is_some_and(FieldLocation::legacy_sink_auth_or_descendant);
+            // A malformed array or object under a credential key must not
+            // smuggle literal strings into draft history. Component IDs are
+            // labels, so only field steps within a component carry context.
+            let field_path = location.as_ref().map_or_else(
+                || match path {
+                    [PathStep::Field(section), PathStep::Field(_), field @ ..]
+                        if ["sources", "transforms", "sinks"].contains(&section.as_str()) =>
+                    {
+                        field
+                    }
+                    _ => path,
+                },
+                |at| at.field,
+            );
+            let credential_key = field_path.iter().any(|step| match step {
+                PathStep::Field(key) => credential_key_name(key),
+                PathStep::Item => false,
+            });
+            let credential_header = field_path.windows(2).any(|pair| {
+                matches!(pair, [PathStep::Field(headers), PathStep::Field(name)]
+                    if headers == "headers" && credential_header_name(name))
+            });
+            if !(secret_field
+                || legacy_auth
+                || ((credential_key || credential_header) && credential_literal(text))
+                || plaintext_url_credential(text)
+                || credential_token_shape(text))
+            {
+                return;
+            }
+            let full_path = display_path(path, indexes);
+            let (component, field) = if let Some(at) = &location {
+                let items = at
+                    .field
+                    .iter()
+                    .filter(|step| **step == PathStep::Item)
+                    .count();
+                (
+                    Some(at.component.to_owned()),
+                    display_path(at.field, &indexes[indexes.len() - items..]),
+                )
+            } else {
+                (None, full_path.clone())
+            };
+            let fix = if secret_field {
+                DEVICE_SECRET_FIX
+            } else {
+                NATIVE_FIX
+            };
+            let prefix = component
+                .as_deref()
+                .filter(|_| secret_field || legacy_auth)
+                .map_or_else(String::new, |name| format!("{name}: "));
+            let named_field = if secret_field || legacy_auth {
+                &field
+            } else {
+                &full_path
+            };
+            let message =
+                format!("{prefix}Plaintext credentials cannot be stored in `{named_field}`. {fix}");
+            findings.push(CredentialFinding {
+                code: "plaintext_credential",
+                path: full_path,
+                component,
+                field,
+                message,
+                fix: fix.into(),
+            });
+        },
+    );
+    findings
+}
+
+/// URL scans that exceed the conservative parsing budget are invalid input,
+/// not plaintext findings. Refuse them before storage without alleging that a
+/// harmless long field contains a credential.
+pub fn credential_scan_limit_paths(config: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    visit_strings(
+        config,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut |text, path, indexes| {
+            if !is_test_input_event(path) && url_credential_scan(text) == UrlCredentialScan::Limit {
+                paths.push(display_path(path, indexes));
+            }
+        },
+    );
+    paths
 }
 
 /// Whether a configuration uses device secrets, and the problems with its
@@ -3535,52 +3744,15 @@ pub fn validate(config: &Value) -> Value {
             break;
         }
     }
-    // Credential-looking fields anywhere, including components this catalog
-    // doesn't know. Device-secret fields and the sink auth fields are checked
-    // by `local_secret_scan`, which names the fix.
-    fn security(config: &Value, errors: &mut Vec<String>) {
-        visit_strings(
-            config,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut |text, path, indexes| {
-                if text.is_empty()
-                    || is_local_secret(text)
-                    || is_native_secret_reference(text)
-                    || locate(config, path)
-                        .is_some_and(|at| at.secret_field() || at.legacy_sink_auth())
-                {
-                    return;
-                }
-                let credential_key = match path {
-                    // Native nullable credential lists retain field context while
-                    // inspecting elements. JSON Schema marks these SensitiveString.
-                    [.., PathStep::Field(key), PathStep::Item] => ["valid_tokens", "access_keys"]
-                        .contains(&key.to_ascii_lowercase().replace(['-', '.'], "_").as_str()),
-                    [.., PathStep::Field(key)] => credential_key_name(key),
-                    _ => false,
-                };
-                let credential_header = matches!(path,
-                    [.., PathStep::Field(headers), PathStep::Field(name)]
-                    if headers == "headers" && credential_header_name(name));
-                // Graph metadata also reaches draft and version history. A
-                // token-shaped value must not escape simply because it has no
-                // component field location there.
-                let token_shape = credential_token_shape(text);
-                if ((credential_key || credential_header) && credential_literal(text))
-                    || plaintext_url_credential(text)
-                    || token_shape
-                {
-                    errors.push(format!(
-                        "Plaintext credentials cannot be stored in `{}`. Use a native secret or environment reference, such as SECRET[backend.key].",
-                        display_path(path, indexes),
-                    ));
-                }
-            },
-        );
-    }
     event_type_mismatches(config, &dependencies, &mut errors);
-    security(config, &mut errors);
+    errors.extend(
+        credential_findings(config)
+            .into_iter()
+            .map(|finding| finding.message),
+    );
+    errors.extend(credential_scan_limit_paths(config).into_iter().map(|path| {
+        format!("Credential scan limit exceeded at `{path}`. Shorten this field before saving.")
+    }));
     let (_, reference_errors) = local_secret_references(config);
     errors.extend(reference_errors);
     errors.sort();
@@ -3592,6 +3764,38 @@ pub fn validate(config: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_credential_fixtures_match_server_detector() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../vector-catalog/fixtures/credentials/cases.json"
+        ))
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let findings = credential_findings(&case["config"]);
+            let expected = case["findings"].as_array().unwrap();
+            let mut actual_pairs: Vec<_> = findings
+                .iter()
+                .map(|finding| (finding.code.to_owned(), finding.path.clone()))
+                .collect();
+            actual_pairs.sort();
+            let mut expected_pairs: Vec<_> = expected
+                .iter()
+                .map(|finding| {
+                    (
+                        finding["code"].as_str().unwrap().to_owned(),
+                        finding["path"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            expected_pairs.sort();
+            assert_eq!(actual_pairs, expected_pairs, "{}", case["name"]);
+            for found in &findings {
+                assert!(!found.message.contains("synthetic-"), "{}", case["name"]);
+                assert!(!found.fix.contains("synthetic-"), "{}", case["name"]);
+            }
+        }
+    }
+
     #[test]
     fn network_calls_are_found_by_call_syntax_only() {
         let call = |text: &str| unrunnable_vrl_calls(&json!({"source": text}));
@@ -4171,7 +4375,7 @@ mod tests {
         );
         // Credential-looking names anywhere else keep the generic refusal, once.
         let named = validate(
-            &json!({"sources":{"in":{"type":"custom_source","client_secret":"x","endpoints":["https://user:pass@es.example:9200"]}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}),
+            &json!({"sources":{"in":{"type":"custom_source","client_secret":"synthetic-secret","endpoints":["https://synthetic-user:synthetic-password@es.example:9200"]}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}),
         );
         assert_eq!(named["valid"], false);
         let errors = named["errors"].as_array().unwrap();
@@ -4192,17 +4396,17 @@ mod tests {
         for (pointer, value, field) in [
             (
                 "/sinks/out/client_secret",
-                "z9Q4",
+                "z9Q4Y2R8",
                 "sinks.out.client_secret",
             ),
             (
                 "/sinks/out/request/headers/Authorization",
-                "z9Q4",
+                "z9Q4Y2R8",
                 "sinks.out.request.headers.Authorization",
             ),
             (
                 "/sinks/out/request/query/api_key",
-                "z9Q4",
+                "z9Q4Y2R8",
                 "sinks.out.request.query.api_key",
             ),
             (
@@ -4227,7 +4431,7 @@ mod tests {
             ),
             (
                 "/sinks/out/uri",
-                "https://example.test/events?api_key=z9Q4",
+                "https://example.test/events?api_key=z9Q4Y2R8",
                 "sinks.out.uri",
             ),
             (
@@ -4368,6 +4572,15 @@ mod tests {
         assert!(!plaintext_url_credential(
             "s'hit https://example.test/?api_key=${API_KEY}'"
         ));
+        assert!(!plaintext_url_credential(
+            "See (https://collector.example/?api_key=example)"
+        ));
+        assert!(plaintext_url_credential(
+            "See (https://collector.example/?api_key=tiny)"
+        ));
+        assert!(plaintext_url_credential(
+            "See (https://collector.example/?api_key=example)more"
+        ));
         assert!(plaintext_url_credential(
             ".message = \"hit https://example.test/?api_key=plain-secret\""
         ));
@@ -4377,15 +4590,21 @@ mod tests {
         assert!(plaintext_url_credential(
             "don't trust https://example.test/?note='ok'&api_key=plain-secret"
         ));
-        assert!(plaintext_url_credential(&format!(
+        let long_url = format!(
             "https://example.test/{}?api_key=${{API_KEY}}",
             "x".repeat(16 * 1024)
-        )));
-        assert!(plaintext_url_credential(
-            &std::iter::repeat_n("https://example.test/?api_key=${API_KEY}", 65)
-                .collect::<Vec<_>>()
-                .join(" ")
-        ));
+        );
+        let many_urls = std::iter::repeat_n("https://example.test/?api_key=${API_KEY}", 65)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(url_credential_scan(&long_url), UrlCredentialScan::Limit);
+        assert_eq!(url_credential_scan(&many_urls), UrlCredentialScan::Limit);
+        assert!(!plaintext_url_credential(&long_url));
+        assert!(!plaintext_url_credential(&many_urls));
+        assert_eq!(
+            credential_scan_limit_paths(&json!({"sinks":{"out":{"type":"http","uri":long_url}}})),
+            ["sinks.out.uri"]
+        );
         assert!(plaintext_url_credential(
             ".message = \"https://example.test/?note=\\\"ok\\\"&api_key=plain-secret\""
         ));
@@ -4394,18 +4613,24 @@ mod tests {
         ));
         assert!(!credential_literal("sid=${COOKIE}"));
         assert!(!credential_literal("Bearer redacted"));
+        assert!(!credential_literal("bearer example"));
+        assert!(!credential_literal("Token redacted"));
+        assert!(!credential_literal("sid=${COOKIE}; theme=${THEME}"));
         assert!(!credential_literal(""));
         assert!(!credential_literal("example"));
         assert!(!credential_literal("SECRET[vault.key]"));
         assert!(credential_literal("x"));
         assert!(credential_literal("abc"));
-        assert!(credential_literal("sid=example"));
+        assert!(!credential_literal("sid=example"));
         assert!(credential_literal("Bearer live-secret=example"));
         assert!(credential_literal("sid=live-secret; theme=example"));
         assert!(credential_literal("sid=live-secret; theme=${THEME}"));
         assert!(!credential_key_name("source_key"));
         assert!(credential_key_name("x_honeycomb_team"));
         assert!(credential_header_name("X-Session-Token"));
+        assert!(!credential_header_name("X-Team-Name"));
+        assert!(credential_findings(&json!({"sinks":{"out":{"type":"http","request":{"headers":{"X-Team-Name":"platform"}}}}})).is_empty());
+        assert_eq!(credential_findings(&json!({"sinks":{"out":{"type":"http","request":{"headers":{"X-Honeycomb-Team":"short"}}}}})).len(), 1);
 
         for token in [
             "AKIAABCDEFGHIJKLMNOP",

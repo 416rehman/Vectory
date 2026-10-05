@@ -53,7 +53,7 @@ Each heartbeat reply is an Ed25519-signed manifest bound to the device, the nonc
 
 ## Local secret references
 
-Only an exact `vectory-secret:NAME` value is accepted, at a credential field of the generated table in `src/secret_fields.rs` (every Vector `SensitiveString` field plus reviewed credentials, per component type; `node scripts/generate-secret-fields.mjs` regenerates it). Names match `[A-Za-z][A-Za-z0-9_.-]{0,63}`. Prefixes, references in URLs, VRL or other fields, and plaintext credentials are refused, with the fix. The server never sees secret values: drafts, versions, exports, signatures and validation hold the reference only.
+Only an exact `vectory-secret:NAME` value is accepted, at a credential field of the generated table in `src/secret_fields.rs` (every Vector `SensitiveString` field plus reviewed credentials, per component type; `node scripts/generate-secret-fields.mjs` regenerates it). Names match `[A-Za-z][A-Za-z0-9_.-]{0,63}`. Prefixes, references in URLs, VRL or other fields, and detected plaintext credentials are refused, with the fix. Drafts, versions, exports, signatures and validation hold the reference only, not its value.
 
 The agent substitutes values from protected local files, re-checks local policy, validates and verifies activation. Versions marked `uses_local_secrets` may report an effective digest that differs from the template, but verification then also requires the matching `applied_template_sha256`, the current generation and a higher `secret_revision`. Every other version must match the desired digest exactly.
 

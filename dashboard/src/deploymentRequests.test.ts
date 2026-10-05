@@ -182,6 +182,49 @@ describe("durable deployment request registry", () => {
     ready: true,
   });
 
+  it("refuses token-shaped and credential-URL bindings before a durable request exists", async () => {
+    const local = new BrowserStorage();
+    const tab = await browserTab(local);
+    for (const value of [
+      "ghp_syntheticcredential123",
+      "https://collector.example/?api_key=short",
+    ]) {
+      expect(() =>
+        tab.run((r) =>
+          r.beginDeploymentOperation(
+            actor,
+            {
+              ...request,
+              variable_bindings: {
+                defaults: { MY_VALUE: value },
+                devices: {},
+              },
+            },
+            true,
+            "Synthetic deployment",
+          ),
+        ),
+      ).toThrow(/variable_bindings\.defaults\.MY_VALUE/);
+      expect(local.data.size).toBe(0);
+    }
+    expect(() =>
+      tab.run((r) =>
+        r.beginDeploymentOperation(
+          actor,
+          {
+            ...request,
+            variable_bindings: {
+              defaults: { MY_VALUE: "ordinary-nonsecret-value" },
+              devices: {},
+            },
+          },
+          true,
+          "Synthetic deployment",
+        ),
+      ),
+    ).not.toThrow();
+  });
+
   it("preserves the exact reviewed token and device/version context after tab reload", async () => {
     const local = new BrowserStorage(),
       first = await browserTab(local),

@@ -315,7 +315,6 @@ async fn short_named_credentials_are_refused_before_draft_history() {
     .await;
     assert_eq!(status, StatusCode::OK, "{draft}");
     let id = draft["id"].as_str().unwrap();
-
     for (index, path, secret) in [
         (0, &["client_secret"][..], "c5sC3"),
         (1, &["request", "headers", "Authorization"][..], "h6rB2"),
@@ -329,8 +328,8 @@ async fn short_named_credentials_are_refused_before_draft_history() {
             field = &mut field[*key];
         }
         *field = json!(secret);
-        let create_body = json!({"name":format!("Rejected credential {index}"),"description":"","config":config,"graph":{"nodes":[],"edges":[]}});
-        let (status, error, _) = call(
+        let create_body = json!({"name":format!("Rejected credential {index}"),"description":"","config":config,"graph":{"nodes":[],"edges":[]},"request_id":uuid::Uuid::new_v4().to_string()});
+        let (status, refused, _) = call(
             app.clone(),
             "POST",
             "/api/v1/configurations",
@@ -339,14 +338,11 @@ async fn short_named_credentials_are_refused_before_draft_history() {
             &csrf,
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
-        assert!(
-            error.to_string().contains("Plaintext credentials"),
-            "{error}"
-        );
-        assert!(!error.to_string().contains(secret));
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["reason"], "plaintext_credential");
+        assert!(!refused.to_string().contains(secret));
 
-        let (status, error, _) = call(
+        let (status, refused, _) = call(
             app.clone(),
             "PUT",
             &format!("/api/v1/configurations/{id}/draft"),
@@ -355,12 +351,9 @@ async fn short_named_credentials_are_refused_before_draft_history() {
             &csrf,
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
-        assert!(
-            error.to_string().contains("Plaintext credentials"),
-            "{error}"
-        );
-        assert!(!error.to_string().contains(secret));
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["reason"], "plaintext_credential");
+        assert!(!refused.to_string().contains(secret));
         let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
             .bind(format!("%{secret}%"))
             .fetch_one(&state.pool)
@@ -368,14 +361,447 @@ async fn short_named_credentials_are_refused_before_draft_history() {
             .unwrap();
         assert_eq!(persisted, 0, "{secret} entered draft history");
     }
-    let current: String =
-        sqlx::query_scalar("SELECT data FROM records WHERE kind='configuration' AND id=?")
-            .bind(id)
+    let mappings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pipeline_requests")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(mappings, 0, "refused request IDs must not be committed");
+}
+
+#[tokio::test]
+async fn nested_credential_literals_cannot_hide_in_malformed_drafts() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (status, safe, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Nested credential guard","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{safe}");
+    for (nested, path) in [
+        (json!(["short"]), "sinks.out.api_key[0]"),
+        (json!({"value":"short"}), "sinks.out.api_key.value"),
+    ] {
+        let mut config = pipeline();
+        config["sinks"]["out"]["type"] = json!("http");
+        config["sinks"]["out"]["uri"] = json!("https://example.test/events");
+        config["sinks"]["out"]["api_key"] = nested;
+        let payload = json!({"name":"Nested credential refused","description":"","config":config,"graph":{"nodes":[],"edges":[]},"request_id":uuid::Uuid::new_v4().to_string()});
+        let (status, refused, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            payload.clone(),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["problems"][0]["path"], path);
+        assert!(!refused.to_string().contains("short"));
+        let (status, refused, _) = call(
+            app.clone(),
+            "PUT",
+            &format!(
+                "/api/v1/configurations/{}/draft",
+                safe["id"].as_str().unwrap()
+            ),
+            json!({"revision":safe["revision"],"config":payload["config"],"graph":payload["graph"]}),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["problems"][0]["path"], path);
+    }
+    let mappings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pipeline_requests")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(mappings, 0);
+    let stored: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE '%\"api_key\"%'")
             .fetch_one(&state.pool)
             .await
             .unwrap();
-    let current: Value = serde_json::from_str(&current).unwrap();
-    assert_eq!(current["revision"], draft["revision"]);
+    assert_eq!(stored, 0, "nested credential key entered history");
+}
+
+#[tokio::test]
+async fn plaintext_refusal_names_fields_without_values_and_bounds_problems() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let canary = "synthetic-credential-never-store-123";
+    let mut config = pipeline();
+    config["sinks"]["out"]["type"] = json!("http");
+    config["sinks"]["out"]["uri"] = json!("https://example.test/events");
+    config["sinks"]["out"]["request"]["headers"]["Authorization"] =
+        json!(format!("Bearer {canary}"));
+    let payload = json!({"name":"Refused credential","description":"","config":config,"graph":{"nodes":[],"edges":[]}});
+
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        payload.clone(),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["code"], "INVALID_INPUT");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["truncated"], false);
+    assert_eq!(refused["error"]["problems"].as_array().unwrap().len(), 1);
+    let finding = &refused["error"]["problems"][0];
+    assert_eq!(finding["code"], "plaintext_credential");
+    assert_eq!(finding["path"], "sinks.out.request.headers.Authorization");
+    assert_eq!(finding["component"], "out");
+    assert_eq!(finding["field"], "request.headers.Authorization");
+    assert!(finding["fix"].as_str().unwrap().contains("SECRET["));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Plaintext credentials")
+    );
+    assert!(!refused.to_string().contains(canary));
+
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Safe baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!("/api/v1/configurations/{id}/draft"),
+        json!({"revision":draft["revision"],"config":payload["config"],"graph":payload["graph"]}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"][0]["path"], finding["path"]);
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{canary}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0);
+
+    let mut many = payload;
+    for index in 0..25 {
+        many["config"]["sinks"]["out"]["request"]["headers"][format!("X-Api-Key-{index}")] =
+            json!(canary);
+    }
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        many,
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"].as_array().unwrap().len(), 20);
+    assert_eq!(refused["error"]["truncated"], true);
+    assert!(!refused.to_string().contains(canary));
+
+    let graph = json!({"nodes":[{"data":{"service_token":canary}}],"edges":[]});
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Unsafe graph metadata","description":"","config":pipeline(),"graph":graph}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"]["problems"][0]["path"],
+        "graph.nodes[0].data.service_token"
+    );
+    assert!(!refused.to_string().contains(canary));
+
+    let long_url = format!("https://example.test/{}", "x".repeat(16 * 1024));
+    let mut config = pipeline();
+    config["sinks"]["out"]["type"] = json!("http");
+    config["sinks"]["out"]["uri"] = json!(long_url);
+    let (status, refused, _) = call(
+        api::router(state.clone()),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Scan limit","description":"","config":config,"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["code"], "INVALID_INPUT");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scan limit")
+    );
+    assert!(refused["error"].get("reason").is_none());
+}
+
+#[tokio::test]
+async fn pipeline_metadata_credentials_do_not_enter_history() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    for (field, candidate) in [
+        ("name", "ghp_synthetictokenvalue123"),
+        ("name", "ghp_synthetictokenvalue123 vectory-secret:DUMMY"),
+        (
+            "description",
+            "https://synthetic-user:synthetic-password@example.test/path",
+        ),
+        (
+            "description",
+            "https://synthetic-user:synthetic-password@example.test/path vectory-secret:DUMMY",
+        ),
+    ] {
+        let mut payload = json!({"name":"Safe name","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}});
+        payload[field] = json!(candidate);
+        let (status, refused, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            payload,
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["reason"], "plaintext_credential");
+        assert_eq!(refused["error"]["problems"][0]["path"], field);
+        assert!(!refused.to_string().contains(candidate));
+        let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+            .bind(format!("%{candidate}%"))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, 0, "{field} entered history");
+    }
+
+    let variable_name = "ghp_syntheticvariabletoken123";
+    let variable = json!([{"name":variable_name,"path":"/sources/sample/format","type":"string"}]);
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Safe variable baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]},"variables":variable}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "variables[0].name");
+    assert!(!refused.to_string().contains(variable_name));
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{variable_name}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0, "variable declaration entered history");
+
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Safe baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!("/api/v1/configurations/{}/draft", draft["id"].as_str().unwrap()),
+        json!({"revision":draft["revision"],"config":draft["config"],"graph":draft["graph"],"variables":variable}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"][0]["path"], "variables[0].name");
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{variable_name}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0, "variable declaration entered draft history");
+    let note = "ghp_syntheticrevisiontoken123 vectory-secret:DUMMY";
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!(
+            "/api/v1/configurations/{}/draft",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"config":draft["config"],"graph":draft["graph"],"message":note}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "message");
+    assert!(!refused.to_string().contains(note));
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+
+    let revision_id: String = sqlx::query_scalar(
+        "SELECT id FROM records WHERE kind='revision' AND json_extract(data,'$.configuration_id')=? LIMIT 1",
+    )
+    .bind(draft["id"].as_str().unwrap())
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/restore",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"revision_id":revision_id,"message":note}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"][0]["path"], "message");
+    let after_restore: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(after_restore, before);
+
+    let (status, refused, _) = call(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/publish",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"message":note}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "message");
+    assert!(!refused.to_string().contains(note));
+    let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='version'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(versions, 0);
+}
+
+#[tokio::test]
+async fn omitted_legacy_metadata_cannot_be_copied_to_revision_or_published() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Legacy baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let candidate = "ghp_syntheticlegacytoken123";
+    let mut conn = state.pool.acquire().await.unwrap();
+    let mut legacy = db::record(&mut conn, "configuration", draft["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    legacy["description"] = json!(candidate);
+    db::update(&mut conn, "configuration", &legacy)
+        .await
+        .unwrap();
+    drop(conn);
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!(
+            "/api/v1/configurations/{}/draft",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"config":draft["config"],"graph":draft["graph"]}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "description");
+    assert!(!refused.to_string().contains(candidate));
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+
+    let (status, refused, _) = call(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/publish",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"message":""}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "description");
+    assert!(!refused.to_string().contains(candidate));
+    let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='version'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(versions, 0);
 }
 
 #[tokio::test]
