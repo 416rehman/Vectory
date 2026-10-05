@@ -215,6 +215,7 @@ At each check-in, the agent reports the SHA-256 digest of its managed file. Vect
 | **The managed file matches this offer, but activation isn't verified.** | The file digest matches, but the latest apply failed or its verification is unknown. Check the device status and Vector log before treating it as running. |
 | **The managed file differs from what Vectory offered at generation 12: it matches generation 11.** | The reported file is an earlier offer. Generation 12 may not be applied yet, or its apply may have failed. Running vs desired above says what the device verified. |
 | **The managed file differs from what Vectory offered at generation 12.** | The reported file isn't any text Vectory offered this device. A local edit does this, and so does the configuration adopted at setup. With sync on, the agent restores the offered configuration at its next check-in. With sync paused, it leaves the file as it is. |
+| **The managed file matches generation 11.** | You're reading an earlier offer whose bytes match the managed file. Generation 12 is offered now; this comparison does not establish that the earlier offer is active, even if the newer verified offer has identical bytes. |
 | **The managed file differs from generation 11.** | You're reading an earlier offer, and the agent reports a different managed file. This alone does not say what Vector loaded. |
 | **Not reported by this agent.** | No digest was reported, so Vectory can't say. |
 | **This device hasn't checked in yet.** | Nothing was reported yet. |

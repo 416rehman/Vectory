@@ -123,23 +123,27 @@ export function driftLine(
     (secrets
       ? run.template_sha256 === config.sha256
       : run.sha256 === config.sha256);
+  const earlierMatchDetail =
+    "This is an earlier offer. Matching file bytes do not establish that this generation is active.";
   if (
     reportedOffer &&
     (run.matches === null ||
       (run.matches === true && device.apply_state !== "verified_applied"))
   )
     return {
-      badge: "Not verified",
+      badge: config.current ? "Not verified" : "File matches",
       tone: "neutral",
       headline: config.current
         ? secrets
           ? "The agent reports this template, but activation isn't verified."
           : "The managed file matches this offer, but activation isn't verified."
-        : `The managed file matches generation ${generation}, but activation isn't verified.`,
+        : `The managed file matches generation ${generation}.`,
       ...shared(
-        device.apply_state === "failed"
-          ? "The latest apply failed. Check the device status and Vector log."
-          : "A matching file digest alone doesn't show that Vector loaded this version.",
+        !config.current
+          ? earlierMatchDetail
+          : device.apply_state === "failed"
+            ? "The latest apply failed. Check the device status and Vector log."
+            : "A matching file digest alone doesn't show that Vector loaded this version.",
       ),
     };
 
@@ -159,9 +163,7 @@ export function driftLine(
       badge: "File matches",
       tone: "neutral",
       headline: `The managed file matches generation ${generation}.`,
-      ...shared(
-        `Generation ${device.desired_generation} is the one offered now.`,
-      ),
+      ...shared(earlierMatchDetail),
     };
   }
 

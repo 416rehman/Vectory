@@ -143,20 +143,25 @@ describe("the drift sentence", () => {
   });
 
   it("describes an earlier matching file without calling its offer active", () => {
-    const line = driftLine(
-      read({
-        current: false,
-        generation: 10,
-        running: running({ matches: null }),
-      }),
-      device({ apply_state: "desired" }),
-    );
-    expect(line).toMatchObject({
-      badge: "Not verified",
-      tone: "neutral",
-      headline:
-        "The managed file matches generation 10, but activation isn't verified.",
-    });
+    for (const apply_state of ["desired", "verified_applied"]) {
+      const line = driftLine(
+        read({
+          current: false,
+          generation: 10,
+          running: running({ matches: null }),
+        }),
+        device({ apply_state }),
+      );
+      expect(line).toMatchObject({
+        badge: "File matches",
+        tone: "neutral",
+        headline: "The managed file matches generation 10.",
+      });
+      expect(line.detail).toContain(
+        "Matching file bytes do not establish that this generation is active.",
+      );
+      expect(line.headline).not.toContain("activation isn't verified");
+    }
   });
 
   it("says the running configuration matches only when the server verified it", () => {
@@ -309,7 +314,9 @@ describe("the drift sentence", () => {
     );
     expect(stillRuns).toMatchObject({ badge: "File matches", tone: "neutral" });
     expect(stillRuns.headline).toBe("The managed file matches generation 10.");
-    expect(stillRuns.detail).toBe("Generation 12 is the one offered now.");
+    expect(stillRuns.detail).toBe(
+      "This is an earlier offer. Matching file bytes do not establish that this generation is active.",
+    );
     const notRunning = driftLine(
       read({
         generation: 10,

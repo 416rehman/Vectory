@@ -1061,6 +1061,35 @@ try {
   });
 
   await check(
+    "An older offer with the current verified bytes is a file comparison",
+    async () => {
+      const offers = history();
+      offers[2] = {
+        ...offers[2],
+        content: offers[3].content,
+        sha256: offers[3].sha256,
+      };
+      await load({ offers });
+      await shown();
+      await expect(section().getByRole("status").first()).toContainText(
+        "Running matches what Vectory offered.",
+      );
+      await pick("generation 11");
+      const line = section().getByRole("status").first();
+      await expect(line).toContainText(
+        "The managed file matches generation 11.",
+      );
+      await expect(line).toContainText(
+        "Matching file bytes do not establish that this generation is active.",
+      );
+      await expect(line).not.toContainText("activation isn't verified");
+      await expect(
+        section().locator(".device-card-head .status-badge"),
+      ).toContainText("File matches");
+    },
+  );
+
+  await check(
     "The changes since the previous generation: counts, then hunks named by component",
     async () => {
       await load();
