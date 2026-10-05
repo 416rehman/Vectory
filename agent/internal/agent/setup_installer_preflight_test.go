@@ -5,9 +5,25 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func preflightTestExecutable(t *testing.T) string {
+	t.Helper()
+	running, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// setup resolves the executable before checking the staged candidate. Go's
+	// macOS test binary may live below /var, which links to /private/var.
+	running, err = filepath.EvalSymlinks(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return running
+}
 
 func stagedRunningBuild(t *testing.T, target string) string {
 	t.Helper()
@@ -15,11 +31,7 @@ func stagedRunningBuild(t *testing.T, target string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(filepath.Dir(target), ".vectory.new.fixture")
-	running, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	in, err := os.Open(running)
+	in, err := os.Open(preflightTestExecutable(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,12 +53,18 @@ func stagedRunningBuild(t *testing.T, target string) string {
 func TestInstallerPreflightBindsCandidateToRunningBuildAndDestination(t *testing.T) {
 	target := filepath.Join(privateTempDir(t), "vectory")
 	candidate := stagedRunningBuild(t, target)
-	running, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	running := preflightTestExecutable(t)
 	if err := checkInstallerCandidate(candidate, target, running, true); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(filepath.Dir(target), ".vectory.link.fixture")
+		if err := os.Symlink(candidate, link); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkInstallerCandidate(link, target, running, true); err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("symlinked staged candidate was not rejected: %v", err)
+		}
 	}
 	for name, args := range map[string]struct {
 		candidate, target string

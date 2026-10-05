@@ -109,6 +109,8 @@ While [agent updates](agent-updates.md) are on, **Add device** has an **Agent up
 
 If you type a device name on **Add device**, the command's token enrolls only that name: a copied command can't enroll a host under another one. The token list shows it as **Only** followed by the name. A token pasted short or mangled is refused on the host before anything is sent.
 
+Once the command is created, its host settings stay fixed so the displayed command matches the issued token. To change the name, mode, certificate choice or service setup, choose **Start over** beside the token. That revokes the old token before you create a new command.
+
 ### Keep tokens out of shell history
 
 | Method | Use it for |

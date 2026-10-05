@@ -9,7 +9,14 @@ const base = () => ({
   sinks: { output: { type: "blackhole", inputs: ["process"] } },
 });
 
-async function create(page: Page) {
+async function create(
+  page: Page,
+  variables: Array<{
+    name: string;
+    path: string;
+    type: "string" | "integer" | "boolean";
+  }> = [],
+) {
   const session = await page.request.get("/api/v1/session");
   expect(session.ok()).toBeTruthy();
   const headers = { "X-CSRF-Token": (await session.json()).csrf_token };
@@ -20,11 +27,141 @@ async function create(page: Page) {
       description: "Browser recovery regression; never deployed.",
       config: base(),
       graph: { nodes: [], edges: [] },
+      variables,
     },
   });
   expect(response.ok()).toBeTruthy();
   return { doc: await response.json(), headers };
 }
+
+test("a stale local copy creates a separate pipeline with variables and recovers a lost reply", async ({
+  page,
+}) => {
+  const variables = [
+    {
+      name: "interval",
+      path: "/sources/input/interval",
+      type: "integer" as const,
+    },
+  ];
+  const { doc, headers } = await create(page, variables);
+  let copyId: string | undefined;
+  const copyName = `${doc.name} recovered copy`;
+  try {
+    await page.goto(`/#/configurations/${doc.id}`);
+    await page.getByRole("button", { name: "Code", exact: true }).click();
+    const code = page.getByLabel("Vector configuration code");
+    const local = base();
+    local.transforms.process.source = '.marker = "mine"';
+    await code.fill(JSON.stringify(local));
+    await page.getByRole("button", { name: "Apply code changes" }).click();
+
+    const peer = base();
+    peer.transforms.process.source = '.marker = "peer"';
+    expect(
+      (
+        await page.request.put(`/api/v1/configurations/${doc.id}/draft`, {
+          headers,
+          data: {
+            revision: doc.revision,
+            config: peer,
+            graph: doc.graph,
+            variables,
+            message: "Peer changed this draft",
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    await page.getByRole("button", { name: "Save options" }).click();
+    await page
+      .getByRole("menuitem", { name: "Save draft", exact: true })
+      .click();
+    const unapplied = base();
+    unapplied.transforms.process.source = '.marker = "not applied"';
+    await code.fill(JSON.stringify(unapplied));
+    await page
+      .getByRole("button", { name: "Save mine as a new pipeline" })
+      .click();
+    await expect(
+      page.getByRole("dialog", { name: "Save mine as a new pipeline" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(/Apply or resolve unfinished field and Code edits/),
+    ).toBeVisible();
+    await code.fill(JSON.stringify(local));
+    await page.getByRole("button", { name: "Apply code changes" }).click();
+    await page
+      .getByRole("button", { name: "Save mine as a new pipeline" })
+      .click();
+    const copy = page.getByRole("dialog", {
+      name: "Save mine as a new pipeline",
+    });
+    await expect(copy).toContainText("1 variable declaration");
+    await expect(copy).toContainText("/sources/input/interval");
+    await copy.getByLabel("New pipeline name").fill(copyName);
+    await copy
+      .getByText("Review the exact local configuration and graph")
+      .click();
+    await expect(copy).toContainText('.marker = \\"mine\\"');
+
+    await page.route("**/api/v1/configurations", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      expect(response.ok()).toBeTruthy();
+      copyId = (await response.json()).id;
+      await route.abort("failed");
+    });
+    await copy.getByRole("button", { name: "Create new pipeline" }).click();
+    await expect(
+      copy.getByRole("button", { name: "Review saved request" }),
+    ).toBeVisible();
+    const saved = await page.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith("vectory:pipeline-creation:"))
+        .map((key) => JSON.parse(localStorage.getItem(key)!)),
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0].request.variables).toEqual(variables);
+    expect(saved[0].request.config.transforms.process.source).toBe(
+      '.marker = "mine"',
+    );
+    expect(copyId).toBeTruthy();
+    const exact = await page.request.get(
+      `/api/v1/configurations/requests/${saved[0].id}`,
+    );
+    expect(exact.ok()).toBeTruthy();
+    expect((await exact.json()).found).toBe(true);
+    const created = await page.request
+      .get(`/api/v1/configurations/${copyId}`)
+      .then((response) => response.json());
+    expect(created.name).toBe(copyName);
+    expect(created.variables).toEqual(variables);
+    expect(created.config.transforms.process.source).toBe('.marker = "mine"');
+
+    await copy.getByRole("button", { name: "Review saved request" }).click();
+    const recovery = page.getByRole("dialog", {
+      name: "Saved pipeline requests",
+    });
+    await recovery.getByRole("button", { name: copyName }).click();
+    const confirmed = page.getByRole("dialog", { name: "Pipeline saved" });
+    await expect(confirmed).toContainText(copyName);
+    await confirmed
+      .getByText("View original configuration, graph and variables")
+      .click();
+    await expect(confirmed).toContainText("/sources/input/interval");
+    const original = await page.request
+      .get(`/api/v1/configurations/${doc.id}`)
+      .then((response) => response.json());
+    expect(original.config.transforms.process.source).toBe('.marker = "peer"');
+    await expect(code).toContainText("mine");
+  } finally {
+    if (copyId) await archive(page, copyId, headers);
+    await archive(page, doc.id, headers);
+  }
+});
 
 async function archive(
   page: Page,

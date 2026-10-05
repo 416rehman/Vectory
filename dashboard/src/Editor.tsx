@@ -124,7 +124,13 @@ import PublishRecovery, { type PublishRecoveryHandle } from "./PublishRecovery";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
 } from "./PipelineCreationRecovery";
-import { usePipelineCreationOperations } from "./pipelineCreationRequests";
+import StaleDraftCopyDialog, {
+  type StaleDraftCopy,
+} from "./StaleDraftCopyDialog";
+import {
+  pipelineCopyName,
+  usePipelineCreationOperations,
+} from "./pipelineCreationRequests";
 import {
   beginPublishOperation,
   finishPublishOperation,
@@ -581,6 +587,7 @@ export default function Editor({
     [activeRecoveryCopy, setActiveRecoveryCopy] = useState(false),
     [conflictStored, setConflictStored] = useState<boolean | null>(null),
     [conflictServer, setConflictServer] = useState<Configuration | null>(null),
+    [copyDraft, setCopyDraft] = useState<StaleDraftCopy | null>(null),
     [loadingConflictServer, setLoadingConflictServer] = useState(false),
     // What an applied template still needs, until dismissed.
     [templateNeeds, setTemplateNeeds] = useState<{
@@ -791,6 +798,7 @@ export default function Editor({
   const publishRecoveryRef = useRef<PublishRecoveryHandle>(null);
   const pipelineCreationRecoveryRef =
     useRef<PipelineCreationRecoveryHandle>(null);
+  const staleCopyOpener = useRef<HTMLButtonElement>(null);
   const pipelineCreationRecovery = usePipelineCreationOperations(user.id);
   const unresolvedPipelineCreation =
     pipelineCreationRecovery.operations.length > 0 ||
@@ -3781,6 +3789,39 @@ export default function Editor({
       );
     }
   }
+  function openStaleDraftCopy() {
+    if (!editable || !saveNeedsReload.current || busy || pendingSave.current)
+      return;
+    if (hasUnappliedImportFields()) {
+      setError(
+        "Apply or resolve unfinished field and Code edits before saving a separate pipeline. Your unfinished edits remain in this editor.",
+      );
+      return;
+    }
+    if (unresolvedPipelineCreation) {
+      if (staleCopyOpener.current)
+        pipelineCreationRecoveryRef.current?.openSaved(staleCopyOpener.current);
+      return;
+    }
+    const current = latest.current;
+    if (!current.doc) return;
+    const metadata = localDraftCopy().metadata!;
+    try {
+      setCopyDraft({
+        sourceName: current.doc.name,
+        name: pipelineCopyName(metadata.name),
+        description: metadata.description,
+        config: structuredClone(current.config),
+        graph: structuredClone({ nodes: current.nodes, edges: current.edges }),
+        variables: structuredClone(current.variables),
+      });
+      setError("");
+    } catch {
+      setError(
+        "This draft could not be copied safely. Download my draft to keep these edits.",
+      );
+    }
+  }
   function invalidateComparison() {
     compareEpoch.current++;
     compareAbort.current?.abort();
@@ -4929,6 +4970,16 @@ export default function Editor({
                 <Button variant="secondary" onClick={downloadLocalDraft}>
                   Download my draft
                 </Button>
+                {editable && (
+                  <Button
+                    ref={staleCopyOpener}
+                    variant="secondary"
+                    disabled={busy || savingDraft}
+                    onClick={openStaleDraftCopy}
+                  >
+                    Save mine as a new pipeline
+                  </Button>
+                )}
                 <Button variant="secondary" onClick={() => void reloadLatest()}>
                   Discard my edits and load server draft
                 </Button>
@@ -6810,6 +6861,24 @@ export default function Editor({
           onClose={invalidateComparison}
           onDownload={downloadLocalDraft}
           onApply={applyCombinedDraft}
+        />
+      )}
+      {copyDraft && (
+        <StaleDraftCopyDialog
+          actorId={user.id}
+          copy={copyDraft}
+          onClose={() => setCopyDraft(null)}
+          onReviewRequest={() => {
+            setCopyDraft(null);
+            if (staleCopyOpener.current)
+              pipelineCreationRecoveryRef.current?.openSaved(
+                staleCopyOpener.current,
+              );
+          }}
+          onOpen={(copyId) => {
+            setCopyDraft(null);
+            navigate(pipelineRoute(copyId, initialDeviceId, destination));
+          }}
         />
       )}
       {detailsOpen && (

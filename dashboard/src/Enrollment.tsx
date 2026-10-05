@@ -22,6 +22,8 @@ import {
   withRequestDeadline,
   type Device,
   type EnrollmentEvent,
+  type AgentInstall,
+  type Release,
   type Token,
   type User,
 } from "./api";
@@ -134,6 +136,20 @@ type Command = {
   since: string;
   expiresAt: string;
   maxUses: number | null;
+  // A token is issued for one set of host choices. Keep every command and
+  // receipt tied to that same snapshot even if install metadata refreshes.
+  issued: {
+    choices: SetupChoices;
+    install: AgentInstall;
+    updatesOn: boolean;
+    trust: TrustChoice;
+    noDownload: boolean;
+    winRelease: Release | null;
+    installCommand: string | null;
+    manualCommand: string | null;
+    windowsCommand: string | null;
+    agentRun: string;
+  };
 };
 type Watch = {
   events: EnrollmentEvent[];
@@ -602,6 +618,7 @@ export function Enrollment({
 
   async function createCommand() {
     setError("");
+    if (!install) return;
     if (!ready) {
       setError(
         !mode
@@ -620,6 +637,18 @@ export function Enrollment({
       hour: "2-digit",
       minute: "2-digit",
     });
+    const issued: Command["issued"] = {
+      choices: structuredClone(choices),
+      install,
+      updatesOn,
+      trust: trustChoice || "system",
+      noDownload,
+      winRelease,
+      installCommand,
+      manualCommand,
+      windowsCommand: windows,
+      agentRun,
+    };
     const record = await tokenFlow.current?.create(
       {
         name: trimmedName
@@ -649,6 +678,7 @@ export function Enrollment({
         since: record.created_at,
         expiresAt: record.expires_at,
         maxUses: record.max_uses ?? null,
+        issued,
       });
     }
   }
@@ -739,18 +769,32 @@ export function Enrollment({
       (os === "windows"
         ? !winRelease
         : !install.installer || noVerifiedDownload));
+  const issued = command?.issued;
+  const shownInstall = issued?.install ?? install;
+  const shownOs = issued?.choices.os ?? os;
+  const shownUpdatesOn = issued?.updatesOn ?? updatesOn;
+  const shownWinRelease = issued ? issued.winRelease : winRelease;
+  const shownInstallCommand = issued ? issued.installCommand : installCommand;
+  const shownManualCommand = issued ? issued.manualCommand : manualCommand;
+  const shownWindowsCommand = issued ? issued.windowsCommand : windows;
+  const shownNoDownload = issued?.noDownload ?? noDownload;
+  const shownPlatformBuilds = issued
+    ? issued.install.releases.filter((release) => release.os === shownOs)
+    : platformBuilds;
   // How to start an agent nothing keeps running: where this page's command
   // put it (the installer's directory, or on PATH next to a copied agent).
-  const agentRun = install
-    ? runCommand(install, choices, !!installCommand && !noDownload)
-    : "";
+  const agentRun = issued
+    ? issued.agentRun
+    : install
+      ? runCommand(install, choices, !!installCommand && !noDownload)
+      : "";
   const unsupervised =
     state?.device && agentRun
       ? unsupervisedLine(
           state.device.name,
           agentRun,
-          os,
-          choices.service === "none",
+          shownOs,
+          (issued?.choices ?? choices).service === "none",
         )
       : null;
   // Saved requests whose command was shown and whose token nobody used fold
@@ -787,7 +831,7 @@ export function Enrollment({
   const activeCount = tokens.data.filter(
     (token) => tokenStatus(token) === "Available",
   ).length;
-  const problem = install?.certificate?.problem;
+  const problem = shownInstall?.certificate?.problem;
 
   return (
     <div className="control-page enroll-page">
@@ -843,7 +887,13 @@ export function Enrollment({
           aria-labelledby="enroll-host"
         >
           <h2 id="enroll-host">1. Choose the host</h2>
-          <fieldset className="enroll-os" disabled={busy}>
+          {command && (
+            <p className="control-muted" role="status">
+              These host settings are fixed for this command. To change them,
+              choose Start over below; that revokes this command's token.
+            </p>
+          )}
+          <fieldset className="enroll-os" disabled={busy || !!command}>
             <legend className="sr-only">Host operating system</legend>
             {platforms.map(({ value, label, icon }) => (
               <label key={value} className="enroll-os-option">
@@ -858,7 +908,11 @@ export function Enrollment({
               </label>
             ))}
           </fieldset>
-          <ModePicker value={mode} onChange={setMode} disabled={busy} />
+          <ModePicker
+            value={mode}
+            onChange={setMode}
+            disabled={busy || !!command}
+          />
           <details className="enroll-advanced">
             <summary>
               Advanced
@@ -868,7 +922,10 @@ export function Enrollment({
                 allowed names, labels, service account, paths
               </span>
             </summary>
-            <fieldset disabled={busy} className="enroll-advanced-fields">
+            <fieldset
+              disabled={busy || !!command}
+              className="enroll-advanced-fields"
+            >
               <Field
                 label="Device name"
                 hint={
@@ -905,10 +962,10 @@ export function Enrollment({
                   </Button>
                 </div>
               )}
-              {install?.agent_url && (
+              {shownInstall?.agent_url && (
                 <TrustChoices
-                  install={install}
-                  os={os}
+                  install={shownInstall}
+                  os={shownOs}
                   value={trust}
                   onChange={setTrust}
                   caFile={caFile}
@@ -1072,7 +1129,7 @@ export function Enrollment({
                       aria-invalid={!!installDirProblem}
                       onChange={(event) => setInstallDir(event.target.value)}
                       placeholder={
-                        install?.default_install_dir || "/usr/local/bin"
+                        shownInstall?.default_install_dir || "/usr/local/bin"
                       }
                       autoComplete="off"
                       spellCheck={false}
@@ -1176,13 +1233,19 @@ export function Enrollment({
           </details>
         </section>
 
-        {updatesOn && (
+        {shownUpdatesOn && (
           <section
             className="control-card enroll-step"
             aria-labelledby="enroll-updates"
           >
             <h2 id="enroll-updates">2. Agent updates</h2>
-            {updatesChoice ? (
+            {command ? (
+              <p className="control-muted" role="status">
+                {issued?.choices.updates
+                  ? `This command fixes agent updates to ${issued.choices.updates.level === "auto" ? "Automatic" : issued.choices.updates.level === "ask" ? "Ask on the host" : "Off"}. Start over to change that choice.`
+                  : updatesNotInRelease(shownOs)}
+              </p>
+            ) : updatesChoice ? (
               <>
                 <p className="control-muted">
                   The host agrees to updates when you run the command, and only
@@ -1196,7 +1259,7 @@ export function Enrollment({
                   }
                   read={updateRead}
                   signingKey={agentUpdates.updates?.current_key ?? null}
-                  disabled={busy}
+                  disabled={busy || !!command}
                   name="enroll-update-level"
                 />
                 <DocLink
@@ -1209,7 +1272,7 @@ export function Enrollment({
               </>
             ) : (
               <p className="control-muted">
-                {updatesNotInRelease(os)}{" "}
+                {updatesNotInRelease(shownOs)}{" "}
                 <DocLink
                   topic="installation"
                   section="upgrade-an-existing-agent"
@@ -1226,12 +1289,14 @@ export function Enrollment({
           className="control-card enroll-step"
           aria-labelledby="enroll-run"
         >
-          <h2 id="enroll-run">{updatesOn ? 3 : 2}. Run this on the host</h2>
-          {details.loading && !install ? (
+          <h2 id="enroll-run">
+            {shownUpdatesOn ? 3 : 2}. Run this on the host
+          </h2>
+          {details.loading && !shownInstall ? (
             <p className="control-muted" role="status">
               <Spinner /> Loading install details…
             </p>
-          ) : !install ? null : !install.agent_url ? (
+          ) : !shownInstall ? null : !shownInstall.agent_url ? (
             <div className="control-note">
               The agent listener is off, so devices can&apos;t connect yet.
               Start the server with an agent TLS certificate and key
@@ -1360,8 +1425,8 @@ export function Enrollment({
             </div>
           ) : (
             <>
-              {os === "windows" ? (
-                winRelease && windows ? (
+              {shownOs === "windows" ? (
+                shownWinRelease && shownWindowsCommand ? (
                   <>
                     <p className="control-muted">
                       Download the agent, then run this from an elevated
@@ -1369,49 +1434,49 @@ export function Enrollment({
                     </p>
                     <a
                       className="button secondary enroll-download"
-                      href={winRelease.url}
+                      href={shownWinRelease.url}
                       download="vectory.exe"
                     >
                       <Download size={16} aria-hidden="true" />
-                      Download vectory.exe ({winRelease.version},{" "}
-                      {(winRelease.size / 1048576).toFixed(1)} MB)
+                      Download vectory.exe ({shownWinRelease.version},{" "}
+                      {(shownWinRelease.size / 1048576).toFixed(1)} MB)
                     </a>
                     <CommandBlock
-                      command={windows}
+                      command={shownWindowsCommand}
                       label="Windows setup command"
                       focus={focusCommand}
                       onFocused={commandFocused}
                     />
                   </>
-                ) : manualCommand ? (
+                ) : shownManualCommand ? (
                   <>
                     <p className="control-muted">
                       Copy vectory.exe to the host, then run this from an
                       elevated PowerShell in the same folder.
                     </p>
                     <CommandBlock
-                      command={manualCommand}
+                      command={shownManualCommand}
                       label="Setup command"
                       focus={focusCommand}
                       onFocused={commandFocused}
                     />
                   </>
                 ) : null
-              ) : installCommand && !noDownload ? (
+              ) : shownInstallCommand && !shownNoDownload ? (
                 <CommandBlock
-                  command={installCommand}
+                  command={shownInstallCommand}
                   label="Install command"
                   focus={focusCommand}
                   onFocused={commandFocused}
                 />
-              ) : manualCommand ? (
+              ) : shownManualCommand ? (
                 <>
                   <p className="control-muted">
                     Copy the vectory agent to the host, then run this next to
                     it.
                   </p>
                   <CommandBlock
-                    command={manualCommand}
+                    command={shownManualCommand}
                     label="Setup command"
                     focus={focusCommand}
                     onFocused={commandFocused}
@@ -1467,21 +1532,21 @@ export function Enrollment({
                 device connects or you leave. Start over revokes it, so no
                 device can use this command.
               </p>
-              {problem && !install.certificate?.publicly_trusted && (
+              {problem && !shownInstall?.certificate?.publicly_trusted && (
                 <div className="control-note">{problem}</div>
               )}
               <SecurityReceipt
-                install={install}
-                os={os}
-                agentSha256={winRelease?.sha256 || null}
+                install={shownInstall!}
+                os={shownOs}
+                agentSha256={shownWinRelease?.sha256 || null}
                 expiresAt={command.expiresAt}
                 maxUses={command.maxUses}
-                trust={trustChoice || "system"}
-                caFile={caFile.trim()}
+                trust={issued?.trust || "system"}
+                caFile={issued?.choices.caFile?.trim() || ""}
               />
             </>
           )}
-          {install?.agent_url && manualCommand && (
+          {shownInstall?.agent_url && shownManualCommand && (
             <details className="enroll-manual">
               <summary>I already have the agent</summary>
               <p className="control-muted">
@@ -1489,10 +1554,13 @@ export function Enrollment({
                 verified build to the host, then run setup with the same server
                 address and the same certificate check.
               </p>
-              <CommandBlock command={manualCommand} label="Setup command" />
-              {platformBuilds.length > 0 ? (
+              <CommandBlock
+                command={shownManualCommand}
+                label="Setup command"
+              />
+              {shownPlatformBuilds.length > 0 ? (
                 <ul className="enroll-builds">
-                  {platformBuilds.map((release) => (
+                  {shownPlatformBuilds.map((release) => (
                     <li key={release.name}>
                       <a
                         href={release.url}
@@ -1518,13 +1586,14 @@ export function Enrollment({
                     : "Agent downloads aren't set up on this server. Ask an administrator."}
                 </p>
               )}
-              {can(user, "admin") && install.catalog_problems.length > 0 && (
-                <ul className="enroll-problems">
-                  {install.catalog_problems.map((text) => (
-                    <li key={text}>{text}</li>
-                  ))}
-                </ul>
-              )}
+              {can(user, "admin") &&
+                shownInstall.catalog_problems.length > 0 && (
+                  <ul className="enroll-problems">
+                    {shownInstall.catalog_problems.map((text) => (
+                      <li key={text}>{text}</li>
+                    ))}
+                  </ul>
+                )}
             </details>
           )}
         </section>
@@ -1533,7 +1602,7 @@ export function Enrollment({
           className="control-card enroll-step"
           aria-labelledby="enroll-watch"
         >
-          <h2 id="enroll-watch">{updatesOn ? 4 : 3}. Watch it connect</h2>
+          <h2 id="enroll-watch">{shownUpdatesOn ? 4 : 3}. Watch it connect</h2>
           {!command ? (
             <>
               {notes.length > 0 && (

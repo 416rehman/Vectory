@@ -246,6 +246,47 @@ describe("durable pipeline creation registry", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("retains variable declarations in a separate pipeline request and rejects credential-shaped declarations", () => {
+    const variables = [
+      {
+        name: "interval",
+        path: "/sources/in/interval",
+        type: "integer" as const,
+      },
+    ];
+    const operation = beginPipelineCreationOperation(actor, {
+      ...request,
+      request: { ...request.request, variables },
+    });
+    if (operation.operation !== "create")
+      throw Error("Expected a create request");
+    expect(operation.request.variables).toEqual(variables);
+    expect(
+      JSON.parse(storage.getItem(key(operation))!).request.variables,
+    ).toEqual(variables);
+    const restored = readPipelineCreationOperations(actor).operations[0];
+    if (restored.operation !== "create")
+      throw Error("Expected a create request");
+    expect(restored.request.variables).toEqual(variables);
+    finishPipelineCreationOperation(operation);
+    expect(() =>
+      beginPipelineCreationOperation(actor, {
+        ...request,
+        request: {
+          ...request.request,
+          variables: [
+            {
+              name: "ghp_syntheticcredential123",
+              path: "/sources/in/interval",
+              type: "integer",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/credential/i);
+    expect(storage.length).toBe(0);
+  });
+
   it("refreshes storage directly across independent tabs and never erases a peer record", async () => {
     const first = beginPipelineCreationOperation(actor, request);
     const second = fixture();

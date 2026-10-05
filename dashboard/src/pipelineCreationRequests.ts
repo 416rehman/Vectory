@@ -91,6 +91,13 @@ const metadata = {
     ),
 };
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const variableDeclaration = z
+  .object({
+    name: z.string(),
+    path: z.string(),
+    type: z.enum(["string", "integer", "boolean"]),
+  })
+  .strict();
 const createFields = {
   ...metadata,
   config: z.custom<Record<string, any>>(
@@ -102,6 +109,7 @@ const createFields = {
       edges: z.array(z.unknown()).max(5000),
     })
     .strict(),
+  variables: z.array(variableDeclaration).max(64).optional(),
 };
 const duplicateFields = { ...metadata, revision };
 const inputSchema = z.discriminatedUnion("operation", [
@@ -353,7 +361,8 @@ export function beginPipelineCreationOperation(
     findPlainCredential(payload.description, ["description"]) ||
     (input.data.operation === "create"
       ? findPlainCredential(input.data.request.config) ||
-        findPlainCredential(input.data.request.graph, ["graph"])
+        findPlainCredential(input.data.request.graph, ["graph"]) ||
+        findPlainCredential(input.data.request.variables || [], ["variables"])
       : null);
   if (credential) throw Error(credentialPreflightMessage(credential));
   if (!actorSchema.safeParse(actor).success)

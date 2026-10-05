@@ -440,7 +440,7 @@ try {
     },
   );
   await check(
-    "Each certificate choice puts its exact option in the commands, and the choices lock while a token is created",
+    "Each certificate choice issues its own matching command, with host choices fixed until revocation",
     async () => {
       const f = await fixture();
       try {
@@ -454,6 +454,22 @@ try {
         };
         const insecure =
           /(^|\s)(-[A-Za-z]*k[A-Za-z]*|--insecure|--no-check-certificate|-SkipCertificateCheck)(\s|$)/;
+        const restart = async () => {
+          await f.page
+            .getByRole("button", { name: "Start over", exact: true })
+            .click();
+          await f.page
+            .getByRole("dialog", { name: "Start over?" })
+            .getByRole("button", { name: "Revoke and start over", exact: true })
+            .click();
+          await expect(modeTrigger(f.page)).toBeEnabled();
+        };
+        const issue = async () => {
+          await f.page
+            .getByRole("button", { name: /^Create (install|setup) command$/ })
+            .click();
+          await expect(f.page.locator(".enroll-secret")).toBeVisible();
+        };
         await f.page.locator(".enroll-advanced > summary").click();
         const radios = f.page.locator('input[name="enroll-trust"]');
         await expect(radios).toHaveCount(3);
@@ -478,8 +494,8 @@ try {
           f.page.locator(".enroll-command pre").first(),
         ).toBeVisible();
         for (const radio of await radios.all())
-          await expect(radio).toBeEnabled();
-        await expect(modeTrigger(f.page)).toBeEnabled();
+          await expect(radio).toBeDisabled();
+        await expect(modeTrigger(f.page)).toBeDisabled();
         // Pinned: the command carries the CA for curl; setup gets the fingerprint.
         let text = await install();
         expect(text).toContain("-----BEGIN CERTIFICATE-----");
@@ -490,12 +506,14 @@ try {
         expect(text).not.toMatch(insecure);
         expect(await setup()).toContain(`--ca-sha256 ${pin}`);
         // A CA file on the host: exactly that path, for curl and for setup.
+        await restart();
         await f.page
           .getByRole("radio", { name: /^A CA certificate file on the host/ })
           .check();
         await f.page
           .getByLabel("CA certificate on the host", { exact: true })
           .fill("/etc/vectory/server-ca.pem");
+        await issue();
         text = await install();
         expect(text).toContain(
           "curl -fsSL --proto '=https' --proto-redir '=https' \\\n    --cacert /etc/vectory/server-ca.pem \\",
@@ -510,9 +528,11 @@ try {
           "/etc/vectory/server-ca.pem",
         );
         // The host's trusted certificates: an explicit, empty --ca-file=.
+        await restart();
         await f.page
           .getByRole("radio", { name: /^The host's trusted certificates/ })
           .check();
+        await issue();
         text = await install();
         expect(text).toMatch(
           /\n {2}curl -fsSL --proto '=https' --proto-redir '=https' \\\n/,
@@ -524,16 +544,18 @@ try {
         expect(manual).not.toContain("--ca-sha256");
         // Windows: PowerShell checks the file hash and runs setup; it makes
         // no web request, so it has no certificate check to skip.
+        await restart();
         await f.page
           .getByRole("radio", { name: "Windows", exact: true })
           .check();
+        await issue();
         await expect(
           f.page.locator(".enroll-command pre").first(),
         ).toContainText("--ca-file=");
         expect(await install()).not.toMatch(
           /Invoke-WebRequest|SkipCertificateCheck|ServerCertificateValidationCallback/,
         );
-        expect(f.state.posts).toBe(1);
+        expect(f.state.posts).toBe(4);
       } finally {
         await f.close();
       }

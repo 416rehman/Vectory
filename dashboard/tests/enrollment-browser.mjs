@@ -212,6 +212,7 @@ async function fixture({
     tokens,
     events: [],
     install,
+    installReplies: 0,
     posts: 0,
     holdToken: false,
     releaseToken: null,
@@ -262,7 +263,11 @@ async function fixture({
     }
     // Agent updates are off here, so the page is what it was without them.
     if (path === "/agent-updates") return reply(updatesOff());
-    if (path === "/agent-install") return reply(state.install);
+    if (path === "/agent-install") {
+      await reply(state.install);
+      state.installReplies++;
+      return;
+    }
     if (path === "/agent-install/activity") {
       state.activity.push({
         at: Date.now(),
@@ -361,14 +366,18 @@ async function fixture({
     },
     saved.map((request) => [requestKey(request.id), JSON.stringify(request)]),
   );
-  const mount = () =>
-    page.evaluate(
+  const mount = async () => {
+    await page.waitForFunction(
+      () => typeof window.mountEnrollment === "function",
+    );
+    await page.evaluate(
       ({ value, role }) => {
         document.documentElement.dataset.theme = value;
         window.mountEnrollment(role);
       },
       { value: theme, role },
     );
+  };
   await mount();
   /**
    * Leave (accepting "Leave site?"), let `meanwhile` change the synthetic
@@ -480,16 +489,21 @@ try {
         await expect(receipt.nth(1)).not.toContainText("...");
         await expect(receipt.nth(1)).toContainText("Synthetic agent CA");
         await expect(receipt.nth(2)).toContainText("Works once");
-        // Choices change the command, never the token.
-        await f.chooseMode("Full Vector");
+        // The displayed command and the issued token describe one fixed host.
+        await expect(modeTrigger(f.page)).toBeDisabled();
+        await expect(
+          f.page.getByRole("radio", { name: "macOS", exact: true }),
+        ).toBeDisabled();
         await f.advanced();
-        await f.page.getByLabel("Device name", { exact: true }).fill("edge-42");
-        await f.page
-          .getByLabel("Run the agent as a systemd service", { exact: true })
-          .uncheck();
-        expect(await commandText(f.page)).toContain(
-          `  sudo sh "$dir/vectory-install.sh" \\\n    --mode full \\\n    --name edge-42 \\\n    --service none`,
-        );
+        await expect(
+          f.page.getByLabel("Device name", { exact: true }),
+        ).toBeDisabled();
+        await expect(
+          f.page.getByLabel("Run the agent as a systemd service", {
+            exact: true,
+          }),
+        ).toBeDisabled();
+        expect(await commandText(f.page)).toBe(text);
         expect(f.state.posts).toBe(1);
         await f.page
           .getByRole("button", { name: "Copy token", exact: true })
@@ -498,16 +512,9 @@ try {
           .locator("summary")
           .filter({ hasText: "I already have the agent" })
           .click();
-        await expect(f.page.locator(".enroll-command pre").nth(1)).toHaveText(
-          [
-            "sudo vectory setup \\",
-            "  --server https://vectory.example.test:8443 \\",
-            `  --ca-sha256 ${pin} \\`,
-            "  --mode full \\",
-            "  --name edge-42 \\",
-            "  --service none",
-          ].join("\n"),
-        );
+        await expect(
+          f.page.locator(".enroll-command pre").nth(1),
+        ).toContainText("--mode restricted");
         await expect(f.page.locator(".enroll-builds")).toContainText(
           "Operator mirror",
         );
@@ -518,7 +525,110 @@ try {
     },
   );
   await check(
-    "a pending token request locks the host choices until its command is ready",
+    "host choices are captured before issuing a device-bound token",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.chooseMode("Full Vector");
+        await f.advanced();
+        await f.page.getByLabel("Device name", { exact: true }).fill("edge-42");
+        await f.page
+          .getByLabel("Run the agent as a systemd service", { exact: true })
+          .uncheck();
+        await f.create.click();
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
+        ).toBeVisible();
+        expect(f.state.tokenRequest.device_name).toBe("edge-42");
+        const issuedCommand = await commandText(f.page);
+        expect(issuedCommand).toContain("--mode full");
+        expect(issuedCommand).toContain("--name edge-42");
+        expect(issuedCommand).toContain("--service none");
+        await expect(
+          f.page.getByLabel("Device name", { exact: true }),
+        ).toBeDisabled();
+        await f.page
+          .locator("summary")
+          .filter({ hasText: "I already have the agent" })
+          .click();
+        const manual = await f.page
+          .locator(".enroll-command pre")
+          .nth(1)
+          .innerText();
+        expect(manual).toContain("--mode full");
+        expect(manual).toContain("--name edge-42");
+        expect(manual).toContain("--service none");
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "an issued command and receipt stay fixed when server install metadata refreshes",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        const issuedCommand = await commandText(f.page);
+        await f.page
+          .locator("summary")
+          .filter({ hasText: "I already have the agent" })
+          .click();
+        const manual = await f.page
+          .locator(".enroll-command pre")
+          .nth(1)
+          .innerText();
+        const receipt = await f.page.getByRole("definition").nth(1).innerText();
+        const buildUrl = await f.page
+          .locator(".enroll-builds a")
+          .first()
+          .getAttribute("href");
+        await f.advanced();
+        const trustDetails = await f.page.locator(".enroll-trust").innerText();
+        const replies = f.state.installReplies;
+        f.state.install = agentInstall({
+          agent_url: "https://different.example.test:8443",
+          certificate: {
+            ...agentInstall().certificate,
+            ca_sha256: "d".repeat(64),
+            ca_pem: caPem.replace("MIIB", "MIIA"),
+          },
+          installer: {
+            url: "https://different.example.test:8443/agent/v1/install.sh",
+            sha256: "e".repeat(64),
+            platforms: ["linux/amd64"],
+          },
+          releases: [release("linux", "amd64", "f".repeat(64))],
+        });
+        await expect
+          .poll(() => f.state.installReplies, { timeout: 22000 })
+          .toBeGreaterThan(replies);
+        await f.page.evaluate(
+          () =>
+            new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            ),
+        );
+        expect(await commandText(f.page)).toBe(issuedCommand);
+        expect(
+          await f.page.locator(".enroll-command pre").nth(1).innerText(),
+        ).toBe(manual);
+        expect(await f.page.getByRole("definition").nth(1).innerText()).toBe(
+          receipt,
+        );
+        expect(
+          await f.page.locator(".enroll-builds a").first().getAttribute("href"),
+        ).toBe(buildUrl);
+        expect(await f.page.locator(".enroll-trust").innerText()).toBe(
+          trustDetails,
+        );
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "a pending token request and its issued command keep host choices locked",
     async () => {
       const f = await fixture();
       try {
@@ -538,7 +648,7 @@ try {
         ).toBeVisible();
         await expect(
           f.page.getByRole("radio", { name: "macOS", exact: true }),
-        ).toBeEnabled();
+        ).toBeDisabled();
       } finally {
         f.state.releaseToken?.();
         await f.context.close();
@@ -546,14 +656,29 @@ try {
     },
   );
   await check(
-    "at 1440 px no line of the install command is cut off beside Copy, for any certificate choice",
+    "at 1440 px no line of an issued command is cut off beside Copy, for any certificate choice",
     async () => {
-      const f = await fixture({ width: 1440 });
-      try {
-        await f.createCommand();
-        await f.advanced();
-        const measure = () =>
-          f.page
+      for (const [label, path] of [
+        ["Pin this server's CA", ""],
+        ["The host's trusted certificates", ""],
+        ["A CA certificate file on the host", "/etc/vectory/server-ca.pem"],
+      ]) {
+        const f = await fixture({ width: 1440 });
+        try {
+          await f.chooseMode();
+          await f.advanced();
+          await f.page
+            .getByRole("radio", { name: new RegExp("^" + label) })
+            .check();
+          if (path)
+            await f.page
+              .getByLabel("CA certificate on the host", { exact: true })
+              .fill(path);
+          await f.create.click();
+          await expect(
+            f.page.locator(".enroll-command pre").first(),
+          ).toBeVisible();
+          const measured = await f.page
             .locator(".enroll-command")
             .first()
             .evaluate((block) => {
@@ -566,36 +691,23 @@ try {
                 copyLeft: button.getBoundingClientRect().left,
               };
             });
-        for (const [label, path] of [
-          ["Pin this server's CA", ""],
-          ["The host's trusted certificates", ""],
-          ["A CA certificate file on the host", "/etc/vectory/server-ca.pem"],
-        ]) {
-          await f.page
-            .getByRole("radio", { name: new RegExp(`^${label}`) })
-            .check();
-          if (path)
-            await f.page
-              .getByLabel("CA certificate on the host", { exact: true })
-              .fill(path);
-          const measured = await measure();
           geometry.push({
             width: 1440,
-            state: `command-${label}`,
+            state: "command-" + label,
             ...measured,
           });
-          // Every line fits, so nothing needs scrolling to be read, and the
-          // Copy button sits beside the text, never over it.
           expect(measured.scrollWidth).toBeLessThanOrEqual(
             measured.clientWidth,
           );
           expect(measured.copyLeft).toBeGreaterThanOrEqual(measured.preRight);
+          if (path)
+            expect(await commandText(f.page)).toContain(
+              "    --cacert /etc/vectory/server-ca.pem " +
+                String.fromCharCode(92),
+            );
+        } finally {
+          await f.context.close();
         }
-        expect(await commandText(f.page)).toContain(
-          "    --cacert /etc/vectory/server-ca.pem \\",
-        );
-      } finally {
-        await f.context.close();
       }
     },
   );
@@ -713,8 +825,16 @@ try {
           `    | (cd "$dir" && shasum -a 256 -c -)\n  sudo sh "$dir/vectory-install.sh" \\\n    --mode restricted \\\n    --create-user\n)`,
         );
         await f.page
+          .getByRole("button", { name: "Start over", exact: true })
+          .click();
+        await f.page
+          .getByRole("dialog", { name: "Start over?" })
+          .getByRole("button", { name: "Revoke and start over", exact: true })
+          .click();
+        await f.page
           .getByRole("radio", { name: "Windows", exact: true })
           .check();
+        await f.createCommand();
         await expect(
           f.page.getByRole("link", { name: /Download vectory\.exe/ }),
         ).toHaveAttribute(
@@ -856,8 +976,18 @@ try {
           "isn't offered",
         );
         await f.page
+          .getByRole("button", { name: "Start over", exact: true })
+          .click();
+        await f.page
+          .getByRole("dialog", { name: "Start over?" })
+          .getByRole("button", { name: "Revoke and start over", exact: true })
+          .click();
+        await f.page
           .getByRole("radio", { name: "Windows", exact: true })
           .check();
+        await f.page
+          .getByRole("button", { name: "Create setup command", exact: true })
+          .click();
         await expect(f.page.locator(".enroll-page")).toContainText(
           "Copy vectory.exe to the host",
         );
