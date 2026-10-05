@@ -51,10 +51,12 @@ A deployment's reminder confirms that the server saved it. Devices still have to
 | You were | What to do |
 | --- | --- |
 | Signing in | Vectory checks your session automatically. If it still can't tell, it says **We couldn't confirm your sign-in**: enter your password again. |
-| Setting up the first administrator | Vectory checks automatically. If setup didn't finish, paste the setup secret and choose your password again. |
+| Setting up the first administrator | Vectory checks automatically, but a status snapshot cannot prove whether your request finished or who created the account. Choose **Check setup status** for a fresh read, or **Try signing in** with the email and password you chose. If the server has not reported setup, the original request may yet finish; **Start a new setup** is a separate deliberate action. If the status read fails, you can sign in or check again, but starting another setup waits for a successful status read. |
 | Signing out | Open the account menu and choose **Check sign-out status**, or **Check again** in the dialog. |
 | Adding a person | The dialog checks by itself. If the account exists but the reply never arrived, it reads **Ada's account is ready**: "We couldn't show the invite link. Create a new one to send to Ada." Choose **Create invite link**. For a person you gave a password, it reads **Ada can sign in now**; choose **Create reset link** if you no longer have the password. If it can't tell, it says **We couldn't confirm that**: choose **Check again**, or **Cancel it and try again** when the request might still go through. Your entries stay filled in. |
-| Creating a reset link, editing access, or turning two-factor on or off | The dialog shows **We couldn't confirm that**. Choose **Check again**; it only reads. Act again only if it says nothing changed. |
+| Creating a reset link or editing access | The dialog shows **We couldn't confirm that**. Choose **Check again**; it only reads. If the request could still finish, choose **Cancel it and try again** and wait for cancellation before sending a replacement. A not-found status read alone does not cancel the earlier request. |
+| Turning your own two-factor authentication on or off, or generating recovery codes | Choose **Check again** for the current setting. If a setup key or new recovery codes were returned but the reply was lost, Vectory cannot show those same secrets later; follow the review's separate Start again or Generate new codes action. |
+| Resetting another person's two-factor authentication | Choose **Check again**. If it still shows two-factor is on, enter your password for a separate deliberate retry. |
 | Changing your password | Sign in with the new password. If it doesn't work, try the old one. |
 | Setting a new password from a reset or invite link | Try signing in with the new password. If that fails, ask for a new link. |
 

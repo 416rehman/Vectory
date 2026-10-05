@@ -199,7 +199,7 @@ const side = (o) => ({
   offered_at: o.offered_at,
 });
 
-// A device that runs generation 12 and reports the digest of that file.
+// A device that verified generation 12 and reports the digest of its managed file.
 const baseDevice = (over = {}) => ({
   id: deviceId,
   name: "edge-nyc-01",
@@ -278,10 +278,23 @@ function configurationReply(url) {
   const offeredAs = actual
     ? (offers.find((o) => o.sha256 === actual)?.generation ?? null)
     : null;
+  const verifiedThisOffer =
+    target &&
+    state.device.apply_state === "verified_applied" &&
+    state.device.reported_generation === target.generation &&
+    state.device.desired_generation === target.generation &&
+    state.device.desired_version_id === target.version.id;
   const running = state.running ?? {
     sha256: actual,
     template_sha256: null,
-    matches: !actual || !target ? null : actual === target.sha256,
+    matches:
+      !actual || !target
+        ? null
+        : actual !== target.sha256
+          ? false
+          : verifiedThisOffer
+            ? true
+            : null,
     matches_generation: !target || actual !== target.sha256 ? offeredAs : null,
     reported_at: state.device.last_seen ?? null,
   };
@@ -560,6 +573,15 @@ async function check(name, run) {
     console.log(message);
   }
 }
+// Chromium's Windows clipboard normalizes text newlines to CRLF. The download
+// assertion below checks bytes; clipboard checks compare text after this OS
+// conversion so the test does not claim a byte-preserving clipboard format.
+async function copiedText() {
+  return (await page.evaluate(() => navigator.clipboard.readText())).replace(
+    /\r\n?/g,
+    "\n",
+  );
+}
 /** The section as a visitor sees it: a viewport as tall as the page, so nothing sticky is drawn over it. */
 async function shot(name) {
   const file = `${name}.png`;
@@ -729,7 +751,7 @@ try {
   );
 
   await check(
-    "Copy and Download give exactly the offered text and claim no activation",
+    "Copy yields the offered text and Download preserves its bytes without claiming activation",
     async () => {
       await load();
       await shown();
@@ -742,9 +764,7 @@ try {
       await expect(
         section().getByText("Copied", { exact: true }),
       ).toBeVisible();
-      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-        current.content,
-      );
+      expect(await copiedText()).toBe(current.content);
       const [file] = await Promise.all([
         page.waitForEvent("download"),
         section()
@@ -820,9 +840,11 @@ try {
       await expect(select).toHaveValue("11");
       await expect(select.locator("option")).toHaveCount(4);
       const line = section().getByRole("status").first();
-      await expect(line).toContainText("The device doesn't run generation 11.");
+      await expect(line).toContainText(
+        "The managed file differs from generation 11.",
+      );
       await expect(
-        section().getByText("Not running", { exact: true }),
+        section().getByText("File differs", { exact: true }),
       ).toBeVisible();
       // Back to the current one: followed, not pinned.
       await section().getByRole("button", { name: "Show current" }).click();
@@ -894,6 +916,30 @@ try {
     const current = history().at(-1);
     const cases = [
       {
+        name: "matching file, activation unknown",
+        device: baseDevice({
+          actual_sha256: current.sha256,
+          status: "verification_unknown",
+          apply_state: "verification_unknown",
+        }),
+        text: "The managed file matches this offer, but activation isn't verified.",
+        detail:
+          "A matching file digest alone doesn't show that Vector loaded this version.",
+        badge: "Not verified",
+      },
+      {
+        name: "matching file after a failed apply",
+        device: baseDevice({
+          actual_sha256: current.sha256,
+          status: "failed",
+          apply_state: "failed",
+        }),
+        text: "The managed file matches this offer, but activation isn't verified.",
+        detail:
+          "The latest apply failed. Check the device status and Vector log.",
+        badge: "Not verified",
+      },
+      {
         name: "differs, names the generation it is",
         device: baseDevice({
           actual_sha256: history()[1].sha256,
@@ -907,7 +953,7 @@ try {
       {
         name: "differs, unknown file",
         device: baseDevice({ actual_sha256: sha("edited by hand") }),
-        text: "The running configuration differs from what Vectory offered at generation 12.",
+        text: "The managed file differs from what Vectory offered at generation 12.",
         detail: "Vectory sees only the file's digest, never the file",
         badge: "Differs",
       },
@@ -1068,7 +1114,7 @@ try {
           name: /^Copy the diff from generation 11 to generation 12/,
         })
         .click();
-      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      const copied = await copiedText();
       expect(
         copied.startsWith("--- generation 11\n+++ generation 12\n@@ "),
       ).toBe(true);
@@ -1397,9 +1443,7 @@ try {
           name: /^Copy the JSON offered at generation 12/,
         })
         .click();
-      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-        history().at(-1).content,
-      );
+      expect(await copiedText()).toBe(history().at(-1).content);
       await section()
         .getByRole("radio", { name: "Changes", exact: true })
         .click();

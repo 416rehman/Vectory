@@ -4,8 +4,9 @@
 //! current (or an earlier) desired generation: the artifact exactly as stored
 //! in `artifact_blobs`, so a device secret is still a `vectory-secret:NAME`
 //! reference (the server never sees what a host resolves it to), the values
-//! the version's variables took for this device, and whether what the agent
-//! last reported running is that artifact. `GET .../configuration/diff`
+//! the version's variables took for this device, and the managed-file digest
+//! the agent last reported. A matching digest is called active only when the
+//! current offer also has verified apply evidence. `GET .../configuration/diff`
 //! compares two offered generations as a bounded unified diff. Both read one
 //! SQLite snapshot, take no writer lock, write nothing and add no audit row.
 use crate::{
@@ -113,6 +114,8 @@ struct Device {
     actual: Option<String>,
     template: Option<String>,
     verified: Option<String>,
+    apply_state: Option<String>,
+    reported_generation: Option<i64>,
     last_seen: Option<String>,
 }
 
@@ -121,10 +124,11 @@ async fn device(tx: &mut SqliteConnection, id: &str) -> Result<Device> {
         format!("CASE WHEN json_type(data,'$.{key}')='text' THEN json_extract(data,'$.{key}') END")
     };
     let row = sqlx::query(&format!(
-        "SELECT revoked,desired_version_id,desired_generation,{} AS actual,{} AS template,{} AS verified,{} AS last_seen FROM devices WHERE id=?",
+        "SELECT revoked,desired_version_id,desired_generation,{} AS actual,{} AS template,{} AS verified,{} AS apply_state,CASE WHEN json_type(data,'$.reported_generation')='integer' THEN json_extract(data,'$.reported_generation') END AS reported_generation,{} AS last_seen FROM devices WHERE id=?",
         text("actual_sha256"),
         text("applied_template_sha256"),
         text("verified_effective_sha256"),
+        text("apply_state"),
         text("last_seen"),
     ))
     .bind(id)
@@ -138,6 +142,8 @@ async fn device(tx: &mut SqliteConnection, id: &str) -> Result<Device> {
         actual: digest(row.get("actual")),
         template: digest(row.get("template")),
         verified: digest(row.get("verified")),
+        apply_state: row.get("apply_state"),
+        reported_generation: row.get("reported_generation"),
         last_seen: row.get("last_seen"),
     })
 }
@@ -435,11 +441,22 @@ struct Evidence<'a> {
     actual: Option<&'a str>,
     template: Option<&'a str>,
     verified: Option<&'a str>,
+    activation_confirmed: bool,
     revoked: bool,
 }
 
-/// Whether the file the agent runs is the offered artifact, and which offered
-/// generation it is otherwise. `by_actual` and `by_template` are the newest
+/// A matching managed-file digest alone cannot prove Vector loaded it. Only
+/// the current verified apply result for this precise offer confirms that.
+fn activation_confirmed(device: &Device, offer: &Offer) -> bool {
+    device.apply_state.as_deref() == Some("verified_applied")
+        && device.reported_generation == Some(offer.generation)
+        && device.generation == offer.generation
+        && device.version_id.as_deref() == Some(&offer.version_id)
+}
+
+/// Whether the agent's last managed-file report is the offered artifact and
+/// confirmed active, and which offered generation its file matches otherwise.
+/// `by_actual` and `by_template` are the newest
 /// generations offered with the reported file or template digest.
 ///
 /// A version that reads device secrets is written to the host with the host's
@@ -473,6 +490,11 @@ fn verdict(
             None => by_actual.map(|_| false),
         }
     };
+    // For both plain and secret-bearing configurations, equality of bytes is
+    // only a file observation. A write or failed reload is not activation.
+    if matches == Some(true) && !evidence.activation_confirmed {
+        return (None, None);
+    }
     let generation = (matches == Some(false) && !same_template)
         .then_some(running_generation)
         .flatten();
@@ -564,6 +586,9 @@ pub async fn configuration(
             actual: device.actual.as_deref(),
             template: device.template.as_deref(),
             verified: device.verified.as_deref(),
+            activation_confirmed: offer
+                .as_ref()
+                .is_some_and(|offer| activation_confirmed(&device, offer)),
             revoked: device.revoked,
         },
         offer.as_ref().map(|offer| offer.sha256.as_str()),
@@ -1575,8 +1600,70 @@ mod tests {
             actual,
             template,
             verified,
+            activation_confirmed: true,
             revoked: false,
         }
+    }
+
+    #[test]
+    fn matching_file_is_not_confirmation_of_activation() {
+        let unverified = Evidence {
+            activation_confirmed: false,
+            ..evidence(Some(A), None, None)
+        };
+        assert_eq!(
+            verdict(&unverified, Some(A), false, Some(7), None),
+            (None, None)
+        );
+
+        let stale_secret_verification = Evidence {
+            activation_confirmed: false,
+            ..evidence(Some(B), Some(A), Some(B))
+        };
+        assert_eq!(
+            verdict(&stale_secret_verification, Some(A), true, None, Some(7)),
+            (None, None)
+        );
+        // A different file is still a known difference, not a success claim.
+        assert_eq!(
+            verdict(&unverified, Some(B), false, Some(7), None),
+            (Some(false), Some(7))
+        );
+    }
+
+    #[test]
+    fn activation_must_belong_to_the_current_offer() {
+        let mut device = Device {
+            revoked: false,
+            version_id: Some("version-7".to_owned()),
+            generation: 7,
+            actual: Some(A.to_owned()),
+            template: None,
+            verified: Some(A.to_owned()),
+            apply_state: Some("verification_unknown".to_owned()),
+            reported_generation: Some(7),
+            last_seen: None,
+        };
+        let offer = Offer {
+            generation: 7,
+            version_id: "version-7".to_owned(),
+            sha256: A.to_owned(),
+            offered_at: None,
+            content: "{}".to_owned(),
+        };
+        assert!(!activation_confirmed(&device, &offer));
+        device.apply_state = Some("failed".to_owned());
+        assert!(!activation_confirmed(&device, &offer));
+        device.apply_state = Some("verified_applied".to_owned());
+        assert!(activation_confirmed(&device, &offer));
+        device.reported_generation = Some(6);
+        assert!(!activation_confirmed(&device, &offer));
+        device.reported_generation = Some(7);
+        device.version_id = Some("version-8".to_owned());
+        assert!(!activation_confirmed(&device, &offer));
+        device.version_id = Some("version-7".to_owned());
+        device.generation = 8;
+        assert!(!activation_confirmed(&device, &offer));
     }
 
     #[test]

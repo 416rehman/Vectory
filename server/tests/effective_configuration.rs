@@ -669,6 +669,19 @@ async fn the_drift_verdict_follows_the_digest_the_agent_reports() {
     assert_eq!(applied["running"]["matches_generation"], Value::Null);
     assert!(applied["running"]["reported_at"].is_string());
 
+    // The same managed bytes can remain after Vector stops or a reload cannot
+    // be verified. A digest match must not claim that this offer runs.
+    check_in(&f, id, 1, &digest1, "verification_unknown", json!({})).await;
+    let uncertain = configuration(&f, id, "").await;
+    assert_eq!(uncertain["running"]["sha256"], digest1);
+    assert_eq!(uncertain["running"]["matches"], Value::Null);
+    check_in(&f, id, 1, &digest1, "failed", json!({})).await;
+    assert_eq!(
+        configuration(&f, id, "").await["running"]["matches"],
+        Value::Null
+    );
+    check_in(&f, id, 1, &digest1, "verified_applied", json!({})).await;
+
     // A hand edit: a different digest the server has never seen. Nothing is
     // claimed about what the file says.
     let edited = db::hash("someone edited the file");
@@ -678,8 +691,9 @@ async fn the_drift_verdict_follows_the_digest_the_agent_reports() {
     assert_eq!(drifted["running"]["matches"], false);
     assert_eq!(drifted["running"]["matches_generation"], Value::Null);
 
-    // A new version is offered and not applied yet: the device runs what it
-    // was offered at generation 1, which says which one.
+    // A new version is offered and not applied yet: the reported managed file
+    // is what the device was offered at generation 1, but this read cannot
+    // confirm which configuration Vector currently runs.
     deploy_default(&f, &[id], &v2, 101, 600).await;
     check_in(&f, id, 1, &digest1, "desired", json!({})).await;
     let waiting = configuration(&f, id, "").await;
@@ -687,7 +701,7 @@ async fn the_drift_verdict_follows_the_digest_the_agent_reports() {
     assert_eq!(waiting["running"]["matches"], false);
     assert_eq!(waiting["running"]["matches_generation"], 1);
     let older = configuration(&f, id, "?generation=1").await;
-    assert_eq!(older["running"]["matches"], true);
+    assert_eq!(older["running"]["matches"], Value::Null);
 
     // It applies generation 2: now the older one is the one that differs.
     let digest2 = waiting["sha256"].as_str().unwrap().to_owned();

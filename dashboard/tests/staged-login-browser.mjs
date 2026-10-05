@@ -84,6 +84,8 @@ const inviteCode = "c".repeat(64);
 async function fixture({
   mfa = true,
   setupPath = null,
+  setupInitializedAfterPost = false,
+  setupStatusUnavailableAfterPost = false,
   route = "users",
   theme = "light",
 } = {}) {
@@ -130,6 +132,8 @@ async function fixture({
     holdVerification: false,
     held: [],
     requests: [],
+    setupInitialized: false,
+    setupStatusUnavailable: false,
   };
   page.on("pageerror", (error) => errors.push(error.message));
   await context.route("**/api/v1/**", async (route) => {
@@ -149,11 +153,16 @@ async function fixture({
       } catch {}
     };
     const session = () => ({ user, csrf_token: "synthetic-csrf" });
-    if (path === "/status")
+    if (path === "/status") {
+      if (state.setupStatusUnavailable)
+        return reply(
+          { error: { code: "UNAVAILABLE", message: "Synthetic unavailable" } },
+          503,
+        );
       return reply(
         setupPath
           ? {
-              initialized: false,
+              initialized: state.setupInitialized,
               version: "synthetic",
               setup_hint: {
                 source: "file",
@@ -164,6 +173,15 @@ async function fixture({
             }
           : { initialized: true, version: "synthetic" },
       );
+    }
+    if (path === "/bootstrap" && method === "POST") {
+      state.setupInitialized = setupInitializedAfterPost;
+      state.setupStatusUnavailable = setupStatusUnavailableAfterPost;
+      return reply(
+        { error: { code: "UNAVAILABLE", message: "Synthetic unavailable" } },
+        503,
+      );
+    }
     if (path === "/invite/preview" && method === "POST")
       return reply({
         ...invited,
@@ -287,7 +305,10 @@ async function fixture({
       500,
     );
   });
-  await page.goto(`http://127.0.0.1:${port}/__staged-login#/${route}`);
+  await page.goto(`http://127.0.0.1:${port}/__staged-login#/${route}`, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
   await expect(
     page.getByRole("heading", {
       name: setupPath
@@ -298,7 +319,7 @@ async function fixture({
             ? "Reset your password"
             : /^Sign in to /,
     }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15000 });
   return {
     context,
     page,
@@ -804,6 +825,167 @@ try {
         ).toHaveLength(0);
       } finally {
         await f.close();
+      }
+    },
+  );
+  await check(
+    "an uncertain first-admin request keeps setup and status snapshots separate",
+    async () => {
+      const start = async (options) => {
+        const f = await fixture({
+          setupPath: "/run/secrets/bootstrap",
+          ...options,
+        });
+        await f.page
+          .getByLabel("Setup secret", { exact: true })
+          .fill("synthetic-setup-secret");
+        await f.page
+          .getByLabel("Your name", { exact: true })
+          .fill("Synthetic administrator");
+        await f.page
+          .getByLabel("Email address", { exact: true })
+          .fill("admin@example.test");
+        await f.page
+          .getByLabel("Password", { exact: true })
+          .fill("Synthetic private password 2026!");
+        await f.page
+          .getByLabel("Confirm password", { exact: true })
+          .fill("Synthetic private password 2026!");
+        await f.page
+          .getByRole("button", { name: "Create administrator account" })
+          .click();
+        return f;
+      };
+      const first = await start({});
+      try {
+        const review = first.page.getByRole("status").filter({
+          has: first.page.getByRole("heading", {
+            name: "First administrator setup is unconfirmed",
+          }),
+        });
+        await expect(review).toContainText("has not reported setup yet");
+        await expect(review).toContainText(
+          "earlier request; it may still finish",
+        );
+        await expect(
+          first.page.getByRole("button", {
+            name: "Create administrator account",
+          }),
+        ).toHaveCount(0);
+        await expect(
+          first.page.getByRole("button", { name: "Check setup status" }),
+        ).toBeFocused();
+        await first.page.setViewportSize({ width: 390, height: 844 });
+        for (const theme of ["light", "dark"]) {
+          await first.page.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          expect(
+            await first.page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const axe = await new AxeBuilder({ page: first.page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+            .analyze();
+          expect(
+            axe.violations.map(({ id, impact }) => ({ id, impact })),
+          ).toEqual([]);
+          await first.page.screenshot({
+            path: resolve(output, `auth-setup-recovery-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+        expect(
+          first.state.requests.filter((r) => r.path === "/bootstrap"),
+        ).toHaveLength(1);
+        first.state.setupInitialized = true;
+        await first.page
+          .getByRole("button", { name: "Check setup status" })
+          .click();
+        await expect(review).toContainText(
+          "does not show whether your request created the account",
+        );
+        expect(
+          first.state.requests.filter((r) => r.path === "/bootstrap"),
+        ).toHaveLength(1);
+        await first.page
+          .getByRole("button", { name: "Try signing in" })
+          .click();
+        await expect(
+          first.page.getByRole("heading", { name: /^Sign in to / }),
+        ).toBeVisible();
+        await expect(
+          first.page.getByLabel("Email address", { exact: true }),
+        ).toHaveValue("admin@example.test");
+        await expect(
+          first.page.getByText(
+            "A setup status check cannot confirm which request created the account.",
+            { exact: false },
+          ),
+        ).toBeVisible();
+      } finally {
+        await first.close();
+      }
+      const second = await start({ setupStatusUnavailableAfterPost: true });
+      try {
+        const review = second.page.getByRole("status").filter({
+          has: second.page.getByRole("heading", {
+            name: "First administrator setup is unconfirmed",
+          }),
+        });
+        await expect(review).toContainText(
+          "could not check whether setup finished",
+        );
+        await expect(
+          second.page.getByRole("button", { name: "Start a new setup" }),
+        ).toHaveCount(0);
+        second.state.setupStatusUnavailable = false;
+        await second.page
+          .getByRole("button", { name: "Check setup status" })
+          .click();
+        await expect(review).toContainText("has not reported setup yet");
+        await second.page
+          .getByRole("button", { name: "Start a new setup" })
+          .click();
+        await expect(
+          second.page.getByRole("button", {
+            name: "Create administrator account",
+          }),
+        ).toBeVisible();
+        await expect(
+          second.page.getByLabel("Setup secret", { exact: true }),
+        ).toHaveValue("");
+        await expect(
+          second.page.getByLabel("Setup secret", { exact: true }),
+        ).toBeFocused();
+        await expect(
+          second.page.getByLabel("Password", { exact: true }),
+        ).toHaveValue("");
+        expect(
+          second.state.requests.filter((r) => r.path === "/bootstrap"),
+        ).toHaveLength(1);
+      } finally {
+        await second.close();
+      }
+      const third = await start({ setupInitializedAfterPost: true });
+      try {
+        await expect(
+          third.page.getByRole("heading", {
+            name: "First administrator setup is unconfirmed",
+          }),
+        ).toBeVisible();
+        await expect(
+          third.page.getByRole("heading", { name: /^Sign in to / }),
+        ).toHaveCount(0);
+        await expect(
+          third.page.getByText(
+            "does not show whether your request created the account",
+            { exact: false },
+          ),
+        ).toBeVisible();
+      } finally {
+        await third.close();
       }
     },
   );

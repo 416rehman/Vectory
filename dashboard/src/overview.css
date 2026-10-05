@@ -415,6 +415,10 @@ a.overview-kpi-tile:focus-visible {
   color: var(--success-text);
   background: var(--success-bg);
 }
+.overview-all-clear-icon[data-tone="neutral"] {
+  color: var(--neutral-text);
+  background: var(--neutral-bg);
+}
 .overview-all-clear strong {
   display: block;
   font-size: var(--text-base);

@@ -983,6 +983,78 @@ try {
     },
   );
   await check(
+    "Needs you reserves the green all-clear for devices verified and checking in",
+    async () => {
+      const newDevice = device(90, "new-edge-01", {
+        status: "awaiting_first_check_in",
+        apply_state: "unmanaged",
+        last_seen: null,
+        desired_version_id: null,
+        desired_generation: 0,
+        reported_generation: 0,
+      });
+      let { context, page } = await open({
+        overview: slimOverview([newDevice]),
+        fleet: [newDevice],
+      });
+      let card = page.locator(".needs-you");
+      await expect(card).toContainText("Finish setting up your devices");
+      await expect(
+        card.getByRole("link", { name: "Open devices" }),
+      ).toHaveAttribute("href", "#/devices");
+      await expect(card).toContainText("1 device never connected");
+      await expect(card).toContainText("1 device without a pipeline");
+      await expect(card).not.toContainText("applied and checking in");
+      await expect(card.locator(".overview-all-clear-icon")).toHaveAttribute(
+        "data-tone",
+        "neutral",
+      );
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const theme of ["light", "dark"]) {
+          await page.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          await card.screenshot({
+            path: resolve(output, `needs-you-unverified-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      }
+      await context.close();
+
+      ({ context, page } = await open({
+        overview: slimOverview([devices[0]]),
+        fleet: [devices[0]],
+      }));
+      card = page.locator(".needs-you");
+      await expect(card).toContainText("Nothing needs you right now");
+      await expect(card).toContainText(
+        "The device is verified on its assigned version and checking in.",
+      );
+      await expect(card.locator(".overview-all-clear-icon")).toHaveAttribute(
+        "data-tone",
+        "success",
+      );
+      await context.close();
+
+      ({ context, page } = await open({
+        overview: slimOverview([]),
+        fleet: [],
+      }));
+      card = page.locator(".needs-you");
+      await expect(card).toContainText("No devices to monitor yet");
+      await expect(card).toContainText("Add a device");
+      await expect(card).not.toContainText("Nothing needs you right now");
+      await context.close();
+    },
+  );
+  await check(
     "A failed stopped-rollout check is never an all-clear, and Retry recovers",
     async () => {
       const { context, page } = await open({
@@ -1000,7 +1072,8 @@ try {
       state.historyFails = false;
       await row.getByRole("button", { name: "Retry", exact: true }).click();
       await expect(row).toHaveCount(0);
-      await expect(card).toContainText("Nothing needs you right now");
+      await expect(card).toContainText("Finish setting up your devices");
+      await expect(card).not.toContainText("Nothing needs you right now");
       await context.close();
     },
   );

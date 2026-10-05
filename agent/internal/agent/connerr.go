@@ -403,15 +403,15 @@ func classifyTransport(target *url.URL, proxy *url.URL, wrote bool, err error) *
 			e.Fix = "Check that --server points to the Vectory agent listener."
 		}
 	case proxy != nil && !wrote && strings.EqualFold(innerError(err), "Proxy Authentication Required"):
-		// The proxy answered CONNECT with 407. The password, if any, is never
-		// printed: only where to put it.
+		// The proxy answered CONNECT with 407. Never echo credentials or suggest
+		// putting them in a service environment, which other users can inspect.
 		e.Code = "PROXY_AUTH_REQUIRED"
 		if proxy.User != nil {
-			e.Message = fmt.Sprintf("The proxy at %s did not accept the user name and password in HTTPS_PROXY.", proxyAddress)
-			e.Fix = "Check them (percent-encode characters such as @ and : in the password), or ask the proxy's administrator to allow this server."
+			e.Message = fmt.Sprintf("The proxy at %s rejected this host's authentication.", proxyAddress)
+			e.Fix = "Remove credentials from HTTPS_PROXY for the agent service: service environment variables can expose them. This preview has no supported private setup for an authenticated service proxy. Ask the proxy administrator to allow this server through without sign-in, or use a direct route with NO_PROXY."
 		} else {
-			e.Message = fmt.Sprintf("The proxy at %s requires a user name and password.", proxyAddress)
-			e.Fix = fmt.Sprintf("Set HTTPS_PROXY to http://USER:PASSWORD@%s where the agent runs, or ask the proxy's administrator to allow this server without sign-in.", proxyAddress)
+			e.Message = fmt.Sprintf("The proxy at %s requires sign-in.", proxyAddress)
+			e.Fix = "This preview has no supported private setup for an authenticated service proxy. Ask the proxy administrator to allow this server through without sign-in, or use a direct route with NO_PROXY."
 		}
 	case proxy != nil && !wrote:
 		// A proxy that refuses CONNECT reports only its status text.

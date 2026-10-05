@@ -93,6 +93,72 @@ const device = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("the drift sentence", () => {
+  it("does not call a matching managed file running when activation is unknown or failed", () => {
+    for (const apply_state of ["verification_unknown", "failed"]) {
+      const line = driftLine(
+        read({ running: running({ matches: null }) }),
+        device({ status: apply_state, apply_state }),
+      );
+      expect(line).toMatchObject({
+        badge: "Not verified",
+        tone: "neutral",
+        headline:
+          "The managed file matches this offer, but activation isn't verified.",
+      });
+      expect(line.detail).not.toMatch(/verified running|applied this/);
+    }
+    // A stale server response must not make an unverified apply green either.
+    expect(
+      driftLine(
+        read({ running: running({ matches: true }) }),
+        device({
+          status: "verification_unknown",
+          apply_state: "verification_unknown",
+        }),
+      ),
+    ).toMatchObject({ badge: "Not verified", tone: "neutral" });
+  });
+
+  it("distinguishes a reported secret template from verified activation", () => {
+    const line = driftLine(
+      read({
+        uses_local_secrets: true,
+        running: running({
+          matches: null,
+          sha256: SHA("f"),
+          template_sha256: SHA("a"),
+        }),
+      }),
+      device({
+        status: "verification_unknown",
+        apply_state: "verification_unknown",
+      }),
+    );
+    expect(line).toMatchObject({
+      badge: "Not verified",
+      tone: "neutral",
+      headline:
+        "The agent reports this template, but activation isn't verified.",
+    });
+  });
+
+  it("describes an earlier matching file without calling its offer active", () => {
+    const line = driftLine(
+      read({
+        current: false,
+        generation: 10,
+        running: running({ matches: null }),
+      }),
+      device({ apply_state: "desired" }),
+    );
+    expect(line).toMatchObject({
+      badge: "Not verified",
+      tone: "neutral",
+      headline:
+        "The managed file matches generation 10, but activation isn't verified.",
+    });
+  });
+
   it("says the running configuration matches only when the server verified it", () => {
     const line = driftLine(
       read({ running: running({ matches: true }) }),
@@ -113,7 +179,7 @@ describe("the drift sentence", () => {
       device({ apply_state: "desired", status: "applying" }),
     );
     expect(line.headline).toBe(
-      "The running configuration differs from what Vectory offered at generation 12: it matches generation 10.",
+      "The managed file differs from what Vectory offered at generation 12: it matches generation 10.",
     );
     expect(line).toMatchObject({ badge: "Differs", tone: "warning" });
     expect(line.detail).toBe(
@@ -126,7 +192,9 @@ describe("the drift sentence", () => {
       read({ running: running({ matches: false, matches_generation: 11 }) }),
       device({ apply_state: "failed", status: "failed" }),
     );
-    expect(line.detail).toContain("may not be applied yet, or it failed");
+    expect(line.detail).toContain(
+      "may not be applied yet, or its apply failed",
+    );
     expect(line.detail).toContain("Running vs desired above");
   });
 
@@ -136,7 +204,7 @@ describe("the drift sentence", () => {
       device(),
     );
     expect(line.headline).toBe(
-      "The running configuration differs from what Vectory offered at generation 12.",
+      "The managed file differs from what Vectory offered at generation 12.",
     );
     expect(line.detail).toContain("isn't any configuration Vectory offered");
     expect(line.detail).toContain("Vectory sees only the file's digest, never");
@@ -230,7 +298,7 @@ describe("the drift sentence", () => {
     expect(unknown.headline).toContain("file on the host");
   });
 
-  it("reads an earlier generation by what the device runs, not as drift", () => {
+  it("reads an earlier generation as a file comparison, not activation proof", () => {
     const stillRuns = driftLine(
       read({
         generation: 10,
@@ -239,8 +307,8 @@ describe("the drift sentence", () => {
       }),
       device(),
     );
-    expect(stillRuns).toMatchObject({ badge: "Running", tone: "info" });
-    expect(stillRuns.headline).toBe("The device runs generation 10.");
+    expect(stillRuns).toMatchObject({ badge: "File matches", tone: "neutral" });
+    expect(stillRuns.headline).toBe("The managed file matches generation 10.");
     expect(stillRuns.detail).toBe("Generation 12 is the one offered now.");
     const notRunning = driftLine(
       read({
@@ -250,7 +318,10 @@ describe("the drift sentence", () => {
       }),
       device(),
     );
-    expect(notRunning).toMatchObject({ badge: "Not running", tone: "neutral" });
+    expect(notRunning).toMatchObject({
+      badge: "File differs",
+      tone: "neutral",
+    });
     expect(notRunning.detail).toBe(
       "Its agent reports what Vectory offered at generation 12.",
     );

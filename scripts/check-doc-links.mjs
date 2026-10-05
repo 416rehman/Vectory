@@ -70,7 +70,8 @@ export function listMarkdownFiles(root) {
  * line numbers still match the source.
  */
 export function blankBlocks(markdown) {
-  const lines = markdown.split("\n");
+  // Normalize Windows line endings before matching headings and fenced code.
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
   let fence = null;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];

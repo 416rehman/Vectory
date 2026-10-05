@@ -996,6 +996,36 @@ function NeedsYou({
     .filter(Boolean)
     .join(", ");
   const devices = data.counts.total;
+  const { online, offline, never } = data.counts.connection;
+  const managed = data.devices_managed;
+  const onDesired = data.devices_on_desired;
+  const unmeasured = data.devices_unmeasured ?? 0;
+  // An empty attention list says only that nothing was listed. It does not
+  // establish that enrolled devices checked in or verified their version.
+  const verifiedAll =
+    devices > 0 &&
+    online === devices &&
+    data.counts.health.applied === devices &&
+    (managed === undefined || managed === devices) &&
+    (onDesired === undefined || onDesired === devices) &&
+    !unmeasured &&
+    !data.issues_open;
+  const emptyNotes = [
+    never ? `${countLabel(never, "device")} never connected` : "",
+    offline ? `${countLabel(offline, "device")} offline` : "",
+    managed !== undefined && devices > managed
+      ? `${countLabel(devices - managed, "device")} without a pipeline`
+      : "",
+    managed !== undefined && onDesired !== undefined && managed > onDesired
+      ? `${countLabel(managed - onDesired, "device")} not verified on the assigned version`
+      : "",
+    unmeasured
+      ? `Delivery not measured on ${countLabel(unmeasured, "device")}`
+      : "",
+    data.issues_open
+      ? `${countLabel(data.issues_open, "open issue")} in Issues`
+      : "",
+  ].filter(Boolean);
   return (
     <Card
       title="Needs you"
@@ -1009,6 +1039,10 @@ function NeedsYou({
       action={
         data.issues_open > 0 ? (
           <CardLink href="#/issues">Open issues</CardLink>
+        ) : !verifiedAll ? (
+          <CardLink href={devices ? "#/devices" : "#/enrollment"}>
+            {devices ? "Open devices" : "Add device"}
+          </CardLink>
         ) : undefined
       }
     >
@@ -1057,17 +1091,37 @@ function NeedsYou({
         </div>
       ) : (
         <div className="overview-all-clear">
-          <span className="overview-all-clear-icon" aria-hidden="true">
-            <ShieldCheck size={18} />
+          <span
+            className="overview-all-clear-icon"
+            data-tone={verifiedAll ? "success" : "neutral"}
+            aria-hidden="true"
+          >
+            {verifiedAll ? (
+              <ShieldCheck size={18} />
+            ) : (
+              <CircleMinus size={18} />
+            )}
           </span>
           <div>
-            <strong>Nothing needs you right now</strong>
-            <p>
-              {devices === 1
-                ? "The device is applied and checking in."
+            <strong>
+              {verifiedAll
+                ? "Nothing needs you right now"
                 : devices
-                  ? `All ${countLabel(devices, "device")} are applied and checking in.`
-                  : "Failures, offline devices and stuck rollouts will show up here."}
+                  ? never || (managed !== undefined && managed < devices)
+                    ? "Finish setting up your devices"
+                    : "Check device status"
+                  : "No devices to monitor yet"}
+            </strong>
+            <p>
+              {verifiedAll
+                ? devices === 1
+                  ? "The device is verified on its assigned version and checking in."
+                  : `All ${countLabel(devices, "device")} are verified on their assigned version and checking in.`
+                : !devices
+                  ? "Add a device to see its connection and delivery status."
+                  : emptyNotes.length
+                    ? `${emptyNotes.join(" · ")}.`
+                    : "No device alerts or stopped rollouts were reported."}
             </p>
           </div>
         </div>

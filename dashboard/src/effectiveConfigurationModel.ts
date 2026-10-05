@@ -59,10 +59,10 @@ export function versionName(version: VersionLabel | null | undefined) {
 }
 
 /**
- * Whether the running file is what Vectory offered, in words that claim only
- * what the server verified. The agent's report is a digest: equal digests
- * mean identical bytes, and a digest the server never offered says nothing
- * about the file. The local file itself is never seen.
+ * Whether the managed file the agent reports is what Vectory offered, in
+ * words that claim only what the server verified. Equal digests establish
+ * file bytes, not that Vector activated the file. The local file itself is
+ * never seen.
  */
 export function driftLine(
   config: DeviceConfiguration,
@@ -118,6 +118,31 @@ export function driftLine(
       ...shared("Vectory can't say whether it runs this configuration.", false),
     };
 
+  const reportedOffer =
+    config.sha256 !== null &&
+    (secrets
+      ? run.template_sha256 === config.sha256
+      : run.sha256 === config.sha256);
+  if (
+    reportedOffer &&
+    (run.matches === null ||
+      (run.matches === true && device.apply_state !== "verified_applied"))
+  )
+    return {
+      badge: "Not verified",
+      tone: "neutral",
+      headline: config.current
+        ? secrets
+          ? "The agent reports this template, but activation isn't verified."
+          : "The managed file matches this offer, but activation isn't verified."
+        : `The managed file matches generation ${generation}, but activation isn't verified.`,
+      ...shared(
+        device.apply_state === "failed"
+          ? "The latest apply failed. Check the device status and Vector log."
+          : "A matching file digest alone doesn't show that Vector loaded this version.",
+      ),
+    };
+
   if (run.matches === true) {
     if (config.current)
       return {
@@ -131,9 +156,9 @@ export function driftLine(
         ),
       };
     return {
-      badge: "Running",
-      tone: "info",
-      headline: `The device runs generation ${generation}.`,
+      badge: "File matches",
+      tone: "neutral",
+      headline: `The managed file matches generation ${generation}.`,
       ...shared(
         `Generation ${device.desired_generation} is the one offered now.`,
       ),
@@ -144,9 +169,9 @@ export function driftLine(
     const known = run.matches_generation;
     if (!config.current)
       return {
-        badge: "Not running",
+        badge: "File differs",
         tone: "neutral",
-        headline: `The device doesn't run generation ${generation}.`,
+        headline: `The managed file differs from generation ${generation}.`,
         ...shared(
           known !== null
             ? `Its agent reports what Vectory offered at generation ${known}.`
@@ -157,11 +182,11 @@ export function driftLine(
       return {
         badge: "Differs",
         tone: "warning",
-        headline: `The running configuration differs from what Vectory offered at generation ${generation}: it matches generation ${known}.`,
+        headline: `The managed file differs from what Vectory offered at generation ${generation}: it matches generation ${known}.`,
         ...shared(
           IN_PROGRESS.has(device.apply_state)
             ? `The agent hasn't finished applying generation ${generation}.`
-            : `Generation ${generation} may not be applied yet, or it failed and the agent returned to the one before it. Running vs desired above says which.`,
+            : `Generation ${generation} may not be applied yet, or its apply failed. Running vs desired above says what the device verified.`,
         ),
       };
     const sync =
@@ -171,7 +196,7 @@ export function driftLine(
     return {
       badge: "Differs",
       tone: "warning",
-      headline: `The running configuration differs from what Vectory offered at generation ${generation}.`,
+      headline: `The managed file differs from what Vectory offered at generation ${generation}.`,
       ...shared(
         (secrets
           ? "The file changed after the agent verified it. A local edit does this, and so does a rotated secret the agent hasn't applied yet."

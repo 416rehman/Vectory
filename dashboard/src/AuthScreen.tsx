@@ -75,6 +75,10 @@ const ResetReceiptSchema = z.object({
 });
 
 type Notice = { tone: "info" | "success"; text: string };
+type SetupRecovery = {
+  email: string;
+  snapshot: "unavailable" | "not_initialized" | "initialized";
+};
 type Fields = Partial<
   Record<
     "email" | "password" | "confirm" | "secret" | "name" | "code" | "otp",
@@ -176,6 +180,9 @@ export default function AuthScreen({
   const [alert, setAlert] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [unconfirmed, setUnconfirmed] = useState<ReactNode>(null);
+  const [setupRecovery, setSetupRecovery] = useState<SetupRecovery | null>(
+    null,
+  );
   const [throttledUntil, setThrottledUntil] = useState<number | null>(null);
   const [invite, setInvite] = useState<
     z.infer<typeof InvitePreviewSchema> | "invalid" | null
@@ -188,6 +195,7 @@ export default function AuthScreen({
   const emailInput = useRef<HTMLInputElement>(null);
   const passwordInput = useRef<HTMLInputElement>(null);
   const secretInput = useRef<HTMLInputElement>(null);
+  const setupRecoveryHost = useRef<HTMLDivElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   // A field to focus once the form is enabled again (after a failed request, a
   // refused submit or a switched code field).
@@ -251,6 +259,14 @@ export default function AuthScreen({
     focusNext.current = null;
     target()?.focus();
   });
+  useLayoutEffect(() => {
+    if (!setupRecovery || busy || checking) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    setupRecoveryHost.current
+      ?.querySelector<HTMLButtonElement>("button")
+      ?.focus();
+  }, [setupRecovery, busy, checking]);
   useEffect(() => {
     if (throttle === 0) {
       setThrottledUntil(null);
@@ -345,12 +361,14 @@ export default function AuthScreen({
   }
   function toSignIn(next?: Notice, signInEmail?: string) {
     if (signInEmail !== undefined) setEmail(signInEmail);
+    setSecret("");
     setPassword("");
     setConfirm("");
     setCode("");
     setRecovery(false);
     setCodeFailures(0);
     clearMessages();
+    setSetupRecovery(null);
     setNotice(next || null);
     if (linkRoute()) location.hash = destination.current.replace(/^#/, "");
     setView({ kind: "signin" });
@@ -426,6 +444,31 @@ export default function AuthScreen({
       return "unknown";
     } finally {
       if (requests.current(request)) setChecking(false);
+    }
+  }
+
+  async function checkSetupStatus() {
+    if (!setupRecovery) return;
+    const request = requests.claim();
+    if (!request) return;
+    try {
+      const outcome = await resolveUncertain(
+        "setup",
+        setupRecovery.email,
+        request,
+      );
+      if (!requests.current(request) || outcome === "adopted") return;
+      setSetupRecovery({
+        email: setupRecovery.email,
+        snapshot:
+          outcome === "initialized"
+            ? "initialized"
+            : outcome === "absent"
+              ? "not_initialized"
+              : "unavailable",
+      });
+    } finally {
+      requests.finish(request);
     }
   }
 
@@ -661,25 +704,18 @@ export default function AuthScreen({
         setConfirm("");
         const outcome = await resolveUncertain("setup", intended, request);
         if (!requests.current(request) || outcome === "adopted") return;
-        if (outcome === "initialized") {
-          onSetupDetected();
-          toSignIn(
-            {
-              tone: "info",
-              text: "Vectory is set up. Sign in with the account you just created.",
-            },
-            intended,
-          );
-        } else
-          setUnconfirmed(
-            <Unconfirmed>
-              <p>
-                {outcome === "absent"
-                  ? "Setup didn't finish. Paste the setup secret and choose your password again."
-                  : "We couldn't reach Vectory to check. Paste the setup secret and choose your password again to retry."}
-              </p>
-            </Unconfirmed>,
-          );
+        // Status is a snapshot, not a receipt for the original bootstrap.
+        // It neither proves who initialized the server nor fences a request
+        // that may still be running after the browser stopped waiting.
+        setSetupRecovery({
+          email: intended,
+          snapshot:
+            outcome === "initialized"
+              ? "initialized"
+              : outcome === "absent"
+                ? "not_initialized"
+                : "unavailable",
+        });
         return;
       }
       const failed = failure instanceof APIError ? failure.code : "";
@@ -1249,99 +1285,159 @@ export default function AuthScreen({
           <p>It works once, to create this account.</p>
         </section>
         {alertBox}
-        {unconfirmed}
+        {setupRecovery ? (
+          <div ref={setupRecoveryHost}>
+            <Unconfirmed
+              title="First administrator setup is unconfirmed"
+              actions={
+                <>
+                  <Button
+                    variant="secondary compact"
+                    disabled={checking}
+                    onClick={() => void checkSetupStatus()}
+                  >
+                    Check setup status
+                  </Button>
+                  <Button
+                    variant="secondary compact"
+                    disabled={checking}
+                    onClick={() => {
+                      const intended = setupRecovery.email;
+                      if (setupRecovery.snapshot === "initialized")
+                        onSetupDetected();
+                      toSignIn(
+                        {
+                          tone: "info",
+                          text: "Try signing in with the email and password you chose. A setup status check cannot confirm which request created the account.",
+                        },
+                        intended,
+                      );
+                    }}
+                  >
+                    Try signing in
+                  </Button>
+                  {setupRecovery.snapshot === "not_initialized" && (
+                    <Button
+                      variant="secondary compact"
+                      disabled={checking}
+                      onClick={() => {
+                        setSetupRecovery(null);
+                        clearMessages();
+                        focusNext.current = () => secretInput.current;
+                      }}
+                    >
+                      Start a new setup
+                    </Button>
+                  )}
+                </>
+              }
+            >
+              <p>
+                {setupRecovery.snapshot === "initialized"
+                  ? "This server is initialized, but that does not show whether your request created the account. Try the email and password you chose; if they do not work, ask the server administrator who completed setup."
+                  : setupRecovery.snapshot === "not_initialized"
+                    ? "The server has not reported setup yet. This does not cancel the earlier request; it may still finish. Check again, try signing in, or deliberately start a new setup."
+                    : "We could not check whether setup finished. The earlier request may still finish. Check status again or try signing in with the email and password you chose. A new setup remains unavailable until a status read succeeds."}
+              </p>
+            </Unconfirmed>
+          </div>
+        ) : (
+          unconfirmed
+        )}
         {checking && (
           <div className="signin-loading" role="status">
             <Spinner />
             Checking whether setup finished…
           </div>
         )}
-        <form onSubmit={setUp} noValidate>
-          <fieldset disabled={disabled}>
-            <PasswordField
-              label="Setup secret"
-              name="setup-secret"
-              autoComplete="off"
-              mono
-              value={secret}
-              onChange={(value) => {
-                setSecret(value.replace(/[\r\n]/g, ""));
-                edited("secret");
-              }}
-              error={fields.secret}
-              inputRef={secretInput}
-              hint="Surrounding spaces and line breaks are ignored."
-            />
-            <div className="setup-section">Your administrator account</div>
-            <AuthField label="Your name" error={fields.name}>
-              {({ id, describedBy, invalid }) => (
-                <input
-                  id={id}
-                  name="name"
-                  autoComplete="name"
-                  required
-                  maxLength={100}
-                  value={name}
-                  aria-invalid={invalid || undefined}
-                  aria-describedby={describedBy}
-                  onChange={(event) => {
-                    setName(event.target.value);
-                    edited("name");
-                  }}
-                />
-              )}
-            </AuthField>
-            <AuthField label="Email address" error={fields.email}>
-              {({ id, describedBy, invalid }) => (
-                <input
-                  id={id}
-                  name="email"
-                  type="email"
-                  autoComplete="username"
-                  required
-                  value={email}
-                  aria-invalid={invalid || undefined}
-                  aria-describedby={describedBy}
-                  onChange={(event) => {
-                    setEmail(event.target.value);
-                    edited("email");
-                  }}
-                />
-              )}
-            </AuthField>
-            <PasswordField
-              label="Password"
-              name="new-password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(value) => {
-                setPassword(value);
-                edited("password");
-              }}
-              error={fields.password}
-              showStrength
-              identity={[email, name]}
-              revealed={revealed}
-              onReveal={setRevealed}
-            />
-            <PasswordField
-              label="Confirm password"
-              name="confirm-password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(value) => {
-                setConfirm(value);
-                edited("confirm");
-              }}
-              error={fields.confirm}
-              revealed={revealed}
-              onReveal={setRevealed}
-            />
-            <Button type="submit" busy={busy} className="signin-submit">
-              Create administrator account
-            </Button>
-          </fieldset>
-        </form>
+        {!setupRecovery && (
+          <form onSubmit={setUp} noValidate>
+            <fieldset disabled={disabled}>
+              <PasswordField
+                label="Setup secret"
+                name="setup-secret"
+                autoComplete="off"
+                mono
+                value={secret}
+                onChange={(value) => {
+                  setSecret(value.replace(/[\r\n]/g, ""));
+                  edited("secret");
+                }}
+                error={fields.secret}
+                inputRef={secretInput}
+                hint="Surrounding spaces and line breaks are ignored."
+              />
+              <div className="setup-section">Your administrator account</div>
+              <AuthField label="Your name" error={fields.name}>
+                {({ id, describedBy, invalid }) => (
+                  <input
+                    id={id}
+                    name="name"
+                    autoComplete="name"
+                    required
+                    maxLength={100}
+                    value={name}
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={describedBy}
+                    onChange={(event) => {
+                      setName(event.target.value);
+                      edited("name");
+                    }}
+                  />
+                )}
+              </AuthField>
+              <AuthField label="Email address" error={fields.email}>
+                {({ id, describedBy, invalid }) => (
+                  <input
+                    id={id}
+                    name="email"
+                    type="email"
+                    autoComplete="username"
+                    required
+                    value={email}
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={describedBy}
+                    onChange={(event) => {
+                      setEmail(event.target.value);
+                      edited("email");
+                    }}
+                  />
+                )}
+              </AuthField>
+              <PasswordField
+                label="Password"
+                name="new-password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(value) => {
+                  setPassword(value);
+                  edited("password");
+                }}
+                error={fields.password}
+                showStrength
+                identity={[email, name]}
+                revealed={revealed}
+                onReveal={setRevealed}
+              />
+              <PasswordField
+                label="Confirm password"
+                name="confirm-password"
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(value) => {
+                  setConfirm(value);
+                  edited("confirm");
+                }}
+                error={fields.confirm}
+                revealed={revealed}
+                onReveal={setRevealed}
+              />
+              <Button type="submit" busy={busy} className="signin-submit">
+                Create administrator account
+              </Button>
+            </fieldset>
+          </form>
+        )}
       </>,
       true,
     );

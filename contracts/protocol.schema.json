@@ -14907,7 +14907,7 @@
               "type": "null"
             }
           ],
-          "description": "true: the agent runs the artifact in this response. false: it reports another digest, a local edit or an activation not finished. null: nothing to compare (no digest reported, nothing offered, or a revoked device, which can no longer report). For a version that reads device secrets the file holds the host's own values and never has the offered digest, so true means the agent applied this template and its file is unchanged since the server verified it."
+          "description": "true: the reported managed file matches this offer and the device verified applying this exact desired version and generation. false: the reported managed file differs from this offer; this alone does not say what Vector loaded. null: nothing to compare, a revoked device, or matching file bytes without verified activation (including failed or uncertain applies and an earlier selected generation). For device secrets, true also requires the reported template and the file digest recorded at verification."
         },
         "matches_generation": {
           "anyOf": [
@@ -14920,7 +14920,7 @@
               "type": "null"
             }
           ],
-          "description": "The newest generation this device was offered whose artifact the agent reports running, when that is not the one in this response: by its file digest, or for a version that reads device secrets by the template it applied. Also sent when nothing is offered at the current generation. Null when the report matches this response, when the digest was never offered to this device (the server never sees a local file), or when nothing was reported."
+          "description": "The newest offered generation whose artifact matches the agent's reported managed file, by file digest or by template digest for device secrets. Also sent when nothing is offered now. It does not assert Vector activated that generation. Null when no offered generation or reported digest matches."
         },
         "reported_at": {
           "anyOf": [

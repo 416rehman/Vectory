@@ -130,6 +130,11 @@ test("heading anchors follow GitHub: lower case, punctuation dropped, spaces to 
   ]);
 });
 
+test("heading anchors survive Windows line endings", () => {
+  const markdown = "# Title\r\n\r\n## Section\r\n```\r\n## Hidden\r\n```\r\n";
+  assert.deepEqual([...anchorsOf(markdown)].sort(), ["section", "title"]);
+});
+
 test("missing files, missing sections and escapes are reported with their lines", () => {
   const root = repository({
     "README.md": [

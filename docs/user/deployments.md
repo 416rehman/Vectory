@@ -197,7 +197,7 @@ The Devices page's **Needs attention** filter lists the devices that want a look
 
 A device's page shows **Effective configuration**: the exact text Vectory offered that device, with its own values applied. Every signed-in role can read it. It's read-only: nothing there applies, restores or verifies anything, and a copy or download is not proof that the device runs it.
 
-- **Configuration** shows the text with line numbers, folding and search. **Copy** and **Download** give exactly these bytes. Secrets stay references such as `vectory-secret:API_TOKEN`, so the text never holds a secret.
+- **Configuration** shows the text with line numbers, folding and search. **Download** preserves the exact offered bytes. **Copy** puts the text on the clipboard; the operating system may convert line endings. Secrets stay references such as `vectory-secret:API_TOKEN`, so the text never holds a secret.
 - **Changes** compares it with the previous offer: how many lines were added, removed and changed, then the changed lines, each group named by the components around it. A change longer than 2,000 lines is cut and says so. The counts always cover the whole change.
 - **Variables** lists the values this device was offered and where each came from: **Set for this device** or **Deployment default**. A field that can hold a credential reads **Not shown**.
 - **Generation** opens an earlier offer, with its version and when it was offered. A generation that offered the same text as the one before it says **same as 10**.
@@ -207,14 +207,15 @@ The page reads the generation you chose once, and doesn't poll. It reads again o
 
 ### How Vectory compares them
 
-At each check-in, the agent reports the SHA-256 digest of its managed file. Vectory compares it with the digest of what it offered. Equal digests mean identical bytes. Vectory never sees the file itself, so it never says what a file contains.
+At each check-in, the agent reports the SHA-256 digest of its managed file. Vectory compares it with the digest of what it offered. Equal digests mean identical bytes, but do not prove that Vector activated those bytes. A green match also requires a verified apply of the offered generation. Vectory never sees the file itself, so it never says what a file contains.
 
 | The line says | What it establishes |
 | --- | --- |
-| **Running matches what Vectory offered.** | The agent's last report is the offered text, byte for byte. It's a report from the last check-in, not a check made now. |
-| **The running configuration differs from what Vectory offered at generation 12: it matches generation 11.** | The file is an earlier offer. Generation 12 may not be applied yet, or it failed and the agent returned to the one before it. |
-| **The running configuration differs from what Vectory offered at generation 12.** | The file isn't any text Vectory offered this device. A local edit does this, and so does the configuration adopted at setup. With sync on, the agent restores the offered configuration at its next check-in. With sync paused, it leaves the file as it is. |
-| **The device doesn't run generation 11.** | You're reading an earlier offer, and the agent reports a different file. |
+| **Running matches what Vectory offered.** | The agent verified applying this generation, and its last managed-file report matches the offer byte for byte. It's a report from the last check-in, not a check made now. |
+| **The managed file matches this offer, but activation isn't verified.** | The file digest matches, but the latest apply failed or its verification is unknown. Check the device status and Vector log before treating it as running. |
+| **The managed file differs from what Vectory offered at generation 12: it matches generation 11.** | The reported file is an earlier offer. Generation 12 may not be applied yet, or its apply may have failed. Running vs desired above says what the device verified. |
+| **The managed file differs from what Vectory offered at generation 12.** | The reported file isn't any text Vectory offered this device. A local edit does this, and so does the configuration adopted at setup. With sync on, the agent restores the offered configuration at its next check-in. With sync paused, it leaves the file as it is. |
+| **The managed file differs from generation 11.** | You're reading an earlier offer, and the agent reports a different managed file. This alone does not say what Vector loaded. |
 | **Not reported by this agent.** | No digest was reported, so Vectory can't say. |
 | **This device hasn't checked in yet.** | Nothing was reported yet. |
 

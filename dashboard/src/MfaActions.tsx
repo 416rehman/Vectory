@@ -504,8 +504,8 @@ export default function MfaActions({
     },
     restart: {
       title: "Two-factor is still off",
-      body: "We couldn't show the QR code. Start the setup again to get a new one.",
-      note: "Setup didn't start.",
+      body: "The setup key may have been created, but its reply did not reach this page. Start again to get a new QR code.",
+      note: "The setup key could not be shown. Start again to get a new one.",
       action: "Start again",
       next: () => openForm("setup"),
     },

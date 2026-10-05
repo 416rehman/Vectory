@@ -730,6 +730,10 @@ try {
         exact: true,
       });
       await expect(outcome).toBeVisible();
+      await expect(outcome).toContainText(
+        "The setup key may have been created, but its reply did not reach this page.",
+      );
+      await expect(outcome).not.toContainText("Setup didn't start");
       await expect.poll(() => state.statusReads).toBeGreaterThan(reads);
       state.held.shift()();
       await expect(qrImage()).toHaveCount(0);

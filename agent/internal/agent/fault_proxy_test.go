@@ -325,11 +325,11 @@ func TestProxyThatRefusesOrNeedsSignInIsNamed(t *testing.T) {
 			code:  "PROXY_REFUSED", says: []string{"refused to connect to vectory.test:", "Forbidden", "NO_PROXY"}},
 		{name: "needs a password the agent lacks",
 			setup: func(t *testing.T, p *connectProxy) string { p.auth = "Basic x"; return p.url("", "") },
-			code:  "PROXY_AUTH_REQUIRED", says: []string{"requires a user name and password", "HTTPS_PROXY to http://USER:PASSWORD@"}},
+			code:  "PROXY_AUTH_REQUIRED", says: []string{"requires sign-in", "no supported private setup for an authenticated service proxy", "without sign-in", "NO_PROXY"}},
 		{name: "rejects the password in HTTPS_PROXY",
 			setup:  func(t *testing.T, p *connectProxy) string { p.auth = "Basic x"; return p.url("agent", wrong) },
 			code:   "PROXY_AUTH_REQUIRED",
-			says:   []string{"did not accept the user name and password in HTTPS_PROXY", "percent-encode"},
+			says:   []string{"rejected this host's authentication", "Remove credentials from HTTPS_PROXY", "service environment variables can expose them", "no supported private setup"},
 			absent: wrong},
 		{name: "is not running",
 			setup: func(t *testing.T, p *connectProxy) string { return "http://" + unreachable(t) },
@@ -355,6 +355,9 @@ func TestProxyThatRefusesOrNeedsSignInIsNamed(t *testing.T) {
 			}
 			if test.absent != "" && strings.Contains(result.Error+text, test.absent) {
 				t.Fatal("the proxy password was printed")
+			}
+			if strings.Contains(text, "USER:PASSWORD") {
+				t.Fatal("the diagnostic suggested putting a proxy password in the service environment")
 			}
 			if server.enrolls.Load() != 0 {
 				t.Fatal("the token reached the server")
