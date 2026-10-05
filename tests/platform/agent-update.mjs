@@ -1850,6 +1850,10 @@ async function bootGap(evidence) {
           found,
           `The directory never held no executable: the swap went through before the hold was in place (held: ${holder.holding()}). Status ${JSON.stringify(host.status())}, journal ${JSON.stringify(host.journal())}.`,
         );
+        assert(
+          holder.holding(),
+          "The test helper missed the staged build; a fleeting gap does not prove recovery from an interrupted swap.",
+        );
         const killed = host.killStep();
         const atKill = {
           journal: host.journal(),

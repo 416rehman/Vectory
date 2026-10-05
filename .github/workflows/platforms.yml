@@ -500,19 +500,20 @@ jobs:
       # staged file as a virus scanner does, so that the second rename waits, and the
       # step is ended in that wait; then the services are started as a boot may.
       - name: End the update step between the two renames of its swap, and start the services in the order a boot may
+        id: update-boot-gap
         if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
         timeout-minutes: 30
         run: node tests/platform/agent-update.mjs boot-gap
       # The volume is nearly filled with a file of allocated space for this one: the
       # path check refuses a mount point over the step's directory.
       - name: Roll out a build to a host whose update step has no room
-        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.update-boot-gap.outcome == 'success' }}
         timeout-minutes: 30
         run: node tests/platform/agent-update.mjs disk-full
       # The listener is taken over: the server is ended and a small program answers the
       # real agent with the instance's own TLS chain and manifest signing key.
       - name: Offer the host what it must refuse, from a stand-in for the agent listener
-        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.update-boot-gap.outcome == 'success' }}
         timeout-minutes: 60
         run: node tests/platform/agent-update.mjs hostile
       - name: Install a host without the consent flags, and offer it a good release

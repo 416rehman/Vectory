@@ -935,13 +935,15 @@ export function windowsHost({ programData = process.env.ProgramData || "C:\\Prog
             "  if ($null -eq $file) {",
             "    foreach ($f in [IO.Directory]::GetFiles($dir, '.vectory-update-*')) {",
             "      try {",
-            "        $file = [IO.File]::Open($f, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)",
+            // Allow the update step to finish writing while denying deletion. Waiting
+            // for its writer to close can miss the short window before the rename.
+            "        $file = [IO.File]::Open($f, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)",
             "        [IO.File]::WriteAllText($ready, [IO.Path]::GetFileName($f))",
             "        break",
             "      } catch { }",
             "    }",
             "  }",
-            "  Start-Sleep -Milliseconds 10",
+            "  Start-Sleep -Milliseconds 1",
             "}",
             "if ($null -ne $file) { $file.Dispose() }",
             "",
