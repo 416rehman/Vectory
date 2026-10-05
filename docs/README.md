@@ -5,6 +5,7 @@
 | [user/](user/getting-started.md) | **The Help center**: every guide for people who install and use Vectory. It ships inside each server at `/help/`. Start with [What is Vectory?](user/getting-started.md) or the [Quickstart](user/quickstart.md). |
 | [dev/](dev/DEVELOPMENT.md) | For contributors: [local development](dev/DEVELOPMENT.md), the [writing guide](dev/WRITING.md) and [how the Help center is built](dev/HELP-CENTER.md). |
 | [security/](security/THREAT-MODEL.md) | The [threat model](security/THREAT-MODEL.md) and the [security review](security/SECURITY-REVIEW.md). |
+| [deploy/](deploy/CLOUDFLARE-PAGES.md) | Public site deployment and the `vectory.ahmadz.ai` domain. |
 | [adr/](adr/) | Architecture decision records. |
 | [product-specification.md](product-specification.md) | The product's design contract. |
 | [DESIGN.md](DESIGN.md) | The dashboard's visual design system. |

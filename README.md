@@ -4,7 +4,7 @@
 
 **Design, ship and roll back Vector pipelines across your fleet, from one self-hosted dashboard.**
 
-[Quickstart](docs/user/quickstart.md) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Project status](#project-status)
+[Quickstart](docs/user/quickstart.md) · [Download 0.1.0](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Project status](#project-status)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-editor-dark.png">
@@ -52,6 +52,8 @@ flowchart LR
 - **Self-host the developer preview:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
 - **Understand the guarantees:** [Security model](docs/user/security.md).
 
+The [0.1.0 release page](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) has the unsigned agent packages, Docker image archives, checksums and SBOMs. Check [platform coverage](docs/user/compatibility.md) before choosing a download.
+
 The same guides ship inside every server as a searchable, offline Help center at `/help/`.
 
 <table>
@@ -89,6 +91,6 @@ Vectory is a Rust (Axum, SQLite) server, a React and TypeScript dashboard, a Go 
 
 ## Contributing, security and license
 
-Contributions are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Vectory is licensed under [Apache-2.0](LICENSE).
+Contributions are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). For project or business inquiries, contact [416rehman@ahmadz.ai](mailto:416rehman@ahmadz.ai). Vectory is licensed under [Apache-2.0](LICENSE).
 
 Vectory is an independent project. It is not affiliated with or endorsed by Datadog or the Vector project.

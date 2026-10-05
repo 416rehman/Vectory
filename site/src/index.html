@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f3ef" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#211f23" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="Vectory is a self-hosted control plane for Vector. Build pipelines visually, publish immutable versions, and roll them out to your hosts with checks, canaries, and rollback. 0.1.0 developer preview." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vectory" />
+    <meta property="og:title" content="Vectory — Build the pipeline. Know what runs." />
+    <meta property="og:description" content="A self-hosted control plane for Vector pipelines. Explore the 0.1.0 developer preview." />
+    <meta property="og:url" content="https://vectory.ahmadz.ai/" />
+    <meta property="og:image" content="https://vectory.ahmadz.ai/media/product-editor.png" />
+    <meta property="og:image:alt" content="Vectory's pipeline editor showing a labeled synthetic demo pipeline" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Vectory — Build the pipeline. Know what runs." />
+    <meta name="twitter:description" content="A self-hosted control plane for Vector pipelines. 0.1.0 developer preview." />
+    <meta name="twitter:image" content="https://vectory.ahmadz.ai/media/product-editor.png" />
+    <link rel="canonical" href="https://vectory.ahmadz.ai/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/site.css" />
+    <title>Vectory — Build the pipeline. Know what runs.</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="/" aria-label="Vectory home"><img src="/favicon.svg" width="32" height="32" alt="" /><span>Vectory</span></a>
+        <nav aria-label="Main navigation">
+          <a href="#how-it-works">How it works</a>
+          <a href="#features">Product</a>
+          <a href="/help/">Docs</a>
+          <a class="nav-github" href="https://github.com/416rehman/Vectory">GitHub <span aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <div class="release-label"><span class="release-dot" aria-hidden="true"></span> 0.1.0 developer preview <span class="release-divider" aria-hidden="true">/</span> Self-hosted &amp; open source</div>
+          <h1 id="hero-title">Build the pipeline.<br /><em>Know what runs.</em></h1>
+          <p>Vectory gives your Vector fleet a place to design, check, release, and observe pipelines. Your agents apply each version on their own hosts; your events continue to flow to your destinations.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="/help/quickstart/">Try the quickstart <span aria-hidden="true">→</span></a>
+            <a class="button button-secondary" href="https://github.com/416rehman/Vectory/releases/tag/v0.1.0">Get the 0.1.0 preview <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="hero-footnote">Unsigned developer-preview downloads. <a href="/help/compatibility/">Check platform coverage</a> before installing.</p>
+        </div>
+        <div class="hero-visual">
+          <div class="visual-topline"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Pipeline workspace</span><span class="visual-badge">Synthetic demo</span></div>
+          <img src="/media/product-editor.png" width="1440" height="900" alt="Vectory editor with a labeled synthetic demo pipeline: event sources connect through transforms to destinations" fetchpriority="high" />
+          <p>Real Vectory interface. The pipeline and device data shown here are synthetic demo fixtures.</p>
+        </div>
+      </section>
+
+      <div class="section-divider" aria-hidden="true"></div>
+      <section class="story shell" id="how-it-works" aria-labelledby="story-title">
+        <div class="section-heading"><p class="kicker">One deliberate path to deployment</p><h2 id="story-title">From a diagram to a running version.</h2><p>Each step answers a different question. The draft is what you are editing. The published version is fixed. A deployment decides which hosts receive it.</p></div>
+        <ol class="story-steps">
+          <li><span class="step-number">01</span><div><h3>Design &amp; check</h3><p>Draw the flow or edit its YAML, TOML, or JSON. Set component options with Vector-aware fields, run sample tests, and check the configuration.</p></div></li>
+          <li><span class="step-number">02</span><div><h3>Publish &amp; choose</h3><p>Freeze an immutable version. Preview the target devices or groups, then release all at once, on a schedule, or through a canary.</p></div></li>
+          <li><span class="step-number">03</span><div><h3>Apply &amp; verify</h3><p>Each outbound-only agent validates against its host, applies the version, and reports its state. If startup fails, it restores the last working configuration.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="feature-band" id="features" aria-labelledby="features-title">
+        <div class="shell">
+          <div class="section-heading"><p class="kicker">Built for the people operating Vector</p><h2 id="features-title">See the whole change, not just the config file.</h2></div>
+          <div class="feature-grid">
+            <article><span class="feature-symbol" aria-hidden="true">⌘</span><h3>One editing surface</h3><p>Move between graph and code views of the same pipeline. Start from a template or import existing Vector configuration.</p><a href="/help/pipelines/">Explore the editor <span aria-hidden="true">→</span></a></article>
+            <article><span class="feature-symbol" aria-hidden="true">↗</span><h3>A rollout you can follow</h3><p>Compare versions, watch each device progress, pause a rollout, and roll back deliberately when needed.</p><a href="/help/deployments/">How deployments work <span aria-hidden="true">→</span></a></article>
+            <article><span class="feature-symbol" aria-hidden="true">◇</span><h3>The host keeps control</h3><p>Restricted mode and local allowances constrain what a pipeline can touch. Credentials can stay on the device in supported fields.</p><a href="/help/security/">Read the security model <span aria-hidden="true">→</span></a></article>
+            <article><span class="feature-symbol" aria-hidden="true">◎</span><h3>Evidence after release</h3><p>Read the running version, delivery metrics, issues, and an audit trail. A downloaded file is never presented as verified activation.</p><a href="/help/telemetry/">Understand the signals <span aria-hidden="true">→</span></a></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="showcase shell" aria-labelledby="showcase-title">
+        <div class="showcase-copy"><p class="kicker">Observe the result</p><h2 id="showcase-title">A fleet view with reasons behind the status.</h2><p>Overview connects the current pipeline version to the devices running it, the rollouts in motion, delivery measurements, and the issues that need attention.</p><a class="text-link" href="/help/telemetry/">See what Vectory measures <span aria-hidden="true">→</span></a></div>
+        <figure class="showcase-image"><img src="/media/product-overview.png" width="1440" height="1173" loading="lazy" alt="Vectory overview from a labeled synthetic demo fleet, showing device status, pipeline versions, and throughput" /><figcaption>Screenshot from the synthetic demo fleet, not a customer deployment.</figcaption></figure>
+      </section>
+
+      <section class="preview-band" aria-labelledby="preview-title"><div class="shell preview-inner"><div><p class="kicker">Know the boundary</p><h2 id="preview-title">An honest developer preview.</h2><p>Vectory 0.1.0 works with Vector 0.58.x and can be self-hosted on one Linux server. Agent builds target Linux, macOS on Apple silicon, and Windows x86-64, with different levels of native coverage. Packages and image archives are unsigned; there is no package repository or container registry yet.</p><p>Start on a test host, read the security model, and check the detailed compatibility table and known limits before using Vectory for consequential workloads.</p></div><div class="preview-links"><a href="/help/whats-new/#known-limits">Known limits <span aria-hidden="true">→</span></a><a href="/help/compatibility/">Tested platforms <span aria-hidden="true">→</span></a><a href="/help/security/">Security model <span aria-hidden="true">→</span></a><a href="https://github.com/416rehman/Vectory/blob/main/SECURITY.md">Report a vulnerability <span aria-hidden="true">↗</span></a></div></div></section>
+
+      <section class="start shell" aria-labelledby="start-title"><p class="kicker">Start here</p><h2 id="start-title">Run it on one machine.</h2><p>The local quickstart walks through a real Vector build, a synthetic pipeline, one agent, and a verified deployment. It takes about 15 minutes, mostly first-time compilation.</p><div class="start-actions"><a class="button button-primary" href="/help/quickstart/">Open the quickstart <span aria-hidden="true">→</span></a><a class="button button-secondary" href="/help/install-server/">Self-host the server <span aria-hidden="true">→</span></a></div></section>
+    </main>
+
+    <footer class="site-footer"><div class="shell footer-inner"><div><a class="brand footer-brand" href="/"><img src="/favicon.svg" width="26" height="26" alt="" /><span>Vectory</span></a><p>An independent, open-source project. Not affiliated with or endorsed by Datadog or the Vector project.</p><p>© 2026 Vectory contributors · Apache-2.0</p></div><div class="footer-links"><div><strong>Explore</strong><a href="/help/">Documentation</a><a href="/help/quickstart/">Quickstart</a><a href="https://github.com/416rehman/Vectory/releases/tag/v0.1.0">Downloads</a></div><div><strong>Project</strong><a href="https://github.com/416rehman/Vectory">GitHub</a><a href="https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md">Contribute</a><a href="https://github.com/416rehman/Vectory/blob/main/SECURITY.md">Security</a><a href="mailto:416rehman@ahmadz.ai">Contact</a></div></div></div></footer>
+  </body>
+</html>

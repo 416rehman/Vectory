@@ -20,5 +20,7 @@ contents:
     dst: /usr/share/doc/vectory/AGENT-INSTALL.md
   - src: ../LICENSE
     dst: /usr/share/doc/vectory/LICENSE
+  - src: ../NOTICE
+    dst: /usr/share/doc/vectory/NOTICE
 # Deliberately no install scripts: no secret enrollment, account privilege grants,
 # Vector replacement, or service startup occurs during package installation.

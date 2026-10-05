@@ -1,0 +1,84 @@
+name: public site
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: help-center/package-lock.json
+      - name: Install Help center dependencies
+        run: npm ci
+        working-directory: help-center
+      - name: Build landing page and public documentation
+        run: node site/scripts/build.mjs
+      - name: Test public content and documentation links
+        run: node --test site/tests/site.test.mjs
+      - name: Verify deployable entry points
+        run: |
+          test -s site/dist/index.html
+          test -s site/dist/help/index.html
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-site
+          path: site/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    if: >-
+      github.repository == '416rehman/Vectory' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      deployments: write
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Check deployment credentials
+        id: credentials
+        run: |
+          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::Cloudflare deployment skipped: configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in repository secrets.'
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.credentials.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.credentials.outputs.ready == 'true'
+        with:
+          name: public-site
+          path: site/dist
+      - name: Deploy to Cloudflare Pages
+        if: steps.credentials.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.147.0"
+          command: pages deploy site/dist --project-name=vectory --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

@@ -7,8 +7,18 @@
         <Component Id="AgentBinary" Guid="*">
           <File Id="VectoryExe" Source="$(var.Binary)" Name="vectory.exe" KeyPath="yes" />
         </Component>
+        <Component Id="AgentLicense" Guid="*">
+          <File Id="VectoryLicense" Source="$(sys.SOURCEFILEDIR)..\..\LICENSE" Name="LICENSE" />
+        </Component>
+        <Component Id="AgentNotice" Guid="*">
+          <File Id="VectoryNotice" Source="$(sys.SOURCEFILEDIR)..\..\NOTICE" Name="NOTICE" />
+        </Component>
       </Directory>
     </StandardDirectory>
-    <Feature Id="Main" Title="Vectory Agent" Level="1"><ComponentRef Id="AgentBinary" /></Feature>
+    <Feature Id="Main" Title="Vectory Agent" Level="1">
+      <ComponentRef Id="AgentBinary" />
+      <ComponentRef Id="AgentLicense" />
+      <ComponentRef Id="AgentNotice" />
+    </Feature>
   </Package>
 </Wix>

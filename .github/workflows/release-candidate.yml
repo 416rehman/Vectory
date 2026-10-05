@@ -106,8 +106,9 @@ jobs:
             test "$(stat -c %a /usr/bin/vectory)" = 755
             test -f /usr/lib/systemd/system/vectory.service
             # The slim image leaves /usr/share/doc out of an installed system, so the
-            # licence is checked in the package itself.
+            # license and notice are checked in the package itself.
             test "$(dpkg-deb -c /packages/vectory_*_amd64.deb | grep -c " ./usr/share/doc/vectory/LICENSE$")" -ge 1
+            test "$(dpkg-deb -c /packages/vectory_*_amd64.deb | grep -c " ./usr/share/doc/vectory/NOTICE$")" -ge 1
             test ! -e /var/lib/vectory-agent
             if getent passwd vectory; then echo "installing created an account"; exit 1; fi
             status=0; vectory run --state-dir /tmp/absent || status=$?; test "$status" = 78
@@ -126,6 +127,8 @@ jobs:
             vectory setup --help > /dev/null
             test "$(stat -c %a /usr/bin/vectory)" = 755
             test -f /usr/lib/systemd/system/vectory.service
+            test "$(rpm -qlp /packages/vectory-*.x86_64.rpm | grep -cx /usr/share/doc/vectory/LICENSE)" -ge 1
+            test "$(rpm -qlp /packages/vectory-*.x86_64.rpm | grep -cx /usr/share/doc/vectory/NOTICE)" -ge 1
             test ! -e /var/lib/vectory-agent
             if getent passwd vectory; then echo "installing created an account"; exit 1; fi
             status=0; vectory run --state-dir /tmp/absent || status=$?; test "$status" = 78
@@ -142,10 +145,14 @@ jobs:
           # grep -c reads the whole listing: grep -q would end the pipe early, and
           # pipefail then reports the writer's broken pipe as a failure.
           [ "$(dpkg-deb -c "$deb" | grep -c ' ./usr/bin/vectory$')" -ge 1 ]
+          [ "$(dpkg-deb -c "$deb" | grep -c ' ./usr/share/doc/vectory/LICENSE$')" -ge 1 ]
+          [ "$(dpkg-deb -c "$deb" | grep -c ' ./usr/share/doc/vectory/NOTICE$')" -ge 1 ]
           docker run --rm --network none -v "$PWD/artifacts/packages:/packages:ro" "$ALMALINUX_IMAGE" sh -euxc '
             rpm -qp --queryformat "%{NAME} %{VERSION} %{ARCH}\n" /packages/vectory-*.aarch64.rpm
             test "$(rpm -qp --queryformat "%{ARCH}" /packages/vectory-*.aarch64.rpm)" = aarch64
             test "$(rpm -qlp /packages/vectory-*.aarch64.rpm | grep -cx /usr/bin/vectory)" -ge 1
+            test "$(rpm -qlp /packages/vectory-*.aarch64.rpm | grep -cx /usr/share/doc/vectory/LICENSE)" -ge 1
+            test "$(rpm -qlp /packages/vectory-*.aarch64.rpm | grep -cx /usr/share/doc/vectory/NOTICE)" -ge 1
           '
   msi:
     needs: agents
@@ -185,12 +192,16 @@ jobs:
           $install = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/l*v', "`"$logs\install.log`"") -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "msiexec /i exited $($install.ExitCode)" }
           $exe = Join-Path $env:ProgramFiles 'Vectory\vectory.exe'
+          $license = Join-Path $env:ProgramFiles 'Vectory\LICENSE'
+          $notice = Join-Path $env:ProgramFiles 'Vectory\NOTICE'
           & $exe --version
           if ($LASTEXITCODE -ne 0) { throw "vectory --version exited $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath $license) -or -not (Test-Path -LiteralPath $notice)) { throw 'The MSI did not install LICENSE and NOTICE.' }
           if (Get-Service -Name Vectory -ErrorAction SilentlyContinue) { throw 'Installing the MSI registered a service.' }
           $remove = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/l*v', "`"$logs\uninstall.log`"") -Wait -PassThru
           if ($remove.ExitCode -ne 0) { throw "msiexec /x exited $($remove.ExitCode)" }
           if (Test-Path -LiteralPath $exe) { throw 'The agent is still installed after removal.' }
+          if ((Test-Path -LiteralPath $license) -or (Test-Path -LiteralPath $notice)) { throw 'The MSI left legal notices after removal.' }
           Write-Output "Installed, ran and removed $msi."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ !cancelled() }}
