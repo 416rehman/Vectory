@@ -1,6 +1,11 @@
 {
   admin off
   auto_https off
+  # Caddy 2.11.6 can crash when proxying HTTP/2 request bodies. Re-enable h2
+  # after pinning an official 2.11.7-or-newer image and checking its advisories.
+  servers {
+    protocols h1
+  }
 }
 https://{$VECTORY_HOSTNAME}:8443 {
   tls /run/secrets/server_cert /run/secrets/server_key {

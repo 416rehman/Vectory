@@ -890,6 +890,11 @@ jobs:
           curl -fsS --retry 30 --retry-delay 2 --retry-connrefused --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | tee "$RUNNER_TEMP/status-before.json"
           echo
           jq -e '.initialized == false' "$RUNNER_TEMP/status-before.json"
+          # Caddy 2.11.6's HTTP/2 reverse-proxy regression requires h1 until
+          # the patched official image is available and the workaround is removed.
+          version=$(curl --http2 -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" -o /dev/null -w '%{http_version}' https://localhost/api/v1/status)
+          echo "Proxy negotiated HTTP/$version"
+          test "$version" = 1.1
       - name: Provide the pinned Vector 0.58.0 for the enrolled device
         if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         timeout-minutes: 10

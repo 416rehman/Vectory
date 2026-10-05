@@ -47,6 +47,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 ## Known limits
 
 - The release supplies unsigned packages and Docker image archives as downloads, but there is no package repository or container registry. The quickstart can build the server from source.
+- The bundled Compose proxy temporarily serves the dashboard over HTTP/1.1 only. This avoids a Caddy 2.11.6 HTTP/2 proxy regression while the patched 2.11.7 official image is unavailable; normal browser use and agent connections still work.
 - Agent downloads carry SHA-256 checksums but aren't signed.
 - A host takes agent updates only after someone ran a command on it that agreed to them. Hosts that haven't, agents that predate updates and platforms a release doesn't carry are upgraded on the host, one command per device; see [Upgrade many devices](agents.md#upgrade-many-devices).
 - Agent updates have no major track: a host takes patch releases, or minor releases too, and a new major version is an upgrade by hand. Who holds the release key is fixed while updates are on.
