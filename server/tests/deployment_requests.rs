@@ -158,7 +158,7 @@ async fn user(
         s,
         "POST",
         "/api/v1/users",
-        json!({"name":role,"email":email,"password":"isolated-user-password","role":role}),
+        json!({"name":role,"email":email,"password":"isolated-user-password","role":role,"current_password":"isolated-long-admin-password"}),
         admin_cookie,
         admin_csrf,
     )

@@ -536,7 +536,15 @@ async function capture(browser, screen, theme, { get, session }) {
     if (screen.name === "devices") await waitForDemoDeviceRates(page);
     if (screen.name === "add-device") {
       await page.locator('input[name="enroll-os"][value="linux"]').check();
-      await page.locator('input[name="enroll-mode"][value="restricted"]').check();
+      await page
+        .getByRole("button", {
+          name: "How should Vectory manage this device?",
+          exact: true,
+        })
+        .click();
+      await page
+        .getByRole("menuitemradio", { name: "Restricted", exact: true })
+        .click();
       await settle(page);
       if (!(await page.getByRole("button", { name: "Create install command" }).isEnabled()))
         fail("The demo Add device page is not ready to create an install command. No image was saved.");

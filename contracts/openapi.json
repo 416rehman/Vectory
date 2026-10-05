@@ -1802,7 +1802,7 @@
         ]
       },
       "post": {
-        "summary": "Admin creates a local user with a password now, or (keyed only) invite:true for a single-use 24-hour invitation the person redeems to choose their own password; optional one-shot actor-scoped request_id permits secret-free status recovery and a cancellation fence, never password replay. Errors: EMAIL_TAKEN, REQUEST_ALREADY_USED, PASSWORD_TOO_WEAK",
+        "summary": "Admin confirms their current password to create any local user with a password now, or (keyed only) invite:true for a single-use 24-hour invitation the person redeems to choose their own password; optional one-shot actor-scoped request_id permits secret-free status recovery and a cancellation fence, never password replay. Errors: EMAIL_TAKEN, REQUEST_ALREADY_USED, PASSWORD_TOO_WEAK, WRONG_PASSWORD",
         "operationId": "post__api_v1_users",
         "security": [
           {
@@ -1852,6 +1852,9 @@
                           "admin"
                         ]
                       },
+                      "current_password": {
+                        "type": "string"
+                      },
                       "request_id": {
                         "type": "string",
                         "format": "uuid"
@@ -1862,6 +1865,7 @@
                       "email",
                       "password",
                       "role",
+                      "current_password",
                       "request_id"
                     ],
                     "additionalProperties": false
@@ -1888,6 +1892,9 @@
                           "admin"
                         ]
                       },
+                      "current_password": {
+                        "type": "string"
+                      },
                       "request_id": {
                         "type": "string",
                         "format": "uuid"
@@ -1900,6 +1907,7 @@
                       "name",
                       "email",
                       "role",
+                      "current_password",
                       "request_id",
                       "invite"
                     ],
@@ -1931,13 +1939,17 @@
                           "operator",
                           "admin"
                         ]
+                      },
+                      "current_password": {
+                        "type": "string"
                       }
                     },
                     "required": [
                       "name",
                       "email",
                       "password",
-                      "role"
+                      "role",
+                      "current_password"
                     ],
                     "additionalProperties": true,
                     "not": {

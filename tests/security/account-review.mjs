@@ -203,7 +203,7 @@ async function fixture(name, validationUrl, task) {
         await call(
           "POST",
           "/users",
-          { name: role, role, email, password },
+          { name: role, role, email, password, current_password: password },
           admin,
         )
       ).body;

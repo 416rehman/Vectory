@@ -23,6 +23,17 @@
   color: var(--muted);
   line-height: 1.5;
 }
+.publish-review-api {
+  padding: 10px 12px;
+  border: 1px solid var(--ed-warning-line);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-warning-bg);
+  line-height: 1.5;
+}
+.publish-review-api p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
 .publish-review-check {
   display: flex;
   flex-wrap: wrap;

@@ -365,7 +365,7 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		expect(t, n, 409, v)
 	})
 	t.Run("viewer-denied-admin-and-deployment", func(t *testing.T) {
-		n, v, _ := h.api("POST", "/users", map[string]any{"email": "viewer@example.invalid", "name": "viewer", "role": "viewer", "password": "test-only-password-82734"})
+		n, v, _ := h.api("POST", "/users", map[string]any{"email": "viewer@example.invalid", "name": "viewer", "role": "viewer", "password": "test-only-password-82734", "current_password": "test-only-password-29843"})
 		okay(t, n, v)
 		n, v, headers := h.req(h.plain, h.http, "POST", "/api/v1/login", map[string]any{"email": "viewer@example.invalid", "password": "test-only-password-82734"}, "", "")
 		okay(t, n, v)
@@ -704,7 +704,7 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 	t.Run("editor-and-operator-restrictions", func(t *testing.T) {
 		for role, paths := range map[string][]string{"editor": {"/users", "/tokens", "/groups", "/deployments"}, "operator": {"/users", "/configurations"}} {
 			email := role + "@example.invalid"
-			n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": role, "role": role, "password": "test-only-password-82734"})
+			n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": role, "role": role, "password": "test-only-password-82734", "current_password": "test-only-password-29843"})
 			okay(t, n, v)
 			n, v, headers := h.req(h.plain, h.http, "POST", "/api/v1/login", map[string]any{"email": email, "password": "test-only-password-82734"}, "", "")
 			okay(t, n, v)
@@ -817,7 +817,7 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		okay(t, n, version)
 		login := func(label, role string) (string, string) {
 			email := "check-" + label + "@example.invalid"
-			n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "check " + label, "role": role, "password": "test-only-password-82734"})
+			n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "check " + label, "role": role, "password": "test-only-password-82734", "current_password": "test-only-password-29843"})
 			okay(t, n, v)
 			n, v, headers := h.req(h.plain, h.http, "POST", "/api/v1/login", map[string]any{"email": email, "password": "test-only-password-82734"}, "", "")
 			okay(t, n, v)
@@ -1534,7 +1534,7 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 	})
 	t.Run("mfa-replay-recovery-and-session-boundaries", func(t *testing.T) {
 		email, password := "mfa-security@example.invalid", "test-only-password-89374"
-		n, user, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "MFA fixture", "role": "viewer", "password": password})
+		n, user, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "MFA fixture", "role": "viewer", "password": password, "current_password": "test-only-password-29843"})
 		okay(t, n, user)
 		login := func(extra map[string]any) (int, map[string]any, http.Header) {
 			body := map[string]any{"email": email, "password": password}
@@ -1845,7 +1845,7 @@ func TestAgentUpdateBoundaries(t *testing.T) {
 	admin := session{h.cookie, h.csrf}
 	login := func(role string) session {
 		email := "updates-" + role + "@example.invalid"
-		n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "updates " + role, "role": role, "password": "test-only-password-82734"})
+		n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "updates " + role, "role": role, "password": "test-only-password-82734", "current_password": adminPassword})
 		okay(t, n, v)
 		n, v, headers := h.req(h.plain, h.http, "POST", "/api/v1/login", map[string]any{"email": email, "password": "test-only-password-82734"}, "", "")
 		okay(t, n, v)

@@ -213,6 +213,12 @@ async function load({ width = 899, theme = "light" } = {}) {
     if (method === "POST" && path === "/users") {
       current.mutations.push({ method, path, body });
       if (current.hold) await new Promise((done) => current.held.push(done));
+      if (body.current_password !== syntheticPassword)
+        return fail(
+          "WRONG_PASSWORD",
+          "Your current password didn't match.",
+          403,
+        );
       if (current.people.some((person) => person.email === body.email))
         return fail("EMAIL_TAKEN", `Someone already uses ${body.email}.`, 409);
       if (current.createFault === "drop") return route.abort("failed");
@@ -331,6 +337,9 @@ async function choose(modal, label) {
 async function fillPerson(modal, name, email) {
   await modal.getByLabel("Name", { exact: true }).fill(name);
   await modal.getByLabel("Email", { exact: true }).fill(email);
+  await modal
+    .getByLabel("Your password", { exact: true })
+    .fill(syntheticPassword);
 }
 async function check(name, run) {
   const start = Date.now();
@@ -418,7 +427,82 @@ try {
     },
   );
   await check(
-    "an invitation is one keyed request without a password; its single-use link opens once and the table shows it",
+    "creating any role requires the administrator's password and a rejected password is not kept",
+    async () => {
+      await load();
+      const modal = await openAdd();
+      await modal.getByLabel("Name", { exact: true }).fill("New administrator");
+      await modal
+        .getByLabel("Email", { exact: true })
+        .fill("new-admin@fixture.example.test");
+      await choose(modal, "Administrator");
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      await expect(modal).toContainText("Enter your password to add a person.");
+      expect(state.mutations).toHaveLength(0);
+      await modal
+        .getByLabel("Your password", { exact: true })
+        .fill("wrong-synthetic-password");
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      await expect(modal).toContainText("Your password didn't match.");
+      await expect(
+        modal.getByLabel("Your password", { exact: true }),
+      ).toHaveValue("");
+      expect(state.mutations).toHaveLength(1);
+      await modal
+        .getByLabel("Your password", { exact: true })
+        .fill(syntheticPassword);
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      await expect(dialog("Invite link for New administrator")).toBeVisible();
+      expect(state.mutations).toHaveLength(2);
+      expect(state.mutations[1].body.current_password).toBe(syntheticPassword);
+      expect(state.mutations[1].body.request_id).not.toBe(
+        state.mutations[0].body.request_id,
+      );
+    },
+  );
+  await check(
+    "a wrong administrator password asks for both cleared passwords in the direct sign-in flow",
+    async () => {
+      await load();
+      const modal = await openAdd();
+      await fillPerson(modal, "Direct account", "direct@fixture.example.test");
+      await modal.getByText("Set a password now").click();
+      await modal
+        .getByRole("button", { name: "Generate", exact: true })
+        .click();
+      await modal
+        .getByLabel("Your password", { exact: true })
+        .fill("wrong-synthetic-password");
+      await modal
+        .getByRole("button", { name: "Add person", exact: true })
+        .click();
+      await expect(modal).toContainText("Your password didn't match.");
+      await expect(modal).toContainText("Enter their password again.");
+      await expect(
+        modal.getByLabel("Your password", { exact: true }),
+      ).toHaveValue("");
+      await expect(modal.getByLabel("Password for Direct")).toHaveValue("");
+      await modal
+        .getByLabel("Your password", { exact: true })
+        .fill(syntheticPassword);
+      await modal
+        .getByLabel("Password for Direct")
+        .fill("separate-created-user-password");
+      await modal
+        .getByRole("button", { name: "Add person", exact: true })
+        .click();
+      await expect(dialog("Direct account can sign in now")).toBeVisible();
+      expect(state.mutations).toHaveLength(2);
+    },
+  );
+  await check(
+    "an invitation sends the administrator's password once; its single-use link opens once and the table shows it",
     async () => {
       await load();
       const modal = await openAdd();
@@ -439,6 +523,7 @@ try {
       ).toBeVisible();
       const sent = state.mutations[0].body;
       expect(Object.keys(sent).sort()).toEqual([
+        "current_password",
         "email",
         "invite",
         "name",
@@ -532,6 +617,7 @@ try {
       await expect(modal.getByLabel("Password for Someone")).toHaveValue("");
       expect(state.mutations).toHaveLength(1);
       expect(Object.keys(state.mutations[0].body).sort()).toEqual([
+        "current_password",
         "email",
         "name",
         "password",
@@ -593,6 +679,9 @@ try {
         "dropped@fixture.example.test",
       );
       await expect(roleButton(modal)).toContainText("Editor");
+      await modal
+        .getByLabel("Your password", { exact: true })
+        .fill(syntheticPassword);
       expect(state.mutations.at(-1).path).toBe(
         `/users/requests/${first}/cancel`,
       );

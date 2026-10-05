@@ -77,17 +77,23 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
     // Either set a password now, or invite the person to choose their own.
     let invite = v.get("invite").is_some();
     if v.as_object().is_none_or(|fields| {
-        fields.len() != 5
+        fields.len() != 6
             || fields.keys().any(|field| {
                 !matches!(
                     field.as_str(),
-                    "request_id" | "name" | "email" | "role" | "password" | "invite"
+                    "request_id"
+                        | "name"
+                        | "email"
+                        | "role"
+                        | "password"
+                        | "invite"
+                        | "current_password"
                 )
             })
             || (invite && (v["invite"] != true || fields.contains_key("password")))
     }) {
         return Err(ApiError::invalid(
-            "A keyed user creation requires request_id, name, email, role, and either password or invite:true",
+            "A keyed user creation requires request_id, name, email, role, current_password, and either password or invite:true",
         ));
     }
     let email = auth::user_email(v)?;
@@ -96,6 +102,9 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
     if !["viewer", "editor", "operator", "admin"].contains(&role) {
         return Err(ApiError::invalid("Invalid role"));
     }
+    let (_, current_hash) =
+        crate::accounts::reauthenticate(s, h, &["admin"], db::string(v, "current_password", 256)?)
+            .await?;
     let password_hash = if invite {
         // No usable verifier until the invited person chooses a password.
         String::new()
@@ -105,7 +114,7 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
         auth::password_hash(password.to_owned()).await?
     };
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
-    let actor = auth::authorize_in(&mut tx, h, &["admin"], true).await?;
+    let actor = crate::accounts::recheck(&mut tx, h, &["admin"], &current_hash).await?;
     let actor_id = actor["id"].as_str().unwrap();
     if entry(&mut tx, actor_id, key).await?.is_some() {
         return Err(already_used());

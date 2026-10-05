@@ -3,6 +3,7 @@
 //! override reorders what follows. Every route that takes a name refuses those
 //! characters with a sentence that names the field, keeps the stored record as
 //! it was, and still accepts ordinary names in any script.
+use argon2::password_hash::{PasswordHasher, SaltString};
 use axum::{
     Router,
     body::Body,
@@ -14,6 +15,7 @@ use tower::ServiceExt;
 use vectory_server::{Settings, State, api, auth, db, initialize};
 
 const DEVICE: &str = "00000000-0000-4000-8000-000000000001";
+const ADMIN_PASSWORD: &str = "synthetic-names-admin-password";
 /// Line breaks, control characters and text-direction controls, by code point.
 const HOSTILE: [u32; 17] = [
     0x0a, 0x0d, 0x09, 0x1b, 0x7f, 0x85, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
@@ -37,6 +39,17 @@ async fn person(s: &State, role: &str) -> Who {
     let user = db::id();
     let token = auth::random_secret();
     let csrf = auth::random_secret();
+    let password_hash = if role == "admin" {
+        argon2::Argon2::default()
+            .hash_password(
+                ADMIN_PASSWORD.as_bytes(),
+                &SaltString::generate(&mut rand::rngs::OsRng),
+            )
+            .unwrap()
+            .to_string()
+    } else {
+        "unused-test-hash".to_owned()
+    };
     sqlx::query(
         "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
     )
@@ -44,7 +57,7 @@ async fn person(s: &State, role: &str) -> Who {
     .bind(format!("{user}@example.invalid"))
     .bind(format!("Synthetic {role}"))
     .bind(role)
-    .bind("unused-test-hash")
+    .bind(password_hash)
     .bind(db::now())
     .execute(&s.pool)
     .await
@@ -381,7 +394,7 @@ async fn a_person_name_is_one_line_and_a_channel_name_still_is() {
             &f.admin,
             "POST",
             "/api/v1/users",
-            json!({"name":format!("Jane{c}Doe"),"email":"jane@example.test","password":"a-long-enough-passphrase-1","role":"viewer"}),
+            json!({"name":format!("Jane{c}Doe"),"email":"jane@example.test","password":"a-long-enough-passphrase-1","role":"viewer","current_password":ADMIN_PASSWORD}),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "U+{code:04X}: {error}");
@@ -413,7 +426,7 @@ async fn a_person_name_is_one_line_and_a_channel_name_still_is() {
         &f.admin,
         "POST",
         "/api/v1/users",
-        json!({"name":"\n Jane Doe \u{2028}","email":"jane@example.test","password":"a-long-enough-passphrase-1","role":"viewer"}),
+        json!({"name":"\n Jane Doe \u{2028}","email":"jane@example.test","password":"a-long-enough-passphrase-1","role":"viewer","current_password":ADMIN_PASSWORD}),
     )
     .await;
     assert_eq!(jane["name"], "Jane Doe");
@@ -423,7 +436,7 @@ async fn a_person_name_is_one_line_and_a_channel_name_still_is() {
         &f.admin,
         "POST",
         "/api/v1/users",
-        json!({"name":"Joan Doe\u{202e}","email":"joan@example.test","password":"a-long-enough-passphrase-1","role":"viewer"}),
+        json!({"name":"Joan Doe\u{202e}","email":"joan@example.test","password":"a-long-enough-passphrase-1","role":"viewer","current_password":ADMIN_PASSWORD}),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");

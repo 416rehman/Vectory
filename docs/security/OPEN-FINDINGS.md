@@ -12,9 +12,9 @@ Severity: **P2** is bounded or needs a precondition; **P3** is hygiene. Where a 
 
 Each distinct rendered configuration is kept in `artifact_blobs`, and every device generation keeps an immutable reference in `desired_artifacts`. The database cannot remove either record, so repeated deployments with device-specific values can grow storage without a bound. Only users allowed to publish and deploy can cause this growth; it is an availability risk for a small server disk. **Fix:** design retention that keeps the artifacts needed for rollback and audit, then add a quota or pruning path with migration and restore tests. Until then, monitor database size and leave space for backups.
 
-### Administrator creation and invitations need no recent authentication
+### Other sensitive actions need a shared recent-authentication step
 
-Creating or inviting an Administrator does not require password re-entry, although editing one does. Someone holding a stolen Administrator session could create or invite a second Administrator. **Fix (next release):** require a recent-authentication step-up before creating or inviting Administrators and other sensitive actions, including issuing enrollment tokens and changing signing keys, with regression tests for the step-up and its expiry.
+Creating or inviting any account now requires the calling Administrator's password, including on the legacy route. Editing access and changing signing keys also require password re-entry. Other sensitive actions, including issuing enrollment tokens, do not yet share a short-lived confirmation. A stolen privileged session could use those actions while it remains valid. **Fix (next release):** use one recent-authentication step-up for sensitive actions, with a five-minute expiry and the account's second factor as an option, and test its scope and expiry.
 
 ### 1. The unit that `vectory setup` registers is weaker than the packaged unit
 

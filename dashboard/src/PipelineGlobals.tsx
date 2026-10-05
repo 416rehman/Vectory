@@ -12,6 +12,8 @@ import { post } from "./api";
 import { vectorSchema } from "./catalog";
 import { resolveSchema, type Schema } from "./pipelineSchema";
 import PipelineSchemaFields from "./PipelineSchemaFields";
+import { FieldProblemsContext } from "./PipelineSchemaFields";
+import { vectorApiExposure } from "./hostRequirements";
 import DocLink, { ExternalDocLink } from "./DocLink";
 import { Button, ErrorBox, Modal } from "./ui";
 import TabLabel from "./TabLabel";
@@ -166,6 +168,20 @@ export default function PipelineGlobals({
     }
   }
   const root = resolveSchema(vectorSchema, vectorSchema, config);
+  const apiExposure = vectorApiExposure(config);
+  const fieldProblems = useCallback(
+    (path: string) =>
+      path === "api.enabled" && apiExposure
+        ? [
+            {
+              key: "vector-api-exposure",
+              severity: "warning" as const,
+              message: apiExposure,
+            },
+          ]
+        : [],
+    [apiExposure],
+  );
   const details = sections.find((item) => item.id === section)!;
   const names =
     section === "general"
@@ -339,18 +355,20 @@ export default function PipelineGlobals({
               onChange={onVariablesChange}
             />
           ) : (
-            <PipelineSchemaFields
-              key={section}
-              schema={schema}
-              root={vectorSchema}
-              component={config}
-              exclude={Object.keys(config).filter(
-                (key) => !names.includes(key),
-              )}
-              onChange={update}
-              editable={editable}
-              onPendingChange={pendingChange}
-            />
+            <FieldProblemsContext.Provider value={fieldProblems}>
+              <PipelineSchemaFields
+                key={section}
+                schema={schema}
+                root={vectorSchema}
+                component={config}
+                exclude={Object.keys(config).filter(
+                  (key) => !names.includes(key),
+                )}
+                onChange={update}
+                editable={editable}
+                onPendingChange={pendingChange}
+              />
+            </FieldProblemsContext.Provider>
           )}
           {section !== "variables" && (
             <ExternalDocLink

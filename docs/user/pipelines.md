@@ -155,7 +155,7 @@ These settings travel with the version. Paths refer to the device, not your brow
 
 Leave **Data directory** empty unless you need a specific path: the agent gives Vector a private data directory on each device. If you set one, it must exist and be writable on every device, and restricted devices must allow it.
 
-A pipeline that enables the internal API needs a full-mode device. Vector's API has no authentication, so restricted devices refuse it, and the deploy review says so.
+Any `api` block needs a full-mode device, even when `api.enabled` is `false`; restricted devices refuse the block. Vector leaves the API disabled by default. If you set `api.enabled: true`, its unauthenticated API can stream live events. With no `api.address`, Vector binds to `127.0.0.1:8686`, where clients on the device can reach it. A wildcard address such as `0.0.0.0:8686` listens on every interface, and a non-loopback address may be reachable by other network clients, depending on host and network controls. Keep the API isolated from untrusted clients. The editor and publish review warn when it is enabled; the deploy review asks you to confirm the exposure. See [Vector's API reference](https://vector.dev/docs/reference/configuration/api/).
 
 ## Import and export
 

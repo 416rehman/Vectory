@@ -1051,7 +1051,7 @@ async fn pipeline_validation_allows_publishers_without_granting_draft_writes() {
             app.clone(),
             "POST",
             "/api/v1/users",
-            json!({"email":email,"name":role,"role":role,"password":"another-long-password"}),
+            json!({"email":email,"name":role,"role":role,"password":"another-long-password","current_password":"a-long-enough-password"}),
             &sessions[0].1,
             &sessions[0].2,
         )
@@ -1787,7 +1787,7 @@ async fn authentication_csrf_roles_and_immutable_versions() {
             app.clone(),
             "POST",
             "/api/v1/users",
-            json!({"email":email,"name":role,"role":role,"password":"another-long-password"}),
+            json!({"email":email,"name":role,"role":role,"password":"another-long-password","current_password":"a-long-enough-password"}),
             &cookie,
             &csrf,
         )

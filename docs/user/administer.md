@@ -9,6 +9,8 @@ Open [**Settings → People & security**](/#/users) and choose **Add person**.
 - **Invite link** (recommended): Vectory creates a single-use link that expires after 24 hours. Send it through a channel you trust. The person chooses their own password and is offered two-factor sign-in.
 - **Set a password now:** choose a password of 12 characters or more and share it privately. Vectory doesn't send email.
 
+Before adding anyone, confirm with your own administrator password. If you set the new person's password now and the request is refused, enter both passwords again; Vectory does not keep them for a retry.
+
 Pick the role the person's work needs:
 
 | Role | Can do |

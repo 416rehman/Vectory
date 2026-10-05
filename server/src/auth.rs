@@ -1163,9 +1163,16 @@ pub async fn create_user(
     if !["viewer", "editor", "operator", "admin"].contains(&role) {
         return Err(ApiError::invalid("Invalid role"));
     }
+    let (_, current_hash) = crate::accounts::reauthenticate(
+        &s,
+        &h,
+        &["admin"],
+        db::string(&v, "current_password", 256)?,
+    )
+    .await?;
     let hash = password_hash(password.to_owned()).await?;
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
-    let actor = authorize_in(&mut tx, &h, &["admin"], true).await?;
+    let actor = crate::accounts::recheck(&mut tx, &h, &["admin"], &current_hash).await?;
     let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
         .bind(&email)
         .fetch_one(&mut *tx)

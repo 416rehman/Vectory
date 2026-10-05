@@ -161,7 +161,7 @@ async fn create(app: &Router, admin: &Session, role: &str, email: &str) -> Sessi
         app,
         "POST",
         "/api/v1/users",
-        json!({"name":"Colleague","email":email,"role":role,"password":PASSWORD}),
+        json!({"name":"Colleague","email":email,"role":role,"password":PASSWORD,"current_password":PASSWORD}),
         Some(admin),
     )
     .await;

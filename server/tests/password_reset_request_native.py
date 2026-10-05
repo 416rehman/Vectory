@@ -109,7 +109,7 @@ try:
     csrf=api('/bootstrap',{'bootstrap_secret':bootstrap,'name':'Synthetic administrator',
         'email':'admin@example.invalid','password':password})['csrf_token']
     target=api('/users',{'name':'Synthetic colleague','email':'colleague@example.invalid',
-        'password':password,'role':'viewer'})['id']
+        'password':password,'role':'viewer','current_password':password})['id']
     path=f'/users/{target}/password-reset'
     first_key=str(uuid.uuid4()); first_status_path=endpoint(target,first_key)
     assert api(first_status_path)=={'request_id':first_key,'user_id':target,'status':'not_found'}
@@ -129,7 +129,7 @@ try:
     # A different administrator cannot observe or revoke the first actor's
     # request, even with its exact request ID and target UUID.
     admin2=api('/users',{'name':'Second administrator','email':'admin2@example.invalid',
-        'password':password,'role':'admin'})
+        'password':password,'role':'admin','current_password':password})
     other_jar=http.cookiejar.CookieJar()
     other_client=urllib.request.build_opener(urllib.request.ProxyHandler({}),
         urllib.request.HTTPCookieProcessor(other_jar))
@@ -203,9 +203,9 @@ try:
     # The issuer, not only the target, owns the reset capability. A harmless
     # name edit preserves keyed and legacy codes; role downgrade revokes both.
     role_keyed_target=api('/users',{'name':'Keyed role target','email':'keyed-role@example.invalid',
-        'password':password,'role':'viewer'})['id']
+        'password':password,'role':'viewer','current_password':password})['id']
     role_legacy_target=api('/users',{'name':'Legacy role target','email':'legacy-role@example.invalid',
-        'password':password,'role':'viewer'})['id']
+        'password':password,'role':'viewer','current_password':password})['id']
     role_key=str(uuid.uuid4()); role_path=endpoint(role_keyed_target,role_key)
     role_code=api(f'/users/{role_keyed_target}/password-reset',issue_body(role_key,1),
         client=other_client,token=other_csrf)['code']
@@ -237,7 +237,7 @@ try:
 
     # Changing the issuer's password also revokes codes for other users.
     rotation_target=api('/users',{'name':'Rotation target','email':'rotation@example.invalid',
-        'password':password,'role':'viewer'})['id']
+        'password':password,'role':'viewer','current_password':password})['id']
     rotation_key=str(uuid.uuid4()); rotation_path=endpoint(rotation_target,rotation_key)
     rotation_code=api(f'/users/{rotation_target}/password-reset',issue_body(rotation_key,1),
         client=other_client,token=other_csrf)['code']
@@ -251,7 +251,7 @@ try:
 
     # Disabling an administrator revokes another unused legacy issue too.
     disable_target=api('/users',{'name':'Disable target','email':'disable@example.invalid',
-        'password':password,'role':'viewer'})['id']
+        'password':password,'role':'viewer','current_password':password})['id']
     disable_code=api(f'/users/{disable_target}/password-reset',
         {'current_password':next_password,'revision':1},client=other_client,token=other_csrf)['code']
     disabled=api(admin2_path,{'name':'Renamed administrator','role':'admin','enabled':False,

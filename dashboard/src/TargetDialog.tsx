@@ -45,6 +45,7 @@ import { shortDigest } from "./enrollmentCommands";
 import {
   fullModeRequirements,
   hasHostApprovals,
+  vectorApiExposure,
   type AgentCatalog,
   type HostApprovals,
 } from "./hostRequirements";
@@ -437,6 +438,10 @@ export default function TargetDialog({
     // review asks again.
     [leftBehindAccepted, setLeftBehindAccepted] = useState<Reviewed | null>(
       null,
+    ),
+    // An acknowledgement applies to one exact reviewed request only.
+    [apiExposureAccepted, setApiExposureAccepted] = useState<Reviewed | null>(
+      null,
     );
   // Callers such as the editor don't pass the pipeline's name; the reviewed
   // preview carries it, so the review never shows a bare "Version 1".
@@ -757,6 +762,7 @@ export default function TargetDialog({
     }
   }
   const agentCatalog = useAgentCatalog();
+  const apiExposure = version ? vectorApiExposure(version.config) : null;
   const requirements =
     version && agentCatalog && agentCatalog !== "failed"
       ? fullModeRequirements(version.config, agentCatalog)
@@ -1085,6 +1091,10 @@ export default function TargetDialog({
       if (capabilityBlocked)
         throw Error(
           "This pipeline requires full Vector mode on every selected device. Only the host operator can enable that mode.",
+        );
+      if (apiExposure && apiExposureAccepted !== preview)
+        throw Error(
+          "Confirm the Vector API exposure in this review before deploying.",
         );
       if (preview.key !== currentBody.current) {
         setPreview(null);
@@ -1609,6 +1619,12 @@ export default function TargetDialog({
                 .
               </p>
             )}
+          </div>
+        )}
+        {apiExposure && !preview && (
+          <div className="control-note target-api-exposure" role="alert">
+            <strong>Vector API exposure</strong>
+            <p>{apiExposure}</p>
           </div>
         )}
         {!!version &&
@@ -2140,6 +2156,24 @@ export default function TargetDialog({
                 </span>
               </label>
             )}
+            {apiExposure && (
+              <label className="control-note target-left-behind target-api-exposure">
+                <input
+                  type="checkbox"
+                  checked={apiExposureAccepted === preview}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setApiExposureAccepted(
+                      event.currentTarget.checked ? preview : null,
+                    )
+                  }
+                />
+                <span>
+                  <strong>Confirm Vector API exposure</strong>
+                  <small>{apiExposure}</small>
+                </span>
+              </label>
+            )}
             {pausedDevices.length > 0 && (
               <div className="control-note target-paused" role="status">
                 <strong>
@@ -2407,6 +2441,7 @@ export default function TargetDialog({
             (!!preview && !!settingsMismatch.length) ||
             !!preview?.conflicts?.length ||
             (!!preview && leftBehind) ||
+            (!!preview && !!apiExposure && apiExposureAccepted !== preview) ||
             blockers.length > 0 ||
             (!preview &&
               bindingAttempted &&

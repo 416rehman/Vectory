@@ -38,12 +38,6 @@ export function callsDeviceFunction(program: string): boolean {
   return deviceVrlCall.test(program);
 }
 /**
- * Why a pipeline's `api` block needs a full-mode device, whatever its address
- * and whether or not it is enabled: the one sentence the dashboard gives.
- */
-export const localApiReason =
-  "Vector's local API has no authentication; any local user could read live events";
-/**
  * The two AWS credential shapes no host allowance can permit. A credentials
  * file can make Vector run a program, and an AWS-signing sink without explicit
  * keys signs with the host's own identity. The agent (`policy.go`) and the
@@ -150,12 +144,7 @@ export function fullModeRequirements(
     "tests",
   ]);
   for (const key of Object.keys(config))
-    if (!restrictedRoots.has(key))
-      required.add(
-        key === "api"
-          ? `Global setting: api (${localApiReason})`
-          : `Global setting: ${key}`,
-      );
+    if (!restrictedRoots.has(key)) required.add(`Global setting: ${key}`);
   for (const kind of ["sources", "transforms", "sinks"]) {
     for (const component of Object.values(config[kind] || {}) as any[]) {
       if (
@@ -273,6 +262,29 @@ export function loopbackListener(address: string) {
   const mapped = /^::ffff:(.+)$/.exec(host);
   if (mapped) return ipv4(mapped[1]) && mapped[1].startsWith("127.");
   return /^(0{0,4}:){2,7}0{0,3}1$/.test(host) || host === "::1";
+}
+/**
+ * A warning about an API that this pipeline actually enables. Any `api`
+ * block still needs Full Vector mode, including one with `enabled: false`;
+ * that requirement is separate from the risk of an open listener.
+ */
+export function vectorApiExposure(config: Record<string, unknown>) {
+  const api = asObject(config.api);
+  if (api?.enabled !== true) return null;
+  // Vector's documented default applies only when the address is omitted.
+  const address =
+    api.address === undefined
+      ? "127.0.0.1:8686"
+      : typeof api.address === "string"
+        ? api.address
+        : null;
+  const reach =
+    address && loopbackListener(address)
+      ? "Only clients on each device can reach this loopback listener, including other local users or processes."
+      : address && /^(?:0\.0\.0\.0|\[::\]):\d{1,5}$/.test(address)
+        ? "This wildcard address listens on every interface. Network clients may reach it if host and network controls allow."
+        : "This is not a verified loopback address. Network clients may reach it depending on the address, name resolution, and network controls.";
+  return `Vector's API is enabled${address ? ` at ${address}` : ""} without authentication and can stream live events. ${reach} Keep it isolated from untrusted clients.`;
 }
 /**
  * The loopback Prometheus exporter fed only by internal_metrics sources that

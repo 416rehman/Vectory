@@ -17,6 +17,7 @@ import { testsHeadline, type TestsView } from "./publishTests";
 import type { CheckStatus, Problem } from "./pipelineProblems";
 import { SecretBindingSteps } from "./SecretReferenceField";
 import { secretReview } from "./secretFields";
+import { vectorApiExposure } from "./hostRequirements";
 import {
   groupChanges,
   programDiff,
@@ -253,6 +254,7 @@ export default function PublishReview({
     [published, config],
   );
   const newSecrets = secrets.filter((secret) => secret.added).length;
+  const apiExposure = vectorApiExposure(config);
   const steps = useMemo(() => Object.keys(config.transforms || {}), [config]);
   const empty =
     !review.components.length &&
@@ -291,6 +293,12 @@ export default function PublishReview({
           : "This will be the first version of this pipeline."}{" "}
         {reach ?? "Checking where it runs…"}
       </p>
+      {apiExposure && (
+        <div className="publish-review-api" role="alert">
+          <strong>Vector API exposure</strong>
+          <p>{apiExposure}</p>
+        </div>
+      )}
       <div className="publish-review-check" data-check-state={status}>
         <Icon size={16} aria-hidden="true" />
         <strong>{statusLabel}</strong>

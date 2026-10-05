@@ -82,6 +82,17 @@
 .target-approval-note p {
   margin: 4px 0 0;
 }
+.target-api-exposure {
+  border-left-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--ink);
+}
+.target-api-exposure p {
+  margin: 4px 0 0;
+}
+.target-api-exposure small {
+  color: var(--ink);
+}
 .target-approval-steps {
   margin-top: 8px;
 }

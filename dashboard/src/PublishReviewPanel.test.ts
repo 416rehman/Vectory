@@ -90,6 +90,20 @@ describe("the publish review's changes", () => {
       "No configuration changes since v1.",
     );
   });
+
+  it("warns about live-event access only when the Vector API is enabled", () => {
+    const enabled = render({
+      config: { ...config, api: { enabled: true, address: "0.0.0.0:8686" } },
+    });
+    expect(enabled).toContain("Vector API exposure");
+    expect(enabled).toContain("listens on every interface");
+    expect(enabled).toContain("stream live events");
+    const disabled = render({
+      config: { ...config, api: { enabled: false, address: "0.0.0.0:8686" } },
+    });
+    expect(disabled).not.toContain("Vector API exposure");
+    expect(render()).not.toContain("Vector API exposure");
+  });
 });
 
 describe("the publish review's tests", () => {

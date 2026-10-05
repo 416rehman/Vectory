@@ -37,7 +37,7 @@ try:
         try: api("/status"); break
         except urllib.error.URLError: time.sleep(.1)
     csrf = api("/bootstrap",{"bootstrap_secret":bootstrap,"name":"Synthetic administrator","email":"admin@example.invalid","password":password})["csrf_token"]
-    api("/users",{"name":"Synthetic operator","email":"operator@example.invalid","password":password,"role":"operator"})
+    api("/users",{"name":"Synthetic operator","email":"operator@example.invalid","password":password,"role":"operator","current_password":password})
     op_csrf = api("/login",{"email":"operator@example.invalid","password":password},actor=operator,token="")["csrf_token"]
     ids=[str(uuid.uuid4()),str(uuid.uuid4())]
     with contextlib.closing(sqlite3.connect(temp/"state/vectory.db")) as db:

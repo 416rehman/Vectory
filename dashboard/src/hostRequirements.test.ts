@@ -5,9 +5,9 @@ import {
   describeNeeds,
   fullModeRequirements,
   hostApprovals,
-  localApiReason,
   loopbackListener,
   monitoringExporter,
+  vectorApiExposure,
 } from "./hostRequirements";
 import { pipelineTemplate } from "./pipelineTemplates";
 
@@ -203,13 +203,13 @@ describe("what a pipeline asks of its devices", () => {
       label: "Needs Full Vector",
     });
   });
-  it("asks for Full Vector mode for any api block, whatever it says, and gives the reason once", () => {
+  it("asks for Full Vector mode for any api block, even when the API is disabled", () => {
     const base = {
       sources: { demo: { type: "demo_logs", format: "json" } },
       sinks: { out: { type: "blackhole", inputs: ["demo"] } },
     };
-    // The server and the agent refuse the block the same way: Vector's API has
-    // no authentication, so the address and the switch make no difference.
+    // The server and the agent refuse the block the same way: the address and
+    // enabled switch make no difference to the Full Vector requirement.
     for (const api of [
       { enabled: true, address: "127.0.0.1:8686" },
       { enabled: true, address: "[::1]:8686" },
@@ -223,27 +223,39 @@ describe("what a pipeline asks of its devices", () => {
       expect(
         fullModeRequirements({ ...base, api }, catalog),
         JSON.stringify(api),
-      ).toEqual([
-        "Global setting: api (Vector's local API has no authentication; any local user could read live events)",
-      ]);
-    expect(localApiReason).toBe(
-      "Vector's local API has no authentication; any local user could read live events",
-    );
+      ).toEqual(["Global setting: api"]);
     expect(
       describeNeeds({ ...base, api: { enabled: false } }, catalog),
     ).toEqual({
       kind: "full",
       label: "Needs Full Vector",
-      detail: `Uses Global setting: api (${localApiReason}). Runs only on devices in Full Vector mode.`,
+      detail:
+        "Uses Global setting: api. Runs only on devices in Full Vector mode.",
     });
     // Without the block nothing is asked, and the other settings still are.
     expect(fullModeRequirements(base, catalog)).toEqual([]);
     expect(
       fullModeRequirements({ ...base, api: {}, schema: {} }, catalog),
-    ).toEqual([
-      `Global setting: api (${localApiReason})`,
-      "Global setting: schema",
-    ]);
+    ).toEqual(["Global setting: api", "Global setting: schema"]);
+  });
+  it("warns only for an enabled API and describes who can reach it", () => {
+    for (const api of [undefined, null, {}, { enabled: false }])
+      expect(vectorApiExposure({ api })).toBeNull();
+    const defaultAddress = vectorApiExposure({ api: { enabled: true } });
+    expect(defaultAddress).toContain("127.0.0.1:8686");
+    expect(defaultAddress).toContain("Only clients on each device");
+    expect(defaultAddress).toContain("stream live events");
+    expect(
+      vectorApiExposure({ api: { enabled: true, address: "[::1]:8686" } }),
+    ).toContain("loopback listener");
+    for (const address of ["0.0.0.0:8686", "[::]:8686"])
+      expect(vectorApiExposure({ api: { enabled: true, address } })).toContain(
+        "listens on every interface",
+      );
+    for (const address of ["192.0.2.10:8686", "localhost:8686"])
+      expect(vectorApiExposure({ api: { enabled: true, address } })).toContain(
+        "not a verified loopback address",
+      );
   });
   it("names what a restricted host has to approve, briefly", () => {
     expect(

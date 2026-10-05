@@ -91,11 +91,13 @@ export default function AddPersonActions({
 }) {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [password, setPassword] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [revealed, setRevealed] = useState(false);
   const [finished, setFinished] = useState<Finished | null>(null);
   const opener = useRef<HTMLButtonElement>(null);
   const authority = useAccountAuthority(user, () => {
     setPassword("");
+    setAdminPassword("");
     creation.authorityChanged();
     setFinished(null);
   });
@@ -136,6 +138,7 @@ export default function AddPersonActions({
       const person = result.user;
       const expected = request.target;
       setPassword("");
+      setAdminPassword("");
       onCreated(person);
       if (
         normalizeAuthEmail(person.email) !== expected.email ||
@@ -175,7 +178,8 @@ export default function AddPersonActions({
   useLeaveGuard(
     request && request.phase !== "form"
       ? "Leave before this account request is resolved? You'll need to check Workspace access later."
-      : creation.open && (draft.name || draft.email || password)
+      : creation.open &&
+          (draft.name || draft.email || password || adminPassword)
         ? "Discard this new person?"
         : null,
   );
@@ -186,6 +190,7 @@ export default function AddPersonActions({
     if (creation.begin(emptyDraft)) {
       setDraft(emptyDraft);
       setPassword("");
+      setAdminPassword("");
       setRevealed(false);
     }
   }
@@ -215,13 +220,17 @@ export default function AddPersonActions({
       const weak = passwordIssue(password, [target.email, target.name]);
       if (weak) fields.password = weak;
     }
+    if (!adminPassword)
+      fields.adminPassword = "Enter your password to add a person.";
     if (Object.keys(fields).length) {
       creation.edit({ fields });
       return;
     }
     const secret = password;
+    const currentPassword = adminPassword;
     // The password is sent once and never kept for a replay.
     setPassword("");
+    setAdminPassword("");
     creation.edit({ target });
     await creation.send(
       async (attempt, signal) => {
@@ -251,6 +260,7 @@ export default function AddPersonActions({
               name: target.name,
               email: target.email,
               role: target.role,
+              current_password: currentPassword,
               ...(target.method === "invite"
                 ? { invite: true }
                 : { password: secret }),
@@ -278,6 +288,13 @@ export default function AddPersonActions({
           return {
             password: `${error.message} Enter a password again.`,
           };
+        if (error?.code === "WRONG_PASSWORD")
+          return {
+            adminPassword: "Your password didn't match.",
+            ...(target.method === "password"
+              ? { password: "Enter their password again." }
+              : {}),
+          };
         return {
           form: wait
             ? `Too many attempts. Try again in ${Math.ceil(wait / 60)} min.`
@@ -288,6 +305,7 @@ export default function AddPersonActions({
   }
   function close() {
     setPassword("");
+    setAdminPassword("");
     if (finished) {
       setFinished(null);
       return;
@@ -396,9 +414,19 @@ export default function AddPersonActions({
               <CreationBody
                 request={request}
                 draft={draft}
+                userEmail={user.email}
                 change={change}
                 password={password}
                 setPassword={setPassword}
+                adminPassword={adminPassword}
+                setAdminPassword={(value) => {
+                  setAdminPassword(value);
+                  if (request?.fields.adminPassword) {
+                    const fields = { ...request.fields };
+                    delete fields.adminPassword;
+                    creation.edit({ fields });
+                  }
+                }}
                 revealed={revealed}
                 setRevealed={setRevealed}
                 onLocate={(email) => {
@@ -460,18 +488,24 @@ export default function AddPersonActions({
 function CreationBody({
   request,
   draft,
+  userEmail,
   change,
   password,
   setPassword,
+  adminPassword,
+  setAdminPassword,
   revealed,
   setRevealed,
   onLocate,
 }: {
   request: KeyedRequest<Draft> | null;
   draft: Draft;
+  userEmail: string;
   change: (next: Partial<Draft>) => void;
   password: string;
   setPassword: (value: string) => void;
+  adminPassword: string;
+  setAdminPassword: (value: string) => void;
   revealed: boolean;
   setRevealed: (value: boolean) => void;
   onLocate: (email: string) => void;
@@ -641,6 +675,25 @@ function CreationBody({
           </div>
         </>
       )}
+      <p className="control-note">
+        Confirm your password before giving someone access to this workspace.
+      </p>
+      <input
+        type="text"
+        name="username"
+        autoComplete="username"
+        value={userEmail}
+        readOnly
+        hidden
+      />
+      <PasswordField
+        label="Your password"
+        name="admin-current-password"
+        autoComplete="current-password"
+        value={adminPassword}
+        onChange={setAdminPassword}
+        error={request.fields.adminPassword}
+      />
     </fieldset>
   );
 }

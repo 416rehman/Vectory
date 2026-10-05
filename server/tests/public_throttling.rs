@@ -342,7 +342,7 @@ async fn one_address_cannot_block_password_reset_and_invitations_for_everyone_el
             "10.0.0.1",
             "POST",
             "/api/v1/users",
-            json!({"name":"Sam","email":"sam@example.test","role":"viewer","password":PASSWORD}),
+            json!({"name":"Sam","email":"sam@example.test","role":"viewer","password":PASSWORD,"current_password":PASSWORD}),
             true,
         )
         .await;
@@ -366,7 +366,7 @@ async fn one_address_cannot_block_password_reset_and_invitations_for_everyone_el
             "10.0.0.1",
             "POST",
             "/api/v1/users",
-            json!({"request_id":uuid::Uuid::new_v4().to_string(),"name":"Jane","email":"jane@example.test","role":"viewer","invite":true}),
+            json!({"request_id":uuid::Uuid::new_v4().to_string(),"name":"Jane","email":"jane@example.test","role":"viewer","invite":true,"current_password":PASSWORD}),
             true,
         )
         .await;

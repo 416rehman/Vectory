@@ -135,7 +135,7 @@ async fn person(app: &Router, admin: &Session, email: &str, role: &str) -> Sessi
     let reply = post(
         app,
         "/api/v1/users",
-        json!({"name":"Colleague","email":email,"role":role,"password":PASSWORD}),
+        json!({"name":"Colleague","email":email,"role":role,"password":PASSWORD,"current_password":PASSWORD}),
         Some(admin),
     )
     .await;
@@ -237,14 +237,14 @@ async fn ordinary_rejections_have_distinct_codes() {
     let duplicate = post(
         &app,
         "/api/v1/users",
-        json!({"name":"Twin","email":"Colleague@example.test","role":"viewer","password":NEXT}),
+        json!({"name":"Twin","email":"Colleague@example.test","role":"viewer","password":NEXT,"current_password":PASSWORD}),
         Some(&admin),
     )
     .await;
     assert_eq!(duplicate.status, StatusCode::CONFLICT);
     assert_eq!(code(&duplicate), "EMAIL_TAKEN");
     let key = uuid::Uuid::new_v4().to_string();
-    let keyed = |email: &str| json!({"request_id":key,"name":"Keyed","email":email,"role":"viewer","password":NEXT});
+    let keyed = |email: &str| json!({"request_id":key,"name":"Keyed","email":email,"role":"viewer","password":NEXT,"current_password":PASSWORD});
     let taken = post(
         &app,
         "/api/v1/users",
@@ -726,7 +726,7 @@ async fn invitations_let_people_choose_their_own_password_once() {
     let created = post(
         &app,
         "/api/v1/users",
-        json!({"request_id":key,"name":"Jane Doe","email":"jane@example.test","role":"editor","invite":true}),
+        json!({"request_id":key,"name":"Jane Doe","email":"jane@example.test","role":"editor","invite":true,"current_password":PASSWORD}),
         Some(&admin),
     )
     .await;
@@ -817,7 +817,7 @@ async fn invitations_let_people_choose_their_own_password_once() {
     let second = post(
         &app,
         "/api/v1/users",
-        json!({"request_id":key,"name":"Sam","email":"sam@example.test","role":"viewer","invite":true}),
+        json!({"request_id":key,"name":"Sam","email":"sam@example.test","role":"viewer","invite":true,"current_password":PASSWORD}),
         Some(&admin),
     )
     .await;
@@ -859,7 +859,7 @@ async fn invitations_let_people_choose_their_own_password_once() {
     let both = post(
         &app,
         "/api/v1/users",
-        json!({"request_id":uuid::Uuid::new_v4().to_string(),"name":"X","email":"x@example.test","role":"viewer","invite":true,"password":NEXT}),
+        json!({"request_id":uuid::Uuid::new_v4().to_string(),"name":"X","email":"x@example.test","role":"viewer","invite":true,"password":NEXT,"current_password":PASSWORD}),
         Some(&admin),
     )
     .await;

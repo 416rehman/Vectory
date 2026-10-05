@@ -11,6 +11,8 @@ import {
 } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import crypto from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 // Passwords, reset links and MFA secrets must never enter traces or screenshots.
 test.use({ trace: "off", screenshot: "off" });
@@ -43,6 +45,7 @@ async function session(request: APIRequestContext) {
 async function createAccount(
   request: APIRequestContext,
   role: string,
+  currentPassword: string,
 ): Promise<Account> {
   const active = await session(request);
   const suffix = crypto.randomBytes(8).toString("hex");
@@ -54,7 +57,7 @@ async function createAccount(
   };
   const response = await request.post("/api/v1/users", {
     headers: { "X-CSRF-Token": active.csrf_token },
-    data: account,
+    data: { ...account, current_password: currentPassword },
   });
   expect(response.status()).toBe(200);
   return { ...account, id: (await response.json()).id };
@@ -65,7 +68,23 @@ async function fixture(
   browser: Browser,
   baseURL: string,
 ) {
-  const admin = await createAccount(seed, "admin");
+  const activeSeed = await session(seed);
+  const credential = JSON.parse(
+    await readFile(
+      path.resolve(
+        import.meta.dirname,
+        "../..",
+        process.env.VECTORY_PREVIEW_DIR || ".local/preview",
+        "credentials.json",
+      ),
+      "utf8",
+    ),
+  );
+  expect(credential.email).toBe(activeSeed.user.email);
+  expect(
+    typeof credential.password === "string" && credential.password.length > 0,
+  ).toBe(true);
+  const admin = await createAccount(seed, "admin", credential.password);
   const contexts: BrowserContext[] = [];
   const accounts: Account[] = [];
   async function open(account?: Account) {
@@ -96,7 +115,11 @@ async function fixture(
     administrator,
     open,
     async account(role = "viewer") {
-      const account = await createAccount(administrator.request, role);
+      const account = await createAccount(
+        administrator.request,
+        role,
+        admin.password,
+      );
       accounts.push(account);
       return account;
     },

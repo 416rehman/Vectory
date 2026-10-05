@@ -22,6 +22,8 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 
 ### Dashboard
 
+- **Adding a person confirms your identity.** Every new account or invite now asks for the administrator's current password, including Viewer and Operator accounts. A wrong password creates no account; the one-shot request recovery keeps neither person's password.
+- **Vector API exposure is explicit.** An enabled API warns when its address can expose unauthenticated live events beyond the host, and review asks for acknowledgement before deploying it.
 - **Checks keep their meaning.** The pipeline check status shows its last findings on hover or focus and opens Problems without running a second check. **Check again** in Problems runs a fresh validation; dragging a node then undoing back to the acknowledged draft clears **Unsaved**.
 - **Account uncertainty stays visible.** A lost reply to a browser sign-out does not become a success claim merely because a later session list lacks that browser. Administrator reset-link checks require the status to identify the same request and person, and an old sign-in cannot restore held links after the acting account changes.
 - **Choose device access with context.** Add device uses the described picker used for account roles, with each configuration mode's host permissions in the choice itself.
