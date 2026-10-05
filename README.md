@@ -49,7 +49,7 @@ flowchart LR
 ## Get started
 
 - **Try it on one machine** (Linux or macOS, about 15 minutes, mostly compiling): [Quickstart](docs/user/quickstart.md). After its first step, `node scripts/demo.mjs` starts a local demo fleet of real agents on synthetic data.
-- **Run it for real:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
+- **Self-host the developer preview:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
 - **Understand the guarantees:** [Security model](docs/user/security.md).
 
 The same guides ship inside every server as a searchable, offline Help center at `/help/`.

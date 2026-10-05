@@ -89,5 +89,5 @@ Editor and Operator are separate jobs, not levels. The server checks every permi
 ## Where to next
 
 - **Try it on one machine** in about 15 minutes: [Quickstart](quickstart.md).
-- **Run it for real:** [Install the server](install-server.md), then [Connect a device](installation.md) and [Deploy your first pipeline](first-pipeline.md).
+- **Self-host the developer preview:** [Install the server](install-server.md), then [Connect a device](installation.md) and [Deploy your first pipeline](first-pipeline.md).
 - **Understand the guarantees:** [Security model](security.md).

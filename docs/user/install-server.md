@@ -1,6 +1,6 @@
 # Install the server
 
-Run Vectory with Docker Compose on one Linux host: the server, a TLS proxy and a sandboxed Vector validator. Plan on 30 minutes, most of it the first image build.
+Run the Vectory developer preview with Docker Compose on one Linux host: the server, a TLS proxy and a sandboxed Vector validator. Plan on 30 minutes, most of it the first image build.
 
 ## Before you start
 
@@ -36,7 +36,9 @@ The bootstrap secret creates the first administrator, once. It is not an enrollm
 
 ```sh
 git clone https://github.com/416rehman/Vectory.git
-cd Vectory/deploy
+cd Vectory
+git checkout v0.1.0
+cd deploy
 cp .env.example .env
 ```
 

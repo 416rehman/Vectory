@@ -24,6 +24,7 @@ Use a test host with no existing Vectory agent or running Vector workload. Step 
 ```sh
 git clone https://github.com/416rehman/Vectory.git
 cd Vectory
+git checkout v0.1.0
 ```
 
 ```sh

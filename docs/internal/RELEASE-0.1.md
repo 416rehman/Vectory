@@ -44,7 +44,7 @@ These change the public repository and need the maintainer's explicit go-ahead; 
 2. Compare the new `main` tree with the reviewed release-branch tree: only the release-record update that closes gate 7 may differ. A runnable change restarts the review. Confirm all nine `checks` jobs pass on the new commit.
 3. Tag `v0.1.0` on that commit.
 4. Run `release-candidate.yml` on the tag, download `unsigned-release-candidate`, verify `SHA256SUMS` and `packaging/verify-release.py`.
-5. Create the GitHub release from the tag with the candidate's files, the changelog section as the notes, and the sentence that nothing in it is signed.
+5. Create the GitHub release from the tag with the candidate's files. Lead the notes with the highlights from the `0.1.0` changelog section, link the full [changelog](../../CHANGELOG.md), [What's new](../user/whats-new.md), [quickstart](../user/quickstart.md) and [known limits](../user/compatibility.md), and state plainly that the downloads are unsigned.
 6. Check the release page's downloads against `SHA256SUMS`, and run the quickstart from the README on a clean machine.
 
 ## After the release

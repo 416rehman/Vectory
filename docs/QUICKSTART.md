@@ -3,7 +3,7 @@
 The quickstart lives in the Help center, which ships with every Vectory server:
 
 - **[Quickstart](user/quickstart.md):** run Vectory on one Linux or macOS machine, connect it as a device and deploy a first pipeline, in about 15 minutes.
-- **[Install the server](user/install-server.md):** a production install with Docker Compose.
+- **[Install the server](user/install-server.md):** a self-hosted developer-preview install with Docker Compose.
 - **[Connect a device](user/installation.md)** and **[Deploy your first pipeline](user/first-pipeline.md).**
 
 The short version, from a clone of this repository:
