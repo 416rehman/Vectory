@@ -93,6 +93,8 @@ The update path was attacked in independent reviews of the privileged step on Li
 
 Wake-up hint authentication order and bounds; device certificate checks and device CA rotation, including a live test that a retired key is refused; enrollment token normalization, races and idempotence; the install trust chain on POSIX (the pin equals the CA, no `-k`); `vectory allow` symlink and `host:port` matching; most of the notification address blocklist; secret sealing; CSRF; per-role list visibility.
 
-## Not covered
+## Review coverage limits
 
-List, sort and filter parameters of the fleet-scale reads; live response headers (security headers were read from source, not from a running proxy); the sample-test change in the validator worker (`server/src/bin/vector-validator.rs`, which holds stdin open until the last sample's output arrives); Windows and macOS hosts; anything after commit `f4d1826`, which includes the publish gate, canary choice, held-device, fleet-scale dashboard and agent adoption work, and the fixes listed at the top.
+The broad attack pass described above was run at `f4d1826`. It did not probe fleet-scale list, sort and filter parameters, response headers through a running proxy, or the validator worker's sample-test wait path. Later targeted reviews covered account and session flows, enrollment, agent installation and updates, and the release candidate's packages and images. Native service and update tests ran on Ubuntu 24.04, macOS 15 and Windows Server 2025. These checks do not amount to a comprehensive adversarial rerun of the final binaries.
+
+The fleet query parameters, live proxy response headers and validator sample-test wait path still lack a targeted final-build probe. Reboot, upgrades from an earlier release, physical power loss and older operating systems remain outside the tested compatibility matrix; see [Compatibility](../user/compatibility.md).
