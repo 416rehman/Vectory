@@ -2,7 +2,7 @@
 
 The reviewed code and unsigned candidate were built from `74dacc769ccf31739bfcc4d666a76d4b1f39b711`. The [nine-job checks run](https://github.com/416rehman/Vectory/actions/runs/37282511193), [native platform run](https://github.com/416rehman/Vectory/actions/runs/37282556351), [candidate run](https://github.com/416rehman/Vectory/actions/runs/37282556392) and [screenshot run](https://github.com/416rehman/Vectory/actions/runs/37282556622) all passed on that commit. The candidate's 37 listed SHA-256 digests matched its 37 other files, and `packaging/verify-release.py` accepted the complete unsigned inventory. The final publication commit will have a different SHA, so its checks and candidate must run again before the tag's downloads are published.
 
-Independent pre-release reviewers found no new P0 or P1 issue, and no new P2 requiring a release fix. The existing P2 findings have owners and are disclosed in [Open security findings](../security/OPEN-FINDINGS.md) and the user-facing [known limits](../user/whats-new.md#known-limits). Review evidence and limits by area:
+The targeted pre-release review identified no new P0 or P1 issue, and no new P2 requiring a release fix. The existing P2 findings have owners and are disclosed in [Open security findings](../security/OPEN-FINDINGS.md) and the user-facing [known limits](../user/whats-new.md#known-limits). Review evidence and limits by area:
 
 | Area | Evidence | Result and limit |
 | --- | --- | --- |
