@@ -4,7 +4,7 @@ Run Vectory on one Linux or macOS machine, connect that same machine as a device
 
 > [!NOTE]
 > **A local trial, not a production install**
-> The preview listens only on 127.0.0.1 and trusts a short-lived test certificate authority. To run Vectory for real, see [Install the server](install-server.md).
+> The preview listens only on 127.0.0.1 and trusts a short-lived test certificate authority. To self-host the developer preview, see [Install the server](install-server.md).
 
 ## Before you start
 
