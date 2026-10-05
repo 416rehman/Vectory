@@ -39,6 +39,9 @@ const (
 	// The lock file is persistent: removing it would let another writer lock a
 	// different inode while the first writer still holds the old one.
 	updatePolicyLockFile = "policy.lock"
+	// This lock spans update-step installation/removal, including host units.
+	// Like policy.lock it must remain at a stable path after each operation.
+	updateLifecycleLockFile = "lifecycle.lock"
 )
 
 // ErrUpdatePolicyInvalid is what a policy file that is not what the contract

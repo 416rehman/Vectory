@@ -214,17 +214,19 @@ func ServiceControl(action string) error {
 	case "uninstall":
 		// The update step goes first, and is refused while it is trying a build: the
 		// agent's service must not be removed under it.
-		if err := RemoveUpdateHelper(); err != nil {
-			return err
-		}
-		status, err := s.Query()
-		if err != nil {
-			return err
-		}
-		if status.State != svc.Stopped {
-			return errors.New("stop Vectory service before removing its registration")
-		}
-		return s.Delete()
+		return withUpdateLifecycle(func() error {
+			if err := removeStepWith(removalUpdateHost()); err != nil {
+				return err
+			}
+			status, err := s.Query()
+			if err != nil {
+				return err
+			}
+			if status.State != svc.Stopped {
+				return errors.New("stop Vectory service before removing its registration")
+			}
+			return s.Delete()
+		})
 	}
 	return errors.New("invalid service operation")
 }

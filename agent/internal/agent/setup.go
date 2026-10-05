@@ -260,7 +260,7 @@ func (h serviceHost) installUpdateStep(dir, executable string) error {
 	if h.installUpdates != nil {
 		return h.installUpdates(dir, executable)
 	}
-	return InstallUpdateHelper(dir, executable)
+	return installUpdateHelperLocked(dir, executable)
 }
 
 // removeUpdateStep takes the update step away, and says whether that ended a rollback that

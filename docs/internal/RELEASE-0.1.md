@@ -40,7 +40,7 @@ Every gate is a command or a check anyone can repeat. A gate is **Done** only wi
 
 These change the public repository and need the maintainer's explicit go-ahead; they are not done by routine work.
 
-1. Decide how to handle the local home path in the three existing `main` commits (`2f18fb7`, `d1dd1d3`, and `c88758e`) and private session links in published branch commit trailers, including any copies already made: the repository is already public. The current tree has neither detail, but old history remains reachable. Then squash the release branch into one commit on `main` only with the maintainer's explicit approval.
+1. Decide how to handle local home paths in the three existing `main` commits (`2f18fb7`, `d1dd1d3`, and `c88758e`) and private session URLs in 376 published branch-only commit messages, including any copies already made: the repository is already public. The current tree has neither detail. A squash makes the new `main` history smaller but does not erase the three old `main` commits or already published branch history. Then squash the release branch into one commit on `main` only with the maintainer's explicit approval.
 2. Tag `v0.1.0` on that commit.
 3. Run `release-candidate.yml` on the tag, download `unsigned-release-candidate`, verify `SHA256SUMS`.
 4. Create the GitHub release from the tag with the candidate's files, the changelog section as the notes, and the sentence that nothing in it is signed.

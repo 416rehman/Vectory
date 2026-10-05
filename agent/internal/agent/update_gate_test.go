@@ -85,7 +85,8 @@ func TestAnOperatingSystemOutsideTheReleaseHasNoStepAndEveryFunctionOfTheStepSay
 	if err := ApplyStagedUpdate(context.Background(), dir, true, func(string) {}); !errors.Is(err, errUpdateStepUnavailable) {
 		t.Errorf("applying a staged update: %v", err)
 	}
-	// There is no step to remove, and removing it changes nothing.
+	// There is no step to remove, and removing it changes nothing. The gate
+	// prevents any concurrent installer while the cleanup checks host units.
 	if err := RemoveUpdateHelper(); err != nil {
 		t.Errorf("removing the step: %v", err)
 	}

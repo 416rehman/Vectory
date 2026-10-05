@@ -224,16 +224,18 @@ func ServiceControl(action string) error {
 	case "uninstall":
 		// The update step goes first, and is refused while it is trying a build: the
 		// agent's service must not be removed under it.
-		if err := RemoveUpdateHelper(); err != nil {
-			return err
-		}
-		if err := systemctl("disable", "--now", ServiceName); err != nil {
-			return err
-		}
-		if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return systemctl("daemon-reload")
+		return withUpdateLifecycle(func() error {
+			if err := removeStepWith(removalUpdateHost()); err != nil {
+				return err
+			}
+			if err := systemctl("disable", "--now", ServiceName); err != nil {
+				return err
+			}
+			if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return systemctl("daemon-reload")
+		})
 	}
 	return errors.New("invalid service operation")
 }

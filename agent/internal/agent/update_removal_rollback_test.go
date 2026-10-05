@@ -241,7 +241,9 @@ func TestTurningUpdatesOffThatIsRefusedAfterItChangedThingsSaysWhatWasDoneAndRun
 			return lockErr
 		}
 		held = release
-		return RemoveUpdateHelper()
+		// Withdrawal already holds lifecycle.lock; use the internal removal
+		// path so this injected step-lock refusal does not reacquire it.
+		return removeStepWith(removalUpdateHost())
 	})
 	if held != nil {
 		held()

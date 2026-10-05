@@ -203,14 +203,22 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 }
 
 func ServiceControl(action string) error {
-	return controlLaunchdService(action, agentJob, func() (func(), error) {
-		return lockLifecycle(serviceDefinition)
-	}, RemoveUpdateHelper, func() error {
-		if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	})
+	control := func(removeUpdate func() error) error {
+		return controlLaunchdService(action, agentJob, func() (func(), error) {
+			return lockLifecycle(serviceDefinition)
+		}, removeUpdate, func() error {
+			if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		})
+	}
+	if action == "uninstall" {
+		return withUpdateLifecycle(func() error {
+			return control(func() error { return removeStepWith(removalUpdateHost()) })
+		})
+	}
+	return control(RemoveUpdateHelper)
 }
 
 // ServiceStatus asks launchd about the agent daemon without changing it.

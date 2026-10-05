@@ -32,6 +32,17 @@ import (
 // being applied or tried, because replacing the helper then would put the build
 // under trial in the place of the one that rolls it back.
 func InstallUpdateHelper(dir, executable string) error {
+	return installUpdateHelper(dir, executable, true)
+}
+
+// installUpdateHelperLocked is setup's path after it has acquired lifecycle.lock
+// and rechecked consent. Calling the public entry point there would take the
+// same lock twice and deadlock. Both paths hold it through InstallUnits.
+func installUpdateHelperLocked(dir, executable string) error {
+	return installUpdateHelper(dir, executable, false)
+}
+
+func installUpdateHelper(dir, executable string, acquireLifecycle bool) error {
 	host := currentUpdateHost()
 	if host == nil {
 		return errUpdateStepUnavailable
@@ -42,12 +53,36 @@ func InstallUpdateHelper(dir, executable string) error {
 	if !filepath.IsAbs(dir) || !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
 		return fmt.Errorf("the state directory and the executable must be absolute paths, and %q and %q aren't", dir, executable)
 	}
+	if acquireLifecycle {
+		// Preserve the no-effects refusal of an ineligible host, but do not
+		// rely on this snapshot after waiting: service-uninstall may remove
+		// the registered agent service before we acquire lifecycle.lock.
+		preflight := inspectHost(host, dir, executable)
+		if preflight.install != nil {
+			_ = preflight.install.Close()
+		}
+		if preflight.code != UpdateEligible {
+			return &UpdateRefusal{Code: preflight.code, Detail: preflight.detail}
+		}
+		release, err := acquireUpdateLifecycle()
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	facts := inspectHost(host, dir, executable)
 	if facts.install != nil {
 		defer facts.install.Close()
 	}
 	if facts.code != UpdateEligible {
 		return &UpdateRefusal{Code: facts.code, Detail: facts.detail}
+	}
+	policy, basis, err := readUpdatePolicy(UpdateLocations())
+	if err != nil {
+		return err
+	}
+	if basis != "" && policy.Consent == UpdateConsentOff {
+		return &UpdateRefusal{Code: "UPDATES_OFF", Detail: "updates are off on this host"}
 	}
 	paths := UpdateLocations()
 	private, release, err := openStepForInstall(host, paths)
@@ -222,7 +257,15 @@ func placeHelper(host updateHost, install updateInstall, paths UpdatePaths, dige
 // launch daemon or service that runs it, which an earlier build installed. Where no
 // step is written for the operating system, there is none to remove, and a step's
 // directory that is there anyway is said to be out of its reach, never reported removed.
-func RemoveUpdateHelper() error { return removeStepWith(removalUpdateHost()) }
+func RemoveUpdateHelper() error {
+	// A build whose update gate is closed cannot install a step concurrently,
+	// but still asks its removal host to clean units left by an older build.
+	// This also keeps the no-step path side-effect-free on unsupported hosts.
+	if currentUpdateHost() == nil {
+		return removeStepWith(removalUpdateHost())
+	}
+	return withUpdateLifecycle(func() error { return removeStepWith(removalUpdateHost()) })
+}
 
 // removeStepWith is RemoveUpdateHelper for the host given: nil where no step is written
 // for the operating system.

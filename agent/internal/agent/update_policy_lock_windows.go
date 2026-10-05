@@ -9,9 +9,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func tryLockUpdatePolicy(dir *rootOwned) (func(), error) {
-	path := dir.entryPath(updatePolicyLockFile)
-	name, err := windows.UTF16PtrFromString(path)
+func tryLockUpdateFile(dir *rootOwned, name string) (func(), error) {
+	path := dir.entryPath(name)
+	widePath, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
@@ -22,9 +22,9 @@ func tryLockUpdatePolicy(dir *rootOwned) (func(), error) {
 	// No sharing prevents a second writer from using or replacing this file
 	// until the first writer closes its handle. The directory's checked handle
 	// also keeps its path stable during the transaction.
-	handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, sa, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	handle, err := windows.CreateFile(widePath, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, sa, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
-		return nil, errUpdatePolicyLockBusy
+		return nil, errUpdateFileLockBusy
 	}
 	if err != nil {
 		return nil, &fs.PathError{Op: "lock", Path: path, Err: err}

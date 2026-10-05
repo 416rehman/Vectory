@@ -253,21 +253,39 @@ func WithdrawUpdates(dir string) (UpdateWithdrawal, error) {
 // whether it ended a rollback that waited for the agent's service to start.
 func withdrawUpdatesReporting(dir string, removeStep func() (endedARollback bool, err error)) (UpdateWithdrawal, error) {
 	var done UpdateWithdrawal
-	if err := updateInProgress(true); err != nil {
-		return done, err
-	}
 	paths := UpdateLocations()
-	// A host that never enabled updates has no policy directory. Observe that
-	// absence without creating one: withdrawal linearizes before any concurrent
-	// setup that creates it. Once the directory exists, take the persistent
-	// lock before deciding whether its policy is absent, off or enabled.
+	// A host with no policy directory and no step needs no lifecycle file.
+	// Observe that absence without creating one: withdrawal linearizes before
+	// any concurrent setup that creates it. An orphan step still needs removal,
+	// so in that case create the checked directory to coordinate with setup.
 	policyDir, err := openRootOwned(paths.PolicyDir, rootOwnedDirectory)
 	policyDirAbsent := notExist(err)
 	if err != nil && !policyDirAbsent {
 		return done, err
 	}
+	if policyDirAbsent {
+		if _, stepErr := os.Lstat(paths.StepDir); stepErr == nil {
+			policyDir, err = ensureRootOwnedDir(paths.PolicyDir, rootReadable)
+			if err != nil {
+				return done, err
+			}
+			policyDirAbsent = false
+		} else if !notExist(stepErr) {
+			return done, stepErr
+		}
+	}
 	if policyDir != nil {
-		_ = policyDir.Close()
+		defer policyDir.Close()
+		// Hold this through the fresh busy/policy checks and host-unit removal.
+		// Setup's final install holds the same lock through InstallUnits.
+		unlock, err := lockUpdateLifecycle(policyDir)
+		if err != nil {
+			return done, err
+		}
+		defer unlock()
+	}
+	if err := updateInProgress(true); err != nil {
+		return done, err
 	}
 	if !policyDirAbsent {
 		// Decide under the same lock used by setup and the privileged update step.
@@ -299,7 +317,14 @@ func withdrawUpdatesReporting(dir string, removeStep func() (endedARollback bool
 		}
 		done.Discarded, done.StagedLeft = discarded, left
 	}
-	if _, err := os.Lstat(paths.StepDir); err == nil {
+	if !policyDirAbsent {
+		_, err := os.Lstat(paths.StepDir)
+		if err != nil && !notExist(err) {
+			return done, err
+		}
+		if notExist(err) {
+			return done, nil
+		}
 		ended, err := removeStep()
 		done.RollbackEnded = ended
 		if err != nil {

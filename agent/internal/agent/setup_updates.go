@@ -532,11 +532,41 @@ func (r *setupRun) finishUpdates(agentPath, dir string) error {
 		return nil
 	}
 	r.updateStep = nil
+	// The policy was written before service registration. A local `update off`
+	// may have withdrawn it in the meantime, so decide again under the same
+	// lifecycle lock that withdrawal holds through removing the host units.
+	release, err := acquireUpdateLifecycle()
+	if err != nil {
+		return r.refuseUpdates("The update step couldn't be installed ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Setup stopped before it started or restarted the service.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
+	}
+	defer release()
+	policy, basis, err := readUpdatePolicy(UpdateLocations())
+	if err != nil {
+		return r.refuseUpdates("The update policy couldn't be read before installing the update step ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Setup stopped before it started or restarted the service.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
+	}
+	if basis == "" || policy.Consent == UpdateConsentOff {
+		r.add("updates", "warn", "Updates", "Updates were turned off on this host while setup was running; the update step was not installed.", "")
+		r.result.Updates = &SetupUpdates{Consent: UpdateConsentOff}
+		return nil
+	}
 	if err := r.host.installUpdateStep(dir, agentPath); err != nil {
 		return r.refuseUpdates("The agent is installed and enrolled, the update policy is saved and the service is registered, but the update step couldn't be installed ("+strings.TrimSuffix(sentence(err.Error()), ".")+"). Setup stopped before it started or restarted the service. Until the step is installed, this host takes no update.", "Fix the cause, then run the same command again; setup resumes where it stopped.")
 	}
-	r.add("updates", "ok", "Updates", pending.words, "")
-	updates := pending.updates
+	// Another local policy edit (such as pause or pin rollover) can run between
+	// the early setup write and host registration. Report the policy in force.
+	policy, _, err = readUpdatePolicy(UpdateLocations())
+	if err != nil {
+		return r.refuseUpdates("The update step is installed, but the update policy couldn't be read for the setup result ("+strings.TrimSuffix(sentence(err.Error()), ".")+").", "Read the update policy on this host before relying on the reported update state.")
+	}
+	updates := SetupUpdates{Consent: policy.Consent, Track: policy.Track, Windows: policy.Windows, Keys: policy.Fingerprints(), Paused: policy.Paused}
+	words := pending.words
+	if updates.Consent != pending.updates.Consent || updates.Track != pending.updates.Track || updates.Paused != pending.updates.Paused || !slices.Equal(updates.Windows, pending.updates.Windows) || !slices.Equal(updates.Keys, pending.updates.Keys) {
+		words = UpdatePolicyWords(policy) + " (pinned)"
+		if policy.Paused {
+			words += " · paused on this host: " + AdminCommandFor(dir, "vectory update resume")
+		}
+	}
+	r.add("updates", "ok", "Updates", words, "")
 	r.result.Updates = &updates
 	return nil
 }
