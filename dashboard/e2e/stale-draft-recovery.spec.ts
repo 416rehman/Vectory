@@ -640,7 +640,7 @@ test("Code Apply names a plaintext credential field and keeps the code unapplied
     await page.getByRole("button", { name: "Apply code changes" }).click();
     await expect(
       page.getByText(
-        /Likely plaintext credential at sinks.output.request.headers.Authorization/,
+        /Likely plaintext credential at (?:Line \d+: )?sinks.output.request.headers.Authorization/,
       ),
     ).toBeVisible();
     await expect(
@@ -652,7 +652,7 @@ test("Code Apply names a plaintext credential field and keeps the code unapplied
     await page.getByRole("button", { name: "Apply code changes" }).click();
     await expect(
       page.getByText(
-        /Device secret reference at sinks.output.request.headers.Authorization is not supported in this field/,
+        /Device secret reference at (?:Line \d+: )?sinks.output.request.headers.Authorization is not supported in this field/,
       ),
     ).toBeVisible();
     expect(
