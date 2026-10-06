@@ -4,6 +4,38 @@ const tabs = [...document.querySelectorAll('[role="tab"][data-step]')];
 const panels = [...document.querySelectorAll('[role="tabpanel"][data-step-panel]')];
 const flowPoints = [...document.querySelectorAll('.flow-point')];
 
+const artwork = document.querySelector('.hero-art-sculpture');
+if (artwork) {
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const finePointer = matchMedia('(hover: hover) and (pointer: fine)');
+  let lightFrame = null;
+  let pointer;
+  const dimArtwork = () => {
+    if (lightFrame !== null) cancelAnimationFrame(lightFrame);
+    lightFrame = null;
+    artwork.classList.remove('is-lit');
+  };
+  const followLight = (event) => {
+    if (!finePointer.matches || event.pointerType === 'touch') return;
+    pointer = { x: event.clientX, y: event.clientY };
+    if (lightFrame !== null) return;
+    lightFrame = requestAnimationFrame(() => {
+      lightFrame = null;
+      const bounds = artwork.getBoundingClientRect();
+      artwork.style.setProperty('--light-x', `${pointer.x - bounds.left}px`);
+      artwork.style.setProperty('--light-y', `${pointer.y - bounds.top}px`);
+      artwork.classList.add('is-lit');
+    });
+  };
+  artwork.addEventListener('pointerenter', followLight);
+  artwork.addEventListener('pointermove', followLight);
+  artwork.addEventListener('pointerleave', dimArtwork);
+  artwork.addEventListener('pointercancel', dimArtwork);
+  window.addEventListener('blur', dimArtwork);
+  reducedMotion.addEventListener('change', dimArtwork);
+  finePointer.addEventListener('change', dimArtwork);
+}
+
 for (const menu of document.querySelectorAll('.tools-menu')) {
   document.addEventListener('pointerdown', (event) => {
     if (!menu.contains(event.target)) menu.open = false;

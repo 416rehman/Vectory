@@ -65,6 +65,12 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline
 .hero-actions { display: flex; align-items: center; gap: 19px; flex-wrap: wrap; margin-top: 30px; }
 .hero-art { width: 100%; margin-top: clamp(-220px, -14vw, -110px); padding-bottom: 54px; pointer-events: none; }
 .hero-art img { width: 100%; max-width: none; height: auto; }
+.hero-art-sculpture { position: relative; pointer-events: auto; }
+.hero-art-light { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .5s ease; mask-image: radial-gradient(circle clamp(150px, 18vw, 290px) at var(--light-x, 50%) var(--light-y, 50%), #000 20%, transparent 75%); }
+.hero-art-sculpture.is-lit .hero-art-light { opacity: 1; }
+.hero-art-light img { position: relative; filter: brightness(1.45) saturate(1.2); }
+.hero-bead-glow { position: absolute; left: var(--x); top: var(--y); width: var(--size); aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%; background: radial-gradient(circle, rgb(185 222 255 / 95%) 0, rgb(80 140 255 / 65%) 18%, rgb(72 102 245 / 25%) 40%, transparent 70%); }
+.hero-bead-glow-lime { background: radial-gradient(circle, rgb(244 255 184 / 95%) 0, rgb(217 251 85 / 75%) 18%, rgb(183 221 53 / 30%) 40%, transparent 70%); }
 .button { display: inline-flex; min-height: 52px; align-items: center; justify-content: space-between; gap: 25px; padding: 0 21px; border: 1px solid currentColor; text-decoration: none; font-size: 14px; font-weight: 650; white-space: nowrap; transition: transform .18s ease, background-color .18s ease, color .18s ease; }
 .button:hover { transform: translateY(-2px); }
 .button-dark { background: var(--ink); color: #fff; border-color: var(--ink); }
@@ -291,9 +297,13 @@ h2, h3, p { overflow-wrap: break-word; }
   .browser-tool-copy > p { font-size: 19px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .hero-art-light { transition: none; }
   html { scroll-behavior: auto; }
   .button { transition: none; }
   .button:hover { transform: none; }
   .step-panel { animation: none; }
   .walkthrough-nav button::before, .flow-point::before { transition: none; }
+}
+@media (hover: none), (pointer: coarse) {
+  .hero-art-light { display: none; }
 }

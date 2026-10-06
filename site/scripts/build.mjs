@@ -53,10 +53,14 @@ await fs.mkdir(path.join(output, "help"), { recursive: true });
 await fs.cp(helpOutput, path.join(output, "help"), { recursive: true });
 await fs.cp(designerOutput, path.join(output, "designer"), { recursive: true });
 await fs.rename(path.join(output, "designer/designer.html"), path.join(output, "designer/index.html"));
-const landingSource = await fs.readFile(path.join(siteRoot, "src/index.html"), "utf8");
-const stylesheetVersion = createHash("sha256").update(await fs.readFile(path.join(siteRoot, "src/site.css"))).digest("hex").slice(0, 16);
-assert(landingSource.includes('href="/site.css"'), "Landing stylesheet link is missing");
-await fs.writeFile(path.join(output, "index.html"), landingSource.replace('href="/site.css"', `href="/site.css?v=${stylesheetVersion}"`));
+let landingSource = await fs.readFile(path.join(siteRoot, "src/index.html"), "utf8");
+for (const [name, attribute] of [["site.css", "href"], ["site.js", "src"]]) {
+  const version = createHash("sha256").update(await fs.readFile(path.join(siteRoot, "src", name))).digest("hex").slice(0, 16);
+  const link = `${attribute}="/${name}"`;
+  assert(landingSource.includes(link), `Landing asset link is missing: ${name}`);
+  landingSource = landingSource.replace(link, `${attribute}="/${name}?v=${version}"`);
+}
+await fs.writeFile(path.join(output, "index.html"), landingSource);
 await fs.copyFile(path.join(siteRoot, "src/site.css"), path.join(output, "site.css"));
 await fs.copyFile(path.join(siteRoot, "src/site.js"), path.join(output, "site.js"));
 await fs.copyFile(path.join(repoRoot, "deploy/install.sh"), path.join(output, "install.sh"));

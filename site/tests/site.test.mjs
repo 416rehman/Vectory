@@ -46,7 +46,8 @@ test("public landing's local destinations exist", async () => {
     assert((await fs.stat(target).catch(() => null))?.isFile(), `Missing local destination ${href}`);
   }
   for (const [, src] of landing.matchAll(/\bsrc="(\/[^"]+)"/g)) {
-    assert((await fs.stat(path.join(output, src)).catch(() => null))?.isFile(), `Missing local asset ${src}`);
+    const pathname = new URL(src, "https://vectory.ahmadz.ai/").pathname;
+    assert((await fs.stat(path.join(output, pathname)).catch(() => null))?.isFile(), `Missing local asset ${src}`);
   }
 });
 
