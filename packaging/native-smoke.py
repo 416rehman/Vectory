@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import secrets
 import shutil
 import ssl
@@ -24,6 +25,50 @@ import urllib.error
 import urllib.request
 
 UNITS = ['vectory-native-' + role + '.service' for role in ('validator', 'certificates', 'server', 'proxy')]
+PRIVATE_LOG_LIMIT = 1024 * 1024
+FAILURE_PHASES = frozenset(('argument_parse', 'host_preflight', 'retained_instance', 'payload_verification',
+    'payload_install', 'service_identity', 'state_prepare', 'configuration_install', 'unit_verification',
+    'validator_start', 'validator_readiness', 'validator_isolation', 'public_start', 'public_readiness',
+    'final_isolation', 'initialization_status'))
+
+
+def native_failure_marker(output, launcher_line_count, returncode):
+    """Accept only one static diagnostic; never return surrounding private text."""
+    if (not isinstance(output, bytes) or len(output) > PRIVATE_LOG_LIMIT or
+            type(launcher_line_count) is not int or not 0 < launcher_line_count <= 65536 or
+            type(returncode) is not int or not 0 < returncode <= 255):
+        return None
+    markers = [line for line in output.splitlines() if b'VECTORY_NATIVE_FAILURE' in line]
+    if len(markers) != 1:
+        return None
+    match = re.fullmatch(rb'VECTORY_NATIVE_FAILURE phase=([a-z_]+) status=([1-9][0-9]{0,2}) line=([1-9][0-9]{0,5})', markers[0])
+    if match is None:
+        return None
+    phase = match[1].decode('ascii')
+    status, line = int(match[2]), int(match[3])
+    if phase not in FAILURE_PHASES or status != returncode or not 0 < line <= launcher_line_count:
+        return None
+    return {'phase': phase, 'status': status, 'line': line}
+
+
+def check_native_start(outcome, log, launcher_source, operation):
+    operation = operation if operation in ('startup', 'restart') else 'startup'
+    if outcome.returncode == 0:
+        return
+    marker = None
+    try:
+        with log.open('rb') as private:
+            output = private.read(PRIVATE_LOG_LIMIT + 1)
+        with launcher_source.open('rb') as source:
+            launcher = source.read(65537)
+        if len(launcher) <= 65536:
+            marker = native_failure_marker(output, len(launcher.splitlines()), outcome.returncode)
+    except OSError:
+        pass
+    description = 'Native ' + operation + ' failed'
+    if marker is not None:
+        description += f" at phase={marker['phase']} line={marker['line']} status={marker['status']}"
+    raise RuntimeError(description + '; private output was not published')
 
 
 def run(*args, check=True, env=None, timeout=180):
@@ -95,7 +140,7 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
             with log.open('wb') as private:
                 outcome = subprocess.run(install_command, env=environment,
                     stdout=private, stderr=private, timeout=240)
-            check(outcome.returncode == 0, 'Native startup failed; private startup output was not published')
+            check_native_start(outcome, log, kit / 'deploy/native/start.sh', 'startup')
             with log.open('rb') as private:
                 startup_output = private.read(1024 * 1024 + 1)
             check(len(startup_output) <= 1024 * 1024, 'Native startup output exceeded its private-log bound')
@@ -238,7 +283,7 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
             with log.open('wb') as private:
                 outcome = subprocess.run([launcher, *arguments], env=environment,
                     stdout=private, stderr=private, timeout=240)
-            check(outcome.returncode == 0, 'Native restart failed; private restart output was not published')
+            check_native_start(outcome, log, kit / 'deploy/native/start.sh', 'restart')
             with log.open('rb') as private:
                 restart_output = private.read(1024 * 1024 + 1)
             check(len(restart_output) <= 1024 * 1024, 'Native restart output exceeded its private-log bound')

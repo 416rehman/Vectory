@@ -2,8 +2,21 @@
 # Install and run the authenticated prebuilt Linux server. No compilation.
 set -euo pipefail
 umask 077
+native_failure_phase=argument_parse
+native_failure_line=0
+native_failure_emitted=0
+native_failure() {
+  local status="$1" line="$2"
+  [[ "$status" != 0 && "$native_failure_emitted" == 0 ]] || return 0
+  native_failure_emitted=1
+  [[ "$native_failure_line" == 0 ]] || line="$native_failure_line"
+  [[ "$line" =~ ^[1-9][0-9]*$ ]] || line=1
+  printf 'VECTORY_NATIVE_FAILURE phase=%s status=%s line=%s\n' "$native_failure_phase" "$status" "$line" >&2
+}
+trap 'native_failure_line=$LINENO' ERR
+trap 'native_failure "$?" "$LINENO"' EXIT
 bundle="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-fail() { printf 'Vectory: %s\n' "$*" >&2; exit 1; }
+fail() { native_failure_line="${BASH_LINENO[0]:-$LINENO}"; printf 'Vectory: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
 usage() {
   say 'Usage: sudo ./start.sh start --hostname DNS [--email ACME-EMAIL] [--tls-mode automatic|local] --release-dir DIR'
@@ -26,6 +39,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift 2
 done
+native_failure_phase=host_preflight
 [[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] || fail 'This native server kit supports Linux x86-64.'
 [[ "$(id -u)" == 0 ]] || fail 'Run this command with sudo.'
 for tool in systemctl systemd-analyze sha256sum tar realpath stat getent install curl cmp awk sed find ps cut readlink groupadd useradd wc; do
@@ -56,6 +70,25 @@ root_directory() {
   done
 }
 regular() { [[ -f "$1" && ! -L "$1" && "$(realpath -e "$1")" == "$1" ]] || fail 'A required file is missing or linked.'; }
+verify_service_units() {
+  local unit directory="$work/verify-units" binary="$kit/validator-root/usr/local/bin/vector-validator"
+  local -a paths=()
+  regular "$binary"
+  [[ -x "$binary" ]] || fail 'The authenticated validator executable is not executable.'
+  install -d -m 0700 "$directory"
+  for unit in "${units[@]}"; do
+    regular "$work/$unit.service"
+    cp -- "$work/$unit.service" "$directory/$unit.service"
+    paths+=("$directory/$unit.service")
+  done
+  unit="$directory/vectory-native-validator.service"
+  [[ "$(awk '/^ExecStart=/ {total++} $0=="ExecStart=/usr/local/bin/vector-validator" {exact++} END {print (total+0) ":" (exact+0)}' "$unit")" == 1:1 ]] || fail 'The validator unit must have its one exact authenticated start command.'
+  # The static verifier resolves executables against the host, not the unit's
+  # RootDirectory. Rewrite only its private verification copy to the same
+  # authenticated executable. The installed service keeps its jailed path.
+  sed "s|^ExecStart=/usr/local/bin/vector-validator$|ExecStart=$binary|" "$work/vectory-native-validator.service" > "$unit"
+  systemd-analyze verify "${paths[@]}" || fail 'The host refused the native service definitions.'
+}
 load_record() {
   root_directory "$config"
   regular "$record"
@@ -132,6 +165,7 @@ health() {
   curl --noproxy '*' --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/api/v1/status >/dev/null || return 1
   browser_status >/dev/null || return 1
 }
+native_failure_phase=retained_instance
 if [[ "$action" != start ]]; then
   load_record
   hostname="$stored_hostname" tls_mode="$stored_mode"
@@ -152,6 +186,7 @@ if [[ -e "$record" ]]; then
   fi
   if [[ "$proof" == signed && -z "$release_dir" && -z "$candidate_root" ]]; then release_dir="$config/release"; fi
 fi
+native_failure_phase=payload_verification
 [[ "$hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ && "$hostname" != *..* ]] || fail 'Provide the DNS hostname with --hostname.'
 case "$tls_mode" in automatic|local) ;; *) fail '--tls-mode must be automatic or local.' ;; esac
 [[ -z "$email" || "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || fail 'Provide a valid ACME email address.'
@@ -165,15 +200,16 @@ root_directory /var/lib
 work="$(mktemp -d /var/lib/.vectory-native-install.XXXXXX)"
 public_started=
 finish_install() {
-  local result=$1
+  local result=$1 line=$2
   trap - EXIT
+  native_failure "$result" "$line"
   if [[ "$result" != 0 && -n "$public_started" ]]; then
     systemctl stop vectory-native-proxy vectory-native-server vectory-native-certificates vectory-native-validator || say 'Could not stop every native service; inspect them before retrying.'
   fi
   rm -rf -- "$work"
   exit "$result"
 }
-trap 'finish_install "$?"' EXIT
+trap 'finish_install "$?" "$LINENO"' EXIT
 verify_inventory() {
   local directory="$1" digest name extra count=0
   regular "$directory/SHA256SUMS"
@@ -223,6 +259,7 @@ else
 fi
 # Every installed byte comes from the private authenticated copy, never from
 # a mutable download directory after its verification.
+native_failure_phase=payload_install
 root_directory /opt
 if [[ ! -e /opt/vectory-server ]]; then install -d -m 0755 /opt/vectory-server; fi
 root_directory /opt/vectory-server
@@ -239,6 +276,7 @@ else
 fi
 kit="$target"
 install -d -m 0755 "$kit/validator-root/tmp" "$kit/validator-root/run" "$kit/validator-root/run/vectory-validator"
+native_failure_phase=service_identity
 for account in vectory-server vectory-validator vectory-proxy; do
   if ! getent group "$account" >/dev/null; then groupadd --system "$account"; fi
   if ! getent passwd "$account" >/dev/null; then useradd --system --gid "$account" --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$account"; fi
@@ -247,6 +285,7 @@ for account in vectory-server vectory-validator vectory-proxy; do
   [[ "$shell" == /usr/sbin/nologin || "$shell" == /sbin/nologin || "$shell" == /bin/false ]] || fail 'Native service accounts must have no login shell.'
 done
 [[ "$(id -u vectory-server)" != "$(id -u vectory-validator)" && "$(id -u vectory-proxy)" != "$(id -u vectory-validator)" ]] || fail 'The validator must have a separate user.'
+native_failure_phase=state_prepare
 root_directory /var/lib
 if [[ ! -e "$state" ]]; then install -d -m 0755 "$state"; fi
 root_directory "$state"
@@ -263,6 +302,7 @@ if [[ ! -e "$state/secrets/bootstrap" ]]; then
 fi
 regular "$state/secrets/bootstrap"
 [[ "$(stat -c %u:%a "$state/secrets/bootstrap")" == "$(id -u vectory-server):600" ]] || fail 'The retained bootstrap file is not private.'
+native_failure_phase=configuration_install
 root_directory /etc
 if [[ ! -e "$config" ]]; then install -d -m 0755 "$config"; fi
 root_directory "$config"
@@ -305,29 +345,38 @@ install -m 0640 -o root -g vectory-server "$work/server.env" "$config/server.env
 install -m 0640 -o root -g vectory-server "$work/certificates.env" "$config/certificates.env"
 install -m 0644 "$work/Caddyfile" "$config/Caddyfile"
 install -m 0600 "$work/instance.conf" "$record"
+native_failure_phase=unit_verification
 for unit in "${units[@]}"; do
   regular "$kit/deploy/native/$unit.service"
   [[ ! -L "/etc/systemd/system/$unit.service" ]] || fail 'A native unit path is linked.'
   sed "s|@KIT_ROOT@|$kit|g" "$kit/deploy/native/$unit.service" > "$work/$unit.service"
   install -m 0644 "$work/$unit.service" "/etc/systemd/system/$unit.service"
+  cmp -- "$work/$unit.service" "/etc/systemd/system/$unit.service" >/dev/null || fail 'An installed native unit differs from its authenticated definition.'
 done
-systemd-analyze verify "${units[@]/%/.service}" || fail 'The host refused the native service definitions.'
+verify_service_units
 systemctl daemon-reload
 systemctl enable "${units[@]/%/.service}" >/dev/null
 # Public services remain stopped until the worker's actual namespaces and
 # kernel resource limits have been checked, including on an explicit retry.
 public_started=1
+native_failure_phase=validator_start
 systemctl stop vectory-native-proxy vectory-native-server vectory-native-certificates
 systemctl start vectory-native-validator
+native_failure_phase=validator_readiness
 ready=
 for attempt in {1..30}; do if worker_health; then ready=true; break; fi; sleep 1; done
 [[ "$ready" == true ]] || fail 'The isolated validator did not become ready. No public service was started.'
+native_failure_phase=validator_isolation
 isolation_check
+native_failure_phase=public_start
 systemctl start vectory-native-certificates vectory-native-server vectory-native-proxy
+native_failure_phase=public_readiness
 ready=
 for attempt in {1..60}; do if health; then ready=true; break; fi; sleep 1; done
 [[ "$ready" == true ]] || fail 'The services did not become ready; inspect their journals. State is retained for an explicit retry.'
+native_failure_phase=final_isolation
 isolation_check
+native_failure_phase=initialization_status
 status="$(browser_status)" || fail 'Could not read the local server initialization state over verified HTTPS.'
 [[ "$status" =~ \"initialized\"[[:space:]]*:[[:space:]]*(true|false) ]] || fail 'The local server returned no initialization state.'
 initialized="${BASH_REMATCH[1]}"

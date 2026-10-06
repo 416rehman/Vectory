@@ -42,7 +42,7 @@ What each part needs, where that is established. "Not yet established" means not
 | x86-64 CPU | x86-64-v1 | Agents are built with `GOAMD64=v1`, the baseline instruction set. |
 | Arm64 CPU | ARMv8.0 | Agents use Go's default, `GOARM64=v8.0`. |
 | Vector on a device | 0.58.0 | Any 0.58.x release is accepted; pre-releases are refused. Vector's own OS requirements aren't recorded here yet: check the [Vector 0.58.0 release notes](https://vector.dev/releases/0.58.0/). |
-| Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
+| Server host | [By installation method](#server-installation-choices) | Docker CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older Docker versions aren't tested. |
 | Browser | Not yet established | Chromium is tested on every change; Firefox and WebKit run four first-use flows on demand (see [Browsers](#browsers)). |
 
 The prebuilt server images and local evaluation kit are Linux x86-64. Normal installation needs no Rust, Go, Node or compiler. The Docker Desktop bootstrap runs those same signed images and original Compose templates on Windows or macOS. Apple silicon uses explicit amd64 emulation; there is no native Arm server image. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
@@ -53,7 +53,7 @@ Every change runs the same automated checks on GitHub-hosted runners. They prove
 
 | Runner | Versions | What passes | Not covered |
 | --- | --- | --- | --- |
-| Ubuntu 24.04 | Vector 0.58.0, Go 1.26.8, Rust 1.94.0, Node 22, Chromium from Playwright 1.63.0 | Server, dashboard and agent unit tests. The agent's native tests with real Vector: validate, apply, reload, drift repair, rollback, metrics, device secrets and full mode. The server's validator tests with real Vector. An adversarial TLS and protocol suite against a running server. Browser checks of the dashboard and this Help center. Both container images build. | Installing under systemd, reboot, upgrade, starting Compose, Linux on Arm64 |
+| Ubuntu 24.04 | Vector 0.58.0, Go 1.26.8, Rust 1.94.0, Node 22, Chromium from Playwright 1.63.0 | Server, dashboard and agent unit tests. The agent's native tests with real Vector: validate, apply, reload, drift repair, rollback, metrics, device secrets and full mode. The server's validator tests with real Vector. An adversarial TLS and protocol suite against a running server. Browser checks of the dashboard and this Help center. Both container images build. Full Compose startup, healthy services, administrator setup, device enrollment and validator isolation. | Agent systemd service installation, reboot, upgrade, Linux on Arm64 |
 | Windows Server 2025 | Vector 0.58.0, Go 1.26.8 | The agent's unit and native tests with real Vector. Windows restarts Vector instead of reloading it. | The Windows service, the MSI, reboot, upgrade |
 | macOS 15 on Apple silicon | Vector 0.58.0, Go 1.26.8 | The agent's unit and native tests with real Vector, including reload and rollback. | The package, launchd, reboot, upgrade |
 
