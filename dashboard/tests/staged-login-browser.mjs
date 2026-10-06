@@ -365,6 +365,16 @@ try {
       const f = await fixture();
       try {
         await expect(
+          f.page.getByRole("link", { name: "Notices (opens in a new tab)" }),
+        ).toHaveAttribute("href", "/NOTICE.txt");
+        const notices = await f.page.request.get(
+          `http://127.0.0.1:${port}/NOTICE.txt`,
+        );
+        expect(notices.ok()).toBe(true);
+        expect(await notices.text()).toContain(
+          "Copyright (c) Meta Platforms, Inc. and affiliates.",
+        );
+        await expect(
           f.page.getByLabel("Authenticator code", { exact: true }),
         ).toHaveCount(0);
         await expect(

@@ -1,0 +1,318 @@
+{
+  "capture": {
+    "architecture": "x64",
+    "executable_sha256": "019c41f4ae28543dd8e275a631f4d7b67a6aed3e3fba4c0ed37c4bdf054ac3a6",
+    "inventory_command": [
+      "vector",
+      "list",
+      "--format",
+      "json"
+    ],
+    "platform": "win32",
+    "release": "vector 0.58.0 (x86_64-pc-windows-msvc 2bcad9b 2026-08-26 13:37:07.557544670)",
+    "schema_command": [
+      "vector",
+      "generate-schema"
+    ],
+    "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
+    "vector_version": "0.58.0"
+  },
+  "captured_schema_sha256": "6fb93485e8ee61aa54ce59910e0dfdb9212f9af4a14fd39093fb207dcbf2e30d",
+  "experimental_upstream_schema": true,
+  "generated_catalog_sha256": "a41dd43b9f8f2a1da1fff4c9a6274ab71f9458ee7bf0b11dc1ee256261f1c168",
+  "generated_schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
+  "generator_sha256": "7656d09ed22a14c3b4c7f10a083ebf99cfcc9cf1ca63a886eeeca3b6f43f04e2",
+  "inventory_verification": "Exact kind/type set equals the pinned official generated CUE inventory after excluding unit_test and unit_test_stream.",
+  "license_file": "LICENSE",
+  "native_components": 125,
+  "reviewed_credentials": [
+    {
+      "definition": "vector_core::tls::settings::TlsConfig",
+      "pointer": "/properties/key_pass",
+      "reason": "passphrase of the TLS private key"
+    },
+    {
+      "definition": "vector::common::mqtt::MqttCommonConfig",
+      "pointer": "/properties/password",
+      "reason": "MQTT password"
+    },
+    {
+      "definition": "vector::sources::okta::client::OktaConfig",
+      "pointer": "/properties/token",
+      "reason": "Okta API token"
+    },
+    {
+      "definition": "vector::sinks::prometheus::remote_write::config::RemoteWriteConfig",
+      "pointer": "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/password",
+      "reason": "basic authentication password"
+    },
+    {
+      "definition": "vector::sinks::redis::config::RedisSinkConfig",
+      "pointer": "/allOf/0/properties/sentinel_connect/oneOf/1/properties/connections/oneOf/1/properties/password",
+      "reason": "Redis Sentinel connection password"
+    },
+    {
+      "definition": "vector::http::Auth",
+      "pointer": "/oneOf/0/properties/user",
+      "reason": "basic authentication user"
+    },
+    {
+      "definition": "vector::sinks::elasticsearch::config::ElasticsearchConfig",
+      "pointer": "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/user",
+      "reason": "basic authentication user"
+    },
+    {
+      "definition": "vector::sinks::prometheus::remote_write::config::RemoteWriteConfig",
+      "pointer": "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/user",
+      "reason": "basic authentication user"
+    },
+    {
+      "definition": "vector::common::http::server_auth::HttpServerAuthConfig",
+      "pointer": "/oneOf/0/properties/username",
+      "reason": "basic authentication user"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/LICENSE"
+    },
+    {
+      "path": "src/sources/mod.rs",
+      "sha256": "4ba06b34f21689329da06fdc9e04b6177fdf6f715f13247e2697881cd318729f",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources/mod.rs"
+    },
+    {
+      "path": "src/transforms/mod.rs",
+      "sha256": "6a412e8e586c689a8a8c333d51791ba904b95130cb5d82f3d2d075a484446cc0",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms/mod.rs"
+    },
+    {
+      "path": "src/sinks/mod.rs",
+      "sha256": "ddcf0f9f8a03513ac2b4bc2b6276a41eed40879d1a1ac82dbb1659ddf985a09d",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks/mod.rs"
+    },
+    {
+      "path": "src/sources/dnstap/mod.rs",
+      "sha256": "ab6f0b51e0ba37c074dfc79c9536ad6f8435df463bda12adbbabeeb859755598",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources/dnstap/mod.rs"
+    },
+    {
+      "path": "src/sources/file_descriptors/file_descriptor.rs",
+      "sha256": "259dd86e913a4307f859f3bd588410a04c4e36041d529e5d1c8df465dec51ee1",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources/file_descriptors/file_descriptor.rs"
+    },
+    {
+      "path": "src/sources/journald.rs",
+      "sha256": "e357b2efc58b822d19088b398f467b1c56af3e0bbfd56fb1ee859ce909c9aeaa",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources/journald.rs"
+    },
+    {
+      "path": "src/sources/http_server.rs",
+      "sha256": "56c98b549a6f8dd1172181059211bb603a8f95856872cf924e02c732b7c4f424",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources/http_server.rs"
+    },
+    {
+      "path": "src/sinks/greptimedb/metrics/config.rs",
+      "sha256": "ec505d66844dd30c7cd6f686a88bf86c0ea3d4f787450f5f658f2a5d3e9bd32b",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks/greptimedb/metrics/config.rs"
+    },
+    {
+      "path": "website/cue/reference/components/sources/dnstap.cue",
+      "sha256": "ed044729687b6330dd5ccb87a1ffad433918c6d7eb07f5320158917b66322e9e",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/dnstap.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/dnstap.cue",
+      "sha256": "9ada5b17c4d1fb5177ac27904fb6086f9a5940e8aad160286ca606a5827ef1dc",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/dnstap.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/file_descriptor.cue",
+      "sha256": "3686b8b13ca8e2b600ecc9225da9a15094c295cfe2d957cffe21c20ef4ae1006",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/file_descriptor.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/file_descriptor.cue",
+      "sha256": "f6a323d6e69282a9032bad3646a1d5e3064693b5d01bf5862a44d20f35f0c051",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/file_descriptor.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/journald.cue",
+      "sha256": "667dad4762a7e9c2fe3007e9caff28d92f78035c94e1faf90718c02673f51cc2",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/journald.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/journald.cue",
+      "sha256": "510fef2945780d9811ad8362949b3d5bc917c6e4e37fc880ef1acd670ffe24a1",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/journald.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/socket.cue",
+      "sha256": "4c7bdd7855b07f4881b8c8e66e16060c90eab3e3cec81547982422285af3b738",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/socket.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/socket.cue",
+      "sha256": "da804d4ac357e34714d9aa22efee58b5ec821f94d4281ef61f5583b420ec704c",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/socket.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/syslog.cue",
+      "sha256": "00f78d896ff141300ac9dbb8ca80d6afd40b79cfeb409c8cc356fbe9be4ca754",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/syslog.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/syslog.cue",
+      "sha256": "f2c7c3704931ed1f92142feab1f430feb5a3f9f6a7836bfc16ab1a3a97a3f692",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/syslog.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/fluent.cue",
+      "sha256": "1bde937e0369c3d12e399a9fa4b0bf3a69977fe9ff68e93b2171856ab0652e3d",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/fluent.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/fluent.cue",
+      "sha256": "935f3fb6cd93a74d921536cc1a2f2434d9c3c5f45824dbfa83769c2655e20bd2",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/fluent.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/statsd.cue",
+      "sha256": "5baf06488487d360ac2ba3f136cd269a1332a9b3064df71e5d402f854d700f3b",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/statsd.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sources/generated/statsd.cue",
+      "sha256": "8101e47522a856464823ad359c74b5808606eea3295ffeb941a09faeb76c8050",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/statsd.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sinks/statsd.cue",
+      "sha256": "edb6ea62a7706da23ad22716fd97aa611e244507bbe3fd160fffc6fae18944fb",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sinks/statsd.cue"
+    },
+    {
+      "path": "website/cue/reference/components/sinks/generated/statsd.cue",
+      "sha256": "4d9b0583f2802bf2407c5f63f35d6e7d9491c01dbbfb137826c441d3249b5144",
+      "url": "https://raw.githubusercontent.com/vectordotdev/vector/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sinks/generated/statsd.cue"
+    },
+    {
+      "path": "official-component-inventory.json",
+      "sha256": "569c5284fc24679fddff726c90eda0c70f70ffe1f1d2cc5496463dd78980d67e"
+    },
+    {
+      "path": "vector-list-0.58.0.json",
+      "sha256": "fbc4463cc3b86d59400f84444631ce5ddc14eefc0c8ed5a09f0fba8ed08190ba"
+    }
+  ],
+  "supplemental_branches": [
+    {
+      "fields": [
+        "decoding",
+        "framing",
+        "host_key",
+        "log_namespace",
+        "mode",
+        "path",
+        "socket_file_mode"
+      ],
+      "kind": "sources",
+      "mode": "unix_datagram",
+      "source": "website/cue/reference/components/sources/generated/socket.cue",
+      "source_sha256": "da804d4ac357e34714d9aa22efee58b5ec821f94d4281ef61f5583b420ec704c",
+      "type": "socket"
+    },
+    {
+      "fields": [
+        "decoding",
+        "framing",
+        "host_key",
+        "log_namespace",
+        "mode",
+        "path",
+        "socket_file_mode"
+      ],
+      "kind": "sources",
+      "mode": "unix_stream",
+      "source": "website/cue/reference/components/sources/generated/socket.cue",
+      "source_sha256": "da804d4ac357e34714d9aa22efee58b5ec821f94d4281ef61f5583b420ec704c",
+      "type": "socket"
+    },
+    {
+      "fields": [
+        "host_key",
+        "log_namespace",
+        "max_length",
+        "mode",
+        "path",
+        "socket_file_mode"
+      ],
+      "kind": "sources",
+      "mode": "unix",
+      "source": "website/cue/reference/components/sources/generated/syslog.cue",
+      "source_sha256": "f2c7c3704931ed1f92142feab1f430feb5a3f9f6a7836bfc16ab1a3a97a3f692",
+      "type": "syslog"
+    },
+    {
+      "fields": [
+        "log_namespace",
+        "mode",
+        "path",
+        "socket_file_mode"
+      ],
+      "kind": "sources",
+      "mode": "unix",
+      "source": "website/cue/reference/components/sources/generated/fluent.cue",
+      "source_sha256": "935f3fb6cd93a74d921536cc1a2f2434d9c3c5f45824dbfa83769c2655e20bd2",
+      "type": "fluent"
+    },
+    {
+      "fields": [
+        "convert_to",
+        "mode",
+        "path",
+        "sanitize"
+      ],
+      "kind": "sources",
+      "mode": "unix",
+      "source": "website/cue/reference/components/sources/generated/statsd.cue",
+      "source_sha256": "8101e47522a856464823ad359c74b5808606eea3295ffeb941a09faeb76c8050",
+      "type": "statsd"
+    },
+    {
+      "fields": [
+        "acknowledgements",
+        "batch",
+        "default_namespace",
+        "mode",
+        "path",
+        "send_buffer_size",
+        "unix_mode"
+      ],
+      "kind": "sinks",
+      "mode": "unix",
+      "source": "website/cue/reference/components/sinks/generated/statsd.cue",
+      "source_sha256": "4d9b0583f2802bf2407c5f63f35d6e7d9491c01dbbfb137826c441d3249b5144",
+      "type": "statsd"
+    }
+  ],
+  "supplemental_components": [
+    "dnstap",
+    "file_descriptor",
+    "journald"
+  ],
+  "transformations": [
+    "Remove duplicate windows_event_log registration from generated enum",
+    "Exclude internal unit test component registrations",
+    "Add per-component schemas including common outer fields",
+    "Project three Unix generated CUE metadata documents with explicit coverage limitations",
+    "Restore six Unix socket mode branches in five cross-platform components from pinned generated CUE",
+    "Mark credential fields with _metadata.sensitive: every field whose type resolves to SensitiveString, plus the reviewed plain-string credentials, and list each component's sensitive_fields"
+  ],
+  "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
+  "upstream_license": "MPL-2.0",
+  "upstream_repository": "https://github.com/vectordotdev/vector",
+  "vector_version": "0.58.0"
+}

@@ -40,6 +40,7 @@ FROM timberio/vector:0.58.0-debian@sha256:1c1ea358c617ea0b23003d5af87f7a678b30f8
 USER root
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY --from=server /src/server/target/release/vector-validator /usr/local/bin/vector-validator
+COPY LICENSE NOTICE /app/legal/
 USER 10002:10002
 WORKDIR /tmp
 ENV VECTORY_VECTOR_BINARY=/usr/bin/vector VECTORY_VALIDATOR_ADDR=0.0.0.0:8081
@@ -56,6 +57,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 COPY --from=server /src/server/target/release/vectory-server /usr/local/bin/vectory-server
 COPY --from=server /src/server/target/release/vectory-admin /usr/local/bin/vectory-admin
 COPY --from=dashboard /src/dashboard/dist /app/dashboard
+COPY LICENSE NOTICE /app/legal/
+COPY NOTICE /app/dashboard/NOTICE.txt
 # Bundled agents live apart from /app/releases, which an operator mirror may
 # mount over; a mirror entry replaces the bundled build for its platform.
 COPY --from=agents /out /app/agent-releases

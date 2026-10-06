@@ -1,4 +1,5 @@
 """Offline verifier regressions with synthetic archive bytes, never real installs."""
+import base64
 import gzip
 import hashlib
 import importlib.util
@@ -325,7 +326,8 @@ class CandidateVerification(unittest.TestCase):
             }[os_name]
             members = {
                 'vectory.exe' if os_name == 'windows' else 'vectory': binary,
-                'LICENSE': b'license', 'NOTICE': b'notice',
+                'LICENSE': self.non_agent_bytes('LICENSE'),
+                'NOTICE': self.non_agent_bytes('NOTICE'),
                 'docs/AGENT-INSTALL.md': b'install',
                 'docs/COMPATIBILITY.md': b'compatibility',
                 'RELEASE-STATUS.txt': b'UNSIGNED DEVELOPMENT BUILD',
@@ -355,6 +357,77 @@ class CandidateVerification(unittest.TestCase):
         self.checksums()
 
     @staticmethod
+    def source_fixture():
+        prefix = 'pagefind-1.5.2-source/'
+        inputs = [{'name': f'dependency-{index:02d}', 'version': '1.0.0',
+                   'url': f'https://example.invalid/dependency-{index:02d}.crate',
+                   'sha256': hashlib.sha256(str(index).encode()).hexdigest(),
+                   'path': f'vendor/dependency-{index:02d}'}
+                  for index in range(20)]
+        inputs.extend([
+            {'name': 'pagefind_microjson', 'version': '0.1.4',
+             'url': 'https://example.invalid/pagefind_microjson.crate', 'sha256': 'a' * 64,
+             'path': 'vendor/pagefind_microjson-0.1.4'},
+            {'name': 'pagefind_web', 'version': '0.0.0',
+             'url': f'https://github.com/CloudCannon/pagefind/archive/{verifier.PAGEFIND_COMMIT}.tar.gz',
+             'sha256': 'b' * 64, 'upstream_commit': verifier.PAGEFIND_COMMIT,
+             'path': 'upstream/pagefind_web'},
+            {'name': 'Snowball', 'version': '3.0.0',
+             'url': f'https://codeload.github.com/snowballstem/snowball/tar.gz/{verifier.SNOWBALL_COMMIT}',
+             'sha256': verifier.SNOWBALL_SHA256, 'upstream_commit': verifier.SNOWBALL_COMMIT,
+             'path': 'snowball'},
+        ])
+        members = {prefix + 'REBUILD.md': b'# Synthetic rebuild recipe\n'}
+        members.update({prefix + item['path'] + '/Cargo.toml':
+                        f'[package]\nname = "{item["name"]}"\n'.encode()
+                        for item in inputs if item['name'] != 'Snowball'})
+        members[prefix + 'snowball/algorithms/english.sbl'] = b'/* Synthetic algorithm */\n'
+        members[prefix + 'snowball/COPYING'] = b'Synthetic source license\n'
+        ui_inputs = []
+        ui_locked = {}
+        for name, version in verifier.PAGEFIND_UI_INPUTS.items():
+            url = f'https://registry.npmjs.org/{name}/-/{name}-{version}.tgz'
+            integrity = 'sha512-' + base64.b64encode(hashlib.sha512(name.encode()).digest()).decode()
+            path = f'ui-vendor/{name}-{version}'
+            ui_inputs.append({'name': name, 'version': version, 'url': url,
+                              'sha256': hashlib.sha256(name.encode()).hexdigest(),
+                              'integrity': integrity, 'path': path})
+            ui_locked['node_modules/' + name] = {'version': version, 'resolved': url,
+                                                 'integrity': integrity}
+            members[prefix + path + '/package.json'] = json.dumps({'name': name, 'version': version}).encode()
+        members[prefix + 'upstream/pagefind_ui/default/package-lock.json'] = json.dumps({'packages': ui_locked}).encode()
+        file_entry = lambda name, data: {'path': name, 'sha256': hashlib.sha256(data).hexdigest(),
+                                         'bytes': len(data)}
+        internal_files = [file_entry(name, data) for name, data in sorted(members.items())]
+        internal = {'schema': 1, 'upstream_commit': verifier.PAGEFIND_COMMIT,
+                    'source_inputs': inputs, 'ui_source_inputs': ui_inputs, 'files': internal_files}
+        members[prefix + 'SOURCE-MANIFEST.json'] = json.dumps(internal).encode()
+        files = [file_entry(name, data) for name, data in sorted(members.items())]
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode='w') as archive:
+            for name, data in sorted(members.items()):
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+        bundle = gzip.compress(stream.getvalue(), mtime=0)
+        manifest = {
+            'schema': 1,
+            'component': 'Pagefind offline Help search',
+            'version': '1.5.2',
+            'upstream_commit': verifier.PAGEFIND_COMMIT,
+            'upstream_source_url': f'https://github.com/CloudCannon/pagefind/archive/{verifier.PAGEFIND_COMMIT}.tar.gz',
+            'archive': {'filename': 'pagefind-1.5.2-source.tar.gz',
+                        'sha256': hashlib.sha256(bundle).hexdigest(), 'bytes': len(bundle)},
+            'wasm': [{'filename': key, 'sha256': digest, 'bytes': verifier.PAGEFIND_WASM_BYTES[key]}
+                     for key, digest in verifier.PAGEFIND_WASM_SHA256.items()],
+            'build_recipe': prefix + 'REBUILD.md',
+            'source_inputs': inputs,
+            'ui_source_inputs': ui_inputs,
+            'files': files,
+        }
+        return bundle, json.dumps(manifest).encode()
+
+    @staticmethod
     def non_agent_bytes(name):
         if name.endswith('.deb'):
             header = (f'{"debian-binary/":<16}{"0":<12}{"0":<6}{"0":<6}'
@@ -372,7 +445,8 @@ class CandidateVerification(unittest.TestCase):
             files = {
                 'compose.yaml': b'services:\n  server:\n    image: vectory-server:candidate\n',
                 'README.md': f'# Vectory {kind} kit\n\nSynthetic fixture.\n'.encode(),
-                'LICENSE': b'license', 'NOTICE': b'notice',
+                'LICENSE': CandidateVerification.non_agent_bytes('LICENSE'),
+                'NOTICE': CandidateVerification.non_agent_bytes('NOTICE'),
                 'VERSION': b'0.1.0\n',
             }
             if kind == 'preview':
@@ -416,6 +490,10 @@ class CandidateVerification(unittest.TestCase):
         if name.endswith('.spdx.json'):
             return json.dumps({'spdxVersion': 'SPDX-2.3', 'SPDXID': 'SPDXRef-DOCUMENT',
                                'packages': [{'name': 'synthetic-component'}]}).encode()
+        if name == 'pagefind-1.5.2-source.tar.gz':
+            return CandidateVerification.source_fixture()[0]
+        if name == 'pagefind-1.5.2-source.json':
+            return CandidateVerification.source_fixture()[1]
         if name == 'license-inventory.json':
             return json.dumps({'components': [{'name': 'synthetic-component'}]}).encode()
         if name == 'SOURCE-INPUTS.json':
@@ -429,6 +507,10 @@ class CandidateVerification(unittest.TestCase):
                                {'RepoTags': ['vectory-validator:candidate']}]).encode()
         if name == 'THIRD-PARTY-LICENSES.md':
             return b'# Third-party licenses\n\nSynthetic fixture.\n'
+        if name == 'LICENSE':
+            return b'Apache License\n\nSynthetic fixture.\n'
+        if name == 'NOTICE':
+            return b'Vectory\n\nSynthetic third-party notices.\n'
         if name == 'THIRD-PARTY-INVENTORY.md':
             return b'# Source dependency inventory\n\nSynthetic fixture.\n'
         return f'synthetic {name}\n'.encode()
@@ -497,6 +579,9 @@ class CandidateVerification(unittest.TestCase):
         self.assertEqual(manifest['inventory_status'], 'complete')
         self.assertEqual(manifest['parts']['preview'], [self.preview])
         self.assertEqual(manifest['parts']['serverkit'], [self.serverkit])
+        self.assertEqual(manifest['parts']['legal'], ['LICENSE', 'NOTICE'])
+        self.assertEqual(manifest['parts']['source'],
+                         ['pagefind-1.5.2-source.json', 'pagefind-1.5.2-source.tar.gz'])
         self.assertEqual(len(manifest['parts']['agents']), 10)
         self.assertNotIn(self.preview, manifest['parts']['agents'])
         self.assertNotIn(self.serverkit, manifest['parts']['agents'])
@@ -505,12 +590,48 @@ class CandidateVerification(unittest.TestCase):
                                  str(self.root)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_plain_notice_must_match_agent_and_starter_archives(self):
+        notice = self.root / 'NOTICE'
+        notice.write_bytes(b'Vectory\n\nDifferent notice bytes.\n')
+        self.checksums()
+        with self.assertRaisesRegex(ValueError, 'archive LICENSE or NOTICE differs'):
+            verifier.verify(self.root)
+        self.assertEqual(self.manifest()['inventory_status'], 'incomplete-diagnostic')
+        with self.assertRaisesRegex(ValueError, 'NOTICE differs from the release asset'):
+            verifier.candidate_inventory(self.root, require_status=False)
+
+    def test_pagefind_source_requires_pinned_wasm_and_real_file_hashes(self):
+        path = self.root / 'pagefind-1.5.2-source.json'
+        original = path.read_bytes()
+        for change, message in [('wasm', 'shipped Help WASM pins'),
+                                ('file', 'source archive member differs'),
+                                ('ui-version', 'five pinned UI source packages'),
+                                ('ui-package-file', 'omits a rebuild recipe or pinned dependency')]:
+            with self.subTest(change=change):
+                manifest = json.loads(original)
+                if change == 'wasm':
+                    manifest['wasm'][0]['sha256'] = '0' * 64
+                elif change == 'file':
+                    manifest['files'][0]['sha256'] = '0' * 64
+                elif change == 'ui-version':
+                    manifest['ui_source_inputs'][0]['version'] = '0.0.0'
+                else:
+                    required_name = 'pagefind-1.5.2-source/ui-vendor/svelte-4.2.20/package.json'
+                    manifest['files'] = [item for item in manifest['files']
+                                         if item['path'] != required_name]
+                path.write_text(json.dumps(manifest), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, message):
+                    verifier.required_pagefind_source(self.root)
+        path.write_bytes(original)
+
     def test_missing_release_parts_are_diagnostic_and_refused(self):
         for name in [
             'vectory_0.1.0_arm64.deb', self.msi,
             self.preview,
             self.serverkit,
             'vectory-server-image.tar.gz', 'vectory-validator-image.spdx.json',
+            'NOTICE',
+            'pagefind-1.5.2-source.tar.gz',
             'vectory-agent.cdx.json', 'license-inventory.json',
             'npm-dependency-audit.json', 'THIRD-PARTY-INVENTORY.md',
         ]:
@@ -589,6 +710,11 @@ class CandidateVerification(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unsafe or unexpected preview member'):
             verifier.candidate_inventory(self.root, require_status=False)
 
+    def test_preview_rejects_notice_above_its_separate_bound(self):
+        self.rewrite_preview(replace=('NOTICE', b'x' * (verifier.MAX_PREVIEW_NOTICE_BYTES + 1)))
+        with self.assertRaisesRegex(ValueError, 'unsafe or unexpected preview member'):
+            verifier.required_starter_bundle(self.root / self.preview, self.version, 'preview')
+
     def test_empty_or_malformed_non_agent_deliverables_are_refused(self):
         self.assertEqual(self.manifest()['inventory_status'], 'complete')
         for name, bad in [
@@ -606,6 +732,10 @@ class CandidateVerification(unittest.TestCase):
             ('npm-dependency-audit.json', b'{"gate_passed":false}'),
             ('images.json', b'[]'),
             ('THIRD-PARTY-LICENSES.md', b''),
+            ('LICENSE', b'not the shipped license'),
+            ('NOTICE', b'not the shipped notice'),
+            ('pagefind-1.5.2-source.tar.gz', b'not a source archive'),
+            ('pagefind-1.5.2-source.json', b'{}'),
             ('install.log', b''),
         ]:
             with self.subTest(name=name):

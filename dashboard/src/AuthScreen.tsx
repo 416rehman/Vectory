@@ -935,6 +935,11 @@ export default function AuthScreen({
         <ExternalLink size={13} aria-hidden="true" />
         <span className="sr-only">(opens in a new tab)</span>
       </a>
+      <a href="/NOTICE.txt" target="_blank" rel="noopener noreferrer">
+        Notices
+        <ExternalLink size={13} aria-hidden="true" />
+        <span className="sr-only">(opens in a new tab)</span>
+      </a>
     </footer>
   );
   const shell = (content: ReactNode, wide = false) => (

@@ -23,6 +23,8 @@ PARTS = {
     'preview': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-preview-linux-amd64\.tar\.gz', n)),
     'serverkit': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-server-linux-amd64\.tar\.gz', n)),
     'sbom': lambda n: n.endswith('.cdx.json'),
+    'legal': lambda n: n in {'LICENSE', 'NOTICE'},
+    'source': lambda n: n in {'pagefind-1.5.2-source.tar.gz', 'pagefind-1.5.2-source.json'},
     'license_inventory': lambda n: n == 'THIRD-PARTY-LICENSES.md',
 }
 RESULTS = {'packages': 'PACKAGES_RESULT', 'msi': 'MSI_RESULT', 'images': 'IMAGES_RESULT', 'sbom': 'SBOM_RESULT', 'starters': 'STARTERS_RESULT', 'preview_smoke': 'PREVIEW_SMOKE_RESULT'}

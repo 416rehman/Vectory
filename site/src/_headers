@@ -15,5 +15,26 @@
 /help/_markdown/*
   X-Robots-Tag: noindex
 
+/help/legal/*
+  X-Robots-Tag: noindex
+
+/NOTICE.txt
+  X-Robots-Tag: noindex
+
+/LICENSE.txt
+  X-Robots-Tag: noindex
+
+/designer/NOTICE.txt
+  X-Robots-Tag: noindex
+
+/fonts/OFL.txt
+  X-Robots-Tag: noindex
+
+/designer/fonts/OFL.txt
+  X-Robots-Tag: noindex
+
+/help/fonts/OFL.txt
+  X-Robots-Tag: noindex
+
 /favicons/*
   Cache-Control: public, max-age=86400

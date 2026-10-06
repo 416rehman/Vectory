@@ -15,6 +15,55 @@ await build({ root: pathToFileURL(helpRoot + path.sep) });
 const output = path.join(helpRoot, "dist");
 const scriptDir = path.join(output, "_scripts");
 await fs.mkdir(scriptDir, { recursive: true });
+// Pagefind's shipped browser WASM includes third-party code. Keep its exact
+// corresponding-source archive next to the search files in both the installed
+// Help center and the public copy. A changed binary or source bundle must be
+// reviewed and recorded before either build can be distributed.
+const legalInput = path.join(helpRoot, "legal");
+const sourceManifest = JSON.parse(
+  await fs.readFile(path.join(legalInput, "pagefind-1.5.2-source.json"), "utf8"),
+);
+if (
+  sourceManifest.version !== "1.5.2" ||
+  sourceManifest.upstream_commit !== "a2e9f40ef326f9a7926247695df25981a6f3ef4b" ||
+  !sourceManifest.upstream_source_url?.includes("Pagefind/pagefind") ||
+  typeof sourceManifest.build_recipe !== "string" ||
+  !sourceManifest.build_recipe.trim() ||
+  sourceManifest.archive?.filename !== "pagefind-1.5.2-source.tar.gz" ||
+  !Array.isArray(sourceManifest.source_inputs) ||
+  sourceManifest.source_inputs.length < 23 ||
+  !Array.isArray(sourceManifest.ui_source_inputs) ||
+  sourceManifest.ui_source_inputs.length !== 5 ||
+  !Array.isArray(sourceManifest.wasm) ||
+  sourceManifest.wasm.length !== 2
+) {
+  throw new Error("Pagefind source manifest is incomplete or refers to a different release");
+}
+async function verifySourceRecord(file, record) {
+  const bytes = await fs.readFile(file);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (bytes.length !== record.bytes || digest !== record.sha256)
+    throw new Error(`Pagefind source or browser binary does not match its manifest: ${file}`);
+}
+await verifySourceRecord(
+  path.join(legalInput, sourceManifest.archive.filename),
+  sourceManifest.archive,
+);
+const expectedWasm = new Set(["wasm.en.pagefind", "wasm.unknown.pagefind"]);
+for (const record of sourceManifest.wasm) {
+  if (!expectedWasm.delete(record.filename))
+    throw new Error(`Unexpected or duplicate Pagefind browser binary: ${record.filename}`);
+  await verifySourceRecord(path.join(output, "pagefind", record.filename), record);
+}
+await fs.mkdir(path.join(output, "legal"), { recursive: true });
+await fs.copyFile(
+  path.join(legalInput, sourceManifest.archive.filename),
+  path.join(output, "legal", sourceManifest.archive.filename),
+);
+await fs.copyFile(
+  path.join(legalInput, "pagefind-1.5.2-source.json"),
+  path.join(output, "legal/pagefind-1.5.2-source.json"),
+);
 const pages = [];
 async function files(dir) {
   const result = [];

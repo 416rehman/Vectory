@@ -38,6 +38,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         timeout-minutes: 10
+      - name: Verify checked-in notices and Pagefind corresponding source
+        timeout-minutes: 10
+        run: |
+          python3 packaging/generate-notices.py --check
+          python3 packaging/build-pagefind-source.py --check
+          python3 packaging/test_notices.py
+          python3 packaging/test_pagefind_source.py
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         timeout-minutes: 10
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
@@ -262,6 +269,32 @@ jobs:
           trap 'docker rm "$image_container" >/dev/null' EXIT
           docker cp "$image_container:/app/agent-releases/." "$image_agents"
           python3 packaging/check-image-agents.py "$image_agents"
+          for name in LICENSE NOTICE; do
+            docker cp "$image_container:/app/legal/$name" "$image_agents/server-$name"
+            cmp -s "$name" "$image_agents/server-$name" || { echo "::error::Server image $name differs from the release source."; exit 1; }
+          done
+          docker cp "$image_container:/app/dashboard/NOTICE.txt" "$image_agents/dashboard-NOTICE.txt"
+          cmp -s NOTICE "$image_agents/dashboard-NOTICE.txt" || { echo "::error::Dashboard NOTICE differs from the release source."; exit 1; }
+          docker run --rm --network none --entrypoint sh vectory-server:candidate -euc '
+            test -r /app/legal/LICENSE
+            test -r /app/legal/NOTICE
+            test -r /app/dashboard/NOTICE.txt
+          '
+          validator_container=$(docker create vectory-validator:candidate)
+          trap 'docker rm "$image_container" "$validator_container" >/dev/null' EXIT
+          for name in LICENSE NOTICE; do
+            docker cp "$validator_container:/app/legal/$name" "$image_agents/validator-$name"
+            cmp -s "$name" "$image_agents/validator-$name" || { echo "::error::Validator image $name differs from the release source."; exit 1; }
+          done
+          docker run --rm --network none --entrypoint sh vectory-validator:candidate -euc '
+            test -r /app/legal/LICENSE
+            test -r /app/legal/NOTICE
+            test -r /usr/share/vector/NOTICE
+            test -r /usr/share/vector/LICENSE-3rdparty.csv
+            set -- /usr/share/vector/licenses/*
+            test "$#" -ge 17
+            for file in "$@"; do test -r "$file"; done
+          '
           cp "$image_agents/catalog.json" artifacts/images/image-agent-catalog.json
           docker image inspect vectory-server:candidate vectory-validator:candidate > artifacts/images/images.json
       - name: Save the images
@@ -409,6 +442,8 @@ jobs:
           fi
           curl --fail --silent --show-error --retry 6 --retry-delay 2 http://127.0.0.1:18080/api/v1/status > "$RUNNER_TEMP/preview-status.json"
           curl --fail --silent --show-error --retry 6 --retry-delay 2 http://127.0.0.1:18080/ > "$RUNNER_TEMP/preview-index.html"
+          curl --fail --silent --show-error http://127.0.0.1:18080/NOTICE.txt > "$RUNNER_TEMP/preview-notice.txt"
+          cmp -s NOTICE "$RUNNER_TEMP/preview-notice.txt" || { echo '::error::The dashboard did not serve the release NOTICE bytes.'; exit 1; }
           python3 - "$RUNNER_TEMP/preview-status.json" <<'PY'
           import json
           import sys
@@ -682,6 +717,10 @@ jobs:
           duplicates=$(find artifacts/parts -type f -printf '%f\n' | sort | uniq -d)
           [ -z "$duplicates" ] || { echo "::error::Two parts hold the same file name: $duplicates"; exit 1; }
           find artifacts/parts -type f -exec cp {} "$out/" \;
+          # Keep the actual notices and corresponding Pagefind source next to
+          # loose downloads as checksummed assets.
+          cp LICENSE NOTICE "$out/"
+          cp help-center/legal/pagefind-1.5.2-source.tar.gz help-center/legal/pagefind-1.5.2-source.json "$out/"
           python3 packaging/candidate-manifest.py "$out"
           python3 packaging/verify-release.py "$out" --refresh-checksums
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

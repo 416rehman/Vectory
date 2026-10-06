@@ -92,6 +92,8 @@ Vectory is a Rust (Axum, SQLite) server, a React and TypeScript dashboard, a Go 
 
 ## Contributing, security and license
 
-Contributions are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). For project or business inquiries, contact [416rehman@ahmadz.ai](mailto:416rehman@ahmadz.ai). Vectory is licensed under [Apache-2.0](LICENSE).
+Contributions are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). For project or business inquiries, contact [416rehman@ahmadz.ai](mailto:416rehman@ahmadz.ai). Vectory's own code is licensed under [Apache-2.0](LICENSE).
+
+Third-party components retain their licenses and copyright notices in [NOTICE](NOTICE). The compiled documentation search includes GPL-covered code; its corresponding source and provenance are included in the release downloads and under `/help/legal/` in the installed Help center. These source materials are optional for rebuilding. Installation uses the prebuilt kits.
 
 Vectory is an independent project. It is not affiliated with or endorsed by Datadog or the Vector project.

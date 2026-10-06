@@ -19,6 +19,8 @@ TARGETS = {('linux', 'amd64'), ('linux', 'arm64'), ('darwin', 'amd64'),
            ('darwin', 'arm64'), ('windows', 'amd64')}
 REQUIRED_CANDIDATE_FILES = {
     'catalog.json', 'CANDIDATE.json', 'SHA256SUMS',
+    'LICENSE', 'NOTICE',
+    'pagefind-1.5.2-source.tar.gz', 'pagefind-1.5.2-source.json',
     'vectory-server-image.tar.gz', 'vectory-validator-image.tar.gz',
     'vectory-server-image.spdx.json', 'vectory-validator-image.spdx.json',
     'image-agent-catalog.json', 'images.json',
@@ -50,6 +52,27 @@ MAX_IMAGE_PATH_BYTES = 1024
 MAX_PREVIEW_BUNDLE_BYTES = 4 * 1024 * 1024
 MAX_PREVIEW_UNPACKED_BYTES = 8 * 1024 * 1024
 MAX_PREVIEW_MEMBER_BYTES = 1024 * 1024
+MAX_PREVIEW_NOTICE_BYTES = 2 * 1024 * 1024
+MAX_SOURCE_BUNDLE_BYTES = 128 * 1024 * 1024
+MAX_SOURCE_UNPACKED_BYTES = 1024 * 1024 * 1024
+MAX_SOURCE_MEMBER_BYTES = 128 * 1024 * 1024
+MAX_SOURCE_MEMBERS = 10_000
+MAX_SOURCE_METADATA_TOTAL_BYTES = 32 * 1024 * 1024
+PAGEFIND_COMMIT = 'a2e9f40ef326f9a7926247695df25981a6f3ef4b'
+SNOWBALL_COMMIT = '988b5ae3fff9db34cc978c8ddd3b84f83ef5ef58'
+SNOWBALL_SHA256 = '571f314a0d86fefa0eaf5e2cd39a944a82f9d0ef314ce085f97f16154a354343'
+PAGEFIND_WASM_SHA256 = {
+    'wasm.en.pagefind': '68c6aefbc022a1482b1a9d2adbd5599f23fd53ac0326e58cb3aebd82e8cd8232',
+    'wasm.unknown.pagefind': '706a7a423f3e9fdd1b6e987b61305a9abf694ca940b3f822e12f2668e4037384',
+}
+PAGEFIND_WASM_BYTES = {'wasm.en.pagefind': 72206, 'wasm.unknown.pagefind': 68023}
+PAGEFIND_UI_INPUTS = {
+    'svelte': '4.2.20',
+    'bcp-47': '2.1.0',
+    'is-alphabetical': '2.0.1',
+    'is-alphanumerical': '2.0.1',
+    'is-decimal': '2.0.1',
+}
 STARTER_FILES = {
     'preview': {'start.sh', 'release-images.sh', 'compose.yaml', 'README.md', 'LICENSE', 'NOTICE', 'VERSION', 'SHA256SUMS'},
     'server': {'start.sh', 'release-images.sh', 'compose.yaml', 'Caddyfile', '.env.example',
@@ -169,6 +192,14 @@ def verify(directory, allow_new_files=False):
     catalog = json.loads(catalog_path.read_text(encoding='utf-8'))
     if not isinstance(catalog, list) or not catalog:
         raise ValueError('catalog must contain at least one artifact')
+    # Standalone agent jobs do not yet have top-level legal assets. A complete
+    # candidate does, so its archives must carry those exact bytes as well.
+    release_legal_hashes = {}
+    for legal_name in ('LICENSE', 'NOTICE'):
+        legal_path = directory / legal_name
+        if legal_path.is_file() and not legal_path.is_symlink():
+            required_file(legal_path, MAX_TEXT_BYTES)
+            release_legal_hashes[legal_name] = sha(legal_path)
     seen = set()
     for item in catalog:
         name = item['name']
@@ -214,12 +245,15 @@ def verify(directory, allow_new_files=False):
                     if sum(member.file_size for member in members) > MAX_AGENT_ARCHIVE_UNPACKED_BYTES:
                         raise ValueError('archive expanded contents exceed size limit')
                     binary_sha = None
+                    archive_legal_hashes = {}
                     expanded = 0
                     for member in members:
                         is_binary = member.filename == 'vectory.exe'
                         if is_binary and member.file_size > MAX_AGENT_BINARY_BYTES:
                             raise ValueError('archive binary exceeds size limit')
-                        digest = hashlib.sha256() if is_binary else None
+                        if member.filename in release_legal_hashes and member.file_size > MAX_TEXT_BYTES:
+                            raise ValueError('archive legal file exceeds size limit')
+                        digest = hashlib.sha256() if is_binary or member.filename in release_legal_hashes else None
                         actual = 0
                         # Reading every member to EOF makes ZipExtFile check
                         # each CRC, including docs and service material.
@@ -229,7 +263,7 @@ def verify(directory, allow_new_files=False):
                                 expanded += len(chunk)
                                 if expanded > MAX_AGENT_ARCHIVE_UNPACKED_BYTES:
                                     raise ValueError('archive expanded contents exceed size limit')
-                                if is_binary:
+                                if digest is not None:
                                     if actual > MAX_AGENT_BINARY_BYTES:
                                         raise ValueError('archive binary exceeds size limit')
                                     digest.update(chunk)
@@ -237,12 +271,15 @@ def verify(directory, allow_new_files=False):
                             raise ValueError('archive member length differs from ZIP inventory')
                         if is_binary:
                             binary_sha = digest.hexdigest()
+                        elif member.filename in release_legal_hashes:
+                            archive_legal_hashes[member.filename] = digest.hexdigest()
             except (OSError, EOFError, zipfile.BadZipFile) as error:
                 raise ValueError('archive has a corrupt ZIP member') from error
         else:
             names = []
             expanded = 0
             binary_sha = None
+            archive_legal_hashes = {}
             try:
                 with gzip.open(archive, 'rb') as compressed:
                     source = BoundedAgentReader(compressed)
@@ -261,6 +298,11 @@ def verify(directory, allow_new_files=False):
                                     raise ValueError('archive binary exceeds size limit')
                                 with z.extractfile(member) as binary_source:
                                     binary_sha = archive_binary_sha(binary_source)
+                            elif member.name in release_legal_hashes:
+                                if member.size > MAX_TEXT_BYTES:
+                                    raise ValueError('archive legal file exceeds size limit')
+                                with z.extractfile(member) as legal_source:
+                                    archive_legal_hashes[member.name] = archive_binary_sha(legal_source)
                         # The tar reader stops at its first zero block. Check
                         # the second block and all padding, even if prefetched.
                         zero_tail = 0
@@ -282,6 +324,8 @@ def verify(directory, allow_new_files=False):
                 raise ValueError('offline archive lacks its binary')
         if binary_sha != item['sha256']:
             raise ValueError('offline archive incomplete or binary differs')
+        if archive_legal_hashes != release_legal_hashes:
+            raise ValueError('archive LICENSE or NOTICE differs from the release assets: ' + archive.name)
     checksum_names = set()
     checksums_path = directory / 'SHA256SUMS'
     required_file(checksums_path, MAX_AGENT_CHECKSUMS_BYTES)
@@ -424,14 +468,15 @@ def required_starter_bundle(path, version, kind):
             source = BoundedPreviewReader(compressed, path.name)
             with tarfile.open(fileobj=source, mode='r|', tarinfo=BoundedTarInfo) as archive:
                 for member in archive:
+                    limit = MAX_PREVIEW_NOTICE_BYTES if member.name == prefix + 'NOTICE' else MAX_PREVIEW_MEMBER_BYTES
                     if (member.name not in expected or member.name in members
-                            or not member.isfile() or not 0 < member.size <= MAX_PREVIEW_MEMBER_BYTES
+                            or not member.isfile() or not 0 < member.size <= limit
                             or member.mode != (0o755 if member.name == prefix + 'start.sh' else 0o644)):
                         raise ValueError(f'{path.name} has an unsafe or unexpected {kind} member: {member.name}')
                     contents = archive.extractfile(member)
                     if contents is None:
                         raise ValueError(f'{path.name} has an unreadable {kind} member')
-                    data = contents.read(MAX_PREVIEW_MEMBER_BYTES + 1)
+                    data = contents.read(limit + 1)
                     if len(data) != member.size:
                         raise ValueError(f'{path.name} has an incomplete {kind} member: {member.name}')
                     members[member.name.removeprefix(prefix)] = (data, member.mode)
@@ -471,6 +516,193 @@ def required_starter_bundle(path, version, kind):
     for name, digest in sums.items():
         if hashlib.sha256(members[name][0]).hexdigest() != digest:
             raise ValueError(f'{path.name} {kind} checksum mismatch: {name}')
+    return members
+
+
+class BoundedSourceReader:
+    """Bound decompressed corresponding-source bytes while streaming tar."""
+
+    def __init__(self, source):
+        self.source = source
+        self.total = 0
+
+    def read(self, size):
+        if size < 0 or size > 16 * 1024 * 1024:
+            raise ValueError('Pagefind source archive requested an oversized read')
+        chunk = self.source.read(size)
+        self.total += len(chunk)
+        if self.total > MAX_SOURCE_UNPACKED_BYTES:
+            raise ValueError('Pagefind source archive exceeds expanded size limit')
+        return chunk
+
+
+class BoundedSourceTarInfo(BoundedTarInfo):
+    """Allow bounded long-name records for the larger vendored source tree."""
+
+    def _charge_extension(self, archive):
+        count = getattr(archive, '_vectory_metadata_records', 0) + 1
+        total = getattr(archive, '_vectory_metadata_bytes', 0) + self.size
+        if (self.size < 0 or self.size > MAX_TAR_METADATA_BYTES
+                or total > MAX_SOURCE_METADATA_TOTAL_BYTES or count > MAX_SOURCE_MEMBERS):
+            raise ValueError('Pagefind source archive has oversized extended metadata')
+        archive._vectory_metadata_records = count
+        archive._vectory_metadata_bytes = total
+
+
+def required_pagefind_source(directory):
+    """Check pinned source metadata and every bounded archive member."""
+    archive_name = 'pagefind-1.5.2-source.tar.gz'
+    archive_path = directory / archive_name
+    manifest = required_json(directory / 'pagefind-1.5.2-source.json')
+    if (not isinstance(manifest, dict) or manifest.get('schema') != 1
+            or manifest.get('component') != 'Pagefind offline Help search'
+            or manifest.get('version') != '1.5.2'
+            or manifest.get('upstream_commit') != PAGEFIND_COMMIT
+            or not isinstance(manifest.get('upstream_source_url'), str)
+            or PAGEFIND_COMMIT not in manifest['upstream_source_url']
+            or manifest.get('build_recipe') != 'pagefind-1.5.2-source/REBUILD.md'):
+        raise ValueError('pagefind-1.5.2-source.json does not identify the pinned corresponding source')
+    bundle = manifest.get('archive')
+    required_file(archive_path, MAX_SOURCE_BUNDLE_BYTES)
+    if (not isinstance(bundle, dict) or bundle.get('filename') != archive_name
+            or bundle.get('bytes') != archive_path.stat().st_size
+            or bundle.get('sha256') != sha(archive_path)):
+        raise ValueError(f'{archive_name} differs from its manifest')
+    wasm = manifest.get('wasm')
+    if (not isinstance(wasm, list) or len(wasm) != len(PAGEFIND_WASM_SHA256)
+            or any(not isinstance(item, dict) or item.get('filename') not in PAGEFIND_WASM_SHA256
+                   or item.get('sha256') != PAGEFIND_WASM_SHA256[item['filename']]
+                   or item.get('bytes') != PAGEFIND_WASM_BYTES[item['filename']] for item in wasm)
+            or {item['filename'] for item in wasm} != set(PAGEFIND_WASM_SHA256)):
+        raise ValueError('Pagefind source manifest does not match the shipped Help WASM pins')
+    inputs = manifest.get('source_inputs')
+    if (not isinstance(inputs, list) or len(inputs) != 23
+            or any(not isinstance(item, dict) or not all(isinstance(item.get(key), str) and item[key]
+                                                        for key in ('name', 'version', 'url', 'path'))
+                   or not isinstance(item.get('sha256'), str)
+                   or not re.fullmatch(r'[0-9a-f]{64}', item['sha256']) for item in inputs)
+            or len({(item['name'], item['version']) for item in inputs}) != len(inputs)
+            or not any(item['name'] == 'pagefind_web' and item['version'] == '0.0.0'
+                       and item['path'] == 'upstream/pagefind_web'
+                       and item.get('upstream_commit') == PAGEFIND_COMMIT for item in inputs)
+            or not any(item['name'] == 'pagefind_microjson' and item['version'] == '0.1.4' for item in inputs)
+            or not any(item['name'] == 'Snowball' and item['version'] == '3.0.0'
+                       and item['path'] == 'snowball' and item.get('upstream_commit') == SNOWBALL_COMMIT
+                       and SNOWBALL_COMMIT in item['url']
+                       and item['sha256'] == SNOWBALL_SHA256 for item in inputs)):
+        raise ValueError('Pagefind source manifest lacks its 22 Cargo inputs and pinned Snowball source')
+    ui_inputs = manifest.get('ui_source_inputs')
+    if (not isinstance(ui_inputs, list) or len(ui_inputs) != len(PAGEFIND_UI_INPUTS)
+            or any(not isinstance(item, dict)
+                   or item.get('name') not in PAGEFIND_UI_INPUTS
+                   or item.get('version') != PAGEFIND_UI_INPUTS.get(item.get('name'))
+                   or item.get('path') != f"ui-vendor/{item['name']}-{item['version']}"
+                   or item.get('url') != f"https://registry.npmjs.org/{item['name']}/-/{item['name']}-{item['version']}.tgz"
+                   or not isinstance(item.get('sha256'), str)
+                   or not re.fullmatch(r'[0-9a-f]{64}', item['sha256'])
+                   or not isinstance(item.get('integrity'), str)
+                   or not re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', item['integrity'])
+                   for item in ui_inputs)
+            or {item['name'] for item in ui_inputs} != set(PAGEFIND_UI_INPUTS)):
+        raise ValueError('Pagefind source manifest lacks its five pinned UI source packages')
+
+    prefix = 'pagefind-1.5.2-source/'
+    internal_name = prefix + 'SOURCE-MANIFEST.json'
+    ui_lock_name = prefix + 'upstream/pagefind_ui/default/package-lock.json'
+    files = manifest.get('files')
+    if not isinstance(files, list) or not 22 < len(files) <= MAX_SOURCE_MEMBERS:
+        raise ValueError('Pagefind source manifest has no bounded file inventory')
+    expected_files = {}
+    for item in files:
+        if not isinstance(item, dict):
+            raise ValueError('Pagefind source manifest has an invalid file entry')
+        name = item.get('path')
+        if (not isinstance(name, str) or not name.startswith(prefix) or name in expected_files
+                or PurePosixPath(name).is_absolute() or '..' in PurePosixPath(name).parts
+                or str(PurePosixPath(name)) != name or '\\' in name or ':' in name
+                or not isinstance(item.get('sha256'), str)
+                or not re.fullmatch(r'[0-9a-f]{64}', item['sha256'])
+                or not isinstance(item.get('bytes'), int)
+                or not 0 <= item['bytes'] <= MAX_SOURCE_MEMBER_BYTES):
+            raise ValueError('Pagefind source manifest has an unsafe file entry')
+        expected_files[name] = item
+    if (internal_name not in expected_files or manifest['build_recipe'] not in expected_files
+            or any(item['name'] != 'Snowball' and not item['path'].startswith(('vendor/', 'upstream/'))
+                   or prefix + item['path'] + '/Cargo.toml' not in expected_files
+                   for item in inputs if item['name'] != 'Snowball')
+            or prefix + 'snowball/algorithms/english.sbl' not in expected_files
+            or prefix + 'snowball/COPYING' not in expected_files
+            or ui_lock_name not in expected_files
+            or any(prefix + item['path'] + '/package.json' not in expected_files
+                   for item in ui_inputs)):
+        raise ValueError('Pagefind source manifest omits a rebuild recipe or pinned dependency')
+    seen = set()
+    internal_bytes = None
+    ui_lock_bytes = None
+    try:
+        with gzip.open(archive_path, 'rb') as compressed:
+            source = BoundedSourceReader(compressed)
+            with tarfile.open(fileobj=source, mode='r|', tarinfo=BoundedSourceTarInfo) as archive:
+                for member in archive:
+                    name = member.name
+                    path = PurePosixPath(name)
+                    if (len(seen) >= MAX_SOURCE_MEMBERS or name in seen or not name.startswith(prefix)
+                            or path.is_absolute() or '..' in path.parts or str(path) != name
+                            or '\\' in name or ':' in name or not member.isfile()
+                            or member.size < 0 or member.size > MAX_SOURCE_MEMBER_BYTES
+                            or name not in expected_files or member.size != expected_files[name]['bytes']):
+                        raise ValueError('Pagefind source archive has an unsafe or oversized member')
+                    seen.add(name)
+                    contents = archive.extractfile(member)
+                    if contents is None:
+                        raise ValueError('Pagefind source archive has an unreadable member')
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: contents.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                        if name == internal_name:
+                            if internal_bytes is None:
+                                internal_bytes = bytearray()
+                            internal_bytes.extend(chunk)
+                        elif name == ui_lock_name:
+                            if ui_lock_bytes is None:
+                                ui_lock_bytes = bytearray()
+                            ui_lock_bytes.extend(chunk)
+                    if digest.hexdigest() != expected_files[name]['sha256']:
+                        raise ValueError('Pagefind source archive member differs from its file inventory')
+                zero_tail = 0
+                for chunk in iter(lambda: archive.fileobj.read(1024 * 1024), b''):
+                    zero_tail += len(chunk)
+                    if chunk.strip(b'\0'):
+                        raise ValueError('Pagefind source archive has nonzero data after tar end')
+                if zero_tail < 512:
+                    raise ValueError('Pagefind source archive lacks a complete tar end marker')
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                if chunk.strip(b'\0'):
+                    raise ValueError('Pagefind source archive has nonzero data after tar end')
+    except (OSError, EOFError, tarfile.TarError) as error:
+        raise ValueError('Pagefind source archive is not an intact gzip tar') from error
+    if (seen != set(expected_files) or internal_bytes is None or len(internal_bytes) > 1024 * 1024
+            or ui_lock_bytes is None or len(ui_lock_bytes) > 1024 * 1024):
+        raise ValueError('Pagefind source archive is missing its inventoried files or internal manifest')
+    try:
+        internal = json.loads(internal_bytes)
+        ui_lock = json.loads(ui_lock_bytes)
+    except (UnicodeError, ValueError) as error:
+        raise ValueError('Pagefind source archive has an invalid internal manifest') from error
+    if (not isinstance(internal, dict) or internal.get('schema') != 1
+            or internal.get('upstream_commit') != PAGEFIND_COMMIT
+            or internal.get('source_inputs') != inputs
+            or internal.get('ui_source_inputs') != ui_inputs
+            or internal.get('files') != [item for item in files if item['path'] != internal_name]):
+        raise ValueError('Pagefind source archive internal manifest differs from the release manifest')
+    locked = ui_lock.get('packages') if isinstance(ui_lock, dict) else None
+    if (not isinstance(locked, dict)
+            or any(not isinstance(locked.get('node_modules/' + item['name']), dict)
+                   or locked['node_modules/' + item['name']].get('version') != item['version']
+                   or locked['node_modules/' + item['name']].get('resolved') != item['url']
+                   or locked['node_modules/' + item['name']].get('integrity') != item['integrity']
+                   for item in ui_inputs)):
+        raise ValueError('Pagefind UI source packages do not match the upstream lockfile')
 
 
 class BoundedImageReader:
@@ -611,13 +843,21 @@ def required_sbom(path):
 
 def non_agent_contents(directory, debs, rpms, msi, preview, serverkit, version):
     """Check bounded shape and file signatures, not native install behavior."""
+    required_text(directory / 'LICENSE')
+    if b'Apache License' not in (directory / 'LICENSE').read_bytes()[:1024]:
+        raise ValueError('LICENSE does not contain the expected Apache License heading')
+    required_text(directory / 'NOTICE', 'Vectory')
+    required_pagefind_source(directory)
     for name in debs:
         required_deb(directory / name)
     for name in rpms:
         required_rpm(directory / name)
     required_msi(directory / msi)
-    required_starter_bundle(directory / preview, version, 'preview')
-    required_starter_bundle(directory / serverkit, version, 'server')
+    for name, kind in ((preview, 'preview'), (serverkit, 'server')):
+        members = required_starter_bundle(directory / name, version, kind)
+        for legal_name in ('LICENSE', 'NOTICE'):
+            if members[legal_name][0] != (directory / legal_name).read_bytes():
+                raise ValueError(f'{name} {legal_name} differs from the release asset')
     for name in ('vectory-server-image.tar.gz', 'vectory-validator-image.tar.gz'):
         required_image(directory / name)
     for name in ('vectory-server-image.spdx.json', 'vectory-validator-image.spdx.json',
@@ -693,6 +933,8 @@ def candidate_inventory(directory, require_status=True):
         'serverkit': [serverkit],
         'images': ['vectory-server-image.tar.gz', 'vectory-validator-image.tar.gz'],
         'sbom': sorted(name for name in names if name.endswith('.cdx.json')),
+        'legal': ['LICENSE', 'NOTICE'],
+        'source': ['pagefind-1.5.2-source.json', 'pagefind-1.5.2-source.tar.gz'],
         'license_inventory': ['THIRD-PARTY-LICENSES.md'],
     }
     if manifest.get('parts') != parts:

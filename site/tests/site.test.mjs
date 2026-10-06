@@ -37,6 +37,84 @@ test("public landing's local destinations exist", async () => {
   }
 });
 
+test("browser distributions expose the release notices and required upstream terms", async () => {
+  const canonical = await fs.readFile(path.join(root, "NOTICE"));
+  const notice = canonical.toString("utf8");
+  assert.match(notice, /Copyright \(c\) Meta Platforms, Inc\. and affiliates\./);
+  assert.match(notice, /Mozilla Public License, version 2\.0/i);
+  assert.match(notice, /vectordotdev\/vector\/tree\/v0\.58\.0/);
+  assert.match(notice, /@astrojs\/starlight/);
+  assert.match(notice, /Instrument Sans/);
+  assert.match(notice, /component.artwork/i);
+  for (const file of [
+    "dashboard/public/NOTICE.txt",
+    "dashboard/dist-designer/NOTICE.txt",
+    "site/dist/NOTICE.txt",
+    "site/dist/designer/NOTICE.txt",
+  ]) {
+    assert.deepEqual(
+      await fs.readFile(path.join(root, file)),
+      canonical,
+      `${file} differs from the release notice`,
+    );
+  }
+  for (const file of [
+    "dashboard/dist/help/index.html",
+    "site/dist/help/index.html",
+    "site/dist/index.html",
+    "site/dist/designer/index.html",
+  ]) {
+    const html = await fs.readFile(path.join(root, file), "utf8");
+    assert.match(html, /href="\/NOTICE\.txt"/, `${file} has no visible notice link`);
+  }
+  const headers = (await fs.readFile(path.join(output, "_headers"), "utf8")).replaceAll("\r\n", "\n");
+  for (const route of ["/NOTICE.txt", "/LICENSE.txt", "/designer/NOTICE.txt", "/help/legal/*"]) {
+    assert(
+      headers.includes(`${route}\n  X-Robots-Tag: noindex`),
+      `${route} is missing its noindex response header`,
+    );
+  }
+});
+
+test("installed and public Help ship the source for their exact Pagefind browser binaries", async () => {
+  const manifestBytes = await fs.readFile(path.join(root, "help-center/legal/pagefind-1.5.2-source.json"));
+  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  const archiveName = manifest.archive.filename;
+  assert.equal(archiveName, "pagefind-1.5.2-source.tar.gz");
+  assert.equal(manifest.version, "1.5.2");
+  assert.equal(manifest.upstream_commit, "a2e9f40ef326f9a7926247695df25981a6f3ef4b");
+  assert.equal(manifest.source_inputs.length, 23);
+  assert.deepEqual(
+    manifest.ui_source_inputs.map(({ name }) => name).sort(),
+    ["bcp-47", "is-alphabetical", "is-alphanumerical", "is-decimal", "svelte"],
+  );
+  const archive = await fs.readFile(path.join(root, "help-center/legal", archiveName));
+  assert.equal(archive.length, manifest.archive.bytes);
+  assert.equal(createHash("sha256").update(archive).digest("hex"), manifest.archive.sha256);
+  const notice = await fs.readFile(path.join(root, "NOTICE"), "utf8");
+  assert.match(notice, /\/help\/legal\/pagefind-1\.5\.2-source\.tar\.gz/);
+  for (const helpPath of ["dashboard/dist/help", "site/dist/help"]) {
+    const directory = path.join(root, helpPath);
+    assert.deepEqual(
+      await fs.readFile(path.join(directory, "legal/pagefind-1.5.2-source.json")),
+      manifestBytes,
+    );
+    assert.deepEqual(
+      await fs.readFile(path.join(directory, "legal", archiveName)),
+      archive,
+    );
+    for (const record of manifest.wasm) {
+      const bytes = await fs.readFile(path.join(directory, "pagefind", record.filename));
+      assert.equal(bytes.length, record.bytes, `${helpPath}/${record.filename} size`);
+      assert.equal(
+        createHash("sha256").update(bytes).digest("hex"),
+        record.sha256,
+        `${helpPath}/${record.filename} digest`,
+      );
+    }
+  }
+});
+
 test("public docs are complete and do not point at a nonexistent dashboard", async () => {
   assert(manifest.pages.length >= 20);
   const home = await fs.readFile(path.join(output, "help/index.html"), "utf8");
