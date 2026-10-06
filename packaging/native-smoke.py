@@ -368,6 +368,53 @@ def check_worker_root_identity(observed, expected):
         raise RuntimeError('Actual worker root metadata could not be safely checked') from None
 
 
+def check_worker_payload_mount(root):
+    """Require a read-only refusal without opening a running executable."""
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError(message) from None
+
+    try:
+        directory = root / 'usr/local/bin'
+        for relative in ('usr', 'usr/local', 'usr/local/bin'):
+            parent = (root / relative).lstat()
+            require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == 0 and parent.st_mode & 0o022 == 0,
+                    'Private worker payload ancestry is not protected')
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            bound = os.fstat(directory_fd)
+            require(stat.S_ISDIR(bound.st_mode) and bound.st_uid == 0 and bound.st_mode & 0o022 == 0 and
+                    (bound.st_dev, bound.st_ino) == (parent.st_dev, parent.st_ino),
+                    'Private worker payload directory identity changed')
+            probe = '.vectory-native-ci-payload-ro-' + secrets.token_hex(12)
+            try:
+                descriptor = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                     0o600, dir_fd=directory_fd)
+            except OSError as error:
+                require(error.errno == errno.EROFS, 'Private worker payload is not protected by a read-only mount')
+                return
+            identity = None
+            try:
+                identity = os.fstat(descriptor)
+                require(stat.S_ISREG(identity.st_mode) and stat.S_IMODE(identity.st_mode) == 0o600 and identity.st_nlink == 1,
+                        'Private worker payload probe is not a private regular file')
+            finally:
+                try:
+                    os.close(descriptor)
+                finally:
+                    if identity is not None:
+                        current = os.stat(probe, dir_fd=directory_fd, follow_symlinks=False)
+                        require(stat.S_ISREG(current.st_mode) and current.st_nlink == 1 and
+                                (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino),
+                                'Private worker payload probe identity changed; cleanup was refused')
+                        os.unlink(probe, dir_fd=directory_fd)
+            raise RuntimeError('Private worker payload permits writes') from None
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        raise RuntimeError('Private worker payload mount could not be safely checked') from None
+
+
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -474,13 +521,7 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
         check(not (root / 'etc/.vectory-native-ci-sentinel').exists() and not (root / 'etc/vectory-server').exists()
             and not (root / 'var/lib/vectory-server').exists() and not (root / 'var/run/docker.sock').exists(),
             'Host state, secrets or engine socket are visible inside the worker root')
-        try:
-            descriptor = os.open(root / 'usr/local/bin/vector-validator', os.O_WRONLY)
-        except OSError as error:
-            check(error.errno == errno.EROFS, 'Private worker payload is not protected by a read-only mount')
-        else:
-            os.close(descriptor)
-            raise RuntimeError('Private worker payload permits writes')
+        check_worker_payload_mount(root)
         check_worker_runtime_mount(root, worker_uid, pwd.getpwnam('vectory-validator').pw_gid)
         verified.add('private_filesystem')
         control_group = value(worker, 'ControlGroup')

@@ -423,6 +423,199 @@ fi
                     self.assertNotIn(str(root).encode(), result.stderr)
 
 
+@unittest.skipUnless(os.name == 'posix', 'Payload mount fixtures use only private POSIX directories and descriptors')
+class NativeWorkerPayloadMountTests(unittest.TestCase):
+    @contextmanager
+    def directories(self, attack=None, relative='usr/local/bin'):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / 'usr/local/bin'
+            parent.mkdir(parents=True, mode=0o755)
+            existing = parent / 'vector-validator'
+            existing.write_bytes(b'unchanged synthetic executable fixture')
+            target = root / relative
+            if attack == 'mode':
+                target.chmod(0o777)
+            elif attack in ('link', 'file'):
+                target.rename(root / 'original-parent')
+                if attack == 'link':
+                    target.symlink_to(root / 'original-parent', target_is_directory=True)
+                else:
+                    target.write_bytes(b'synthetic non-directory fixture')
+            original_lstat, original_fstat = Path.lstat, os.fstat
+
+            def metadata(path):
+                fields = list(original_lstat(path))
+                if path in (root / 'usr', root / 'usr/local', parent):
+                    fields[4] = 12345 if attack == 'owner' and path == target else 0
+                return os.stat_result(fields)
+
+            def bound(descriptor):
+                fields = list(original_fstat(descriptor))
+                if stat.S_ISDIR(fields[0]):
+                    fields[4] = 0
+                return os.stat_result(fields)
+
+            with mock.patch.object(Path, 'lstat', metadata), mock.patch.object(smoke.os, 'fstat', bound):
+                yield root, parent, existing
+
+    @contextmanager
+    def readonly(self, refusal=errno.EROFS):
+        original = os.open
+
+        def open_file(path, flags, mode=0o777, **options):
+            if options.get('dir_fd') is not None and str(path).startswith('.vectory-native-ci-payload-ro-'):
+                raise OSError(refusal, 'synthetic private mount refusal', 'synthetic-private-probe-file')
+            return original(path, flags, mode, **options)
+
+        with mock.patch.object(smoke.os, 'open', side_effect=open_file) as opened:
+            yield opened
+
+    def assert_private(self, failure, root):
+        rendered = ''.join(traceback.format_exception(failure))
+        self.assertNotIn(str(root), rendered)
+        self.assertNotIn('synthetic private', rendered)
+        self.assertNotIn('synthetic-private', rendered)
+
+    def test_only_fresh_exclusive_probe_accepts_ero_fs_and_closes_the_parent_descriptor(self):
+        with self.directories() as (root, parent, existing), self.readonly() as opened, \
+                mock.patch.object(smoke.os, 'close', wraps=os.close) as closed:
+            smoke.check_worker_payload_mount(root)
+            calls = opened.call_args_list
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0].args[0], parent)
+            self.assertTrue(calls[0].args[1] & os.O_DIRECTORY and calls[0].args[1] & os.O_NOFOLLOW
+                            and calls[0].args[1] & os.O_CLOEXEC)
+            name, flags, mode = calls[1].args
+            self.assertRegex(name, r'^\.vectory-native-ci-payload-ro-[a-f0-9]{24}$')
+            self.assertTrue(flags & os.O_WRONLY and flags & os.O_CREAT and flags & os.O_EXCL
+                            and flags & os.O_NOFOLLOW and flags & os.O_CLOEXEC)
+            self.assertEqual(mode, 0o600)
+            closed.assert_called_once_with(calls[1].kwargs['dir_fd'])
+            with self.assertRaises(OSError):
+                os.fstat(calls[1].kwargs['dir_fd'])
+            self.assertEqual(existing.read_bytes(), b'unchanged synthetic executable fixture')
+            self.assertEqual(list(parent.iterdir()), [existing])
+
+    def test_writable_mount_is_refused_after_removing_only_the_owned_probe(self):
+        with self.directories() as (root, parent, existing), \
+                mock.patch.object(smoke.os, 'close', wraps=os.close) as closed, \
+                mock.patch.object(smoke.os, 'unlink', wraps=os.unlink) as removed:
+            with self.assertRaises(RuntimeError) as failure:
+                smoke.check_worker_payload_mount(root)
+            self.assertEqual(str(failure.exception), 'Private worker payload permits writes')
+            self.assertEqual(closed.call_count, 2)
+            self.assertEqual(removed.call_count, 1)
+            self.assertTrue(removed.call_args.kwargs['dir_fd'] >= 0)
+            self.assertRegex(removed.call_args.args[0], r'^\.vectory-native-ci-payload-ro-[a-f0-9]{24}$')
+            self.assertEqual(list(parent.iterdir()), [existing])
+            self.assertEqual(existing.read_bytes(), b'unchanged synthetic executable fixture')
+            self.assert_private(failure.exception, root)
+
+    def test_other_errors_including_text_file_busy_never_count_as_readonly(self):
+        for refusal in (errno.ETXTBSY, errno.EACCES, errno.EPERM, errno.EEXIST, errno.ENOENT):
+            with self.subTest(refusal=refusal), self.directories() as (root, parent, existing), \
+                    self.readonly(refusal), self.assertRaises(RuntimeError) as failure:
+                smoke.check_worker_payload_mount(root)
+            self.assertEqual(str(failure.exception), 'Private worker payload is not protected by a read-only mount')
+            self.assert_private(failure.exception, root)
+
+    def test_unsafe_or_linked_ancestry_is_refused_before_any_open(self):
+        for relative in ('usr', 'usr/local', 'usr/local/bin'):
+            for attack in ('owner', 'mode', 'link', 'file'):
+                with self.subTest(relative=relative, attack=attack), self.directories(attack, relative) as (root, parent, existing), \
+                        mock.patch.object(smoke.os, 'open') as opened, self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_payload_mount(root)
+                opened.assert_not_called()
+                self.assertEqual(str(failure.exception), 'Private worker payload ancestry is not protected')
+                self.assert_private(failure.exception, root)
+
+    def test_directory_descriptor_identity_and_permissions_must_match(self):
+        for index, replacement in ((1, lambda value: value + 1), (2, lambda value: value + 1),
+                                   (4, lambda _: 12345), (0, lambda _: stat.S_IFDIR | 0o777),
+                                   (0, lambda _: stat.S_IFREG | 0o755)):
+            with self.subTest(index=index), self.directories() as (root, parent, existing):
+                original = smoke.os.fstat
+
+                def changed(descriptor):
+                    fields = list(original(descriptor))
+                    fields[index] = replacement(fields[index])
+                    return os.stat_result(fields)
+
+                with mock.patch.object(smoke.os, 'fstat', changed), \
+                        mock.patch.object(smoke.os, 'open', wraps=os.open) as opened, \
+                        mock.patch.object(smoke.os, 'close', wraps=os.close) as closed, self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_payload_mount(root)
+                self.assertEqual(len(opened.call_args_list), 1)
+                closed.assert_called_once()
+                self.assertEqual(str(failure.exception), 'Private worker payload directory identity changed')
+                self.assert_private(failure.exception, root)
+
+    def test_changed_probe_inode_refuses_unrelated_cleanup_and_closes_both_descriptors(self):
+        with self.directories() as (root, parent, existing):
+            original = os.stat
+
+            def changed(path, **options):
+                record = original(path, **options)
+                if options.get('dir_fd') is not None:
+                    fields = list(record)
+                    fields[1] += 1
+                    return os.stat_result(fields)
+                return record
+
+            with mock.patch.object(smoke.os, 'stat', changed), mock.patch.object(smoke.os, 'unlink') as removed, \
+                    mock.patch.object(smoke.os, 'close', wraps=os.close) as closed, self.assertRaises(RuntimeError) as failure:
+                smoke.check_worker_payload_mount(root)
+            removed.assert_not_called()
+            self.assertEqual(closed.call_count, 2)
+            self.assertEqual(str(failure.exception), 'Private worker payload probe identity changed; cleanup was refused')
+            self.assertEqual(len(list(parent.iterdir())), 2)
+            self.assertEqual(existing.read_bytes(), b'unchanged synthetic executable fixture')
+            self.assert_private(failure.exception, root)
+
+    def test_filename_bearing_metadata_open_and_cleanup_errors_are_suppressed(self):
+        for operation in ('lstat', 'open', 'fstat', 'stat', 'unlink', 'file_close', 'directory_close'):
+            with self.subTest(operation=operation), self.directories() as (root, parent, existing):
+                private = OSError(errno.EIO, 'synthetic private payload refusal', str(root / 'private-file'))
+                original_fstat, original_close = smoke.os.fstat, os.close
+
+                def fstat(descriptor):
+                    record = original_fstat(descriptor)
+                    if stat.S_ISREG(record.st_mode):
+                        raise private
+                    return record
+
+                def close(descriptor):
+                    regular = stat.S_ISREG(original_fstat(descriptor).st_mode)
+                    original_close(descriptor)
+                    if regular == (operation == 'file_close'):
+                        raise private
+
+                target, name, replacement = {
+                    'lstat': (Path, 'lstat', mock.Mock(side_effect=private)),
+                    'open': (smoke.os, 'open', mock.Mock(side_effect=private)),
+                    'fstat': (smoke.os, 'fstat', fstat),
+                    'stat': (smoke.os, 'stat', mock.Mock(side_effect=private)),
+                    'unlink': (smoke.os, 'unlink', mock.Mock(side_effect=private)),
+                    'file_close': (smoke.os, 'close', close),
+                    'directory_close': (smoke.os, 'close', close),
+                }[operation]
+                with mock.patch.object(target, name, replacement), self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_payload_mount(root)
+                self.assertEqual(str(failure.exception), 'Private worker payload mount could not be safely checked')
+                self.assert_private(failure.exception, root)
+
+    def test_active_caller_private_context_is_suppressed_on_writable_refusal(self):
+        with self.directories() as (root, parent, existing):
+            try:
+                raise OSError(errno.EIO, 'synthetic private caller refusal', str(root / 'private-caller-file'))
+            except OSError:
+                with self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_payload_mount(root)
+            self.assertEqual(list(parent.iterdir()), [existing])
+            self.assert_private(failure.exception, root)
+
+
 @unittest.skipUnless(os.name == 'posix', 'Root identity fixtures use only private POSIX temporary directories')
 class NativeWorkerRootIdentityTests(unittest.TestCase):
     @contextmanager
