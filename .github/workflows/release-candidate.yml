@@ -278,9 +278,9 @@ jobs:
           docker cp "$image_container:/app/dashboard/NOTICE.txt" "$image_agents/dashboard-NOTICE.txt"
           cmp -s NOTICE "$image_agents/dashboard-NOTICE.txt" || { echo "::error::Dashboard NOTICE differs from the release source."; exit 1; }
           docker run --rm --network none --entrypoint sh vectory-server:candidate -euc '
-            test -r /app/legal/LICENSE
-            test -r /app/legal/NOTICE
-            test -r /app/dashboard/NOTICE.txt
+            for file in /app/legal/LICENSE /app/legal/NOTICE /app/dashboard/NOTICE.txt; do
+              test -r "$file" || { echo "Public release material unreadable by server UID: $file"; exit 1; }
+            done
           '
           validator_container=$(docker create vectory-validator:candidate)
           trap 'docker rm "$image_container" "$validator_container" >/dev/null' EXIT
@@ -289,13 +289,14 @@ jobs:
             cmp -s "$name" "$image_agents/validator-$name" || { echo "::error::Validator image $name differs from the release source."; exit 1; }
           done
           docker run --rm --network none --entrypoint sh vectory-validator:candidate -euc '
-            test -r /app/legal/LICENSE
-            test -r /app/legal/NOTICE
-            test -r /usr/share/vector/NOTICE
-            test -r /usr/share/vector/LICENSE-3rdparty.csv
+            for file in /app/legal/LICENSE /app/legal/NOTICE /usr/share/vector/NOTICE /usr/share/vector/LICENSE-3rdparty.csv; do
+              test -r "$file" || { echo "Release material unreadable by validator UID: $file"; exit 1; }
+            done
             set -- /usr/share/vector/licenses/*
-            test "$#" -ge 17
-            for file in "$@"; do test -r "$file"; done
+            test "$#" -eq 16 || { echo "Expected 16 full Vector license texts, found $#"; exit 1; }
+            for file in "$@"; do
+              test -f "$file" && test -r "$file" || { echo "Inherited Vector license missing or unreadable by validator UID: $file"; exit 1; }
+            done
           '
           cp "$image_agents/catalog.json" artifacts/images/image-agent-catalog.json
           docker image inspect vectory-server:candidate vectory-validator:candidate > artifacts/images/images.json
