@@ -83,6 +83,13 @@ test("installed and public Help ship the source for their exact Pagefind browser
   assert.equal(archiveName, "pagefind-1.5.2-source.tar.gz");
   assert.equal(manifest.version, "1.5.2");
   assert.equal(manifest.upstream_commit, "a2e9f40ef326f9a7926247695df25981a6f3ef4b");
+  assert.equal(manifest.schema, 2);
+  assert.deepEqual(Object.keys(manifest.wasm_profiles).sort(), [
+    "darwin-arm64", "darwin-x64", "freebsd-x64", "linux-arm64", "linux-x64", "win32-arm64", "win32-x64",
+  ]);
+  const profile = manifest.wasm_profiles[`${process.platform}-${process.arch}`];
+  assert(profile, "no reviewed Pagefind profile for the build platform");
+  assert.equal(profile.native_package.upstream_commit, manifest.upstream_commit);
   assert.equal(manifest.source_inputs.length, 23);
   assert.deepEqual(
     manifest.ui_source_inputs.map(({ name }) => name).sort(),
@@ -103,7 +110,7 @@ test("installed and public Help ship the source for their exact Pagefind browser
       await fs.readFile(path.join(directory, "legal", archiveName)),
       archive,
     );
-    for (const record of manifest.wasm) {
+    for (const record of profile.wasm) {
       const bytes = await fs.readFile(path.join(directory, "pagefind", record.filename));
       assert.equal(bytes.length, record.bytes, `${helpPath}/${record.filename} size`);
       assert.equal(

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "component": "Pagefind offline Help search",
   "version": "1.5.2",
   "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
@@ -9,18 +9,274 @@
     "sha256": "c4f82f4806a6c470fd8ec444d3016b9a19670f101d399eb6a099049fda6c2900",
     "bytes": 6713015
   },
-  "wasm": [
-    {
-      "filename": "wasm.en.pagefind",
-      "sha256": "68c6aefbc022a1482b1a9d2adbd5599f23fd53ac0326e58cb3aebd82e8cd8232",
-      "bytes": 72206
+  "wasm_profiles": {
+    "darwin-arm64": {
+      "native_package": {
+        "name": "@pagefind/darwin-arm64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/darwin-arm64/-/darwin-arm64-1.5.2.tgz",
+        "integrity": "sha512-MXpI+7HsAdPkvJ0gk9xj9g541BCqBZOBbdwj9g6lB5LCj6kSV6nqDSjzcAJwvOsfu0fjwvC8hQU+ecfhp+MpiQ==",
+        "sha256": "3fdba074a0116a2e6e3635c48d2bf34a7c5d34e769dcda196f254c35c2c19c67",
+        "bytes": 52722762,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2fdarwin-arm64@1.5.2",
+        "published_provenance_sha256": "ca1db5d7fe1f5c5d89ce41139c98050ab48662b9ab62a7c181ee3938c5bbcb19",
+        "binary": "bin/pagefind_extended",
+        "binary_sha256": "111c39d20165385df77736c80ddace6593d01d46d0758d541f5d3bafff0cddd2"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "6c8406154b5d460fc8b6cdbf2c99c008c43c465efdb1f9c15c192f5cf30dcd85",
+          "bytes": 72740,
+          "uncompressed_sha256": "24b8831b0d6c54f112bab9aa283eac515a24423bc4968e6fc7958ea372253bf2",
+          "uncompressed_bytes": 151143,
+          "decoded_wasm_sha256": "3467ed491c13eca69aa49fd90ed7d7e573df643a4912c2237f30326a887a0aaa",
+          "decoded_wasm_bytes": 151131,
+          "native_binary_offset": 52256100
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "2533da887ac06de36813d031310af0f737daadacc931775e342aa5a3857a4959",
+          "bytes": 68199,
+          "uncompressed_sha256": "7a8e6dfc7bda3eca8043ea7936e61e0ebdca0e5bc96df5a613761824423dfc2b",
+          "uncompressed_bytes": 140536,
+          "decoded_wasm_sha256": "7dba7ba7b8ba8b562106731a92e32273e56d9a4366b73a91aff6d36b13e87e25",
+          "decoded_wasm_bytes": 140524,
+          "native_binary_offset": 54818568
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
     },
-    {
-      "filename": "wasm.unknown.pagefind",
-      "sha256": "706a7a423f3e9fdd1b6e987b61305a9abf694ca940b3f822e12f2668e4037384",
-      "bytes": 68023
+    "darwin-x64": {
+      "native_package": {
+        "name": "@pagefind/darwin-x64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/darwin-x64/-/darwin-x64-1.5.2.tgz",
+        "integrity": "sha512-IojxFWMEJe0RQ7PQ3KXQsPIImNsbpPYpoZ+QUDrL8fAl/O27IX+LVLs74/UzEZy5uA2LD8Nz1AiwKr72vrkZQw==",
+        "sha256": "60ca57451e9b8c4103695fb5eab6abf5af3844ea299217eb9129214e00ea0a3f",
+        "bytes": 52434775,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2fdarwin-x64@1.5.2",
+        "published_provenance_sha256": "cac1f63a0c8fb0f9aed64e8b96ed7491dc84bf39ffc19bd8ccdef74c009a505b",
+        "binary": "bin/pagefind_extended",
+        "binary_sha256": "a8ca52c505ccd223136d19193c56824191268b045036c25828322c7bba4008c3"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "6dcd742398e59de09ba938f725e27ce7f6896979621c46bf409902ef05909da9",
+          "bytes": 72740,
+          "uncompressed_sha256": "24b8831b0d6c54f112bab9aa283eac515a24423bc4968e6fc7958ea372253bf2",
+          "uncompressed_bytes": 151143,
+          "decoded_wasm_sha256": "3467ed491c13eca69aa49fd90ed7d7e573df643a4912c2237f30326a887a0aaa",
+          "decoded_wasm_bytes": 151131,
+          "native_binary_offset": 52835126
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "fdb104414d57b1805881631a68982cf1b5b5b58a45049113ffee21672dd5ab6c",
+          "bytes": 68199,
+          "uncompressed_sha256": "7a8e6dfc7bda3eca8043ea7936e61e0ebdca0e5bc96df5a613761824423dfc2b",
+          "uncompressed_bytes": 140536,
+          "decoded_wasm_sha256": "7dba7ba7b8ba8b562106731a92e32273e56d9a4366b73a91aff6d36b13e87e25",
+          "decoded_wasm_bytes": 140524,
+          "native_binary_offset": 55402453
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
+    },
+    "freebsd-x64": {
+      "native_package": {
+        "name": "@pagefind/freebsd-x64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/freebsd-x64/-/freebsd-x64-1.5.2.tgz",
+        "integrity": "sha512-7EVzo9+0w+2cbe671BtMj10UlNo83I+HrLVLfRxO731svHRJKUfJ/mo05gU14pe9PCfpKNQT8FS3Xc/oDN6pOA==",
+        "sha256": "99cb75bfc7af8bd245786200134905eff0c37c64abf8edf81bf51b4c8a863255",
+        "bytes": 52546873,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2ffreebsd-x64@1.5.2",
+        "published_provenance_sha256": "c0df6d8c16fd7892e6e03a4cc069d35512ee7493696608c083c01c08c0a7c57d",
+        "binary": "bin/pagefind_extended",
+        "binary_sha256": "547baa255c19c54193280c45cc1ae71aafd0d248a31ea1fd208549cd9a6332a5"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "5b2ddaa222999edfaba12fd550cbc2ccec07599b719f77171be847086b1119dc",
+          "bytes": 72209,
+          "uncompressed_sha256": "7e092add3897f1c134d7f093ebae88a3358e671addd5e1a3d39dcebdee83b12a",
+          "uncompressed_bytes": 151143,
+          "decoded_wasm_sha256": "b79a9c0cde49a652854df3a09363fe2f088ccfe6bb6dc03c29b1a8b22f331415",
+          "decoded_wasm_bytes": 151131,
+          "native_binary_offset": 53423077
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "38ec4007ac604d99c8b542979f4157b736432f20d4d4061f7d9ee3946c09a787",
+          "bytes": 68024,
+          "uncompressed_sha256": "77e118a7fd29152134c0285a97d3048a07055172dbadeb4fc6f27c6a0d3f851c",
+          "uncompressed_bytes": 140536,
+          "decoded_wasm_sha256": "26fc70ed88bf7c04481a2d5c92ac353218c2bc5af56d79e318d3c22c70d5bd8f",
+          "decoded_wasm_bytes": 140524,
+          "native_binary_offset": 55972876
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
+    },
+    "linux-arm64": {
+      "native_package": {
+        "name": "@pagefind/linux-arm64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/linux-arm64/-/linux-arm64-1.5.2.tgz",
+        "integrity": "sha512-Ovt9+K35sqzn8H3ZMXGwls4TD/wMJuvRtShHIsmUQREmaxjrDEX7gHckRCrwYJ4XE1H1p6HkLz3wukrAnsfXQw==",
+        "sha256": "a10e9f8c336afc2d759c6667cc0e1b11c5cac68312f39ca027af624c8cae47ec",
+        "bytes": 52519326,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2flinux-arm64@1.5.2",
+        "published_provenance_sha256": "c368406e5b5905f4188aae8bc8485ec7bb1fa1e735154e7a8318f318d3921ec9",
+        "binary": "bin/pagefind_extended",
+        "binary_sha256": "f317d9624087db37e875e1f606aaf09e935a9fce9cf5122b989d7579cc669a8c"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "e99e9a04b846b68e99dac617421945740e81b1843807c48bdb17adb521c7230f",
+          "bytes": 72209,
+          "uncompressed_sha256": "7e092add3897f1c134d7f093ebae88a3358e671addd5e1a3d39dcebdee83b12a",
+          "uncompressed_bytes": 151143,
+          "decoded_wasm_sha256": "b79a9c0cde49a652854df3a09363fe2f088ccfe6bb6dc03c29b1a8b22f331415",
+          "decoded_wasm_bytes": 151131,
+          "native_binary_offset": 52522853
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "cf93bf56ed009c839b5df7890ccf7a7fe678be9a20f7dc236f673c6f73796811",
+          "bytes": 68024,
+          "uncompressed_sha256": "77e118a7fd29152134c0285a97d3048a07055172dbadeb4fc6f27c6a0d3f851c",
+          "uncompressed_bytes": 140536,
+          "decoded_wasm_sha256": "26fc70ed88bf7c04481a2d5c92ac353218c2bc5af56d79e318d3c22c70d5bd8f",
+          "decoded_wasm_bytes": 140524,
+          "native_binary_offset": 55074221
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
+    },
+    "linux-x64": {
+      "native_package": {
+        "name": "@pagefind/linux-x64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/linux-x64/-/linux-x64-1.5.2.tgz",
+        "integrity": "sha512-V+tFqHKXhQKq/WqPBD67AFy7scn1/aZID00ws4fSDd+1daSi5UHR9VVlRrOUYKxn3VuFQYRD7lYXdZK1WED1YA==",
+        "sha256": "3c8dcfdaa69946113e0257be05bdef57297c7f1a562aa168536ff7c5d4590660",
+        "bytes": 52776114,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2flinux-x64@1.5.2",
+        "published_provenance_sha256": "a0c1316abf83544e1ba05138ef89ff29e41b9f6343aea30b3ad6adc16b393c73",
+        "binary": "bin/pagefind_extended",
+        "binary_sha256": "70cb6d23d6508bb18e77fd5403e99d7ede0ae9d2eef1ab9f049411e0c12ec380"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "bb16c9e6d3d214d4d05cccca51df7b487b86b3657318da767f6ca9e0a2e7259d",
+          "bytes": 72209,
+          "uncompressed_sha256": "7e092add3897f1c134d7f093ebae88a3358e671addd5e1a3d39dcebdee83b12a",
+          "uncompressed_bytes": 151143,
+          "decoded_wasm_sha256": "b79a9c0cde49a652854df3a09363fe2f088ccfe6bb6dc03c29b1a8b22f331415",
+          "decoded_wasm_bytes": 151131,
+          "native_binary_offset": 53830877
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "3a74cefceacd066e8d3bc8c52e7bc1c869544ca3d9031b44a9b7136356d5d7f4",
+          "bytes": 68024,
+          "uncompressed_sha256": "77e118a7fd29152134c0285a97d3048a07055172dbadeb4fc6f27c6a0d3f851c",
+          "uncompressed_bytes": 140536,
+          "decoded_wasm_sha256": "26fc70ed88bf7c04481a2d5c92ac353218c2bc5af56d79e318d3c22c70d5bd8f",
+          "decoded_wasm_bytes": 140524,
+          "native_binary_offset": 56380676
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
+    },
+    "win32-arm64": {
+      "native_package": {
+        "name": "@pagefind/windows-arm64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/windows-arm64/-/windows-arm64-1.5.2.tgz",
+        "integrity": "sha512-hN9Nh90fNW61nNRCW9ZyQrAj/mD0eRvmJ8NlTUzkbuW8kIzGJUi3cxjFkEcMZ5h/8FsKWD/VcouZl4yo1F7B6g==",
+        "sha256": "0287adc97c2ec7a2f0f78bbc975c63774ad97dea0b18d4cd205580929bc34ea4",
+        "bytes": 52447869,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2fwindows-arm64@1.5.2",
+        "published_provenance_sha256": "d9035fe00d0b62a6dc09da2f27f7c904efdb72e85c50ee45eb43862d824e44f9",
+        "binary": "bin/pagefind_extended.exe",
+        "binary_sha256": "5f2ce0af09c782728743fb3aae3ac4fdc974c068cf67a32cb4e7a9024b100732"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "6fa00fc5ce49340159eb9878e88d5c056aa299ebf227012b2493f10b50d857a6",
+          "bytes": 72198,
+          "uncompressed_sha256": "f2212ab462c5df119427b91940c9b5e55639a05f4dc1cebb759b9289b8d0975c",
+          "uncompressed_bytes": 151166,
+          "decoded_wasm_sha256": "afb8bb7ba36260456c73b88cbdfb4b7520352105334268c10b50323784130136",
+          "decoded_wasm_bytes": 151154,
+          "native_binary_offset": 52997472
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "0ed85ee7c8e9dcf608235110f8973097c5a58b8a0746898cba4ce5f8d6ee11cc",
+          "bytes": 68026,
+          "uncompressed_sha256": "de2120b03d8527f7e65abc6a04e1fdb9448cce52cbd8225a563820c936854ec5",
+          "uncompressed_bytes": 140560,
+          "decoded_wasm_sha256": "df9c6c0f968da334d81d15ee2be22c90a8c8a4feeb325967e8a6debfbb00c1a5",
+          "decoded_wasm_bytes": 140548,
+          "native_binary_offset": 55552161
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
+    },
+    "win32-x64": {
+      "native_package": {
+        "name": "@pagefind/windows-x64",
+        "version": "1.5.2",
+        "url": "https://registry.npmjs.org/@pagefind/windows-x64/-/windows-x64-1.5.2.tgz",
+        "integrity": "sha512-Fa2Iyw7kaDRzGMfNYNUXNW2zbL5FQVDgSOcbDHdzBrDEdpqOqg8TcZ68F22ol6NJ9IGzvUdmeyZypLW5dyhqsg==",
+        "sha256": "a27aecdad058a94283f4b7969e42064fbde57be3b29e040cfcd2361e8bf0b04a",
+        "bytes": 52557450,
+        "upstream_commit": "a2e9f40ef326f9a7926247695df25981a6f3ef4b",
+        "published_provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2fwindows-x64@1.5.2",
+        "published_provenance_sha256": "e21fd81345f0a955d51f14632c4d77dc9978ea127cb1205b267cb6eaa7b437ed",
+        "binary": "bin/pagefind_extended.exe",
+        "binary_sha256": "ea67f8e3757e756263df57244ba894807a9bed8501b02d15daf1ab00a8a98734"
+      },
+      "wasm": [
+        {
+          "filename": "wasm.en.pagefind",
+          "sha256": "68c6aefbc022a1482b1a9d2adbd5599f23fd53ac0326e58cb3aebd82e8cd8232",
+          "bytes": 72206,
+          "uncompressed_sha256": "5844b06dbf865f81d2c23c098c77c36a417ad3441a6ac559fda70e31f6bc1b24",
+          "uncompressed_bytes": 151174,
+          "decoded_wasm_sha256": "34f56598d5cb14f240bcf0564a196b54f879528c8f2202577d0885ca42be80b7",
+          "decoded_wasm_bytes": 151162,
+          "native_binary_offset": 53428450
+        },
+        {
+          "filename": "wasm.unknown.pagefind",
+          "sha256": "706a7a423f3e9fdd1b6e987b61305a9abf694ca940b3f822e12f2668e4037384",
+          "bytes": 68023,
+          "uncompressed_sha256": "de0d3d0e0729ec5f45cdeb7e3c03ae92d5e566bbbf01ab8cb61b30600fef4bf9",
+          "uncompressed_bytes": 140568,
+          "decoded_wasm_sha256": "d7e2e8234ffd6540e5be62e7ae8ca1350d3c74b3d584d57116046306506eb486",
+          "decoded_wasm_bytes": 140556,
+          "native_binary_offset": 55993025
+        }
+      ],
+      "verification": "Locked npm archive integrity verified; published provenance resolves same source commit; gzip modules extracted directly from native binary. English identified by unique packaged Snowball dictionary markers; unstemmed fallback is the unique smallest module. Linux x64 and Windows x64 extraction digests independently match files emitted by native builds. Foreign native packages were inspected without execution."
     }
-  ],
+  },
   "build_recipe": "pagefind-1.5.2-source/REBUILD.md",
   "source_inputs": [
     {

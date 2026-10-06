@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zlib
 
 
 SPEC = importlib.util.spec_from_file_location('pagefind_source', Path(__file__).with_name('build-pagefind-source.py'))
@@ -56,6 +57,35 @@ class PagefindSourceTests(unittest.TestCase):
         with patch.object(source, 'DEST', dest):
             with self.assertRaisesRegex(ValueError, 'input manifest mismatch'):
                 source.check()
+
+    def test_arbitrary_platform_wasm_pin_is_rejected(self):
+        dest = self.fixture()
+        manifest = json.loads((dest / source.MANIFEST).read_text())
+        manifest['wasm_profiles']['linux-x64']['wasm'][0]['sha256'] = '0' * 64
+        (dest / source.MANIFEST).write_text(json.dumps(manifest))
+        with patch.object(source, 'DEST', dest):
+            with self.assertRaisesRegex(ValueError, 'Wrong pinned platform WASM profiles'):
+                source.check()
+
+    def test_mixed_platform_wasm_pair_is_rejected(self):
+        directory = tempfile.TemporaryDirectory(prefix='vectory-mixed-wasm-test-')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        output = root / 'help-center/dist/pagefind'
+        output.mkdir(parents=True)
+        profiles = {}
+        for key in ('one', 'two'):
+            records = []
+            for name in ('wasm.en.pagefind', 'wasm.unknown.pagefind'):
+                raw = b'pagefind_dcd\0asm' + (key + name).encode('ascii')
+                data = zlib.compress(raw, wbits=31)
+                records.append({'filename': name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+                if (key == 'one' and name == 'wasm.en.pagefind') or (key == 'two' and name == 'wasm.unknown.pagefind'):
+                    (output / name).write_bytes(data)
+            profiles[key] = {'wasm': records}
+        with patch.object(source, 'ROOT', root):
+            with self.assertRaisesRegex(ValueError, 'single verified native profile'):
+                source.check_local_wasm(profiles)
 
     def test_parent_traversal_from_downloaded_source_is_rejected(self):
         buffer = io.BytesIO()

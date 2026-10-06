@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 import tarfile
 import tomllib
 import urllib.request
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / 'help-center/legal'
@@ -32,10 +33,8 @@ MAX_INPUT = 64 * 1024 * 1024
 MAX_EXPANDED = 128 * 1024 * 1024
 WASM_LOCK_SHA256 = 'd762f97d4dc284014c284f2b2147d0d29bb4add334df4bdc14eaf4e84201a5c3'
 UI_LOCK_SHA256 = '278a71cacfa1a5e1dbd9365039f67f363fc5ae18b4c6aa897ace00ed8b8761ae'
-WASM = (
-    ('wasm.en.pagefind', '68c6aefbc022a1482b1a9d2adbd5599f23fd53ac0326e58cb3aebd82e8cd8232'),
-    ('wasm.unknown.pagefind', '706a7a423f3e9fdd1b6e987b61305a9abf694ca940b3f822e12f2668e4037384'),
-)
+PROFILES_PATH = ROOT / 'packaging/notices/pagefind-wasm-profiles.json'
+WASM_PROFILES = json.loads(PROFILES_PATH.read_bytes())['profiles']
 
 REBUILD = """Pagefind 1.5.2 compiled Help search: corresponding source
 
@@ -258,12 +257,7 @@ def build(cache, allow_download):
                 info.mtime = 0
                 archive.addfile(info, io.BytesIO(data))
     payload = buffer.getvalue()
-    wasm = []
-    for name, expected in WASM:
-        data = (ROOT / 'help-center/dist/pagefind' / name).read_bytes()
-        if sha(data) != expected:
-            raise ValueError(f'Shipped Pagefind WASM changed: {name}')
-        wasm.append({'filename': name, 'sha256': expected, 'bytes': len(data)})
+    check_local_wasm(WASM_PROFILES)
     inventory.append({'path': PREFIX + '/SOURCE-MANIFEST.json', 'sha256': sha(files['SOURCE-MANIFEST.json']), 'bytes': len(files['SOURCE-MANIFEST.json'])})
     proof = {'toolchain': 'Rust 1.94.0', 'container_image': 'rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55',
              'network': 'disabled during builds', 'target': 'wasm32-unknown-unknown',
@@ -272,10 +266,10 @@ def build(cache, allow_download):
                          {'variant': 'unknown', 'command': 'cargo build --locked --offline --release --target wasm32-unknown-unknown --no-default-features', 'raw_cargo_wasm_sha256': 'e2804c6f6c017c3ce3faa0df9255136d3f952a7fe67950f84798d4453c20bcd6'}],
              'upstream_packaged_wasm_byte_equivalence': 'Not asserted: upstream also applies wasm-bindgen, wasm-opt and compression.',
              'snowball': {'upstream_commit': SNOWBALL_COMMIT, 'english_generated_rust_sha256': 'e83bb65144434954728488c5bd9f796f23a7d6829609db5b4f1adaed5c924a90', 'matches_published_english_and_runtime_sources': True}}
-    document = {'schema': 1, 'component': 'Pagefind offline Help search', 'version': VERSION,
+    document = {'schema': 2, 'component': 'Pagefind offline Help search', 'version': VERSION,
                 'upstream_commit': COMMIT, 'upstream_source_url': SOURCE_URL,
                 'archive': {'filename': ARCHIVE, 'sha256': sha(payload), 'bytes': len(payload)},
-                'wasm': wasm, 'build_recipe': PREFIX + '/REBUILD.md',
+                'wasm_profiles': WASM_PROFILES, 'build_recipe': PREFIX + '/REBUILD.md',
                 'source_inputs': inputs, 'ui_source_inputs': ui_inputs, 'files': sorted(inventory, key=lambda f: f['path']), 'build_verification': proof}
     DEST.mkdir(parents=True, exist_ok=True)
     (DEST / ARCHIVE).write_bytes(payload)
@@ -285,7 +279,7 @@ def build(cache, allow_download):
 
 def check():
     document = json.loads((DEST / MANIFEST).read_text(encoding='utf-8'))
-    if document.get('schema') != 1 or document.get('upstream_commit') != COMMIT or document['archive']['filename'] != ARCHIVE:
+    if document.get('schema') != 2 or document.get('upstream_commit') != COMMIT or document['archive']['filename'] != ARCHIVE:
         raise ValueError('Wrong pinned Pagefind source manifest')
     payload = (DEST / ARCHIVE).read_bytes()
     if len(payload) != document['archive']['bytes'] or sha(payload) != document['archive']['sha256']:
@@ -347,14 +341,36 @@ def check():
         package = ui_packages['node_modules/' + entry['name']]
         if entry['version'] != package['version'] or entry['integrity'] != package['integrity'] or PREFIX + '/' + entry['path'] + '/package.json' not in seen:
             raise ValueError('Pinned UI source input mismatch')
-    for name, digest in WASM:
-        entry = next(item for item in document['wasm'] if item['filename'] == name)
-        if entry['sha256'] != digest:
-            raise ValueError('Wrong pinned WASM digest')
-        local = ROOT / 'help-center/dist/pagefind' / name
-        if local.exists() and (local.stat().st_size != entry['bytes'] or sha(local.read_bytes()) != digest):
-            raise ValueError('Built Help WASM differs from source manifest')
+    if document.get('wasm_profiles') != WASM_PROFILES:
+        raise ValueError('Wrong pinned platform WASM profiles')
+    check_local_wasm(WASM_PROFILES)
     return document
+
+
+def check_local_wasm(profiles):
+    """Match one complete verified profile; Help's build selects native platform."""
+    names = ('wasm.en.pagefind', 'wasm.unknown.pagefind')
+    paths = {name: ROOT / 'help-center/dist/pagefind' / name for name in names}
+    if not any(path.exists() for path in paths.values()):
+        return
+    if not all(path.exists() for path in paths.values()):
+        raise ValueError('Built Help WASM pair incomplete')
+    observed = {name: path.read_bytes() for name, path in paths.items()}
+    matches = []
+    for key, profile in profiles.items():
+        if {record['filename'] for record in profile['wasm']} != set(names):
+            raise ValueError('Pinned WASM profile file set invalid')
+        if all(len(observed[r['filename']]) == r['bytes'] and sha(observed[r['filename']]) == r['sha256'] for r in profile['wasm']):
+            matches.append((key, profile))
+    if len(matches) != 1:
+        raise ValueError('Built Help WASM pair does not match a single verified native profile')
+    for record in matches[0][1]['wasm']:
+        raw = zlib.decompress(observed[record['filename']], wbits=31)
+        if not raw.startswith(b'pagefind_dcd\0asm'):
+            raise ValueError('Pagefind decoded WASM header invalid')
+        module = raw[len(b'pagefind_dcd'):]
+        if len(raw) != record['uncompressed_bytes'] or sha(raw) != record['uncompressed_sha256'] or len(module) != record['decoded_wasm_bytes'] or sha(module) != record['decoded_wasm_sha256']:
+            raise ValueError('Pagefind decoded WASM digest differs from native profile')
 
 
 def main():

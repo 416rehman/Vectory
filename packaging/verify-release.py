@@ -61,11 +61,22 @@ MAX_SOURCE_METADATA_TOTAL_BYTES = 32 * 1024 * 1024
 PAGEFIND_COMMIT = 'a2e9f40ef326f9a7926247695df25981a6f3ef4b'
 SNOWBALL_COMMIT = '988b5ae3fff9db34cc978c8ddd3b84f83ef5ef58'
 SNOWBALL_SHA256 = '571f314a0d86fefa0eaf5e2cd39a944a82f9d0ef314ce085f97f16154a354343'
-PAGEFIND_WASM_SHA256 = {
-    'wasm.en.pagefind': '68c6aefbc022a1482b1a9d2adbd5599f23fd53ac0326e58cb3aebd82e8cd8232',
-    'wasm.unknown.pagefind': '706a7a423f3e9fdd1b6e987b61305a9abf694ca940b3f822e12f2668e4037384',
+PAGEFIND_PLATFORM_PINS = {
+    'linux-x64': {
+        'wasm.en.pagefind': ('bb16c9e6d3d214d4d05cccca51df7b487b86b3657318da767f6ca9e0a2e7259d', 72209,
+                             'b79a9c0cde49a652854df3a09363fe2f088ccfe6bb6dc03c29b1a8b22f331415'),
+        'wasm.unknown.pagefind': ('3a74cefceacd066e8d3bc8c52e7bc1c869544ca3d9031b44a9b7136356d5d7f4', 68024,
+                                  '26fc70ed88bf7c04481a2d5c92ac353218c2bc5af56d79e318d3c22c70d5bd8f'),
+    },
+    'win32-x64': {
+        'wasm.en.pagefind': ('68c6aefbc022a1482b1a9d2adbd5599f23fd53ac0326e58cb3aebd82e8cd8232', 72206,
+                             '34f56598d5cb14f240bcf0564a196b54f879528c8f2202577d0885ca42be80b7'),
+        'wasm.unknown.pagefind': ('706a7a423f3e9fdd1b6e987b61305a9abf694ca940b3f822e12f2668e4037384', 68023,
+                                  'd7e2e8234ffd6540e5be62e7ae8ca1350d3c74b3d584d57116046306506eb486'),
+    },
 }
-PAGEFIND_WASM_BYTES = {'wasm.en.pagefind': 72206, 'wasm.unknown.pagefind': 68023}
+PAGEFIND_PROFILE_KEYS = {'darwin-arm64', 'darwin-x64', 'freebsd-x64', 'linux-arm64',
+                         'linux-x64', 'win32-arm64', 'win32-x64'}
 PAGEFIND_UI_INPUTS = {
     'svelte': '4.2.20',
     'bcp-47': '2.1.0',
@@ -554,7 +565,7 @@ def required_pagefind_source(directory):
     archive_name = 'pagefind-1.5.2-source.tar.gz'
     archive_path = directory / archive_name
     manifest = required_json(directory / 'pagefind-1.5.2-source.json')
-    if (not isinstance(manifest, dict) or manifest.get('schema') != 1
+    if (not isinstance(manifest, dict) or manifest.get('schema') != 2
             or manifest.get('component') != 'Pagefind offline Help search'
             or manifest.get('version') != '1.5.2'
             or manifest.get('upstream_commit') != PAGEFIND_COMMIT
@@ -568,13 +579,49 @@ def required_pagefind_source(directory):
             or bundle.get('bytes') != archive_path.stat().st_size
             or bundle.get('sha256') != sha(archive_path)):
         raise ValueError(f'{archive_name} differs from its manifest')
-    wasm = manifest.get('wasm')
-    if (not isinstance(wasm, list) or len(wasm) != len(PAGEFIND_WASM_SHA256)
-            or any(not isinstance(item, dict) or item.get('filename') not in PAGEFIND_WASM_SHA256
-                   or item.get('sha256') != PAGEFIND_WASM_SHA256[item['filename']]
-                   or item.get('bytes') != PAGEFIND_WASM_BYTES[item['filename']] for item in wasm)
-            or {item['filename'] for item in wasm} != set(PAGEFIND_WASM_SHA256)):
-        raise ValueError('Pagefind source manifest does not match the shipped Help WASM pins')
+    profiles = manifest.get('wasm_profiles')
+    canonical = required_json(Path(__file__).resolve().parent / 'notices/pagefind-wasm-profiles.json')
+    if (not isinstance(canonical, dict) or canonical.get('schema') != 1
+            or not isinstance(canonical.get('profiles'), dict)
+            or set(canonical['profiles']) != PAGEFIND_PROFILE_KEYS
+            or profiles != canonical['profiles']):
+        raise ValueError('Pagefind source manifest does not match the pinned native WASM profiles')
+    for platform, profile in profiles.items():
+        native = profile.get('native_package') if isinstance(profile, dict) else None
+        records = profile.get('wasm') if isinstance(profile, dict) else None
+        package_platform = platform.replace('win32-', 'windows-')
+        binary_name = 'bin/pagefind_extended.exe' if platform.startswith('win32-') else 'bin/pagefind_extended'
+        if (not isinstance(native, dict) or native.get('name') != f'@pagefind/{package_platform}'
+                or native.get('version') != '1.5.2'
+                or native.get('url') != f'https://registry.npmjs.org/@pagefind/{package_platform}/-/{package_platform}-1.5.2.tgz'
+                or native.get('upstream_commit') != PAGEFIND_COMMIT
+                or not isinstance(native.get('integrity'), str)
+                or not re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', native['integrity'])
+                or any(not isinstance(native.get(key), str)
+                       or not re.fullmatch(r'[0-9a-f]{64}', native[key])
+                       for key in ('sha256', 'published_provenance_sha256', 'binary_sha256'))
+                or not isinstance(native.get('bytes'), int) or not 0 < native['bytes'] <= 128 * 1024 * 1024
+                or native.get('binary') != binary_name
+                or native.get('published_provenance_url') !=
+                f'https://registry.npmjs.org/-/npm/v1/attestations/@pagefind%2f{package_platform}@1.5.2'
+                or not isinstance(records, list) or len(records) != 2
+                or {record.get('filename') for record in records if isinstance(record, dict)} !=
+                {'wasm.en.pagefind', 'wasm.unknown.pagefind'}):
+            raise ValueError('Pagefind source manifest has an invalid native WASM profile')
+        for record in records:
+            if (any(not isinstance(record.get(key), str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', record[key])
+                    for key in ('sha256', 'uncompressed_sha256', 'decoded_wasm_sha256'))
+                    or any(not isinstance(record.get(key), int) or record[key] <= 0
+                           for key in ('bytes', 'uncompressed_bytes', 'decoded_wasm_bytes'))
+                    or not isinstance(record.get('native_binary_offset'), int)
+                    or not 0 <= record['native_binary_offset'] < 256 * 1024 * 1024):
+                raise ValueError('Pagefind source manifest has an invalid native WASM record')
+        if platform in PAGEFIND_PLATFORM_PINS:
+            pinned = PAGEFIND_PLATFORM_PINS[platform]
+            if any((record['sha256'], record['bytes'], record['decoded_wasm_sha256']) !=
+                   pinned[record['filename']] for record in records):
+                raise ValueError('Pagefind source manifest does not match the shipped Help WASM pins')
     inputs = manifest.get('source_inputs')
     if (not isinstance(inputs, list) or len(inputs) != 23
             or any(not isinstance(item, dict) or not all(isinstance(item.get(key), str) and item[key]

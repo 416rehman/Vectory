@@ -6,14 +6,15 @@
     "server/Cargo.toml": "1679758b10ff432a3243f47234cf156809583cc3d2c11a405dfa957ef4529474",
     "server/Cargo.lock": "729ff3f700471633ed81a3bb17171802dcb66554e53590fabe4047fa2a741b70",
     "dashboard/package.json": "c4c15ac0802d73aa05bf3b6561ecbd77375ad996aea620d45141b0736a0ef37e",
-    "dashboard/package-lock.json": "23032f818970d7b0a351bf4cbc6c76162b55846124babf7c62e0905688c9fc08",
+    "dashboard/package-lock.json": "f3278e5a7e3e8cd82b01064d9f30f8fc4c0912efde29cf57016fabbe732dac8b",
     "help-center/package.json": "821e0022356545c52c6337ad16cddeb934f9de4ef54aad509301582f08d584e7",
-    "help-center/package-lock.json": "9815d335926d26d23bb6513ef373692266caf65e4fcfac44ee6c69ab811ab696",
+    "help-center/package-lock.json": "470545da9562a58f7ee0a61f01f71cd6339744d1318620a2d7828e37fe2890f0",
     "vector-catalog/upstream/provenance.json": "4736e444487d5af6c81a5fb04fbae346c86461a0a2d77eb92498e42e7fa18850",
     "dashboard/src/assets/component-icons/provenance.json": "40ec4de759c1e20cfb76beced05f7f269ed9f6c1737288cf4ff06c5422095b18",
     "dashboard/public/fonts/OFL.txt": "9e27a72ed30eb49a08678f6a5d6ed98ec7ba5368f541637ee0683ec9134ef966",
     "dashboard/public/fonts/README.txt": "866411bf59234081fbd1ecf43effbe77b75bd1b67f0ed903e61924f04e3330ea",
-    "help-center/legal/pagefind-1.5.2-source.json": "d60763ac06f29fb2ca7b8843d0aea6806ef088f73a0fbf7801bb092a30e6938a"
+    "help-center/legal/pagefind-1.5.2-source.json": "7a5b0490161b2a4a927e034053b3b4cfd6e4b1ed97586a5bfc456a19f303a5e7",
+    "packaging/notices/pagefind-wasm-profiles.json": "8402322456df54165c20ba026962a34a02bbc8314e3111e75e02947d8cd35ed6"
   },
   "scope": {
     "npm-dashboard": {

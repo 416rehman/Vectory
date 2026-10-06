@@ -62,5 +62,31 @@ inside an isolated pinned Rust container with registry access disabled. The
 manifest records raw build hashes and explicitly does not claim byte equivalence
 to upstream's separately optimized/packaged WASM.
 
+Pagefind's native npm packages embed platform-specific compressed browser modules.
+The source manifest's `wasm_profiles` binds all seven supported native package
+profiles to the same upstream source commit, locked package integrity, native
+binary SHA-256, and exact compressed and decoded WASM hashes. The public and
+installed Help builds select their actual Node platform/architecture profile;
+an unknown platform or arbitrary changed output is refused. macOS/ARM and other
+foreign binaries were inspected as data, never executed on a different host.
+Windows and Linux extracted modules were independently matched to native build
+outputs. The decompressed modules differ between platform families too, so no
+shared cross-platform module-byte identity is asserted.
+
+Verify profile metadata offline, or reproduce the package/provenance/member proof:
+
+```sh
+python packaging/verify-pagefind-profiles.py --check
+python packaging/verify-pagefind-profiles.py --download
+```
+
+The download check verifies every exact native archive against the lockfile's
+SHA-512 integrity and recorded SHA-256, checks its published source-provenance
+mapping, and reads the pinned gzip members from the native binary. Both the
+Pagefind wrapper and the actual decoded WASM module hashes are retained in
+`pagefind-wasm-profiles.json`. Reading publisher provenance is evidence of its
+published source mapping, not an independent signature-verification or legal
+clearance claim.
+
 These files document shipped materials and provenance. They are not legal
 clearance or a completeness claim for a future changed distribution.

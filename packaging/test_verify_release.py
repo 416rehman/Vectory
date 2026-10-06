@@ -410,16 +410,17 @@ class CandidateVerification(unittest.TestCase):
                 member.size = len(data)
                 archive.addfile(member, io.BytesIO(data))
         bundle = gzip.compress(stream.getvalue(), mtime=0)
+        profiles = json.loads((Path(__file__).with_name('notices') /
+                               'pagefind-wasm-profiles.json').read_text(encoding='utf-8'))['profiles']
         manifest = {
-            'schema': 1,
+            'schema': 2,
             'component': 'Pagefind offline Help search',
             'version': '1.5.2',
             'upstream_commit': verifier.PAGEFIND_COMMIT,
             'upstream_source_url': f'https://github.com/CloudCannon/pagefind/archive/{verifier.PAGEFIND_COMMIT}.tar.gz',
             'archive': {'filename': 'pagefind-1.5.2-source.tar.gz',
                         'sha256': hashlib.sha256(bundle).hexdigest(), 'bytes': len(bundle)},
-            'wasm': [{'filename': key, 'sha256': digest, 'bytes': verifier.PAGEFIND_WASM_BYTES[key]}
-                     for key, digest in verifier.PAGEFIND_WASM_SHA256.items()],
+            'wasm_profiles': profiles,
             'build_recipe': prefix + 'REBUILD.md',
             'source_inputs': inputs,
             'ui_source_inputs': ui_inputs,
@@ -603,14 +604,14 @@ class CandidateVerification(unittest.TestCase):
     def test_pagefind_source_requires_pinned_wasm_and_real_file_hashes(self):
         path = self.root / 'pagefind-1.5.2-source.json'
         original = path.read_bytes()
-        for change, message in [('wasm', 'shipped Help WASM pins'),
+        for change, message in [('wasm', 'pinned native WASM profiles'),
                                 ('file', 'source archive member differs'),
                                 ('ui-version', 'five pinned UI source packages'),
                                 ('ui-package-file', 'omits a rebuild recipe or pinned dependency')]:
             with self.subTest(change=change):
                 manifest = json.loads(original)
                 if change == 'wasm':
-                    manifest['wasm'][0]['sha256'] = '0' * 64
+                    manifest['wasm_profiles']['linux-x64']['wasm'][0]['sha256'] = '0' * 64
                 elif change == 'file':
                     manifest['files'][0]['sha256'] = '0' * 64
                 elif change == 'ui-version':
