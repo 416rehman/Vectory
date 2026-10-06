@@ -60,6 +60,14 @@ def source_records(text, wanted):
     return records
 
 
+def fetch_authenticated_sources(arguments, destination):
+    subprocess.run(arguments, check=True, timeout=600, stdout=subprocess.DEVNULL)
+    # CAP_CHOWN lets the helper return files to the host owner, but does not
+    # permit container root to chmod the host-owned mount. Only its host owner
+    # sets the final mode after verified downloads return to their host owner.
+    destination.chmod(0o755)
+
+
 def build(provenance_path, out):
     proof = json.loads(provenance_path.read_text())
     version = proof['version']
@@ -104,14 +112,12 @@ for f in /var/lib/apt/lists/*InRelease /var/lib/apt/lists/*Release /var/lib/apt/
 done
 cp /usr/share/keyrings/debian-archive-keyring.gpg metadata/
 chown -R "$VECTORY_SOURCE_UID:$VECTORY_SOURCE_GID" /out
-chmod 0755 /out
 '''
-            subprocess.run(['docker', 'run', '--platform', 'linux/amd64', '--pull', 'never', '--rm', '--user', '0:0', '--cap-drop', 'ALL',
+            fetch_authenticated_sources(['docker', 'run', '--platform', 'linux/amd64', '--pull', 'never', '--rm', '--user', '0:0', '--cap-drop', 'ALL',
                 '--cap-add', 'CHOWN', '--env', f'VECTORY_SOURCE_UID={os.getuid()}', '--env', f'VECTORY_SOURCE_GID={os.getgid()}',
                 '--security-opt', 'no-new-privileges:true', '--memory', '768m', '--pids-limit', '64',
                 '--mount', f'type=bind,src={destination.resolve()},dst=/out', '--entrypoint', '/bin/sh',
-                image, '-c', script, 'vectory-source-fetch', *(name + '=' + release for name, release in sorted(wanted))],
-                check=True, timeout=600, stdout=subprocess.DEVNULL)
+                image, '-c', script, 'vectory-source-fetch', *(name + '=' + release for name, release in sorted(wanted))], destination)
             records = source_records((destination / 'SOURCE-INDEX.txt').read_text(), wanted)
             allowed = {'SOURCE-INDEX.txt', 'metadata'}
             for key, files in records.items():

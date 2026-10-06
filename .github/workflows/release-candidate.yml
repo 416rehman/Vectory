@@ -348,6 +348,7 @@ jobs:
         run: |
           python3 packaging/test_native_kit.py
           python3 packaging/test_native_license_extraction.py
+          python3 packaging/test_native_runtime_source.py
       - name: Extract exact prebuilt images into the bounded native kit
         timeout-minutes: 10
         run: |
