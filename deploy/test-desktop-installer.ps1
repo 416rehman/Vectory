@@ -7,6 +7,9 @@ $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'Installer syntax failed.' }
 if ($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ieq 'docker' },$false).Count) { throw 'Installer must not shadow the external Docker command.' }
+$securityImports = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Import-Module' },$false))
+if ($securityImports.Count -ne 1) { throw 'Installer must select its executing PowerShell built-in modules.' }
+Invoke-Expression $securityImports[0].Extent.Text
 foreach ($functionAst in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] },$false)) {
     # Only functions from this tracked installer, never external text.
     Invoke-Expression $functionAst.Extent.Text

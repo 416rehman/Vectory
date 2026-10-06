@@ -1220,6 +1220,12 @@ const INSTALL_PS1: &str = r#"# Vectory Windows agent installer, compatible with 
 # Program Files, registers its unprivileged virtual service account and waits for a check-in.
 # It never installs Vector or takes over a running Vector without an explicit local choice.
 $ErrorActionPreference = 'Stop'
+# A PowerShell 7 parent may supply its module path to Windows PowerShell.
+# Resolve ACL and hash commands from this executing host's protected modules.
+Import-Module -Name @(
+    (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'),
+    (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1')
+) -Scope Local -Force -ErrorAction Stop
 $server = @SERVER@
 $caSHA256 = @CA_SHA256@
 $caPEM = @CA_PEM@

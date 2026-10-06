@@ -23,7 +23,12 @@ bash vectory-install.sh
 On **Windows**, run in PowerShell:
 
 ```powershell
-curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1 } else { throw 'Installer download failed' }
+curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1
+if ($LASTEXITCODE -eq 0) {
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1
+} else {
+  throw 'Installer download failed'
+}
 ```
 
 On **Linux without Docker**, run:

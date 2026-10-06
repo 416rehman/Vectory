@@ -83,10 +83,16 @@ def image_identity(image, user=None, archive_path=None, expected_tag=None):
             command('docker', 'image', 'save', '--output', str(archive), execution_id, timeout=180)
             saved = verifier.required_image(archive, identity=True, uncompressed=True)
     configuration = saved['configuration']
+    execution_user = item.get('Config', {}).get('User', '')
+    configuration_user = configuration['config'].get('User', '')
     if (execution_id not in saved['execution_ids']
             or item.get('RootFS', {}).get('Type') != 'layers'
             or item['RootFS'].get('Layers') != configuration['rootfs']['diff_ids']
-            or item.get('Config', {}).get('User') != configuration['config'].get('User')
+            # Classic Docker fills the omitted default User with "", while
+            # containerd preserves its omission. Explicit execution users must
+            # still match exactly in both independent configuration records.
+            or not isinstance(execution_user, str) or not isinstance(configuration_user, str)
+            or execution_user != configuration_user
             or (user and configuration['config'].get('User') != user)):
         raise ValueError('Source execution image differs from its exact saved configuration')
     return {'reference': image, 'config_id': saved['config_id'], 'execution_id': execution_id,

@@ -11,12 +11,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  realpathSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentInstallSchema } from "./api";
 import { installerCommand, type SetupChoices } from "./enrollmentCommands";
@@ -177,7 +178,10 @@ describe.skipIf(!usable)("the install command, run", () => {
       expect(result.installerArgs).toBe("--mode\nrestricted\n--create-user\n");
       expect(result.sudoScript).toBe(installerScript);
       expect(result.sudoArgs?.split("\n")[0]).toBe("sh");
-      expect(result.directoryPath?.startsWith(result.temporaryRoot)).toBe(true);
+      expect(result.directoryPath).not.toBeNull();
+      expect(realpathSync(dirname(result.directoryPath!))).toBe(
+        realpathSync(result.temporaryRoot),
+      );
       expect(result.sudoArgs?.split("\n")[1]).toBe(
         `${result.directoryPath}/vectory-install.sh`,
       );

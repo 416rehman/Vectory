@@ -21,7 +21,7 @@ The public site workflow builds and tests every push and pull request. Only a su
 
 The build needs no credentials. Deployment does: a workflow that warns about missing secrets has not published the site. Connect `vectory.ahmadz.ai` as the project's custom domain, then complete the production checks in [SEO.md](SEO.md). Keep release download links tied to an available, verified GitHub release.
 
-The build copies the release-owned `deploy/install.sh` verbatim to `/install.sh`. Its response is a plain-text attachment with `noindex`; it is downloaded for review and run from the user's terminal, never executed by the website. The installer and advertised release must be updated together after the release verification gates pass.
+The build copies all four release-owned bootstrap scripts verbatim: `/install.sh` for Linux Docker, `/install-desktop.sh` for macOS Docker, `/install.ps1` for Windows Docker, and `/install-native.sh` for native Linux. Each response is a plain-text attachment with `noindex` and `no-store`; it is downloaded for review and run from the user's terminal. Deployment waits until the advertised stable release contains every required signed installer and server kit, so the public instructions always point to available artifacts.
 
 The site uses checked-in screenshots from the labeled synthetic demo; update those through the screenshot capture workflow when the product changes. Release status, signature verification, registry references, compatibility, security model and known limits must match the artifacts that passed the release checks.
 

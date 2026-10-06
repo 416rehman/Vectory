@@ -102,10 +102,42 @@ describe.each(shells)("Windows recipe in %s", (shell) => {
   );
 });
 
+const coreModules = shells.includes("pwsh.exe")
+  ? spawnSync(
+      "pwsh.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Join-Path $PSHOME 'Modules'",
+      ],
+      { encoding: "utf8", windowsHide: true },
+    ).stdout.trim()
+  : "";
+
+describe.skipIf(!coreModules)(
+  "Windows PowerShell recipe with inherited PowerShell 7 modules",
+  () => {
+    it.each(["readable", "one-line"] as const)(
+      "executes the %s recipe with real private ACL and hash checks",
+      (presentation) => {
+        runWindows("powershell.exe", presentation, false, coreModules);
+      },
+    );
+    it.each(["readable", "one-line"] as const)(
+      "refuses a tampered installer in the %s recipe",
+      (presentation) => {
+        runWindows("powershell.exe", presentation, true, coreModules);
+      },
+    );
+  },
+);
+
 function runWindows(
   shell: string,
   presentation: "readable" | "one-line",
   tamper: boolean,
+  inheritedModules?: string,
 ) {
   const folder = mkdtempSync(join(tmpdir(), "vectory-command-native-"));
   try {
@@ -134,11 +166,22 @@ ${command}
 `;
     const file = join(folder, "fixture.ps1");
     writeFileSync(file, fixture, "utf8");
+    const environment: Record<string, string | undefined> = {
+      ...process.env,
+      VECTORY_COMMAND_FIXTURE: folder,
+    };
+    if (inheritedModules) {
+      // Windows names are case-insensitive. Keep one spelling in this child
+      // environment; the host's global module path remains untouched.
+      for (const name of Object.keys(environment))
+        if (name.toLowerCase() === "psmodulepath") delete environment[name];
+      environment.PSModulePath = inheritedModules;
+    }
     const result = spawnSync(
       shell,
       ["-NoProfile", "-NonInteractive", "-File", file],
       {
-        env: { ...process.env, VECTORY_COMMAND_FIXTURE: folder },
+        env: environment,
         encoding: "utf8",
         timeout: 30000,
         windowsHide: true,

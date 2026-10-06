@@ -1650,6 +1650,70 @@ fn exercise_windows_installer(root: &Path, served: &str) {
         assert!(!run(&tampered, "0", &[]).status.success());
         assert!(!calls.exists(), "wrong-size native program executed");
     }
+    if native_powershell("pwsh.exe")
+        .arg("-Version")
+        .output()
+        .is_ok()
+    {
+        let calls = root.join("ps7-parent-agent-args.txt");
+        let curl_calls = root.join("ps7-parent-curl-args.txt");
+        let run = |download: &Path| {
+            native_powershell("pwsh.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(&driver)
+                .arg("parent")
+                .arg(root)
+                .arg(&script)
+                .args([
+                    "--name",
+                    "ps7-parent-fixture",
+                    "--mode",
+                    "restricted",
+                    "--dry-run",
+                ])
+                .env("VECTORY_TEST_DOWNLOAD", download)
+                .env("VECTORY_TEST_AGENT_ARGS", &calls)
+                .env("VECTORY_TEST_CURL_ARGS", &curl_calls)
+                .env("VECTORY_TEST_AGENT_EXIT", "0")
+                .output()
+                .unwrap()
+        };
+        let positive = run(&fixture);
+        assert!(positive.status.success(), "PS7 parent: {positive:?}");
+        let recorded = std::fs::read_to_string(&calls)
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(recorded.contains("setup\n--server\nhttps://vectory.example.test:8443\n"));
+        assert!(recorded.contains("--ca-sha256\n"));
+        assert!(recorded.contains("--name\nps7-parent-fixture\n--mode\nrestricted\n--dry-run"));
+        let curl_args = std::fs::read_to_string(&curl_calls)
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(curl_args.contains("--tlsv1.3\n"));
+        assert!(curl_args.contains("--cacert\n"));
+        let temporary_binary = curl_args
+            .lines()
+            .skip_while(|arg| *arg != "--output")
+            .nth(1)
+            .unwrap();
+        assert!(!Path::new(temporary_binary).parent().unwrap().exists());
+        std::fs::remove_file(&calls).unwrap();
+        let tampered = root.join("ps7-parent-tampered.exe");
+        let mut changed = fixture_bytes;
+        *changed.last_mut().unwrap() ^= 1;
+        std::fs::write(&tampered, changed).unwrap();
+        assert!(!run(&tampered).status.success());
+        assert!(
+            !calls.exists(),
+            "PS7 parent executed an altered native program"
+        );
+    }
 }
 
 #[tokio::test]

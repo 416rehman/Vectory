@@ -260,6 +260,7 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
     await page
       .getByRole("button", { name: "Create install command", exact: true })
       .click();
+    await page.getByRole("button", { name: "Readable", exact: true }).click();
     await expect(page.locator(".enroll-command pre").first()).toContainText(
       `sudo sh "$dir/vectory-install.sh" \\\n    --mode restricted`,
     );
@@ -444,8 +445,14 @@ try {
     async () => {
       const f = await fixture();
       try {
-        const install = () =>
-          f.page.locator(".enroll-command pre").first().innerText();
+        const install = async () => {
+          const readable = f.page.getByRole("button", {
+            name: "Readable",
+            exact: true,
+          });
+          if (await readable.isVisible()) await readable.click();
+          return f.page.locator(".enroll-command pre").first().innerText();
+        };
         const setup = async () => {
           const manual = f.page.locator(".enroll-manual");
           if (!(await manual.evaluate((details) => details.open)))

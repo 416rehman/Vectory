@@ -37,6 +37,15 @@ public static class InstallerFixture {
     Copy-Item -LiteralPath (Join-Path $FixtureRoot 'fixture.exe') -Destination (Join-Path $FixtureRoot 'bin\curl.exe')
     exit 0
 }
+if ($FixtureAction -eq 'parent') {
+    if ($PSVersionTable.PSEdition -ne 'Core') { throw 'This fixture requires a real PowerShell 7 parent.' }
+    # Deliberately reproduce a Core-only inherited module path in the 5.1
+    # child, as a generated Add device command can do. The served installer
+    # must select its own modules while all real ACL/hash checks still run.
+    $env:PSModulePath = Join-Path $PSHOME 'Modules'
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath run $FixtureRoot $FixtureInstaller @args
+    exit $LASTEXITCODE
+}
 if ($FixtureAction -ne 'run') { throw 'Unknown fixture mode' }
 $env:PATH = (Join-Path $FixtureRoot 'bin') + ';' + $env:PATH
 & $FixtureInstaller @args

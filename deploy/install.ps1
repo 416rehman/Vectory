@@ -14,6 +14,12 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# A PowerShell 7 parent can pass its module path to powershell.exe. Select the
+# executing Windows PowerShell's built-ins without changing PSModulePath.
+Import-Module -Name @(
+    (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'),
+    (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1')
+) -Scope Local -Force -ErrorAction Stop
 $version = '0.2.1'
 $kitName = "vectory-$version-server-linux-amd64"
 $release = "https://github.com/416rehman/Vectory/releases/download/v$version"

@@ -67,7 +67,12 @@ bash vectory-install.sh
 **Windows**, in PowerShell after starting Docker Desktop in Linux container mode:
 
 ```powershell
-curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1 } else { throw 'Installer download failed' }
+curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1
+if ($LASTEXITCODE -eq 0) {
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1
+} else {
+  throw 'Installer download failed'
+}
 ```
 
 **Linux without Docker**, on an x86-64 host with systemd 252 or later and cgroup v2:

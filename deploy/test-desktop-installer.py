@@ -328,7 +328,10 @@ class WindowsDesktopInstaller(DesktopInstaller):
         self.wrapper.write_text(source, newline='\n')
 
     def run_installer(self, action='start', **values):
-        env = dict(self.env, **values)
+        # Windows environment names are case-insensitive; os.environ exposes
+        # uppercase names, so overrides must not create duplicate spellings.
+        env = dict(self.env)
+        env.update({name.upper(): value for name, value in values.items()})
         env['TEST_RELEASE'] = str(self.release); env['TEST_LOG'] = str(self.log)
         args = ['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(self.wrapper),'-Action',action,'-Directory',str(self.target),'-Hostname',env['VECTORY_HOSTNAME'],'-Project',env['VECTORY_SERVER_PROJECT']]
         if env.get('VECTORY_CERTIFICATE_MODE'): args += ['-CertificateMode',env['VECTORY_CERTIFICATE_MODE']]
@@ -343,5 +346,16 @@ class WindowsDesktopInstaller(DesktopInstaller):
     def lines(self):
         if not self.log.exists(): return ''
         return '\n'.join(' '.join(json.loads(line)).replace('\\','/') for line in self.log.read_text(encoding='utf-8-sig').splitlines())
+
+    def test_core_module_path_does_not_break_windows_powershell_private_settings(self):
+        core = shutil.which('pwsh')
+        if not core: self.skipTest('PowerShell 7 is unavailable for the inherited-module regression')
+        core_modules = Path(core).parent/'Modules'
+        if not (core_modules/'Microsoft.PowerShell.Security').is_dir():
+            self.skipTest('PowerShell 7 built-in Security module is unavailable')
+        result = self.run_installer(PSModulePath=str(core_modules))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.target/'.env').is_file())
+        self.assertIn('up -d --wait', self.lines())
 
 if __name__ == '__main__': unittest.main()

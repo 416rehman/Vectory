@@ -30,7 +30,12 @@ bash vectory-install.sh
 On Windows, run in PowerShell:
 
 ```powershell
-curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1 } else { throw 'Installer download failed' }
+curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1
+if ($LASTEXITCODE -eq 0) {
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1
+} else {
+  throw 'Installer download failed'
+}
 ```
 
 Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) or [Docker Desktop for macOS](https://docs.docker.com/desktop/setup/install/mac-install/) first, and wait for its engine to start. On Windows, select Linux containers. On Apple silicon, configure [amd64 emulation](https://docs.docker.com/desktop/settings-and-maintenance/settings/) and confirm the installer prompt. This runs the prebuilt x86-64 images; it does not claim a native Arm image. Docker Desktop forwards the published ports to your computer, so its host firewall and router must permit the connections.

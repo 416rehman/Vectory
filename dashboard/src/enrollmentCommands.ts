@@ -472,6 +472,8 @@ export function windowsInstallerRun(
     const steps = [
       "& {",
       "  $ErrorActionPreference = 'Stop'",
+      "  Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1') -Scope Local -Force -ErrorAction Stop",
+      "  Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -Scope Local -Force -ErrorAction Stop",
       "  $taskTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)",
       "  $dir = Join-Path $taskTempRoot ('vectory-' + [Guid]::NewGuid().ToString('N'))",
       "  $acl = New-Object Security.AccessControl.DirectorySecurity",

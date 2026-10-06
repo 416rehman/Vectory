@@ -24,8 +24,8 @@ verifier = load('release_verifier', 'verify-release.py')
 
 
 class NativeImageIdentityTests(unittest.TestCase):
-    def image(self, directory, storage='manifest', architecture='amd64', user='10001:10001', attack=None):
-        configuration = {'architecture': architecture, 'os': 'linux', 'config': {'User': user},
+    def image(self, directory, storage='manifest', architecture='amd64', user='10001:10001', attack=None, omit_user=False):
+        configuration = {'architecture': architecture, 'os': 'linux', 'config': {} if omit_user else {'User': user},
                          'rootfs': {'type': 'layers', 'diff_ids': ['sha256:' + 'a' * 64]}}
         config_bytes = json.dumps(configuration, sort_keys=True).encode()
         config_id = 'sha256:' + hashlib.sha256(config_bytes).hexdigest()
@@ -189,6 +189,34 @@ class CorrespondingSourceTests(unittest.TestCase):
     def test_conflicting_authenticated_source_stanzas_are_rejected(self):
         with self.assertRaises(ValueError):
             sources.source_records(self.index() + self.index().replace('a' * 64, 'c' * 64), {('glibc', '2.41-1')})
+
+
+class DefaultUserIdentityTests(unittest.TestCase):
+    def test_classic_empty_and_containerd_omitted_default_users_match_only_each_other(self):
+        fixture = NativeImageIdentityTests()
+        for omit_saved, inspect_user in ((True, {'User': ''}), (False, {})):
+            with self.subTest(omit_saved=omit_saved), tempfile.TemporaryDirectory() as temporary:
+                path, config_id, inspect = fixture.image(Path(temporary), storage='classic', user='', omit_user=omit_saved)
+                inspect['Config'] = inspect_user
+                with mock.patch.object(builder, 'command', return_value=json.dumps([inspect])):
+                    proof = builder.image_identity('synthetic-default-user-image', archive_path=path,
+                                                   expected_tag='vectory-server:candidate')
+                self.assertEqual(proof['config_id'], config_id)
+                self.assertEqual(proof['execution_id'], inspect['Id'])
+                for user in ('10001:10001', '0:0', None, 1, [], {}):
+                    changed = dict(inspect, Config={'User': user})
+                    with self.subTest(user=user), mock.patch.object(builder, 'command', return_value=json.dumps([changed])), self.assertRaises(ValueError):
+                        builder.image_identity('synthetic-default-user-image', archive_path=path,
+                                               expected_tag='vectory-server:candidate')
+
+    def test_matching_non_string_users_are_not_accepted_as_default_or_explicit_users(self):
+        fixture = NativeImageIdentityTests()
+        for user in (None, 1, [], {}):
+            with self.subTest(user=user), tempfile.TemporaryDirectory() as temporary:
+                path, _, inspect = fixture.image(Path(temporary), storage='classic', user=user)
+                with mock.patch.object(builder, 'command', return_value=json.dumps([inspect])), self.assertRaises(ValueError):
+                    builder.image_identity('synthetic-invalid-user-image', archive_path=path,
+                                           expected_tag='vectory-server:candidate')
 
 
 if __name__ == '__main__':

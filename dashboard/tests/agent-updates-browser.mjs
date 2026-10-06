@@ -2796,9 +2796,11 @@ try {
     },
   );
 
-  /** The install command on Add device, once created. */
-  const installCommandText = () =>
-    page.locator(".enroll-command pre").first().innerText();
+  /** Inspect the readable install command on Add device, once created. */
+  const installCommandText = async () => {
+    await page.getByRole("button", { name: "Readable", exact: true }).click();
+    return page.locator(".enroll-command pre").first().innerText();
+  };
   const levelCards = () =>
     page.getByRole("group", {
       name: "How should this host take agent updates?",
