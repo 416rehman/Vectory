@@ -1,6 +1,7 @@
 """Static native failure diagnostics fixtures; no native service execution."""
 import importlib.util
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+import errno
 import os
 from pathlib import Path
 import platform
@@ -10,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import traceback
 import unittest
 from unittest import mock
 
@@ -199,12 +201,31 @@ class RetainedWorkerErrorTests(unittest.TestCase):
         public_source += (root / 'server/src/validation_socket.rs').read_bytes()
         for sentence, identifier in smoke.WORKER_ERROR_SENTENCES.items():
             with self.subTest(identifier=identifier):
-                self.assertIn(sentence.removeprefix(b'Error: '), public_source)
+                # This single generic sentence was public in the 5c source;
+                # it stays compatible with older records after the refinement.
+                if identifier != 'socket_ancestors':
+                    self.assertIn(sentence.removeprefix(b'Error: '), public_source)
                 self.assertEqual(smoke.retained_worker_error(sentence + b'\n'), identifier)
                 self.assertEqual(smoke.retained_worker_error(
                     b'synthetic-private-message\n' + sentence + b'\n' + sentence + b'\n'), identifier)
         for sentence in smoke.SYSTEMD_WORKER_ERROR_LINES:
             self.assertEqual(smoke.retained_worker_error(sentence), 'syscall_signal')
+
+    def test_all_twelve_fixed_ancestor_reasons_keep_companion_and_ambiguity_rules(self):
+        for category in ('leaf', 'parent', 'root', 'other'):
+            for reason in ('directory', 'write', 'owner'):
+                identifier = 'socket_ancestor_' + category + '_' + reason
+                sentence = ('Error: Validator socket ancestor ' + category + ' failed ' + reason + ' safety check').encode('ascii')
+                with self.subTest(identifier=identifier):
+                    self.assertEqual(smoke.WORKER_ERROR_SENTENCES[sentence], identifier)
+                    self.assertEqual(smoke.retained_worker_error(sentence + b'\n' + sentence + b'\n' + smoke.WORKER_EXIT_COMPANION), identifier)
+                    self.assertIsNone(smoke.retained_worker_error(sentence + b' extra-private-text'))
+                    different = ('Error: Validator socket ancestor ' + category + ' failed ' +
+                        ('owner' if reason != 'owner' else 'write') + ' safety check').encode('ascii')
+                    self.assertIsNone(smoke.retained_worker_error(sentence + b'\n' + different))
+        for category, reason in (('unknown', 'write'), ('root', 'unknown'), ('ROOT', 'owner'), ('parent/private', 'write')):
+            sentence = ('Error: Validator socket ancestor ' + category + ' failed ' + reason + ' safety check').encode('ascii')
+            self.assertIsNone(smoke.retained_worker_error(sentence))
 
     def test_unknown_ambiguous_malformed_and_private_injections_are_unavailable(self):
         known = next(iter(smoke.WORKER_ERROR_SENTENCES))
@@ -295,6 +316,160 @@ class RetainedWorkerErrorTests(unittest.TestCase):
             self.assertNotIn(sentence.decode(), str(failure.exception))
             self.assertNotIn('synthetic-private', str(failure.exception))
             self.assertNotIn(str(root), str(failure.exception))
+
+
+@unittest.skipUnless(os.name == 'posix', 'Runtime mount fixtures use only private POSIX temporary directories')
+class NativeWorkerRuntimeMountTests(unittest.TestCase):
+    @contextmanager
+    def directories(self, attack=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, leaf = root / 'run', root / 'run/vectory-validator'
+            leaf.mkdir(parents=True)
+            run.chmod(0o777 if attack == 'run_mode' else 0o755)
+            leaf.chmod(0o770 if attack == 'leaf_mode' else 0o750)
+            if attack == 'run_link':
+                target = root / 'run-original'
+                run.rename(target)
+                run.symlink_to(target, target_is_directory=True)
+            elif attack == 'leaf_link':
+                target = run / 'leaf-original'
+                leaf.rename(target)
+                leaf.symlink_to(target, target_is_directory=True)
+            original = Path.lstat
+
+            def metadata(path):
+                record = original(path)
+                fields = list(record)
+                if path == run:
+                    fields[4] = 12345 if attack == 'run_owner' else 0
+                elif path == leaf:
+                    fields[4] = 12345 if attack == 'leaf_owner' else 10001
+                    fields[5] = 12345 if attack == 'leaf_group' else 10001
+                return os.stat_result(fields)
+
+            with mock.patch.object(Path, 'lstat', metadata):
+                yield root, run, leaf
+
+    @contextmanager
+    def readonly(self, run, refusal=errno.EROFS, leaf_refusal=None):
+        original = os.open
+
+        def open_file(path, flags, mode=0o777, **options):
+            candidate = Path(path)
+            if candidate.parent == run and candidate.name.startswith('.vectory-native-ci-readonly-') and refusal is not None:
+                raise OSError(refusal, 'synthetic private refusal', str(candidate))
+            if candidate.parent == run / 'vectory-validator' and leaf_refusal is not None:
+                raise OSError(leaf_refusal, 'synthetic private leaf refusal', str(candidate))
+            return original(path, flags, mode, **options)
+
+        with mock.patch.object(smoke.os, 'open', side_effect=open_file) as opened:
+            yield opened
+
+    def test_readonly_parent_and_private_writable_leaf_keep_existing_files(self):
+        with self.directories() as (root, run, leaf):
+            kept = leaf / 'existing-synthetic-fixture'
+            kept.write_bytes(b'keep this fixture')
+            with self.readonly(run) as opened:
+                smoke.check_worker_runtime_mount(root, 10001, 10001)
+            calls = opened.call_args_list
+            self.assertEqual(len(calls), 2)
+            for call in calls:
+                path, flags, mode = call.args
+                self.assertRegex(Path(path).name, r'^\.vectory-native-ci-(readonly|leaf)-[a-f0-9]{24}$')
+                self.assertTrue(flags & os.O_EXCL and flags & os.O_NOFOLLOW)
+                self.assertEqual(mode, 0o600)
+            self.assertTrue(calls[1].args[1] & os.O_RDWR)
+            self.assertEqual(kept.read_bytes(), b'keep this fixture')
+            self.assertEqual(list(leaf.iterdir()), [kept])
+            self.assertEqual(list(run.iterdir()), [leaf])
+
+    def test_unsafe_directories_are_refused_before_any_write(self):
+        for attack in ('run_owner', 'run_mode', 'run_link', 'leaf_owner', 'leaf_group', 'leaf_mode', 'leaf_link'):
+            with self.subTest(attack=attack), self.directories(attack) as (root, run, leaf), \
+                    mock.patch.object(smoke.os, 'open') as opened, self.assertRaises(RuntimeError):
+                smoke.check_worker_runtime_mount(root, 10001, 10001)
+            opened.assert_not_called()
+
+    def test_other_refusals_writable_parent_and_readonly_leaf_fail_safely(self):
+        for refusal in (errno.EACCES, errno.EPERM, errno.EEXIST, None):
+            with self.subTest(refusal=refusal), self.directories() as (root, run, leaf), \
+                    self.readonly(run, refusal=refusal), self.assertRaises(RuntimeError) as failure:
+                smoke.check_worker_runtime_mount(root, 10001, 10001)
+            self.assertNotIn(str(root), str(failure.exception))
+            self.assertNotIn('synthetic private', str(failure.exception))
+            rendered = ''.join(traceback.format_exception(failure.exception))
+            self.assertNotIn(str(root), rendered)
+            self.assertNotIn('synthetic private refusal', rendered)
+        with self.directories() as (root, run, leaf), self.readonly(run, leaf_refusal=errno.EROFS), \
+                self.assertRaises(RuntimeError) as failure:
+            smoke.check_worker_runtime_mount(root, 10001, 10001)
+        self.assertEqual(str(failure.exception), 'Private worker runtime mount could not be safely checked')
+        rendered = ''.join(traceback.format_exception(failure.exception))
+        self.assertNotIn(str(root), rendered)
+        self.assertNotIn('synthetic private leaf refusal', rendered)
+
+    def test_short_write_and_wrong_read_close_and_remove_the_owned_fixture(self):
+        for operation, result in (('write', 0), ('read', b'wrong synthetic fixture')):
+            with self.subTest(operation=operation), self.directories() as (root, run, leaf), \
+                    self.readonly(run), mock.patch.object(smoke.os, operation, return_value=result), \
+                    mock.patch.object(smoke.os, 'close', wraps=os.close) as closed:
+                with self.assertRaises(RuntimeError):
+                    smoke.check_worker_runtime_mount(root, 10001, 10001)
+                closed.assert_called_once()
+                self.assertEqual(list(leaf.iterdir()), [])
+
+    def test_changed_fixture_identity_refuses_unrelated_cleanup(self):
+        for operation in (None, 'write', 'read'):
+            with self.subTest(operation=operation), self.directories() as (root, run, leaf), self.readonly(run):
+                original = Path.lstat
+
+                def changed(path):
+                    record = original(path)
+                    if path.parent == leaf and path.name.startswith('.vectory-native-ci-leaf-'):
+                        fields = list(record)
+                        fields[1] += 1
+                        return os.stat_result(fields)
+                    return record
+
+                refused = nullcontext() if operation is None else mock.patch.object(smoke.os, operation,
+                    side_effect=OSError(errno.EIO, 'synthetic private body refusal', str(leaf / 'private-body-file')))
+                with refused, mock.patch.object(Path, 'lstat', changed), self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_runtime_mount(root, 10001, 10001)
+                self.assertEqual(str(failure.exception), 'Private worker writable fixture identity changed; cleanup was refused')
+                rendered = ''.join(traceback.format_exception(failure.exception))
+                self.assertNotIn(str(root), rendered)
+                self.assertNotIn('synthetic private body refusal', rendered)
+                self.assertEqual(len(list(leaf.iterdir())), 1)
+
+    def test_filename_bearing_cleanup_errors_have_only_fixed_rendered_failures(self):
+        for operation in ('lstat', 'unlink', 'close'):
+            with self.subTest(operation=operation), self.directories() as (root, run, leaf), self.readonly(run):
+                filename = str(leaf / 'private-cleanup-file')
+                original_lstat, original_unlink, original_close = Path.lstat, Path.unlink, os.close
+
+                def lstat(path):
+                    if path.parent == leaf and path.name.startswith('.vectory-native-ci-leaf-'):
+                        raise OSError(errno.EIO, 'synthetic private cleanup refusal', filename)
+                    return original_lstat(path)
+
+                def unlink(path, *args, **options):
+                    if path.parent == leaf and path.name.startswith('.vectory-native-ci-leaf-'):
+                        raise OSError(errno.EIO, 'synthetic private cleanup refusal', filename)
+                    return original_unlink(path, *args, **options)
+
+                def close(descriptor):
+                    original_close(descriptor)
+                    raise OSError(errno.EIO, 'synthetic private cleanup refusal', filename)
+
+                target, name, replacement = (Path, 'lstat', lstat) if operation == 'lstat' else (
+                    (Path, 'unlink', unlink) if operation == 'unlink' else (smoke.os, 'close', close))
+                with mock.patch.object(target, name, replacement), self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_runtime_mount(root, 10001, 10001)
+                self.assertEqual(str(failure.exception), 'Private worker runtime mount could not be safely checked')
+                rendered = ''.join(traceback.format_exception(failure.exception))
+                self.assertNotIn(str(root), rendered)
+                self.assertNotIn('synthetic private cleanup refusal', rendered)
 
 
 @unittest.skipUnless(os.name == 'posix', 'Descriptor permission fixtures require POSIX; no global directory is changed')

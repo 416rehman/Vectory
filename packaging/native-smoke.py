@@ -53,6 +53,18 @@ WORKER_ERROR_SENTENCES = {
     b'Error: Validator socket must be an unlinked socket owned by its worker directory\'s user and group, with mode 0660': 'socket_mode_owner',
     b'Error: Validator Vector path must be absolute': 'vector_absolute_path',
     b'Error: Validator requires the pinned Vector version': 'vector_version',
+    b'Error: Validator socket ancestor leaf failed directory safety check': 'socket_ancestor_leaf_directory',
+    b'Error: Validator socket ancestor leaf failed write safety check': 'socket_ancestor_leaf_write',
+    b'Error: Validator socket ancestor leaf failed owner safety check': 'socket_ancestor_leaf_owner',
+    b'Error: Validator socket ancestor parent failed directory safety check': 'socket_ancestor_parent_directory',
+    b'Error: Validator socket ancestor parent failed write safety check': 'socket_ancestor_parent_write',
+    b'Error: Validator socket ancestor parent failed owner safety check': 'socket_ancestor_parent_owner',
+    b'Error: Validator socket ancestor root failed directory safety check': 'socket_ancestor_root_directory',
+    b'Error: Validator socket ancestor root failed write safety check': 'socket_ancestor_root_write',
+    b'Error: Validator socket ancestor root failed owner safety check': 'socket_ancestor_root_owner',
+    b'Error: Validator socket ancestor other failed directory safety check': 'socket_ancestor_other_directory',
+    b'Error: Validator socket ancestor other failed write safety check': 'socket_ancestor_other_write',
+    b'Error: Validator socket ancestor other failed owner safety check': 'socket_ancestor_other_owner',
 }
 # Exact systemd v255 unit_log_process_exit messages, not a cause attribution.
 SYSTEMD_WORKER_ERROR_LINES = {
@@ -284,6 +296,54 @@ def check(condition, message):
         raise RuntimeError(message)
 
 
+def check_worker_runtime_mount(root, worker_uid, worker_gid):
+    """Prove the worker's run mount is protected and only its leaf is writable."""
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError(message) from None
+
+    directory, leaf = root / 'run', root / 'run/vectory-validator'
+    try:
+        ancestor = directory.lstat()
+        require(stat.S_ISDIR(ancestor.st_mode) and ancestor.st_uid == 0 and
+              stat.S_IMODE(ancestor.st_mode) == 0o755,
+              'Private worker runtime ancestry is not protected')
+        runtime = leaf.lstat()
+        require(stat.S_ISDIR(runtime.st_mode) and runtime.st_uid == worker_uid and
+              runtime.st_gid == worker_gid and stat.S_IMODE(runtime.st_mode) == 0o750,
+              'Private worker socket directory identity or mode is unsafe')
+        probe = directory / ('.vectory-native-ci-readonly-' + secrets.token_hex(12))
+        try:
+            descriptor = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except OSError as error:
+            if error.errno != errno.EROFS:
+                raise RuntimeError('Private worker runtime root is not a read-only mount') from None
+        else:
+            os.close(descriptor)
+            probe.unlink()
+            raise RuntimeError('Private worker runtime root permits writes') from None
+        probe = leaf / ('.vectory-native-ci-leaf-' + secrets.token_hex(12))
+        descriptor = os.open(probe, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        identity = None
+        try:
+            identity = os.fstat(descriptor)
+            require(stat.S_ISREG(identity.st_mode) and stat.S_IMODE(identity.st_mode) == 0o600 and identity.st_nlink == 1,
+                  'Private worker writable fixture is not a private regular file')
+            content = b'synthetic native writable socket directory fixture\n'
+            require(os.write(descriptor, content) == len(content), 'Private worker socket directory refused a complete write')
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            require(os.read(descriptor, len(content) + 1) == content, 'Private worker socket directory did not retain the synthetic write')
+        finally:
+            os.close(descriptor)
+            if identity is not None:
+                current = probe.lstat()
+                require((current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino),
+                      'Private worker writable fixture identity changed; cleanup was refused')
+                probe.unlink()
+    except OSError:
+        raise RuntimeError('Private worker runtime mount could not be safely checked') from None
+
+
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -397,6 +457,7 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
         else:
             os.close(descriptor)
             raise RuntimeError('Private worker payload permits writes')
+        check_worker_runtime_mount(root, worker_uid, pwd.getpwnam('vectory-validator').pw_gid)
         verified.add('private_filesystem')
         control_group = value(worker, 'ControlGroup')
         group = Path('/sys/fs/cgroup') / control_group.removeprefix('/')

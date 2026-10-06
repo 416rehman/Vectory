@@ -45,6 +45,66 @@ pub fn worker_path(socket: Option<&str>, address: Option<&str>) -> anyhow::Resul
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum AncestorClass {
+    Leaf,
+    Parent,
+    Root,
+    Other,
+}
+
+#[cfg(target_os = "linux")]
+fn ancestor_class(ancestor: &Path, leaf: &Path) -> AncestorClass {
+    if ancestor == Path::new("/") {
+        AncestorClass::Root
+    } else if ancestor == leaf {
+        AncestorClass::Leaf
+    } else if Some(ancestor) == leaf.parent() {
+        AncestorClass::Parent
+    } else {
+        AncestorClass::Other
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ancestor_failure(
+    class: AncestorClass,
+    is_directory: bool,
+    mode: u32,
+    uid: u32,
+    leaf_uid: u32,
+) -> Option<&'static str> {
+    // Preserve the original short-circuit order and acceptance predicates.
+    let reason = if !is_directory {
+        0
+    } else if mode & 0o022 != 0 {
+        1
+    } else if ![0, leaf_uid].contains(&uid) {
+        2
+    } else {
+        return None;
+    };
+    Some(match (class, reason) {
+        (AncestorClass::Leaf, 0) => "Validator socket ancestor leaf failed directory safety check",
+        (AncestorClass::Leaf, 1) => "Validator socket ancestor leaf failed write safety check",
+        (AncestorClass::Leaf, _) => "Validator socket ancestor leaf failed owner safety check",
+        (AncestorClass::Parent, 0) => {
+            "Validator socket ancestor parent failed directory safety check"
+        }
+        (AncestorClass::Parent, 1) => "Validator socket ancestor parent failed write safety check",
+        (AncestorClass::Parent, _) => "Validator socket ancestor parent failed owner safety check",
+        (AncestorClass::Root, 0) => "Validator socket ancestor root failed directory safety check",
+        (AncestorClass::Root, 1) => "Validator socket ancestor root failed write safety check",
+        (AncestorClass::Root, _) => "Validator socket ancestor root failed owner safety check",
+        (AncestorClass::Other, 0) => {
+            "Validator socket ancestor other failed directory safety check"
+        }
+        (AncestorClass::Other, 1) => "Validator socket ancestor other failed write safety check",
+        (AncestorClass::Other, _) => "Validator socket ancestor other failed owner safety check",
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn checked_parent(path: &Path) -> anyhow::Result<std::fs::Metadata> {
     use std::os::unix::fs::MetadataExt;
     let parent = path
@@ -58,13 +118,14 @@ fn checked_parent(path: &Path) -> anyhow::Result<std::fs::Metadata> {
     }
     for ancestor in parent.ancestors() {
         let metadata = std::fs::symlink_metadata(ancestor)?;
-        if !metadata.is_dir()
-            || metadata.mode() & 0o022 != 0
-            || ![0, leaf.uid()].contains(&metadata.uid())
-        {
-            anyhow::bail!(
-                "Validator socket ancestors must be unlinked directories owned by root or the worker, with no group or other write access"
-            );
+        if let Some(message) = ancestor_failure(
+            ancestor_class(ancestor, parent),
+            metadata.is_dir(),
+            metadata.mode(),
+            metadata.uid(),
+            leaf.uid(),
+        ) {
+            anyhow::bail!(message);
         }
     }
     Ok(leaf)
@@ -126,6 +187,101 @@ mod tests {
             .unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
         dir
+    }
+
+    #[test]
+    fn ancestor_reasons_preserve_every_original_predicate_and_priority() {
+        for (class, name) in [
+            (AncestorClass::Leaf, "leaf"),
+            (AncestorClass::Parent, "parent"),
+            (AncestorClass::Root, "root"),
+            (AncestorClass::Other, "other"),
+        ] {
+            for is_directory in [false, true] {
+                for mode in 0..=0o7777 {
+                    for uid in [0, 10002, 10003] {
+                        let original_refusal =
+                            !is_directory || mode & 0o022 != 0 || ![0, 10002].contains(&uid);
+                        let actual = ancestor_failure(class, is_directory, mode, uid, 10002);
+                        assert_eq!(actual.is_some(), original_refusal);
+                        if let Some(message) = actual {
+                            let reason = if !is_directory {
+                                "directory"
+                            } else if mode & 0o022 != 0 {
+                                "write"
+                            } else {
+                                "owner"
+                            };
+                            assert_eq!(
+                                message,
+                                format!(
+                                    "Validator socket ancestor {name} failed {reason} safety check"
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let leaf = Path::new("/run/outer/parent/leaf");
+        assert!(matches!(ancestor_class(leaf, leaf), AncestorClass::Leaf));
+        assert!(matches!(
+            ancestor_class(leaf.parent().unwrap(), leaf),
+            AncestorClass::Parent
+        ));
+        assert!(matches!(
+            ancestor_class(Path::new("/"), leaf),
+            AncestorClass::Root
+        ));
+        assert!(matches!(
+            ancestor_class(Path::new("/run/outer"), leaf),
+            AncestorClass::Other
+        ));
+    }
+
+    #[test]
+    fn real_ancestor_write_owner_and_directory_refusals_are_precise() {
+        use std::os::unix::fs::{MetadataExt, chown};
+        let dir = directory();
+        let other = dir.path().join("other");
+        let parent = other.join("parent");
+        let leaf = parent.join("leaf");
+        std::fs::create_dir_all(&leaf).unwrap();
+        for path in [&other, &parent] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let socket = leaf.join("socket");
+        checked_parent(&socket).unwrap();
+        let leaf_uid = std::fs::metadata(&leaf).unwrap().uid();
+        for (ancestor, class) in [(&parent, "parent"), (&other, "other")] {
+            // A foreign owner plus writable mode still reports the write predicate first.
+            if leaf_uid == 0 {
+                chown(ancestor, Some(10003), None).unwrap();
+            }
+            std::fs::set_permissions(ancestor, std::fs::Permissions::from_mode(0o777)).unwrap();
+            assert_eq!(
+                checked_parent(&socket).unwrap_err().to_string(),
+                format!("Validator socket ancestor {class} failed write safety check")
+            );
+            std::fs::set_permissions(ancestor, std::fs::Permissions::from_mode(0o755)).unwrap();
+            if leaf_uid == 0 {
+                assert_eq!(
+                    checked_parent(&socket).unwrap_err().to_string(),
+                    format!("Validator socket ancestor {class} failed owner safety check")
+                );
+                chown(ancestor, Some(leaf_uid), None).unwrap();
+            }
+            checked_parent(&socket).unwrap();
+        }
+        let retained = other.join("retained");
+        std::fs::rename(&parent, &retained).unwrap();
+        symlink(&retained, &parent).unwrap();
+        assert_eq!(
+            checked_parent(&socket).unwrap_err().to_string(),
+            "Validator socket ancestor parent failed directory safety check"
+        );
+        assert!(!socket.exists());
     }
 
     #[test]

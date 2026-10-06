@@ -12,6 +12,8 @@ RuntimeDirectory=vectory-validator
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=no
 BindPaths=/run/vectory-validator:/run/vectory-validator
+# Keep the private runtime ancestry protected; only the socket leaf is writable.
+TemporaryFileSystem=/run:ro,nosuid,nodev,noexec,size=16M,mode=0755
 TemporaryFileSystem=/tmp:rw,nosuid,nodev,noexec,size=128M,mode=1777
 Environment=VECTORY_VALIDATOR_ISOLATED=true
 Environment=VECTORY_VALIDATOR_SOCKET=/run/vectory-validator/validator.sock
