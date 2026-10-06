@@ -33,6 +33,8 @@ The prebuilt kits verify their image downloads and write these values themselves
 | `VECTORY_SETUP_PROJECT` | Temporary server kit `.setup.env` | Project recorded while first setup completes, so an interrupted setup resumes with the same volumes. The starter removes the journal after setup. |
 | `VECTORY_PREVIEW_SERVER_IMAGE` | Preview kit `.preview.env` | Verified server image selected for the local preview. |
 | `VECTORY_PREVIEW_VALIDATOR_IMAGE` | Preview kit `.preview.env` | Verified validator image selected for the local preview. |
+| `VECTORY_PREVIEW_VALIDATION_URL` | Preview kit `.preview.env` | Private validator URL that `./start.sh` discovers and checks on each start, such as `http://172.28.0.2:8081`. The validator has no host port. |
+| `VECTORY_PREVIEW_NO_PROXY` | Preview kit `.preview.env` | `localhost,127.0.0.1,::1` plus the validator's private IP. Compose passes it as `NO_PROXY` and `no_proxy` so the server reaches the validator directly. |
 
 ## Server settings
 
@@ -114,6 +116,7 @@ Contributors can use `scripts/preview.sh` and the [source quickstart](https://gi
 | `VECTORY_PREVIEW_DIR` | `.local/preview` | State, logs and the bootstrap secret for the preview. |
 | `VECTORY_PREVIEW_WEB_PORT` | `8080` | Dashboard port on 127.0.0.1. |
 | `VECTORY_PREVIEW_AGENT_PORT` | `8443` | Agent listener port on 127.0.0.1. |
+| `VECTORY_PREVIEW_VALIDATOR_PORT` | `8081` | Loopback validator port for the contributor-run preview. It does not apply to the prebuilt kit, whose validator has no host port. |
 | `VECTORY_PREVIEW_VECTOR` | First `.local/tools/*/bin/vector` | Vector binary for the preview's validator. Without one, checks are structural only. |
 | `VECTORY_PREVIEW_AGENT_TARGETS` | Every supported platform | Space-separated `os/arch` list of bundled agents to build, for example `linux/amd64 darwin/arm64`, for a faster first start. |
 
