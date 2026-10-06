@@ -45,6 +45,14 @@ Runs for version tags and manual dispatch of an exact stable version tag. Histor
 | `candidate` | The reusable release-candidate workflow builds and verifies the actual agents, packages, images and starter kits on this source commit | Public registry access or release signatures |
 | `publish` | Fresh scans contain no critical or fixable high findings; the tested server and validator bytes are published to GHCR with immutable digests and verified GitHub OIDC Cosign signatures; an anonymous client can read both images; the signed release inventory passes actual offline preparation; uploaded assets are downloaded and checked again before the stable release becomes Latest; the public-site workflow is dispatched | Freedom from vulnerabilities, Windows Authenticode, Apple Developer ID/notarization, host activation, or successful website deployment |
 
+## publish-v0.2.0.yml
+
+One-time completion of the signed 0.2.0 distribution after the tagged run's final notes step omitted its release reference. It accepts no inputs and pins the original run, source commit, annotated tag and signed archive digest. It creates no new signatures or builds.
+
+| Job | A green run shows | It does not show |
+| --- | --- | --- |
+| `publish` | Every original qualification job and signing/offline gate passed; the sole failure was the final publication step. The pinned archive, original GitHub OIDC signatures, complete checksums and anonymous image access verify again. The same assets are uploaded as a draft, downloaded and checked before becoming Latest, then the website workflow is dispatched | New native qualification or signing identity; website deployment; Windows Authenticode or Apple notarization |
+
 ## public-site.yml
 
 Runs on pushes, pull requests and manual dispatch. The deploy job runs only on `main` after the advertised stable release and its signing inventory are available. It warns and skips publication when the Cloudflare account and token secrets are absent.

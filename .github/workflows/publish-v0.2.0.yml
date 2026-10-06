@@ -1,0 +1,129 @@
+name: complete signed 0.2.0 publication
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-release-refs/tags/v0.2.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == '416rehman/Vectory' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v0.2.0
+      RELEASE_REF: refs/tags/v0.2.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: c9aeb26d074d517278f92f29f5fc190ff5bfc20d
+          persist-credentials: false
+      - name: Require the exact qualified run, immutable tag and signed archive
+        run: |
+          set -euo pipefail
+          gh api repos/416rehman/Vectory/actions/runs/37458582025 > "$RUNNER_TEMP/original-run.json"
+          gh api 'repos/416rehman/Vectory/actions/runs/37458582025/jobs?per_page=100' > "$RUNNER_TEMP/original-jobs.json"
+          gh api repos/416rehman/Vectory/actions/artifacts/11414502321 > "$RUNNER_TEMP/original-artifact.json"
+          gh api repos/416rehman/Vectory/git/ref/tags/v0.2.0 > "$RUNNER_TEMP/tag-ref.json"
+          gh api repos/416rehman/Vectory/git/tags/65100b93cef8c91def614522e44074c166b9dcdd > "$RUNNER_TEMP/tag-object.json"
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import json, sys
+          from pathlib import Path
+          folder = Path(sys.argv[1])
+          def read(name): return json.loads((folder / name).read_text())
+          source = 'c9aeb26d074d517278f92f29f5fc190ff5bfc20d'
+          run = read('original-run.json')
+          assert (run['id'], run['head_sha'], run['head_branch'], run['path'], run['status'], run['conclusion'], run['run_attempt']) == (37458582025, source, 'v0.2.0', '.github/workflows/release.yml', 'completed', 'failure', 1)
+          assert read('tag-ref.json')['object'] == {'sha': '65100b93cef8c91def614522e44074c166b9dcdd', 'type': 'tag', 'url': 'https://api.github.com/repos/416rehman/Vectory/git/tags/65100b93cef8c91def614522e44074c166b9dcdd'}
+          assert read('tag-object.json')['object']['sha'] == source and read('tag-object.json')['object']['type'] == 'commit'
+          jobs = read('original-jobs.json')
+          assert jobs['total_count'] == len(jobs['jobs']) == 25
+          qualified = [job for job in jobs['jobs'] if job['name'] != 'publish']
+          expected = {'identity', 'candidate / agents', 'candidate / images', 'candidate / starters', 'candidate / sbom', 'candidate / msi', 'candidate / packages', 'candidate / starter smoke (preview and server)', 'candidate / assemble', 'candidate / verify', 'candidate / attest', 'checks / server', 'checks / end-to-end', 'checks / operational', 'checks / dashboard-browsers', 'checks / dashboard', 'checks / compose', 'native / linux-service', 'native / macos', 'native / browsers', 'native / windows'}
+          assert {job['name'] for job in qualified if not job['name'].startswith('checks / agent (')} == expected
+          agents = [job for job in qualified if job['name'].startswith('checks / agent (')]
+          assert len(agents) == 3 and all(sum(job['name'].startswith('checks / agent (' + platform) for job in agents) == 1 for platform in ('ubuntu-24.04,', 'macos-15,', 'windows-2025,'))
+          assert all(job['status'] == 'completed' and job['conclusion'] == ('skipped' if job['name'] == 'candidate / attest' else 'success') for job in qualified)
+          publisher = [job for job in jobs['jobs'] if job['name'] == 'publish']
+          assert len(publisher) == 1 and publisher[0]['id'] == 112270542486 and publisher[0]['conclusion'] == 'failure'
+          steps = {step['number']: step for step in publisher[0]['steps']}
+          assert all(steps[number]['conclusion'] == 'success' for number in range(1, 16))
+          assert [step['name'] for step in steps.values() if step['conclusion'] == 'failure'] == ['Publish a stable release only after signature and public-access verification']
+          assert steps[18]['conclusion'] == 'success'
+          artifact = read('original-artifact.json')
+          assert artifact['id'] == 11414502321 and artifact['name'] == 'signed-release-distribution' and not artifact['expired']
+          assert artifact['digest'] == 'sha256:db10d9e53e677200ad9228f199b35696ee32710ed54f1eb5a0c0d175f204bcf5'
+          assert artifact['workflow_run']['id'] == run['id'] and artifact['workflow_run']['head_sha'] == source
+          PY
+          gh api repos/416rehman/Vectory/actions/artifacts/11414502321/zip > "$RUNNER_TEMP/signed-release.zip"
+          printf '%s  %s\n' db10d9e53e677200ad9228f199b35696ee32710ed54f1eb5a0c0d175f204bcf5 "$RUNNER_TEMP/signed-release.zip" | sha256sum --check --strict
+          python3 - "$RUNNER_TEMP/signed-release.zip" <<'PY'
+          import re, stat, sys, zipfile
+          from pathlib import Path
+          output = Path('artifacts/release')
+          output.mkdir(parents=True, exist_ok=False)
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              names = set()
+              assert len(archive.infolist()) == 53
+              for item in archive.infolist():
+                  assert re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', item.filename) and item.filename not in names
+                  assert not item.is_dir() and not stat.S_ISLNK(item.external_attr >> 16) and 0 < item.file_size <= 2 * 1024**3
+                  names.add(item.filename)
+              archive.extractall(output)
+          PY
+      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22
+        with: { cosign-release: "v3.1.3" }
+      - name: Verify the original signatures, complete inventory and anonymous images
+        run: |
+          set -euo pipefail
+          identity='https://github.com/416rehman/Vectory/.github/workflows/release.yml@refs/tags/v0.2.0'
+          cosign verify-blob --bundle artifacts/release/SHA256SUMS.sigstore.json --certificate-identity "$identity" --certificate-oidc-issuer https://token.actions.githubusercontent.com artifacts/release/SHA256SUMS
+          (cd artifacts/release && sha256sum --check --strict SHA256SUMS)
+          python3 packaging/prepare-signed-release.py scan-gate artifacts/release
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from importlib.util import spec_from_file_location, module_from_spec
+          spec = spec_from_file_location('distribution', 'packaging/prepare-signed-release.py')
+          module = module_from_spec(spec); spec.loader.exec_module(module)
+          folder = Path('artifacts/release')
+          release = json.loads((folder / 'RELEASE.json').read_text())
+          assert release['version'] == '0.2.0' and release['commit'] == 'c9aeb26d074d517278f92f29f5fc190ff5bfc20d'
+          assert release['workflow_run'] == 'https://github.com/416rehman/Vectory/actions/runs/37458582025'
+          assert release['images'] == module.checked_images(folder / 'IMAGE-DIGESTS.env')
+          assert (folder / 'SHA256SUMS').read_text() == module.inventory(folder)
+          PY
+          mkdir -p "$RUNNER_TEMP/anonymous-docker"
+          while IFS='=' read -r name image; do
+            DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker" docker buildx imagetools inspect "$image" > /dev/null
+            DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker" cosign verify --certificate-identity "$identity" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image" > /dev/null
+          done < artifacts/release/IMAGE-DIGESTS.env
+      - name: Publish and read back the exact signed distribution
+        run: |
+          set -euo pipefail
+          if gh api repos/416rehman/Vectory/releases/tags/v0.2.0 > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/existing-release.error"; then
+            echo '::error::A release or draft already exists. Inspect it before recovery.'; exit 1
+          elif ! grep -q '(HTTP 404)' "$RUNNER_TEMP/existing-release.error"; then
+            cat "$RUNNER_TEMP/existing-release.error" >&2; exit 1
+          fi
+          python3 packaging/prepare-signed-release.py notes artifacts/release > "$RUNNER_TEMP/release-notes.md"
+          printf '\nPublication: [CI completion receipt](https://github.com/416rehman/Vectory/actions/runs/%s). All tagged qualification, signing and offline-verification gates passed. This job completes publication of that exact signed inventory after correcting the final notes step environment.\n' "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Vectory $RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md" artifacts/release/*
+          mkdir -p "$RUNNER_TEMP/public-release-check"
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/public-release-check"
+          cmp artifacts/release/SHA256SUMS "$RUNNER_TEMP/public-release-check/SHA256SUMS"
+          cmp artifacts/release/SHA256SUMS.sigstore.json "$RUNNER_TEMP/public-release-check/SHA256SUMS.sigstore.json"
+          (cd "$RUNNER_TEMP/public-release-check" && sha256sum --check --strict SHA256SUMS)
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+      - name: Deploy the website and standalone designer through CI
+        run: gh workflow run public-site.yml --ref main
