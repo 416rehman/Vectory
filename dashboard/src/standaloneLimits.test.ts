@@ -98,7 +98,9 @@ it("counts implicit memory nodes and expanded wildcard connections", () => {
 it("rejects oversized conversion before replacing the exportable original", () => {
   const config = {
     ...pipeline(),
-    custom: Array.from({ length: 38000 }, () => ({ a: { b: { c: 0 } } })),
+    custom: Array.from({ length: 3000 }, () => ({
+      a: { b: { c: "x".repeat(325) } },
+    })),
   };
   const original = JSON.stringify(config);
   expect(new TextEncoder().encode(original).length).toBeLessThan(
