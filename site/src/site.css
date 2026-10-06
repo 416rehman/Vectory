@@ -62,11 +62,8 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline
 .hero h1 em { color: var(--blue); font-style: normal; }
 .hero-description { max-width: 500px; margin: 0; font-size: clamp(19px, 1.65vw, 23px); line-height: 1.4; font-weight: 450; letter-spacing: -.025em; }
 .hero-actions { display: flex; align-items: center; gap: 19px; flex-wrap: wrap; margin-top: 30px; }
-.hero-platform { margin: 21px 0 0; font-size: 12px; color: var(--muted); }
-.hero-product { position: relative; width: 100%; border-radius: 8px; transform: none; }
-.hero-product .frame-bar { min-height: 42px; padding-inline: 14px; font-size: 11px; }
-.hero-product figcaption { font-size: 11px; padding: 10px 14px; }
-.hero-product .frame-v { width: 18px; height: 18px; font-size: 12px; }
+.hero-art { display: flex; align-items: center; justify-content: center; min-width: 0; align-self: stretch; pointer-events: none; }
+.hero-art img { width: 100%; height: auto; }
 .button { display: inline-flex; min-height: 52px; align-items: center; justify-content: space-between; gap: 25px; padding: 0 21px; border: 1px solid currentColor; text-decoration: none; font-size: 14px; font-weight: 650; white-space: nowrap; transition: transform .18s ease, background-color .18s ease, color .18s ease; }
 .button:hover { transform: translateY(-2px); }
 .button-dark { background: var(--ink); color: #fff; border-color: var(--ink); }
@@ -202,7 +199,6 @@ h2, h3, p { overflow-wrap: break-word; }
   .hero-inner { gap: 28px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .hero h1 { font-size: clamp(50px, 6vw, 66px); }
   .hero .eyebrow { font-size: 10px; }
-  .hero-product .frame-label { display: none; }
   .walkthrough-layout { gap: 35px; grid-template-columns: minmax(240px, .5fr) minmax(0, 1fr); }
   .panel-caption { grid-template-columns: 1fr; }
   .panel-caption a { grid-column: 1; }
@@ -244,7 +240,6 @@ h2, h3, p { overflow-wrap: break-word; }
   .hero-description { font-size: 20px; }
   .hero-actions { gap: 18px; margin-top: 25px; }
   .hero .quiet-link { font-size: 13px; }
-  .hero-product .frame-label { display: none; }
   .hero-ruler span { min-height: 47px; font-size: 8px; }
   .product-reveal, .principles, .fleet-proof, .install { padding-block: 78px; }
   .reveal-intro h2, .walkthrough-heading h2, .principles-lead h2, .fleet-copy h2, .install-heading h2 { font-size: clamp(43px, 12vw, 60px); }

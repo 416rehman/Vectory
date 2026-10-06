@@ -131,8 +131,10 @@ try {
   await toolsMenu.locator('summary').press('Escape');
   await expect(toolsMenu).not.toHaveAttribute('open', '');
   await expect(page.locator('.hero .button-dark')).toHaveAttribute('href', '#start');
-  const heroImage = await page.locator('.hero-product').boundingBox();
-  assert(heroImage && heroImage.y > 0 && heroImage.y + heroImage.height < 1000, 'Actual product image must be visible in the desktop hero');
+  const heroImage = await page.locator('.hero-art img').boundingBox();
+  const heroCopy = await page.locator('.hero-copy').boundingBox();
+  assert(heroImage && heroImage.y > 0 && heroImage.y + heroImage.height < 1000, 'Original artwork must be visible in the desktop hero');
+  assert(heroCopy && heroImage.x >= heroCopy.x + heroCopy.width, 'Hero artwork must stay clear of the copy and actions');
   await noOverflow();
   await accessible();
   await page.screenshot({ path: path.join(captures, 'landing-desktop.png') });

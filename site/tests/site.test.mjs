@@ -27,9 +27,8 @@ test("the product leads the landing page and the standalone designer remains a t
   assert(hero, "Landing hero missing");
   assert.match(hero, /class="button button-dark" href="#start">Install Vectory/);
   assert.match(hero, /class="quiet-link" href="\/designer\/">Try the standalone designer/);
-  assert.match(hero, /class="hero-product editor-frame"/);
-  assert.match(hero, /src="\/media\/product-editor.png"/);
-  assert.match(hero, /Synthetic demo data/);
+  assert.match(hero, /src="\/media\/flow-art.webp"/);
+  assert.doesNotMatch(hero, /Open source · Docker Compose · No compiling/);
   const navigation = landing.match(/<nav aria-label="Main navigation">[\s\S]*?<\/nav>/)?.[0];
   assert.match(navigation, /<summary>Tools/);
   assert.match(navigation, /href="\/designer\/"/);
