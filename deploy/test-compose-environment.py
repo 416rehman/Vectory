@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,44 @@ module_spec.loader.exec_module(fixture_module)
 
 
 class ComposeEnvironmentTests(unittest.TestCase):
+    def test_source_compose_files_parse_and_preserve_validator_isolation(self):
+        root = Path(__file__).resolve().parents[1]
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('VECTORY_')}
+        environment.update({
+            'VECTORY_HOSTNAME': 'vectory.example.invalid',
+            'VECTORY_TLS_CERT_FILE': '/tmp/vectory-compose-fixture/server.pem',
+            'VECTORY_TLS_KEY_FILE': '/tmp/vectory-compose-fixture/server-key.pem',
+            'VECTORY_BOOTSTRAP_SECRET_FILE': '/tmp/vectory-compose-fixture/bootstrap',
+            'VECTORY_SERVER_IMAGE': 'vectory-server:parser-fixture',
+            'VECTORY_VALIDATOR_IMAGE': 'vectory-validator:parser-fixture',
+            'VECTORY_PREVIEW_SERVER_IMAGE': 'vectory-server:parser-fixture',
+            'VECTORY_PREVIEW_VALIDATOR_IMAGE': 'vectory-validator:parser-fixture',
+            'VECTORY_PREVIEW_PROJECT': 'vectory-compose-fixture',
+            'VECTORY_PREVIEW_WEB_PORT': '18080',
+            'VECTORY_PREVIEW_AGENT_PORT': '18443',
+            'VECTORY_PREVIEW_VALIDATION_URL': 'http://172.30.0.2:8081',
+            'VECTORY_PREVIEW_NO_PROXY': 'localhost,127.0.0.1,::1,172.30.0.2',
+        })
+        for name in ('compose.yaml', 'compose.preview.yaml', 'compose.release.yaml', 'compose.auto.yaml'):
+            with self.subTest(compose=name):
+                result = subprocess.run(
+                    ['docker', 'compose', '--env-file', os.devnull, '-f', str(root / 'deploy' / name),
+                     'config', '--format', 'json'],
+                    env=environment, capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                config = json.loads(result.stdout)
+                validator = config['services']['validator']
+                self.assertTrue(config['networks']['validation']['internal'])
+                self.assertEqual(set(validator['networks']), {'validation'})
+                self.assertFalse(validator.get('ports'))
+                self.assertTrue(validator['read_only'])
+                self.assertEqual(validator['cap_drop'], ['ALL'])
+                self.assertEqual(validator['user'], '10002:10002')
+                if name != 'compose.yaml':
+                    for service in config['services'].values():
+                        self.assertEqual(service['pull_policy'], 'never')
+
     def test_custom_and_automatic_resume_keep_operator_settings_and_verified_refs(self):
         for automatic in (False, True):
             with self.subTest(automatic=automatic), tempfile.TemporaryDirectory(prefix='vectory-real-compose-') as temporary:

@@ -4,7 +4,6 @@ services:
   server:
     image: ${VECTORY_PREVIEW_SERVER_IMAGE:?Run ./start.sh first}
     pull_policy: never
-    pull_policy: never
     user: "10001:10001"
     network_mode: host
     read_only: true
@@ -39,7 +38,6 @@ services:
         condition: service_healthy
   validator:
     image: ${VECTORY_PREVIEW_VALIDATOR_IMAGE:?Run ./start.sh first}
-    pull_policy: never
     pull_policy: never
     user: "10002:10002"
     read_only: true

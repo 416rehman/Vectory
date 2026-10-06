@@ -1468,6 +1468,17 @@ async fn windows_installer_is_token_free_and_matches_the_dashboard_checksum() {
 }
 
 #[cfg(windows)]
+fn native_powershell(shell: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(shell);
+    // PowerShell 7 -> cargo -> Windows PowerShell otherwise carries PS7's
+    // modules into 5.1, where Security cannot load. Let each child construct
+    // its own builtin module paths, as Microsoft's PSModulePath guidance says.
+    // This changes only this child environment, never the host or ACL checks.
+    command.env_remove("PSModulePath");
+    command
+}
+
+#[cfg(windows)]
 fn exercise_windows_installer(root: &Path, served: &str) {
     let script = root.join("vectory-install.ps1");
     std::fs::write(&script, served).unwrap();
@@ -1477,7 +1488,7 @@ fn exercise_windows_installer(root: &Path, served: &str) {
         include_str!("fixtures/windows-installer-driver.ps1"),
     )
     .unwrap();
-    let build = std::process::Command::new("powershell.exe")
+    let build = native_powershell("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -1512,14 +1523,10 @@ fn exercise_windows_installer(root: &Path, served: &str) {
     // Execute actual PowerShell parsing and early refusals. No native setup,
     // token, service or live Vector instance is touched by this fixture.
     for shell in ["powershell.exe", "pwsh.exe"] {
-        if std::process::Command::new(shell)
-            .arg("-Version")
-            .output()
-            .is_err()
-        {
+        if native_powershell(shell).arg("-Version").output().is_err() {
             continue;
         }
-        let help = std::process::Command::new(shell)
+        let help = native_powershell(shell)
             .args([
                 "-NoProfile",
                 "-NonInteractive",
@@ -1541,7 +1548,7 @@ fn exercise_windows_installer(root: &Path, served: &str) {
             "--installer-preflight",
             "--token",
         ] {
-            let refused = std::process::Command::new(shell)
+            let refused = native_powershell(shell)
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
@@ -1561,7 +1568,7 @@ fn exercise_windows_installer(root: &Path, served: &str) {
         let calls = root.join(format!("{shell}-agent-args.txt"));
         let curl_calls = root.join(format!("{shell}-curl-args.txt"));
         let run = |download: &Path, agent_exit: &str, options: &[&str]| {
-            std::process::Command::new(shell)
+            native_powershell(shell)
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
@@ -1725,7 +1732,7 @@ async fn windows_installer_downloads_over_real_tls_and_refuses_wrong_trust() {
         include_str!("fixtures/windows-installer-driver.ps1"),
     )
     .unwrap();
-    let build = std::process::Command::new("powershell.exe")
+    let build = native_powershell("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -1772,15 +1779,11 @@ async fn windows_installer_downloads_over_real_tls_and_refuses_wrong_trust() {
     std::fs::write(&script, bytes).unwrap();
     let captured = f.temp.path().join("real-tls-native-args.txt");
     for shell in ["powershell.exe", "pwsh.exe"] {
-        if std::process::Command::new(shell)
-            .arg("-Version")
-            .output()
-            .is_err()
-        {
+        if native_powershell(shell).arg("-Version").output().is_err() {
             continue;
         }
         let run = |options: &[&str]| {
-            std::process::Command::new(shell)
+            native_powershell(shell)
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
