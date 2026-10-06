@@ -97,9 +97,9 @@ The validator container (`vector-validator`) reads these.
 | `VECTORY_VECTOR_BINARY` | `/usr/local/bin/vector` | The Vector 0.58.0 binary that checks pipelines. The image uses `/usr/bin/vector`. |
 | `VECTORY_VALIDATOR_ADDR` | `0.0.0.0:8081` | Listener for requests from the server. Keep it on an internal network. |
 
-## Local preview settings
+## Local evaluation settings
 
-The prebuilt [preview kit](quickstart.md) needs Docker Compose and verifies its image downloads before starting. Its settings are:
+The prebuilt local evaluation kit uses loopback listeners, needs Docker Compose and verifies its image downloads before starting. For hosting on your own domain, use the [server guide](install-server.md). The local kit's settings are:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
