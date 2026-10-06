@@ -1,0 +1,30 @@
+{
+  admin off
+  default_sni {$VECTORY_HOSTNAME}
+  skip_install_trust
+  http_port 8080
+  https_port 8443
+  servers {
+    protocols h1 h2
+  }
+}
+{$VECTORY_HOSTNAME} {
+  tls {
+    protocols tls1.3
+  }
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    Referrer-Policy same-origin
+    X-Frame-Options DENY
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  }
+  @agent path /agent/*
+  respond @agent 404
+  reverse_proxy server:8080 {
+    header_up X-Forwarded-For {remote_host}
+    header_up -X-Client-Cert
+    header_up -X-SSL-Client-Cert
+    header_up -X-Forwarded-Client-Cert
+  }
+}

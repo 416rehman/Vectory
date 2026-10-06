@@ -1,53 +1,46 @@
 # Install the server
 
-Run the Vectory developer preview on a Linux x86-64 host with the prebuilt server kit. Its guided start command downloads verified images, checks your certificate, creates the setup secret and starts the server, TLS proxy and isolated Vector validator. No Git, compiler or language toolchain is required.
+The full Vectory server installs from signed, prebuilt GHCR images. One guided command starts the dashboard, isolated Vector validator and HTTPS proxy. No compiler or language toolchain is needed.
 
-For a local trial without DNS or certificates, use the [quickstart](quickstart.md) instead.
+## What you need
 
-## Before you start
-
-| You need | Why |
+| Requirement | Details |
 | --- | --- |
-| Linux x86-64 with Docker Engine running and Compose v2 | Runs the prebuilt containers. |
-| A DNS name pointing at this host | Browsers and devices use it to reach Vectory. |
-| A TLS certificate full-chain PEM and its private-key PEM for that name | Protects browser and agent connections. Use readable regular files at absolute paths. |
-| Ports 443 and 8443 reachable by the appropriate clients | 443 serves the dashboard; 8443 serves enrollment and mutual-TLS agent traffic. |
-| Local, durable disk | SQLite state must not live on a network filesystem. |
+| Server | Linux x86-64 with Docker Engine and Compose v2 running, plus curl. |
+| Address | A DNS name pointing to the server, for example `vectory.example.com`. |
+| Network | TCP 80 and 443 reachable for automatic HTTPS; TCP 8443 reachable from managed devices. Devices connect out and need no inbound ports. |
+| Storage | Local, durable disk. Run one server per data directory; do not put SQLite on a network filesystem. |
 
-If you already have a certificate for this server name, use its full chain and private key. If your organization uses a private certificate authority, obtain its public CA certificate through your trusted administrative channel and append it after the server certificate in the full chain. Keep the CA's private key elsewhere. Browsers and devices need to trust that issuer; Vectory's device identity CA is a different authority and is not the file to distribute here. [Certificate trust](installation.md#trust-the-server-certificate) explains each choice.
+## Install
 
-The server kit is an **unsigned developer preview**. Review [platform coverage](compatibility.md) before installing it.
-
-## 1. Download and extract
-
-Download **[vectory-0.1.1-server-linux-amd64.tar.gz](https://github.com/416rehman/Vectory/releases/download/v0.1.1/vectory-0.1.1-server-linux-amd64.tar.gz)** from the [0.1.1 release](https://github.com/416rehman/Vectory/releases/tag/v0.1.1).
+Run on your server:
 
 ```sh
-curl -fsSL --proto '=https' \
-  https://github.com/416rehman/Vectory/releases/download/v0.1.1/SHA256SUMS \
-  -o release-SHA256SUMS &&
-grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]1-server-linux-amd64[.]tar[.]gz$' \
-  release-SHA256SUMS | sha256sum --check --strict - &&
-tar -xzf vectory-0.1.1-server-linux-amd64.tar.gz &&
-cd vectory-0.1.1-server-linux-amd64 &&
-./start.sh
+curl -fsSL --proto '=https' https://vectory.ahmadz.ai/install.sh -o vectory-install.sh &&
+bash vectory-install.sh
 ```
 
-The script asks for your server DNS name, certificate file, private-key file and the address to listen on. `0.0.0.0` listens on every interface; choose a specific IPv4 address to limit the listener. It verifies that the key matches the certificate, the certificate names your chosen host and it is valid now. It does not install browser trust or establish whether you obtained the CA through a trusted channel.
+The downloaded installer is a readable shell script. It verifies the release's Sigstore bundle against Vectory's GitHub release workflow identity, checks the server kit before extracting it, and runs the guided starter. The starter verifies immutable server and validator image digests before pulling them from GHCR. Cosign runs in a pinned Docker container; no separate verifier installation is required.
 
-You should see the archive name followed by **OK** before startup continues. The starter verifies every kit file and both downloaded images against their SHA-256 inventories before use. The first start downloads the Vectory images plus the pinned TLS proxy image. The server image includes the dashboard, Help center and every supported agent download. You do not compile or fetch agents separately.
+Enter the hostname when asked. The default uses automatic HTTPS: Caddy obtains and renews the public dashboard certificate. A separate retained private CA protects agent connections, and its listener certificate renews automatically without disconnecting enrolled devices. **Add device** includes the correct agent trust in each install command. There is no CA file to distribute by hand.
 
-The script copies your certificate and key into the private `vectory_secrets` Docker volume and generates the bootstrap secret there. It writes the selected hostname, bind address and image tags to `.env`. Keep that file with your backups. `.env.example` lists optional settings; [Server configuration](server-config.md) covers the complete reference.
+Your DNS records and firewall must allow the certificate authority to reach this server. If you use a reverse proxy or Cloudflare, route the dashboard hostname appropriately and keep port 8443 reachable directly by your agents. Do not proxy the agent listener through an ordinary HTTP proxy that terminates its mutual TLS.
 
-## 2. Create the first administrator
+## Create the first administrator
 
-When all services are healthy, the script prints `https://<your-server-name>` and the setup secret. Open that URL and paste the secret, then choose your administrator name, email and password of 12 characters or more. There are no default accounts and no public sign-up.
+When the services are healthy, the starter prints your HTTPS URL and the setup secret. Open the URL, paste that secret and choose your name, email and password. There are no default accounts and no public sign-up.
 
-The setup secret works only once, to create the first administrator. It is neither an enrollment token nor a sign-in password. Retrieve it while the server is running with `./start.sh setup-secret` if needed. After setup, [enable an authenticator](administer.md#set-up-an-authenticator).
+The setup secret creates the first administrator once. It is not an enrollment token or a sign-in password. From the kit directory, `./start.sh setup-secret` retrieves it while setup is incomplete. After setup, [enable an authenticator](administer.md#set-up-an-authenticator), [connect a device](installation.md), and [deploy your first pipeline](first-pipeline.md).
 
-Then [connect a device](installation.md), [deploy your first pipeline](first-pipeline.md), and [invite your team](administer.md#create-workspace-accounts).
+## Use your own certificate
+
+The kit also accepts an existing TLS certificate and private key for private networks or organizations that manage certificates centrally. Run `VECTORY_CERTIFICATE_MODE=custom ./start.sh` from a new kit directory, then provide the full-chain PEM and key PEM at absolute paths when asked. The starter checks the hostname, validity and matching key before installing them.
+
+For a private issuer, include its public CA certificate after the server certificate in the chain. Keep the CA private key separate. Browsers must trust that issuer, and **Add device** carries the public agent CA and its fingerprint in the command. [Certificate trust](installation.md#trust-the-server-certificate) explains the advanced choices.
 
 ## Stop, resume and check
+
+Run from the kit directory:
 
 ```sh
 ./start.sh status
@@ -55,28 +48,47 @@ Then [connect a device](installation.md), [deploy your first pipeline](first-pip
 ./start.sh
 ```
 
-Stopping retains the database and certificate volume. Resuming checks the retained certificate and uses the same workspace; it never replaces trust automatically. For service diagnostics, run:
+Stopping retains the database and certificate volumes. Resuming uses the same workspace and trust. The kit's `.env` records the selected hostname and immutable image references; retain it with your backups.
+
+For diagnostics:
 
 ```sh
 docker compose logs --tail 100 server proxy validator
 ```
 
-The start command waits for the validator, server and proxy health checks. The proxy is healthy only when a request through it reaches the server. If the validator is down, publishing stops until it is restored; the server never skips that check.
+The starter waits for the validator, server and proxy health checks. If native validation is unavailable, publishing stops; the server does not silently skip it.
 
-## What runs where
+## What runs
 
-| Container | Purpose and isolation |
+| Service | Purpose |
 | --- | --- |
-| `proxy` | Serves the dashboard over TLS 1.3 on port 443. Runs as UID 10001 with a read-only filesystem, only `NET_BIND_SERVICE`, no admin API, and no forwarded `/agent/` paths. |
-| `server` | Stores state and serves agents on port 8443. Runs as UID 10001 with a read-only filesystem and no capabilities. Its HTTP listener accepts only the proxy and its own loopback. |
-| `validator` | Validates configurations with Vector 0.58.0. Runs as UID 10002 on an internal network with no internet route, no host ports, no secrets and bounded resources. |
+| `proxy` | Caddy serves the dashboard over HTTPS. Automatic mode renews its public certificate; custom mode uses your supplied pair. It does not forward `/agent/` routes. |
+| `server` | Dashboard, API, bundled Help center, SQLite state and the native mutual-TLS agent listener on 8443. |
+| `validator` | Vector 0.58.0 validation on an internal network, with no internet route, published host ports or production secrets. |
+| Certificate maintenance | Automatic mode retains the private agent issuer and renews its listener certificate before expiry. Custom mode leaves renewal of supplied certificates to you. |
 
-The `vectory_data` volume holds the database and server identity keys. The `vectory_secrets` volume holds the supplied TLS pair and setup secret. Back up both, and retain `.env` and the kit's configuration. [Back up the complete state](administer.md#back-up-the-complete-state) before any upgrade. Docker access itself permits reading these files, so protect it as administrator access.
+The server and validator run as separate unprivileged users with read-only filesystems, dropped capabilities and bounded resources. Every supported agent download is already inside the server image; you do not build or fetch agents separately.
 
-## Certificate maintenance and advanced setup
+## Offline installation
 
-The starter refuses an expired or mismatched retained certificate. To replace it, stop the server and proxy, update `server_cert` and `server_key` inside the `vectory_secrets` volume from a trusted matching pair, verify the full chain and hostname, then start again. A CA change also needs a device trust plan; never silently discard a CA that enrolled devices pin. [Ports and network](ports.md) covers firewalls and proxies.
+On a connected Linux x86-64 Docker host, verify and extract the server kit from the [release page](https://github.com/416rehman/Vectory/releases/tag/v0.2.0), then run from that kit:
 
-For an unattended first start, provide `VECTORY_HOSTNAME`, `VECTORY_TLS_CERT_FILE`, `VECTORY_TLS_KEY_FILE` and `VECTORY_BIND_IP` as environment variables. Use `VECTORY_SERVER_PROJECT` consistently for a separate instance. To use an offline release mirror, set `VECTORY_PREVIEW_RELEASE_DIR` to a directory holding both image archives and the release `SHA256SUMS`, and pre-load the pinned proxy image.
+```sh
+./prepare-offline.sh /absolute/path/vectory-offline
+```
 
-Developers who need to change or build the images can use the [contributor setup](https://github.com/416rehman/Vectory/blob/main/docs/dev/SOURCE-QUICKSTART.md) and the source Compose file under `deploy/`. Ordinary installation uses the prebuilt kit above.
+Preparation verifies the actual release and creates a source-free kit with authenticated Vectory image archives, the pinned Cosign and Caddy images, and the independently verified Sigstore trust cache. It does not start a manager. Transfer the **entire output directory**, including `.cache`, over your trusted channel. On the offline host, run from the transferred directory:
+
+```sh
+VECTORY_OFFLINE=true VECTORY_CERTIFICATE_MODE=custom ./start.sh
+```
+
+Supply your HTTPS certificate and matching private key when asked. The loader verifies signatures, archive checksums and immutable local image identities; Compose disables network pulls. A checksum inventory alone cannot establish independent trust in Sigstore's root.
+
+After installation, the dashboard, documentation, fonts and search need no outside requests. Agent downloads come from your server. Vector's own files, credentials and binaries must be available on each managed host.
+
+## Keep the installation healthy
+
+- [Back up and restore the server](administer.md).
+- [Upgrade the server](administer.md#upgrade-the-server) using a verified new kit and the same retained state.
+- Review [compatibility](compatibility.md), [security](security.md) and [operational limits](whats-new.md#known-limits) for the workload you plan to run.

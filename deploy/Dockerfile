@@ -32,10 +32,13 @@ RUN cd agent && go mod download
 COPY agent ./agent
 COPY packaging/build-release.py ./packaging/build-release.py
 COPY packaging/dev-pki ./packaging/dev-pki
+COPY packaging/server-pki ./packaging/server-pki
 RUN python3 packaging/build-release.py --no-archives --out /out
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /tools/vectory-local-pki ./packaging/dev-pki/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /tools/vectory-server-pki ./packaging/server-pki/main.go ./packaging/server-pki/lock_linux.go
 
 FROM timberio/vector:0.58.0-debian@sha256:1c1ea358c617ea0b23003d5af87f7a678b30f8f7096437e680380c47fc13d2d9 AS validator
+LABEL org.opencontainers.image.source="https://github.com/416rehman/Vectory"
 # The pinned Vector image can lag Debian security updates; refresh its installed packages.
 USER root
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
@@ -49,6 +52,7 @@ ENTRYPOINT ["/usr/local/bin/vector-validator"]
 
 # Keep the Bookworm build target while running on a patched Debian 13 base.
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
+LABEL org.opencontainers.image.source="https://github.com/416rehman/Vectory"
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates curl python3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 vectory && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin vectory \
@@ -64,6 +68,7 @@ COPY NOTICE /app/dashboard/NOTICE.txt
 COPY --from=agents /out /app/agent-releases
 COPY deploy/backup.py /app/operations/backup.py
 COPY --from=agents /tools/vectory-local-pki /app/operations/vectory-local-pki
+COPY --from=agents /tools/vectory-server-pki /app/operations/vectory-server-pki
 USER 10001:10001
 WORKDIR /app
 ENV VECTORY_HTTP_ADDR=0.0.0.0:8080 VECTORY_AGENT_ADDR=0.0.0.0:8443 \

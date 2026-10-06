@@ -45,6 +45,7 @@ pub fn router(s: State) -> Router {
         .route("/agent/v1/renew", post(renew))
         .route("/agent/v1/identity", get(crate::install::identity))
         .route("/agent/v1/install.sh", get(crate::install::install_sh))
+        .route("/agent/v1/install.ps1", get(crate::install::install_ps1))
         .route(
             "/agent/v1/downloads/{os}/{arch}",
             get(crate::install::download_platform),
@@ -1554,8 +1555,13 @@ pub async fn serve_tls(
     cert: &std::path::Path,
     key: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let config = s.keys.tls_config(cert, key)?;
+    let snapshot = crate::tls_reload::load(&s, cert, key)?;
+    let config = (*snapshot.config).clone();
+    *s.agent_tls
+        .write()
+        .map_err(|_| anyhow::anyhow!("Agent TLS state unavailable"))? = Some(snapshot);
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let _watcher = crate::tls_reload::watch(&s, cert.to_owned(), key.to_owned());
     tracing::info!(%addr,"device TLS listener ready");
     serve_tls_on(s, listener, config).await
 }
@@ -1594,7 +1600,7 @@ pub async fn serve_tls_on<A: Accept>(
     config: rustls::ServerConfig,
 ) -> anyhow::Result<()> {
     let config = std::sync::Arc::new(config);
-    let router = router(s);
+    let router = router(s.clone());
     // The server has checked the variable before it started anything.
     let maximum_connections =
         max_agent_connections(std::env::var(MAX_CONNECTIONS_VARIABLE).ok().as_deref())?;
@@ -1625,7 +1631,12 @@ pub async fn serve_tls_on<A: Accept>(
         let Ok(permit) = semaphore.clone().try_acquire_owned() else {
             continue;
         };
-        let config = config.clone();
+        let config = s
+            .agent_tls
+            .read()
+            .ok()
+            .and_then(|current| current.as_ref().map(|snapshot| snapshot.config.clone()))
+            .unwrap_or_else(|| config.clone());
         let handshakes = handshakes.clone();
         let router = router.clone();
         tokio::spawn(async move {

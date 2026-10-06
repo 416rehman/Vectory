@@ -24,6 +24,12 @@
 /LICENSE.txt
   X-Robots-Tag: noindex
 
+/install.sh
+  X-Robots-Tag: noindex
+  Content-Type: text/plain; charset=utf-8
+  Content-Disposition: attachment; filename="vectory-install.sh"
+  Cache-Control: public, max-age=300, must-revalidate
+
 /designer/NOTICE.txt
   X-Robots-Tag: noindex
 

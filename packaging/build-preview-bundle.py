@@ -19,10 +19,13 @@ def build(out, kind='preview'):
     version = match.group(1)
     if kind not in ('preview', 'server'):
         raise ValueError('unknown starter kind')
-    prefix = f'vectory-{version}-{kind}-linux-amd64'
+    label = 'local' if kind == 'preview' and tuple(map(int, version.split('-')[0].split('.'))) >= (0, 2, 0) else kind
+    prefix = f'vectory-{version}-{label}-linux-amd64'
     members = {
         'start.sh': ((ROOT / f'deploy/start-{kind}.sh').read_bytes(), 0o755),
         'release-images.sh': ((ROOT / 'deploy/release-images.sh').read_bytes(), 0o644),
+        'verify-release.sh': ((ROOT / 'deploy/verify-release.sh').read_bytes(), 0o644),
+        'prepare-offline.sh': ((ROOT / 'deploy/prepare-offline.sh').read_bytes(), 0o755),
         'compose.yaml': ((ROOT / ('deploy/compose.preview.yaml' if kind == 'preview' else 'deploy/compose.release.yaml')).read_bytes(), 0o644),
         'README.md': ((ROOT / f'deploy/{kind.upper()}-README.md').read_bytes(), 0o644),
         'LICENSE': ((ROOT / 'LICENSE').read_bytes(), 0o644),
@@ -30,6 +33,9 @@ def build(out, kind='preview'):
         'VERSION': ((version + '\n').encode(), 0o644),
     }
     if kind == 'server':
+        members['start-auto.sh'] = ((ROOT / 'deploy/start-auto.sh').read_bytes(), 0o644)
+        members['compose.auto.yaml'] = ((ROOT / 'deploy/compose.auto.yaml').read_bytes(), 0o644)
+        members['Caddyfile.auto'] = ((ROOT / 'deploy/Caddyfile.auto').read_bytes(), 0o644)
         members['Caddyfile'] = ((ROOT / 'deploy/Caddyfile').read_bytes(), 0o644)
         members['.env.example'] = ((ROOT / 'deploy/.env.release.example').read_bytes(), 0o644)
     members['SHA256SUMS'] = (''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n'

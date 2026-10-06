@@ -45,7 +45,7 @@ await run(process.execPath, ["node_modules/vite/bin/vite.js", "build", "--config
 await run(process.execPath, ["scripts/build.mjs"], helpRoot);
 const helpOutput = path.join(helpRoot, "dist");
 const manifest = JSON.parse(await fs.readFile(path.join(helpOutput, "help-manifest.json"), "utf8"));
-assert.equal(manifest.version, "0.1.1", "Public preview copy and built docs must describe the same release");
+assert.equal(manifest.version, "0.2.0", "Public release copy and built docs must describe the same release");
 assert(manifest.pages.length >= 20, "A partial Help center must not be published");
 
 await fs.rm(output, { recursive: true, force: true });
@@ -56,6 +56,7 @@ await fs.rename(path.join(output, "designer/designer.html"), path.join(output, "
 await fs.copyFile(path.join(siteRoot, "src/index.html"), path.join(output, "index.html"));
 await fs.copyFile(path.join(siteRoot, "src/site.css"), path.join(output, "site.css"));
 await fs.copyFile(path.join(siteRoot, "src/site.js"), path.join(output, "site.js"));
+await fs.copyFile(path.join(repoRoot, "deploy/install.sh"), path.join(output, "install.sh"));
 await fs.copyFile(path.join(repoRoot, "dashboard/public/favicon.svg"), path.join(output, "favicon.svg"));
 await fs.mkdir(path.join(output, "fonts"), { recursive: true });
 await fs.copyFile(path.join(helpOutput, "fonts/instrument-sans-latin.woff2"), path.join(output, "fonts/instrument-sans-latin.woff2"));
@@ -113,7 +114,7 @@ const sitemapPaths = ["/", "/designer/", ...publicPaths.sort()];
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapPaths.map((pathname) => `  <url><loc>${origin}${pathname}</loc></url>`).join("\n")}\n</urlset>\n`;
 await fs.writeFile(path.join(output, "sitemap.xml"), sitemap);
 await fs.writeFile(path.join(output, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
-await fs.writeFile(path.join(output, "llms.txt"), `# Vectory\n\n> Self-hosted Vector control plane. Vectory 0.1.1 is an unsigned developer preview.\n\n- [Overview](${origin}/)\n- [Vector configuration designer](${origin}/designer/): Create, import, visualize and export YAML, JSON and TOML locally in your browser.\n- [Quickstart](${origin}/help/_markdown/quickstart.md)\n- [Security model](${origin}/help/_markdown/security.md)\n- [Known limits](${origin}/help/whats-new/#known-limits)\n- [All guides](${origin}/help/llms.txt)\n`);
+await fs.writeFile(path.join(output, "llms.txt"), `# Vectory\n\n> Self-hosted Vector control plane. Vectory 0.2.0 uses signed prebuilt images and downloads.\n\n- [Overview](${origin}/)\n- [Vector configuration designer](${origin}/designer/): Create, import, visualize and export YAML, JSON and TOML locally in your browser.\n- [Quickstart](${origin}/help/_markdown/quickstart.md)\n- [Security model](${origin}/help/_markdown/security.md)\n- [Known limits](${origin}/help/whats-new/#known-limits)\n- [All guides](${origin}/help/llms.txt)\n`);
 // Cloudflare JavaScript Detections may rewrite HTML unless the origin sends
 // no-transform. Keep the existing HTML cache policy and target only HTML
 // routes so asset caching and compression retain their current behavior.

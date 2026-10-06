@@ -58,6 +58,7 @@ pub mod rollout;
 pub mod schedule;
 pub mod scheduled_refresh;
 pub mod telemetry;
+pub mod tls_reload;
 pub mod token_requests;
 pub mod user_requests;
 pub mod validation;
@@ -117,6 +118,9 @@ pub struct App {
     pub pool: SqlitePool,
     pub writer: Mutex<()>,
     pub settings: Settings,
+    /// The last validated listener certificate and config. Invalid replacements
+    /// never replace this snapshot or change the Add device trust information.
+    pub agent_tls: std::sync::RwLock<Option<tls_reload::Snapshot>>,
     pub keys: crypto::Keys,
     pub audit_exports: Arc<audit_exports::Store>,
     pub validation_slots: tokio::sync::Semaphore,
@@ -235,6 +239,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         pool,
         writer: Mutex::new(()),
         settings,
+        agent_tls: Default::default(),
         keys,
         audit_exports,
         limits: ledger::Ledger::with_capacity(ANONYMOUS_LIMIT_KEYS).into(),

@@ -84,7 +84,7 @@ docker compose cp server:/var/lib/vectory/backup-2026-09-29 /srv/backups/
 Use a new folder name for each backup.
 
 - Keep backups encrypted and access-restricted, off the server: they contain the server's private keys. With [agent updates](agent-updates.md) on and **This server signs** chosen, that includes the release key: whoever holds the backup can approve builds that hosts install as root. A key kept offline is never in a backup.
-- Back up your TLS files, `.env` and any agent download mirror separately. With the prebuilt server kit, the TLS pair and setup secret are in the private `vectory_secrets` volume. Retain that volume alongside the complete data backup, using your own project prefix if you changed it.
+- Back up `.env`, the retained secrets volume and any agent download mirror separately. With the server kit, `vectory_secrets` holds the agent listener's certificate, private issuer and setup secret. Automatic HTTPS also retains public certificate state in `vectory_caddy_data`; keep that volume too. Use your own project prefix if you changed it. These are separate from the complete database and server-identity backup.
 - Avoid rotating signing keys or upgrading while a backup runs. For the strongest guarantee, stop the server first.
 - The backup's manifest lists file hashes. It detects damage; it isn't a signature.
 
@@ -93,11 +93,17 @@ Use a new folder name for each backup.
 Restore into a new, empty folder while the server is stopped, and keep the current state untouched:
 
 ```sh
-python3 deploy/backup.py restore \
-  --from /srv/backups/backup-2026-09-29 --out /srv/restored-vectory
+image=$(sed -n 's/^VECTORY_SERVER_IMAGE=//p' .env)
+sudo install -d -m 0700 -o 10001 -g 10001 /srv/vectory-restore
+docker run --rm --network none --user 10001:10001 --read-only \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --mount type=bind,src=/srv/backups/backup-2026-09-29,dst=/backup,readonly \
+  --mount type=bind,src=/srv/vectory-restore,dst=/restore \
+  --entrypoint python3 "$image" /app/operations/backup.py restore \
+  --from /backup --out /restore/state
 ```
 
-The tool checks the manifest, hashes and database integrity. Give the restored folder to the server's account (UID/GID 10001 in Compose) with private permissions, including the whole `keys/` folder and `mfa-sealing.key`.
+Run from the verified kit directory. The backup input must be readable by UID/GID 10001 with private permissions; decrypt or copy it into such a directory first if your backup system uses another owner. The output is `/srv/vectory-restore/state`, which must not already exist. The tool runs inside the prebuilt image, so no Python installation or source checkout is needed on your host. It checks the manifest, hashes and database integrity and writes private restored files for the server identity, including `keys/` and `mfa-sealing.key`.
 
 An old backup also restores old decisions: accounts that were disabled, old roles and passwords, revoked devices, used codes and tokens. For [agent updates](agent-updates.md) that means a release key you revoked since is back in use, releases you withdrew are ready again, rollouts that ended are running again and a stop you set since is gone. Before anyone reconnects:
 
@@ -122,9 +128,9 @@ If the server's log says it holds a release key whose sealed private half can't 
 1. [Back up](#back-up-the-complete-state) and test restoring the backup.
 2. Note the current image digests and keep a copy of your server kit's `.env` and Compose configuration.
 3. Try the new version against a copy of the restored state first. Confirm the database migrated, people can sign in and representative devices check in.
-4. Download and verify the new release's prebuilt images using its [server kit](install-server.md), load them, and update the image references in your existing Compose configuration. From that directory, run `docker compose up -d --wait`. Keep the existing data volume, TLS files, and environment settings.
+4. Verify and extract the new release's [server kit](install-server.md) into a new directory. Retain the existing `.env`, agent-download mirror, Docker project name and state/certificate volumes, then run the new kit's `./start.sh`. Preserve an offline installation's authenticated `.cache` too. The starter authenticates the new image references and preserves optional settings while selecting the correct automatic or custom certificate stack. Do not run a bare `docker compose up` for an automatic HTTPS kit: its default Compose file is the custom-certificate stack.
 
-Server upgrades use prebuilt images; no source checkout or compilation is needed. Cross-release upgrades have not yet been qualified for this first developer preview, so test the exact transition against restored state before changing a consequential installation.
+Server upgrades use signed prebuilt images; no source checkout or compilation is needed. Test your exact transition against restored state before changing an installation, and retain a complete backup for recovery.
 
 The first start after an upgrade migrates the database before the server answers. Some upgrades build an index over stored telemetry, so that start can take a while when the telemetry table is large. Let it finish.
 

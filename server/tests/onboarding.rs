@@ -1409,6 +1409,243 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
 }
 
 #[tokio::test]
+async fn windows_installer_is_token_free_and_matches_the_dashboard_checksum() {
+    let d = distribution(|_| {}).await;
+    let f = &d.f;
+    let (token, _) = f
+        .token(json!({"name":"Unused Windows token","expires_hours":1}))
+        .await;
+    let (status, _, bytes) = f
+        .get(&f.api, "/api/v1/agent-install", "vectory.example.test")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let details = json_of(&bytes);
+    assert_eq!(
+        details["windows_installer"]["platforms"],
+        json!(["windows/amd64"])
+    );
+    assert_eq!(
+        details["windows_installer"]["url"],
+        "https://vectory.example.test:8443/agent/v1/install.ps1"
+    );
+    let device = agent(&f.s);
+    let (status, headers, bytes) = f
+        .get(
+            &device,
+            "/agent/v1/install.ps1",
+            "vectory.example.test:8443",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let digest = db::hash(&bytes);
+    assert_eq!(details["windows_installer"]["sha256"], digest);
+    assert_eq!(headers[header::ETAG], format!("\"{digest}\""));
+    assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    let script = String::from_utf8(bytes).unwrap();
+    assert!(!script.contains(&token));
+    assert!(!script.contains("Invoke-Expression"));
+    assert!(!script.contains("SkipCertificateCheck"));
+    assert!(!script.contains("--insecure"));
+    assert!(!script.contains("ServerCertificateValidationCallback"));
+    assert!(!script.contains("@SERVER@"));
+    assert!(script.contains("$server = 'https://vectory.example.test:8443'"));
+    assert!(script.contains(&format!("$caSHA256 = '{}'", d.ca_sha256)));
+    assert!(script.contains("SetAccessRuleProtection($true, $false)"));
+    assert!(script.contains("Get-FileHash -LiteralPath $candidate -Algorithm SHA256"));
+    assert!(script.contains("& $candidate setup --server $server @setupOptions"));
+    let (_, _, http2) = send(
+        &device,
+        Request::builder()
+            .uri("https://vectory.example.test:8443/agent/v1/install.ps1")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(http2, script.as_bytes());
+
+    #[cfg(windows)]
+    exercise_windows_installer(f.temp.path(), &script);
+}
+
+#[cfg(windows)]
+fn exercise_windows_installer(root: &Path, served: &str) {
+    let script = root.join("vectory-install.ps1");
+    std::fs::write(&script, served).unwrap();
+    let driver = root.join("windows-installer-driver.ps1");
+    std::fs::write(
+        &driver,
+        include_str!("fixtures/windows-installer-driver.ps1"),
+    )
+    .unwrap();
+    let build = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&driver)
+        .arg("build")
+        .arg(root)
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    let fixture = root.join("fixture.exe");
+    let fixture_bytes = std::fs::read(&fixture).unwrap();
+    let fixture_hash = db::hash(&fixture_bytes);
+    let fixture_script = served
+        .lines()
+        .map(|line| {
+            if line.starts_with("    'amd64' { $version =") {
+                format!(
+                    "    'amd64' {{ $version = '0.2.0'; $expectedHash = '{fixture_hash}'; $expectedSize = {} }}",
+                    fixture_bytes.len()
+                )
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&script, fixture_script).unwrap();
+    // Execute actual PowerShell parsing and early refusals. No native setup,
+    // token, service or live Vector instance is touched by this fixture.
+    for shell in ["powershell.exe", "pwsh.exe"] {
+        if std::process::Command::new(shell)
+            .arg("-Version")
+            .output()
+            .is_err()
+        {
+            continue;
+        }
+        let help = std::process::Command::new(shell)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(&script)
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(help.status.success(), "{shell}: {help:?}");
+        assert!(
+            String::from_utf8_lossy(&help.stdout).contains("Typical: & .\\vectory-install.ps1")
+        );
+        for option in [
+            "--server",
+            "--agent-path",
+            "--installer-preflight",
+            "--token",
+        ] {
+            let refused = std::process::Command::new(shell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(&script)
+                .args([option, "refused"])
+                .output()
+                .unwrap();
+            assert!(
+                !refused.status.success(),
+                "{shell} accepted {option}: {refused:?}"
+            );
+        }
+        let calls = root.join(format!("{shell}-agent-args.txt"));
+        let curl_calls = root.join(format!("{shell}-curl-args.txt"));
+        let run = |download: &Path, agent_exit: &str, options: &[&str]| {
+            std::process::Command::new(shell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(&driver)
+                .arg("run")
+                .arg(root)
+                .arg(&script)
+                .args(options)
+                .env("VECTORY_TEST_DOWNLOAD", download)
+                .env("VECTORY_TEST_AGENT_ARGS", &calls)
+                .env("VECTORY_TEST_CURL_ARGS", &curl_calls)
+                .env("VECTORY_TEST_AGENT_EXIT", agent_exit)
+                .output()
+                .unwrap()
+        };
+        let positive = run(
+            &fixture,
+            "0",
+            &["--name", "windows-fixture", "--mode", "full", "--dry-run"],
+        );
+        assert!(positive.status.success(), "{shell}: {positive:?}");
+        let recorded = std::fs::read_to_string(&calls)
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(recorded.contains("setup\n--server\nhttps://vectory.example.test:8443\n"));
+        assert!(recorded.contains("--ca-sha256\n"));
+        assert!(recorded.contains("--name\nwindows-fixture\n--mode\nfull\n--dry-run"));
+        let curl_args = std::fs::read_to_string(&curl_calls)
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(curl_args.contains("--tlsv1.3\n"));
+        assert!(curl_args.contains("--cacert\n"));
+        assert!(curl_args.contains("--ssl-revoke-best-effort\n"));
+        let temporary_binary = curl_args
+            .lines()
+            .skip_while(|arg| *arg != "--output")
+            .nth(1)
+            .unwrap();
+        assert!(
+            !Path::new(temporary_binary).parent().unwrap().exists(),
+            "temporary staging remained"
+        );
+        assert_eq!(
+            run(&fixture, "3", &["--ca-file=", "--service", "none"])
+                .status
+                .code(),
+            Some(3)
+        );
+        let curl_args = std::fs::read_to_string(&curl_calls)
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(
+            !curl_args.contains("--cacert\n"),
+            "system trust still passed a private CA"
+        );
+        assert!(!curl_args.contains("--ssl-revoke-best-effort\n"));
+        assert!(
+            std::fs::read_to_string(&calls)
+                .unwrap()
+                .replace("\r\n", "\n")
+                .contains("--ca-file=\n")
+        );
+        std::fs::remove_file(&calls).unwrap();
+        let tampered = root.join("tampered.exe");
+        let mut changed = fixture_bytes.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        std::fs::write(&tampered, changed).unwrap();
+        let refused = run(&tampered, "0", &[]);
+        assert!(
+            !refused.status.success(),
+            "{shell} ran a tampered download: {refused:?}"
+        );
+        assert!(!calls.exists(), "tampered native program executed");
+        std::fs::write(&tampered, b"wrong size").unwrap();
+        assert!(!run(&tampered, "0", &[]).status.success());
+        assert!(!calls.exists(), "wrong-size native program executed");
+    }
+}
+
+#[tokio::test]
 async fn hardened_sites_can_turn_off_public_downloads() {
     let d = distribution(|settings| {
         settings.disable_public_agent_downloads = true;
@@ -1417,7 +1654,11 @@ async fn hardened_sites_can_turn_off_public_downloads() {
     .await;
     let f = &d.f;
     let device = agent(&f.s);
-    for path in ["/agent/v1/install.sh", "/agent/v1/downloads/linux/amd64"] {
+    for path in [
+        "/agent/v1/install.sh",
+        "/agent/v1/install.ps1",
+        "/agent/v1/downloads/linux/amd64",
+    ] {
         let (status, _, _) = f.get(&device, path, "agents.example.test:9443").await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
     }
@@ -1427,6 +1668,7 @@ async fn hardened_sites_can_turn_off_public_downloads() {
     let details = json_of(&bytes);
     assert_eq!(details["downloads_enabled"], false);
     assert_eq!(details["installer"], Value::Null);
+    assert_eq!(details["windows_installer"], Value::Null);
     assert_eq!(details["agent_url"], "https://agents.example.test:9443");
     assert_eq!(details["agent_url_configured"], true);
     // Signed-in users can still download builds from the dashboard.
@@ -1438,6 +1680,137 @@ async fn hardened_sites_can_turn_off_public_downloads() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_installer_downloads_over_real_tls_and_refuses_wrong_trust() {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("https://{}", listener.local_addr().unwrap());
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca = CertificateParams::default();
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+    ca.distinguished_name
+        .push(rcgen::DnType::CommonName, "Synthetic installer CA");
+    let ca_cert = ca.self_signed(&ca_key).unwrap();
+    let issuer = Issuer::from_ca_cert_pem(&ca_cert.pem(), ca_key).unwrap();
+    let leaf_key = KeyPair::generate().unwrap();
+    let mut leaf_params = CertificateParams::new(vec!["127.0.0.1".to_owned()]).unwrap();
+    leaf_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "Synthetic installer listener");
+    leaf_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    let leaf = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
+    let chain = format!("{}{}", leaf.pem(), ca_cert.pem());
+    let f = fixture(|settings, root| {
+        settings.agent_certificate_pem = Some(chain.clone());
+        settings.public_agent_url = Some(origin.clone());
+        std::fs::write(root.join("listener.pem"), &chain).unwrap();
+        std::fs::write(root.join("listener-key.pem"), leaf_key.serialize_pem()).unwrap();
+    })
+    .await;
+    let config =
+        f.s.keys
+            .tls_config(
+                &f.temp.path().join("listener.pem"),
+                &f.temp.path().join("listener-key.pem"),
+            )
+            .unwrap();
+    let service = tokio::spawn(device::serve_tls_on(f.s.clone(), listener, config));
+    let driver = f.temp.path().join("windows-installer-driver.ps1");
+    std::fs::write(
+        &driver,
+        include_str!("fixtures/windows-installer-driver.ps1"),
+    )
+    .unwrap();
+    let build = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&driver)
+        .arg("build")
+        .arg(f.temp.path())
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    let binary = std::fs::read(f.temp.path().join("fixture.exe")).unwrap();
+    write_catalog(
+        &f.s.settings.releases_dir,
+        &[Build {
+            name: "vectory-0.2.0-windows-amd64.exe",
+            os: "windows",
+            arch: "amd64",
+            version: "0.2.0",
+            bytes: binary,
+        }],
+    );
+    let (_, _, details) = f.get(&f.api, "/api/v1/agent-install", "127.0.0.1").await;
+    let details = json_of(&details);
+    let client = reqwest::Client::builder()
+        .add_root_certificate(reqwest::Certificate::from_pem(ca_cert.pem().as_bytes()).unwrap())
+        .https_only(true)
+        .build()
+        .unwrap();
+    let bytes = client
+        .get(format!("{origin}/agent/v1/install.ps1"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(details["windows_installer"]["sha256"], db::hash(&bytes));
+    let script = f.temp.path().join("downloaded-installer.ps1");
+    std::fs::write(&script, bytes).unwrap();
+    let captured = f.temp.path().join("real-tls-native-args.txt");
+    for shell in ["powershell.exe", "pwsh.exe"] {
+        if std::process::Command::new(shell)
+            .arg("-Version")
+            .output()
+            .is_err()
+        {
+            continue;
+        }
+        let run = |options: &[&str]| {
+            std::process::Command::new(shell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(&script)
+                .args(options)
+                .env("VECTORY_TEST_AGENT_ARGS", &captured)
+                .env("VECTORY_TEST_AGENT_EXIT", "0")
+                .output()
+                .unwrap()
+        };
+        let success = run(&["--name", "real-tls-fixture", "--dry-run"]);
+        assert!(success.status.success(), "{shell}: {success:?}");
+        assert!(
+            std::fs::read_to_string(&captured)
+                .unwrap()
+                .contains("real-tls-fixture")
+        );
+        std::fs::remove_file(&captured).unwrap();
+        let refused = run(&["--ca-file=", "--dry-run"]);
+        assert!(
+            !refused.status.success(),
+            "untrusted private CA accepted: {refused:?}"
+        );
+        assert!(!captured.exists(), "native setup ran without trusted TLS");
+    }
+    service.abort();
 }
 
 #[tokio::test]

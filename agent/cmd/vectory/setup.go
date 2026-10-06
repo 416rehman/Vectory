@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/vectory/vectory/agent/internal/agent"
@@ -24,11 +25,12 @@ Ctrl-C during the wait for the check-in leaves the service running (exit 130).
 Without a service manager (a container, WSL, Alpine's OpenRC), setup checks
 in once and exits 3, because nothing keeps the agent running: run it under
 your own supervisor with the command setup prints, and pass --service none
-to say you will. Copy the whole command from Add device: it carries your
-server's CA certificate for curl (vectory-ca.pem) and keeps every file in a
-directory only you can enter. By hand, do the same: make that directory first,
-as the examples do. Never use curl -k, which turns certificate checks off;
-pass --cacert with your CA instead.
+to say you will. Copy the whole command from Add device: it verifies the
+download and your server's certificate, and keeps staging files private.
+Linux and macOS use install.sh; Windows uses install.ps1 in administrator
+PowerShell. Both download a prebuilt agent, with no compiler required.
+Never use curl -k, which turns certificate checks off; use the reviewed CA
+certificate or the system trust store instead.
 Setup never takes over a Vector that is running. It records how that Vector
 was started, copies every configuration file it loads into the state
 directory (adoption-inventory, private to this account) and stops. When the
@@ -46,10 +48,31 @@ change only what they name (a new key re-pins the host) and keep the rest:
 the level, the other parts and a pause. On a host that agreed to nothing they
 are refused, with no other effect.
 Pinning a key trusts its holder with root on this host.`,
-	examples: []string{
+	examples: setupExamples(runtime.GOOS),
+	define:   defineSetup,
+}
+
+// Setup examples follow the platform of the prebuilt agent. A Windows user
+// should not have to translate sudo, shell quoting or Unix paths to get started.
+func setupExamples(platform string) []string {
+	if platform == "windows" {
+		return []string{
+			"# Download the Windows installer from Add device. Open PowerShell as administrator in its folder.",
+			`if ((Get-FileHash -LiteralPath .\vectory-install.ps1 -Algorithm SHA256).Hash -ne '<SHA-256 from Add device>') { throw 'Installer checksum mismatch' }`,
+			`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1 --name edge-01 --mode full`,
+			`& .\vectory.exe setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>`,
+			`& .\vectory.exe setup --server https://vectory.example.com:8443 --ca-file C:\Vectory\server-ca.pem --dry-run`,
+			`& 'C:\Program Files\Vectory\vectory.exe' status`,
+		}
+	}
+	checksum := "echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -"
+	if platform == "darwin" {
+		checksum = "echo '<SHA-256 from Add device>  vectory-install.sh' | shasum -a 256 -c -"
+	}
+	return []string{
 		`cd "$(mktemp -d)"`,
 		"curl -fsSL --proto '=https' --proto-redir '=https' --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh",
-		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
+		checksum,
 		"sudo sh vectory-install.sh --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-file /etc/vectory/server-ca.pem",
@@ -59,8 +82,7 @@ Pinning a key trusts its holder with root on this host.`,
 		"sudo vectory setup --server https://vectory.example.com:8443 --update-key-sha256 <64-hex-fingerprint>",
 		"sudo vectory setup --server https://vectory.example.com:8443 --update-track minor",
 		"sudo vectory setup --server https://vectory.example.com:8443 --updates off",
-	},
-	define: defineSetup,
+	}
 }
 
 func defineSetup(c *cli) func() int {

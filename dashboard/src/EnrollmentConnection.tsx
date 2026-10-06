@@ -244,13 +244,23 @@ export function SecurityReceipt({
       });
   return (
     <dl className="enroll-receipt" aria-label="What protects this install">
-      {os !== "windows" && install.installer && (
+      {(os === "windows" ? install.windows_installer : install.installer) && (
         <div>
           <dt>Installer</dt>
           <dd>
             Runs only if its SHA-256 matches{" "}
-            <code title={install.installer.sha256}>
-              {shortDigest(install.installer.sha256)}
+            <code
+              title={
+                (os === "windows"
+                  ? install.windows_installer
+                  : install.installer)!.sha256
+              }
+            >
+              {shortDigest(
+                (os === "windows"
+                  ? install.windows_installer
+                  : install.installer)!.sha256,
+              )}
             </code>
             . It checks the agent it downloads the same way.
           </dd>

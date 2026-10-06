@@ -1,6 +1,12 @@
 name: public site
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -51,12 +57,52 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  release-ready:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.release.outputs.ready }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
+      - name: Require the website's advertised release to be publicly downloadable
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("agent/internal/agent/types.go").read(), re.M).group(1))')
+          if ! gh api "repos/416rehman/Vectory/releases/tags/v$version" > "$RUNNER_TEMP/release.json" 2> "$RUNNER_TEMP/release-error"; then
+            if grep -q '(HTTP 404)' "$RUNNER_TEMP/release-error"; then
+              echo 'ready=false' >> "$GITHUB_OUTPUT"
+              echo "::notice::Site built and tested, but deployment waits for public release v$version."
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/release-error" >&2
+            exit 1
+          fi
+          python3 - "$RUNNER_TEMP/release.json" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          release = json.loads(Path(sys.argv[1]).read_text())
+          assets = {asset['name'] for asset in release['assets']}
+          ready = not release['draft'] and not release['prerelease'] and {'SHA256SUMS', 'SHA256SUMS.sigstore.json', 'IMAGE-DIGESTS.env', 'IMAGE-CONFIGS.env', 'RELEASE.json'} <= assets
+          with open(sys.argv[2], 'a') as output:
+              output.write('ready=' + str(ready).lower() + '\n')
+          if not ready:
+              print('::notice::Deployment waits for a public stable release with its verified signing inventory.')
+          PY
+
   deploy:
     if: >-
       github.repository == '416rehman/Vectory' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name != 'pull_request'
-    needs: build
+      (github.ref == 'refs/heads/main' || github.event_name == 'release') &&
+      github.event_name != 'pull_request' &&
+      needs.release-ready.outputs.ready == 'true'
+    needs: [build, release-ready]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

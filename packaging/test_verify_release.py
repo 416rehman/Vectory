@@ -457,6 +457,12 @@ class CandidateVerification(unittest.TestCase):
                 files['.env.example'] = b'VECTORY_HOSTNAME=example.invalid\n'
                 files['start.sh'] = b'#!/bin/sh\nexit 0\n'
             files['release-images.sh'] = b'#!/bin/sh\n# Shared image loader fixture.\n'
+            files['verify-release.sh'] = b'#!/bin/sh\n# Signed image verifier fixture.\n'
+            files['prepare-offline.sh'] = b'#!/bin/sh\n# Offline preparation fixture.\n'
+            if kind == 'server':
+                files['start-auto.sh'] = b'#!/bin/sh\n# Automatic TLS fixture.\n'
+                files['compose.auto.yaml'] = b'services:\n  proxy:\n    image: caddy\n'
+                files['Caddyfile.auto'] = b'example.invalid { reverse_proxy server:8080 }\n'
             files['SHA256SUMS'] = ''.join(
                 f'{hashlib.sha256(files[part]).hexdigest()}  {part}\n'
                 for part in sorted(files)

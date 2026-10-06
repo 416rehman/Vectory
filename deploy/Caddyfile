@@ -1,10 +1,10 @@
 {
   admin off
+  default_sni {$VECTORY_HOSTNAME}
   auto_https off
-  # The 0.1 release serves the dashboard through HTTP/1.1. Enable h2 only
-  # after the patched proxy passes a separate HTTP/2 integration check.
+  # HTTP/2 is qualified by the release candidate's trusted TLS checks.
   servers {
-    protocols h1
+    protocols h1 h2
   }
 }
 https://{$VECTORY_HOSTNAME}:8443 {

@@ -8,6 +8,7 @@ name: platforms
 # Every phase of every job is one named step that writes an evidence file under
 # artifacts/platforms, and the logs are uploaded even when a step fails.
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     paths:
@@ -301,6 +302,11 @@ jobs:
           rustup toolchain install 1.94.0 --profile minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+          exit $LASTEXITCODE
+      - name: Verify the Windows download and enrollment command in native PowerShell
+        timeout-minutes: 10
+        run: |
+          cargo +1.94.0 test --locked --manifest-path server/Cargo.toml --test onboarding windows_installer_is_token_free_and_matches_the_dashboard_checksum -- --nocapture
           exit $LASTEXITCODE
       - name: Create the development PKI and let the agent listener present its chain
         timeout-minutes: 10

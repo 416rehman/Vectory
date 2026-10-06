@@ -529,9 +529,16 @@ impl Keys {
         certificate: &Path,
         key: &Path,
     ) -> anyhow::Result<rustls::ServerConfig> {
-        let certs = CertificateDer::pem_file_iter(certificate)?
+        self.tls_config_from_pem(&fs::read(certificate)?, &fs::read(key)?)
+    }
+    pub fn tls_config_from_pem(
+        &self,
+        certificate: &[u8],
+        private_key: &[u8],
+    ) -> anyhow::Result<rustls::ServerConfig> {
+        let certs = CertificateDer::pem_slice_iter(certificate)
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let key = PrivateKeyDer::from_pem_file(key)?;
+        let key = PrivateKeyDer::from_pem_slice(private_key)?;
         let mut roots = rustls::RootCertStore::empty();
         for cert in CertificateDer::pem_slice_iter(self.ca_pem.as_bytes()) {
             roots.add(cert?)?;

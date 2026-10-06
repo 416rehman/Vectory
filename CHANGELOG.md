@@ -1,6 +1,15 @@
 # Changelog
 
-All notable changes to Vectory. Version 0.1.1 is an unsigned developer preview.
+All notable changes to Vectory.
+
+## 0.2.0
+
+- Added stable release automation with fresh application and native-platform gates, public GHCR server and validator images, Cosign signatures from GitHub OIDC, authenticated checksum bundles, SBOMs and vulnerability scan gates.
+- Simplified full self-hosting to a verified bootstrap and hostname prompt. Added automatic dashboard HTTPS, retained private agent trust, automatic listener certificate renewal and safe TLS reload without dropping existing connections.
+- Added a verified Windows PowerShell installer alongside Linux and macOS setup. All generated commands keep enrollment tokens out of URLs, validate downloads, use private staging and start the native agent service.
+- Made the standalone Vector configuration designer fill the browser viewport, with responsive properties and code panels and search metadata for configuration creation, import and visualization.
+- Put full self-hosting first on the website, moved the designer to Tools and a secondary action, and placed a readable real product screenshot in the hero.
+- Reworked the README and first-run documentation around prebuilt downloads, automatic certificate trust, one-command device setup and the remaining operational constraints.
 
 ## 0.1.1 (developer preview patch)
 

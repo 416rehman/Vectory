@@ -10,6 +10,12 @@ name: release candidate (no publication)
 #   gh workflow run release-candidate.yml --ref <branch>
 # packaging/README.md describes the outputs.
 on:
+  workflow_call:
+    inputs:
+      attest:
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       attest:
@@ -59,6 +65,8 @@ jobs:
       - name: Unit-test the local preview certificate helper
         timeout-minutes: 10
         run: go test packaging/dev-pki/main.go packaging/dev-pki/main_test.go
+      - name: Unit-test automatic agent certificate renewal
+        run: go test packaging/server-pki/main.go packaging/server-pki/lock_linux.go packaging/server-pki/main_test.go
       - name: Build the agents, archives and catalog for every target
         timeout-minutes: 10
         run: python3 packaging/build-release.py --out artifacts/releases
@@ -348,7 +356,8 @@ jobs:
           version = re.search(r'^const Version = "([^"]+)"$', source, re.MULTILINE).group(1)
           verify = runpy.run_path('packaging/verify-release.py')['required_starter_bundle']
           for kind in ('preview', 'server'):
-              verify(Path(f'artifacts/starters/vectory-{version}-{kind}-linux-amd64.tar.gz'), version, kind)
+              label = 'local' if kind == 'preview' and tuple(map(int, version.split('-')[0].split('.'))) >= (0, 2, 0) else kind
+              verify(Path(f'artifacts/starters/vectory-{version}-{label}-linux-amd64.tar.gz'), version, kind)
           PY
       - name: Check the server kit uses only prebuilt images and an isolated validator
         run: |
@@ -363,6 +372,7 @@ jobs:
           export VECTORY_BIND_IP=127.0.0.1
           export VECTORY_SERVER_PROJECT=vectory-server-check
           docker compose --project-name "$VECTORY_SERVER_PROJECT" --env-file "$kit/.env.example" -f "$kit/compose.yaml" config --format json > "$RUNNER_TEMP/server-kit-config.json"
+          docker compose --project-name "$VECTORY_SERVER_PROJECT" --env-file "$kit/.env.example" -f "$kit/compose.auto.yaml" config --quiet
           python3 - "$RUNNER_TEMP/server-kit-config.json" <<'PY'
           import json
           import sys
@@ -388,7 +398,7 @@ jobs:
     name: starter smoke (preview and server)
     needs: [images, starters]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -410,13 +420,16 @@ jobs:
           from pathlib import Path
 
           version = sys.argv[1]
-          archive = Path(f'artifacts/starters/vectory-{version}-preview-linux-amd64.tar.gz')
+          label = 'local' if tuple(map(int, version.split('-')[0].split('.'))) >= (0, 2, 0) else 'preview'
+          archive = Path(f'artifacts/starters/vectory-{version}-{label}-linux-amd64.tar.gz')
           runpy.run_path('packaging/verify-release.py')['required_starter_bundle'](archive, version, 'preview')
           PY
-          tar -xzf "artifacts/starters/vectory-$version-preview-linux-amd64.tar.gz" -C "$extract_dir"
-          starter="$extract_dir/vectory-$version-preview-linux-amd64"
+          label=$(python3 -c 'import sys; print("local" if tuple(map(int, sys.argv[1].split("-")[0].split("."))) >= (0, 2, 0) else "preview")' "$version")
+          tar -xzf "artifacts/starters/vectory-$version-$label-linux-amd64.tar.gz" -C "$extract_dir"
+          starter="$extract_dir/vectory-$version-$label-linux-amd64"
           project="vectoryci${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
           export VECTORY_PREVIEW_RELEASE_DIR="$release_dir"
+          export VECTORY_UNSIGNED_CANDIDATE=true
           export VECTORY_PREVIEW_PROJECT="$project"
           export VECTORY_PREVIEW_WEB_PORT=18080
           export VECTORY_PREVIEW_AGENT_PORT=18443
@@ -617,6 +630,7 @@ jobs:
           export VECTORY_TLS_CERT_FILE="$fixture_dir/chain.pem"
           export VECTORY_TLS_KEY_FILE="$fixture_dir/key.pem"
           export VECTORY_PREVIEW_RELEASE_DIR="$RUNNER_TEMP/preview-release"
+          export VECTORY_UNSIGNED_CANDIDATE=true
           # The guided starter prints the bootstrap secret. Keep all its output
           # private, including stop and resume, and never upload the fixture.
           echo 'Starting the server kit from verified candidate images.'
@@ -689,7 +703,16 @@ jobs:
           }
           Path(sys.argv[2]).write_text(json.dumps(payload), encoding='utf-8')
           PY
-          curl --noproxy '*' --fail --silent --show-error --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 --header 'Content-Type: application/json' --data-binary @"$fixture_dir/bootstrap.json" https://localhost/api/v1/bootstrap > "$fixture_dir/bootstrap-response.json"
+          curl --http2 --noproxy '*' --fail --silent --show-error --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 --header 'Content-Type: application/json' --header 'X-Forwarded-For: 198.51.100.99' --header 'X-Client-Cert: untrusted-client-header' --data-binary @"$fixture_dir/bootstrap.json" --cookie-jar "$fixture_dir/session-cookies.txt" --write-out '%{http_version}' --output "$fixture_dir/bootstrap-response.json" https://localhost/api/v1/bootstrap > "$fixture_dir/bootstrap-http-version.txt"
+          grep -qx '2' "$fixture_dir/bootstrap-http-version.txt"
+          curl --http2 --noproxy '*' --fail --silent --show-error --cacert "$fixture_dir/ca.pem" --resolve localhost:443:127.0.0.1 --cookie "$fixture_dir/session-cookies.txt" --header 'X-Forwarded-For: 198.51.100.99' --output "$fixture_dir/account-sessions.json" https://localhost/api/v1/account/sessions
+          python3 - "$fixture_dir/account-sessions.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          sessions = json.loads(Path(sys.argv[1]).read_text())['sessions']
+          current = [session for session in sessions if session['current']]
+          assert len(current) == 1 and current[0]['client_address'] and '198.51.100.99' not in current[0]['client_address']
+          PY
           "${server_compose[@]}" exec -T server curl --fail --silent http://127.0.0.1:8080/api/v1/status > "$fixture_dir/status.json"
           python3 - "$fixture_dir/status.json" <<'PY'
           import json
@@ -709,6 +732,71 @@ jobs:
           assert json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))['initialized'] is True
           PY
           echo 'Saved candidate images and the source-free server kit passed verified TLS, first-admin bootstrap and state-preserving restart; no device activation was attempted.'
+      - name: Check automatic HTTPS, retained certificate trust and restart in an isolated fixture
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("agent/internal/agent/types.go").read(), re.M).group(1))')
+          extract="$RUNNER_TEMP/automatic-kit"
+          mkdir -p "$extract"
+          tar -xzf "artifacts/starters/vectory-$version-server-linux-amd64.tar.gz" -C "$extract"
+          kit="$extract/vectory-$version-server-linux-amd64"
+          export VECTORY_SERVER_PROJECT="vectoryauto${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
+          export VECTORY_HOSTNAME=vectory.example.test
+          export VECTORY_BIND_IP=127.0.0.1
+          export VECTORY_PREVIEW_RELEASE_DIR="$RUNNER_TEMP/preview-release"
+          export VECTORY_UNSIGNED_CANDIDATE=true
+          unset VECTORY_TLS_CERT_FILE VECTORY_TLS_KEY_FILE
+          # A separately labeled synthetic fixture uses Caddy's local issuer,
+          # avoiding real DNS, public ACME rate limits and certificate accounts.
+          # The published archive is unchanged. Only this extracted copy differs.
+          sed -i '0,/admin off/s/admin off/admin off\n  local_certs/' "$kit/Caddyfile.auto"
+          (cd "$kit" && sha256sum .env.example Caddyfile Caddyfile.auto LICENSE NOTICE README.md VERSION compose.auto.yaml compose.yaml prepare-offline.sh release-images.sh start-auto.sh start.sh verify-release.sh > SHA256SUMS)
+          log="$RUNNER_TEMP/automatic-kit-private.log"
+          umask 077
+          compose=(docker compose --project-name "$VECTORY_SERVER_PROJECT" --env-file "$kit/.env" -f "$kit/compose.auto.yaml")
+          cleanup() {
+            result=$?
+            trap - EXIT
+            if [ -f "$kit/.env" ]; then "${compose[@]}" down -v >> "$log" 2>&1 || result=1; fi
+            for part in secrets caddy_data caddy_config; do
+              if docker volume inspect "${VECTORY_SERVER_PROJECT}_$part" >/dev/null 2>&1; then docker volume rm "${VECTORY_SERVER_PROJECT}_$part" >> "$log" 2>&1 || result=1; fi
+            done
+            rm -f "$log"
+            exit "$result"
+          }
+          trap cleanup EXIT
+          "$kit/start.sh" > "$log" 2>&1 || { echo '::error::Automatic HTTPS fixture failed to start. Private bootstrap log is not published.'; exit 1; }
+          proxy=$("${compose[@]}" ps -q proxy)
+          server=$("${compose[@]}" ps -q server)
+          docker cp "$proxy:/data/caddy/pki/authorities/local/root.crt" "$extract/browser-ca.pem"
+          docker cp "$server:/run/secrets/issuer/agent-ca.pem" "$extract/agent-ca.pem"
+          curl --http2 --noproxy '*' --fail --silent --show-error --cacert "$extract/browser-ca.pem" --resolve vectory.example.test:443:127.0.0.1 --output "$extract/status.json" --write-out '%{http_version}' https://vectory.example.test/api/v1/status > "$extract/http-version.txt"
+          grep -qx '2' "$extract/http-version.txt"
+          redirect=$(curl --noproxy '*' --silent --show-error --resolve vectory.example.test:80:127.0.0.1 --output /dev/null --write-out '%{redirect_url}' 'http://vectory.example.test/settings?example=1')
+          test "$redirect" = 'https://vectory.example.test/settings?example=1'
+          wrong_name_result=0
+          curl --noproxy '*' --silent --show-error --cacert "$extract/browser-ca.pem" --resolve wrong.example.test:443:127.0.0.1 https://wrong.example.test/api/v1/status --output /dev/null 2> "$extract/wrong-name-error.txt" || wrong_name_result=$?
+          case "$wrong_name_result" in 35|60) ;; *) echo '::error::Automatic HTTPS accepted an unrelated TLS hostname.'; exit 1 ;; esac
+          curl --noproxy '*' --fail --silent --show-error --cacert "$extract/agent-ca.pem" --resolve vectory.example.test:8443:127.0.0.1 https://vectory.example.test:8443/agent/v1/install.sh > "$extract/installer.sh"
+          test -s "$extract/installer.sh"
+          cp "$extract/agent-ca.pem" "$extract/original-agent-ca.pem"
+          "$kit/start.sh" stop >> "$log" 2>&1
+          "$kit/start.sh" >> "$log" 2>&1
+          server=$("${compose[@]}" ps -q server)
+          docker cp "$server:/run/secrets/issuer/agent-ca.pem" "$extract/agent-ca.pem"
+          cmp "$extract/original-agent-ca.pem" "$extract/agent-ca.pem"
+          curl --noproxy '*' --fail --silent --show-error --cacert "$extract/browser-ca.pem" --resolve vectory.example.test:443:127.0.0.1 https://vectory.example.test/api/v1/status > /dev/null
+          echo 'Automatic HTTPS fixture passed both verified TLS issuers and retained-trust restart. Public ACME issuance and host activation were not attempted.'
+      - name: Qualify published manager state and trust across the version transition
+        timeout-minutes: 15
+        run: python3 tests/security/manager-upgrade.py --run --candidate-image vectory-server:candidate --validator-image vectory-validator:candidate --candidate-version 0.2.0 --output artifacts/manager-upgrade/0.1.1-to-0.2.0.json --private-backup-dir "$RUNNER_TEMP/manager-upgrade-private-backup"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() && hashFiles('artifacts/manager-upgrade/*.json') != '' }}
+        with:
+          name: manager-upgrade-evidence
+          path: artifacts/manager-upgrade/*.json
+          if-no-files-found: error
   sbom:
     runs-on: ubuntu-24.04
     timeout-minutes: 40

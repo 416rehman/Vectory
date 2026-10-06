@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Shared prebuilt-image loader. Source only after checking the bundle SHA256SUMS.
 load_release_images() {
+if [[ "${VECTORY_UNSIGNED_CANDIDATE:-false}" != true ]]; then
+  source "$bundle/verify-release.sh"
+  load_signed_images
+  return
+fi
+[[ -n "${VECTORY_PREVIEW_RELEASE_DIR:-}" || -f .cache/release-SHA256SUMS ]] || fail 'Unsigned candidate mode requires an explicit local workflow artifact directory or retained candidate cache.'
+say 'Using explicitly selected unsigned local candidate artifacts for verification only.'
 mkdir -p .cache
 [[ ! -L .cache ]] || fail "The preview cache must be a regular directory."
 for inventory in .cache/release-SHA256SUMS .cache/release-SHA256SUMS.part; do [[ ! -L "$inventory" ]] || fail "The cached release inventory must not be a link."; done
@@ -59,4 +66,8 @@ for index in 0 1; do
     docker tag "$candidate" "$target"
   fi
 done
+if [[ -f "$bundle/Caddyfile" ]]; then
+  proxy='caddy:2.11.7-alpine@sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb'
+  docker image inspect "$proxy" >/dev/null 2>&1 || docker pull "$proxy" >/dev/null || fail 'Could not fetch the pinned candidate-test HTTPS proxy.'
+fi
 }

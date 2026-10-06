@@ -1,5 +1,10 @@
 name: checks
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -641,6 +646,14 @@ jobs:
         with: { python-version: "3.13" }
       - run: python -m unittest discover -s tests/security -p 'test_*.py' -v
       - run: python packaging/test_verify_release.py
+      - run: python packaging/test_signed_release.py
+      - name: Refuse inherited overrides of authenticated server-kit settings
+        run: python deploy/test-compose-environment.py
+      - name: Reject altered signed offline manifests, archives and dependencies
+        run: python deploy/test-signed-offline.py
+      - name: Check private agent-listener certificate renewal
+        env: { GOTOOLCHAIN: go1.26.8 }
+        run: go test packaging/server-pki/main.go packaging/server-pki/lock_linux.go packaging/server-pki/main_test.go
       - name: Unit-test the npm advisory gate
         timeout-minutes: 10
         run: python packaging/test_audit_npm.py

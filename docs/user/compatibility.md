@@ -33,7 +33,7 @@ What each part needs, where that is established. "Not yet established" means not
 | Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
 | Browser | Not yet established | Chromium is tested on every change; Firefox and WebKit run four first-use flows on demand (see [Browsers](#browsers)). |
 
-The prebuilt Linux x86-64 server and preview kits require Docker Engine with Compose v2. Normal installation needs no Rust, Go, Node, or compiler. Other server architectures and Docker Desktop installations are not qualified yet. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
+The prebuilt Linux x86-64 server and local evaluation kits require Docker Engine with Compose v2. Normal installation needs no Rust, Go, Node, or compiler. Other server architectures and Docker Desktop installations are not qualified yet. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
 
 ## Tested on
 
@@ -70,8 +70,8 @@ Checks that need the device itself, such as local files, run on the device befor
 
 ## Server
 
-- **Prebuilt kits for Linux x86-64**, with Docker Engine, Compose v2 and local disk. The kits load unsigned Docker image archives from the GitHub release; no compiler or source build is needed. A container registry is not published yet.
-- On every change, CI builds the server stack from source on a clean Ubuntu 24.04 runner, starts it, waits for healthy services, creates the first administrator, enrolls a device with the Add device installer and checks validator isolation. The release candidate workflow also checks the prebuilt preview and server kits against saved image archives. A customer's host, a public certificate and your network aren't covered, so try it on a staging host first.
+- **Prebuilt kits for Linux x86-64**, with Docker Engine, Compose v2 and local disk. The server kit verifies Cosign-signed GHCR image digests; signed release inventories also authenticate downloadable image archives. No compiler or source build is needed.
+- On every change, CI builds the server stack from source on a clean Ubuntu 24.04 runner, starts it, waits for healthy services, creates the first administrator, enrolls a device with the Add device installer and checks validator isolation. Release gates also test the prebuilt kits, HTTPS and HTTP/2, certificate retention, and a manager upgrade from 0.1.1 with real validation and retained identity. A customer's public DNS, certificate issuance and network still need their own checks.
 - One server per data directory. SQLite doesn't support network filesystems or active-active replicas.
 
 ## Browsers
@@ -80,7 +80,7 @@ The dashboard and this Help center are tested with Chromium on desktop and phone
 
 ## Offline use
 
-The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. The first kit start downloads the released image archives; retain the verified cache to restart offline, or provide the image archives and release checksum inventory through `VECTORY_PREVIEW_RELEASE_DIR`. The server kit also needs its pinned proxy image pre-loaded. Devices need an existing supported Vector installation, which can be supplied offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than 0.58.0.
+The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. The first online start verifies and pulls images from GHCR. For a first offline installation, use [prepare-offline.sh](install-server.md#offline-installation) on a connected machine and transfer its complete kit, cache and verification material through your trusted channel. Previously verified installations can also restart with `VECTORY_OFFLINE=true` and their retained cache and images. Public HTTPS renewal needs internet access; offline servers use custom certificates. Devices need an existing supported Vector installation, which can be supplied offline. Links to [vector.dev](https://vector.dev/docs/) may describe a newer Vector than 0.58.0.
 
 ## References
 

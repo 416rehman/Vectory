@@ -17,11 +17,11 @@ declare -A seen=()
 [[ -f SHA256SUMS && ! -L SHA256SUMS ]] || fail "No regular bundle SHA256SUMS file. Download the kit again."
 while read -r checksum name extra; do
   [[ "$checksum" =~ ^[0-9a-f]{64}$ && -z "${extra:-}" ]] || fail "Malformed kit checksum inventory."
-  case "$name" in start.sh|release-images.sh|compose.yaml|Caddyfile|.env.example|README.md|LICENSE|NOTICE|VERSION) ;; *) fail "Unexpected kit checksum entry." ;; esac
+  case "$name" in start.sh|start-auto.sh|prepare-offline.sh|release-images.sh|verify-release.sh|compose.yaml|compose.auto.yaml|Caddyfile|Caddyfile.auto|.env.example|README.md|LICENSE|NOTICE|VERSION) ;; *) fail "Unexpected kit checksum entry." ;; esac
   [[ -z "${seen[$name]:-}" && -f "$name" && ! -L "$name" ]] || fail "Missing, repeated or linked bundle file: $name"
   seen[$name]=1
 done < SHA256SUMS
-[[ ${#seen[@]} == 9 ]] || fail "The server kit is incomplete. Download it again."
+[[ ${#seen[@]} == 14 ]] || fail "The server kit is incomplete. Download it again."
 sha256sum --check --strict SHA256SUMS >/dev/null || fail "Server kit checksum failed. Download it again."
 version="$(cat VERSION)"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail "Invalid bundled version."
@@ -30,7 +30,47 @@ project="${VECTORY_SERVER_PROJECT:-vectory}"
 export VECTORY_SERVER_PROJECT="$project"
 envfile="$bundle/.env"
 journal="$bundle/.setup.env"
-compose() { docker compose --project-name "$project" --env-file "$envfile" -f "$bundle/compose.yaml" "$@"; }
+compose_file="$bundle/compose.yaml"
+if [[ -f "$envfile" && ! -L "$envfile" ]] && grep -qx 'VECTORY_CERTIFICATE_MODE=automatic' "$envfile"; then compose_file="$bundle/compose.auto.yaml"; fi
+compose() (
+  # Compose gives the caller's environment precedence over --env-file. Only
+  # the checked release settings persisted by this starter may select images,
+  # public addresses and certificate mode on start, resume or administrative actions.
+  unset VECTORY_SERVER_IMAGE VECTORY_VALIDATOR_IMAGE VECTORY_HOSTNAME VECTORY_BIND_IP VECTORY_CERTIFICATE_MODE
+  unset VECTORY_PUBLIC_AGENT_DOWNLOADS VECTORY_MAX_AGENT_CONNECTIONS VECTORY_TELEMETRY_RETENTION_DAYS VECTORY_RELEASES_DIRECTORY
+  unset VECTORY_PROXY_IMAGE
+  # Also clear supported named settings recorded by an operator, without
+  # evaluating their values as shell code or unsetting process variables.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?(VECTORY_[A-Z0-9_]+)[[:space:]]*= ]]; then
+      [[ "${BASH_REMATCH[2]}" == VECTORY_SERVER_PROJECT ]] || unset "${BASH_REMATCH[2]}"
+    fi
+  done < "$envfile"
+  docker compose --project-name "$project" --env-file "$envfile" -f "$compose_file" "$@"
+)
+persist_env() {
+  local mode="${1:-}"
+  [[ ! -L "$envfile" && ( ! -e "$envfile" || -f "$envfile" ) ]] || fail "The server environment file must be regular."
+  [[ ! -L "$envfile.part" && ( ! -e "$envfile.part" || -f "$envfile.part" ) ]] || fail "The temporary environment file must be regular."
+  if [[ -e "$envfile" ]]; then [[ "$(wc -c < "$envfile")" -le 65536 ]] || fail "The server environment file is oversized."; fi
+  (
+    umask 077
+    {
+    if [[ -f "$envfile" ]]; then
+      awk -v mode="$mode" '
+        /^[[:space:]]*(export[[:space:]]+)?VECTORY_(HOSTNAME|BIND_IP|SERVER_IMAGE|VALIDATOR_IMAGE|PROXY_IMAGE)[[:space:]]*=/ {next}
+        mode != "" && /^[[:space:]]*(export[[:space:]]+)?VECTORY_CERTIFICATE_MODE[[:space:]]*=/ {next}
+        {print}
+      ' "$envfile"
+    fi
+    [[ -z "$mode" ]] || printf 'VECTORY_CERTIFICATE_MODE=%s\n' "$mode"
+    printf 'VECTORY_HOSTNAME=%s\nVECTORY_BIND_IP=%s\nVECTORY_SERVER_IMAGE=%s\nVECTORY_VALIDATOR_IMAGE=%s\n' "$hostname" "$bind" "$server_image" "$validator_image"
+    [[ -z "${proxy_image:-}" ]] || printf 'VECTORY_PROXY_IMAGE=%s\n' "$proxy_image"
+    } > "$envfile.part"
+  )
+  chmod 0600 -- "$envfile.part"
+  mv -- "$envfile.part" "$envfile"
+}
 common=(--rm --network none --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount "type=volume,src=${project}_secrets,dst=/var/lib/vectory")
 check_bind() {
   [[ "$bind" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "Enter an IPv4 bind address (0.0.0.0 listens on all interfaces)."
@@ -69,9 +109,7 @@ finish_setup() {
     test -f /var/lib/vectory/bootstrap
     test "$(wc -c < /var/lib/vectory/bootstrap)" -eq 65
     LC_ALL=C grep -Eq "^[A-Za-z0-9_-]{64}$" /var/lib/vectory/bootstrap'
-  [[ ! -L "$envfile.part" && ( ! -e "$envfile.part" || -f "$envfile.part" ) ]] || fail "The temporary server environment file must be regular."
-  (umask 077; printf 'VECTORY_HOSTNAME=%s\nVECTORY_BIND_IP=%s\nVECTORY_SERVER_IMAGE=%s\nVECTORY_VALIDATOR_IMAGE=%s\n' "$hostname" "$bind" "$server_image" "$validator_image" > "$envfile.part")
-  mv -- "$envfile.part" "$envfile"
+  persist_env
   rm -- "$journal"
 }
 if [[ "$action" != start ]]; then
@@ -86,10 +124,18 @@ fi
 source "$bundle/release-images.sh"
 load_release_images
 
+if [[ "$compose_file" == "$bundle/compose.auto.yaml" ]] || [[ ! -e "$envfile" && ! -e "$journal" && -z "${VECTORY_TLS_CERT_FILE:-}" && -z "${VECTORY_TLS_KEY_FILE:-}" && "${VECTORY_CERTIFICATE_MODE:-automatic}" == automatic ]]; then
+  source "$bundle/start-auto.sh"
+  start_auto
+  exit 0
+fi
+
 if [[ -f "$envfile" && ! -L "$envfile" ]]; then
   # Read the stored name without executing an environment file as shell code.
   hostname="$(sed -n 's/^VECTORY_HOSTNAME=//p' "$envfile")"
   [[ "$hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || fail ".env has no safe VECTORY_HOSTNAME; use the installation guide."
+  bind="$(sed -n 's/^VECTORY_BIND_IP=//p' "$envfile")"
+  check_bind
   say "Resuming the server at https://$hostname using its retained certificate and database."
 elif [[ -f "$journal" && ! -L "$journal" ]]; then
   [[ ! -e "$envfile" && ! -L "$envfile" ]] || fail "The server environment file must be regular."
@@ -136,6 +182,7 @@ else
   finish_setup
 fi
 docker run "${common[@]}" --entrypoint /app/operations/vectory-local-pki "$server_image" --server-cert /var/lib/vectory/server_cert --server-key /var/lib/vectory/server_key --hostname "$hostname"
+persist_env
 # This exact public template passed the bundle checksum check above. GNU tar
 # applies the caller's umask to it on extraction; Caddy runs as another UID.
 # Make only this verified configuration readable, never any secret or .env.

@@ -2,6 +2,7 @@ name: vectory
 services:
   server:
     image: ${VECTORY_SERVER_IMAGE:?Run ./start.sh first}
+    pull_policy: never
     restart: unless-stopped
     user: "10001:10001"
     read_only: true
@@ -47,6 +48,7 @@ services:
         condition: service_healthy
   validator:
     image: ${VECTORY_VALIDATOR_IMAGE:?Run ./start.sh first}
+    pull_policy: never
     restart: unless-stopped
     user: "10002:10002"
     read_only: true
@@ -75,7 +77,8 @@ services:
       retries: 3
     networks: [validation]
   proxy:
-    image: caddy:2.11.7-alpine@sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb
+    image: ${VECTORY_PROXY_IMAGE:-caddy:2.11.7-alpine@sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb}
+    pull_policy: never
     restart: unless-stopped
     user: "10001:10001"
     read_only: true
@@ -92,17 +95,18 @@ services:
       VECTORY_HOSTNAME: ${VECTORY_HOSTNAME:?Set the DNS name in deploy/.env}
     volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, secrets:/run/secrets:ro]
 
+    extra_hosts: ["${VECTORY_HOSTNAME:?Set your DNS name}:127.0.0.1"]
     ports:
       - "${VECTORY_BIND_IP:-0.0.0.0}:443:8443"
     # Healthy only once a request through the proxy reaches the server, so
     # `docker compose up --wait` doesn't report a proxy that started but isn't
-    # serving. The request goes to the container's own loopback, which the
-    # certificate doesn't name, so the check skips the name check; it proves
-    # the path works, not the certificate.
+    # serving. The intended DNS name resolves to loopback inside this proxy
+    # so TLS sends the correct SNI. This liveness probe deliberately skips
+    # issuer verification; separate release probes verify the real trust chain.
     healthcheck:
       test:
         - CMD-SHELL
-        - 'wget -q -O /dev/null --no-check-certificate --header "Host: $$VECTORY_HOSTNAME" https://127.0.0.1:8443/api/v1/status'
+        - 'wget -q -O /dev/null --no-check-certificate https://$$VECTORY_HOSTNAME:8443/api/v1/status'
       interval: 10s
       timeout: 5s
       start_period: 10s

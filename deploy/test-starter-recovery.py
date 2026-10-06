@@ -150,7 +150,7 @@ if operation == 'inspect':
     else:
         refuse('unknown container inspection template')
     sys.exit(0)
-if operation in ('volume', 'load', 'tag'):
+if operation in ('volume', 'load', 'tag', 'pull'):
     sys.exit(0)
 if operation == 'compose':
     if args == ['version']:
@@ -162,6 +162,20 @@ if operation == 'compose':
         if any(key in os.environ for key in generated):
             refuse('caller environment can override checked preview configuration')
         environment = dict(line.split('=', 1) for line in (bundle / '.preview.env').read_text().splitlines())
+    else:
+        generated = ('VECTORY_SERVER_IMAGE', 'VECTORY_VALIDATOR_IMAGE', 'VECTORY_HOSTNAME',
+                     'VECTORY_BIND_IP', 'VECTORY_CERTIFICATE_MODE', 'VECTORY_PUBLIC_AGENT_DOWNLOADS',
+                     'VECTORY_MAX_AGENT_CONNECTIONS', 'VECTORY_TELEMETRY_RETENTION_DAYS', 'VECTORY_RELEASES_DIRECTORY')
+        if any(key in os.environ for key in generated):
+            refuse('caller environment can override authenticated server configuration')
+    if os.environ.get('STUB_COMPOSE_EXE') and any(arg in ('config', 'up') for arg in args):
+        index = next(i for i, arg in enumerate(args) if arg in ('config', 'up'))
+        result = subprocess.run([os.environ['STUB_COMPOSE_EXE'], 'compose', *args[:index], 'config', '--format', 'json'],
+                                capture_output=True, text=True, check=False)
+        if result.returncode:
+            print(result.stderr, file=sys.stderr)
+            sys.exit(result.returncode)
+        Path(os.environ['STUB_COMPOSE_RESULT']).write_text(result.stdout)
     for argument in args:
         if argument in ('config', 'logs', 'stop'):
             sys.exit(0)
@@ -216,6 +230,12 @@ if operation == 'run':
         sys.exit(0)
     if entry == '/app/operations/vectory-local-pki':
         helper(command)
+    if entry == '/app/operations/vectory-server-pki':
+        for part in ('server_cert', 'server_key'):
+            target = volume / part
+            if not target.exists():
+                target.write_text('retained automatic certificate fixture ' + part)
+        sys.exit(0)
     refuse('unknown container entrypoint')
 refuse('unknown Docker operation')
 '''
@@ -243,12 +263,16 @@ class Fixture:
         sources = {
             'start.sh': f'deploy/start-{kind}.sh',
             'release-images.sh': 'deploy/release-images.sh',
+            'verify-release.sh': 'deploy/verify-release.sh',
+            'prepare-offline.sh': 'deploy/prepare-offline.sh',
             'compose.yaml': f'deploy/compose.{"preview" if kind == "preview" else "release"}.yaml',
             'README.md': f'deploy/{kind.upper()}-README.md',
             'LICENSE': 'LICENSE', 'NOTICE': 'NOTICE',
         }
         if kind == 'server':
-            sources.update({'Caddyfile': 'deploy/Caddyfile', '.env.example': 'deploy/.env.release.example'})
+            sources.update({'Caddyfile': 'deploy/Caddyfile', '.env.example': 'deploy/.env.release.example',
+                            'start-auto.sh': 'deploy/start-auto.sh', 'compose.auto.yaml': 'deploy/compose.auto.yaml',
+                            'Caddyfile.auto': 'deploy/Caddyfile.auto'})
         # Normalize checkout CRLF to the LF that a Linux release build uses.
         for name, source in sources.items():
             write(self.bundle / name, (ROOT / source).read_text(encoding='utf-8'), executable=name == 'start.sh')
@@ -266,11 +290,13 @@ class Fixture:
             hashlib.sha256(contents).hexdigest() + '  ' + name + '\n'
             for name, contents in self.image_bytes.items()
         ))
+        shutil.copyfile(self.cache / 'release-SHA256SUMS', self.cache / 'SHA256SUMS')
         self.env = os.environ.copy()
         for variable in tuple(self.env):
             if variable.startswith('VECTORY_'):
                 self.env.pop(variable)
         self.env.update({
+            'VECTORY_UNSIGNED_CANDIDATE': 'true',
             'PATH': str(self.bin) + ':/usr/bin:/bin',
             'STUB_KIND': kind, 'STUB_VOLUME': str(self.volume),
             'STUB_BUNDLE': str(self.bundle), 'STUB_LOG': str(self.log),

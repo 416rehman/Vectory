@@ -6,6 +6,7 @@ Which ports to open, which way each connection goes, and how Vectory works with 
 
 | Port | From → to | Purpose | Expose it? |
 | --- | --- | --- | --- |
+| 80 | Certificate authority and browsers → server host | Automatic HTTPS validation and redirect to HTTPS | Required in automatic certificate mode; custom mode does not use it |
 | 443 | Browsers → server host | Dashboard, API and Help center, through the TLS 1.3 proxy | Yes, to the people who use Vectory |
 | 8443 | Devices → server host | Agent enrollment, check-ins and downloads. TLS 1.3, with mutual TLS after enrollment. | Yes, to your devices |
 | 8080 | Proxy → server, inside the host | The server's plain-HTTP listener | Never |
@@ -20,8 +21,9 @@ The local preview kit binds its dashboard to loopback port 8080 and its agent li
 
 **Server host**
 
-- Inbound: TCP 443 from your users, TCP 8443 from your devices.
-- Outbound: nothing at runtime. Vectory makes no analytics, update or license calls. The first kit start downloads released image archives and the pinned proxy image; a verified cache or pre-loaded offline release input avoids those downloads.
+- Inbound: TCP 443 from your users, TCP 8443 from your devices, and TCP 80 for automatic HTTPS certificate validation.
+- Outbound during installation and upgrade: HTTPS to GitHub, GHCR, the proxy image registry and Sigstore verification services. An authenticated offline bundle avoids those downloads.
+- Outbound at runtime: the automatic HTTPS proxy contacts its certificate authority and DNS resolver for renewal. Configured notification channels also contact their email or webhook destinations. The dashboard makes no analytics or license calls, and the validator has no outside network route. Custom certificate mode avoids public certificate issuance.
 
 **Each device**
 
@@ -39,6 +41,6 @@ The local preview kit binds its dashboard to loopback port 8080 and its agent li
 
 With Compose, the ports are fixed at 443 and 8443; set `VECTORY_BIND_IP` in `deploy/.env` to listen on one interface. Without Compose, set [`VECTORY_HTTP_ADDR` and `VECTORY_AGENT_ADDR`](server-config.md#server-settings).
 
-If devices reach the server through a different name or port, for example through NAT, set `VECTORY_PUBLIC_AGENT_URL` so **Add device** builds commands with the address devices actually use.
+The supplied kits advertise `https://<your-hostname>:8443`. In a native deployment or explicitly customized Compose configuration, `VECTORY_PUBLIC_AGENT_URL` can advertise a different externally reachable address, for example through NAT. Adding it to the stock kit's `.env` alone does not override its fixed agent address.
 
 The agent listener's certificate must be valid for the name devices connect to. A bare IP address works only if the certificate lists that IP.

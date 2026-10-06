@@ -4,7 +4,7 @@ The public site has three entry points: the product landing page, the standalone
 
 ## Built into the site
 
-- Static titles, descriptions, headings and explanatory content, including the designer's import, privacy and validation guidance before JavaScript starts.
+- Static titles, descriptions, headings and explanatory content, including the designer's create, import, generate, visualize, privacy and validation guidance before JavaScript starts. That guidance is available in About this tool while the interactive workspace fills the viewport.
 - Canonical production URLs and a sitemap covering the landing page, designer and all public guides. The custom 404 is excluded and marked `noindex`.
 - Organization, website, application and documentation structured data describing actual features. No fabricated ratings, reviews or customer evidence.
 - Open Graph and social card metadata, a 1200 by 630 share image, SVG and ICO favicons, Apple touch icons and a web manifest.
@@ -24,6 +24,6 @@ Google's [SEO starter guide](https://developers.google.com/search/docs/fundament
 
 ## Build useful discovery
 
-Lead launch posts with the free configuration designer and a concrete Vector task. Link to the tool for browser-only exploration, then to the prebuilt Docker quickstart for fleet management. Keep the unsigned developer-preview status visible near installation.
+Lead the product website with self-hosted fleet management and the prebuilt Docker installation path. Keep the configuration designer in Tools and as a secondary try-it option. A post answering a specific Vector configuration question can link directly to the designer for browser-only exploration. Release and signing claims must describe the artifacts that have actually passed verification.
 
 Publish walkthroughs that answer real questions from users. Use actual product screenshots with synthetic-demo captions. Avoid duplicate keyword pages, invented adoption numbers, paid endorsements and coordinated votes. Review each community's rules before posting; use maker-authored text wherever generated posts are prohibited.

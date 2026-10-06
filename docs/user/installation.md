@@ -91,7 +91,11 @@ The installer finds Vector through your `PATH` and Homebrew, and adopts the real
 
 #### Windows
 
-On **Add device**, choose **Windows**, download `vectory.exe` from the page, and run the command it shows in an elevated PowerShell in the same folder. The command checks the file's SHA-256 before it runs setup. It makes no web request of its own, so there is no certificate check to skip; the agent then verifies the server itself, the way you chose. The command quotes what you type under **Advanced** for PowerShell, and **Advanced** refuses curly quotes (‘ ’ ‚ ‛), double quotes and control characters in a path, because PowerShell reads a curly quote as a quote. For configuration management, use the [manual steps](#install-manually).
+On **Add device**, choose **Windows** and copy the install command. Run it in **PowerShell as Administrator**. It creates a private temporary directory, downloads the installer with verified TLS, checks its exact SHA-256, then downloads and checks the agent. Native setup prompts privately for the token, installs the Windows service and waits for its first check-in. There is no separate binary save step.
+
+The command supports PowerShell 5.1 and 7. Its built-in curl path needs Windows 11 or Windows Server 2022 or later for [Schannel TLS 1.3](https://learn.microsoft.com/en-us/windows/win32/secauthn/protocols-in-tls-ssl--schannel-ssp-), and curl 7.70 or later for private-CA revocation-list handling. The tested host is Windows Server 2025. On older systems or for configuration management, download the prebuilt agent and use the [manual steps](#install-manually); do not weaken TLS to make an old HTTP client work.
+
+The command quotes **Advanced** choices for PowerShell and refuses curly quotes (‘ ’ ‚ ‛), double quotes and control characters in paths. Script execution policy is bypassed only in the child process after the script checksum passes; the machine's policy is not changed.
 <!-- /tabs -->
 
 The installer and `vectory setup` then:
@@ -123,7 +127,7 @@ Avoid `--token VALUE`: other users can read it from the process list and your sh
 
 ## Install manually
 
-Use these steps for air-gapped hosts, configuration management or Windows. Download the agent for the host's OS and CPU from **Add device** and check its SHA-256 against the value shown there.
+Use these steps for air-gapped hosts or configuration management. The generated install command is the normal path on all three operating systems. Download the agent for the host's OS and CPU from **Add device** and check its SHA-256 against the value shown there.
 
 <!-- tabs:os -->
 #### Linux

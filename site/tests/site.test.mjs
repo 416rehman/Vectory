@@ -12,13 +12,27 @@ const output = path.join(root, "site/dist");
 const landing = await fs.readFile(path.join(output, "index.html"), "utf8");
 const manifest = JSON.parse(await fs.readFile(path.join(output, "help/help-manifest.json"), "utf8"));
 
-test("public landing describes the preview and labels demo evidence", () => {
+test("public landing describes the install path and labels demo evidence", () => {
   const body = landing.slice(landing.indexOf("<body>"));
-  assert.match(body, /0\.1\.1 is a developer preview/);
-  assert.match(body, /Downloads are unsigned/);
+  assert.match(body, /No Rust, Go or Node toolchain is needed/);
+  assert.match(body, /https:\/\/vectory\.ahmadz\.ai\/install.sh/);
+  assert.match(body, /Download\.<br \/>Run\. Connect\./);
   assert.match(body, /synthetic demo/);
   assert.match(landing, /rel="canonical" href="https:\/\/vectory\.ahmadz\.ai\/"/);
   assert.match(landing, /name="description"/);
+});
+
+test("the product leads the landing page and the standalone designer remains a tool", () => {
+  const hero = landing.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0];
+  assert(hero, "Landing hero missing");
+  assert.match(hero, /class="button button-dark" href="#start">Install Vectory/);
+  assert.match(hero, /class="quiet-link" href="\/designer\/">Try the standalone designer/);
+  assert.match(hero, /class="hero-product editor-frame"/);
+  assert.match(hero, /src="\/media\/product-editor.png"/);
+  assert.match(hero, /Synthetic demo data/);
+  const navigation = landing.match(/<nav aria-label="Main navigation">[\s\S]*?<\/nav>/)?.[0];
+  assert.match(navigation, /<summary>Tools/);
+  assert.match(navigation, /href="\/designer\/"/);
 });
 
 test("public landing's local destinations exist", async () => {
@@ -35,6 +49,12 @@ test("public landing's local destinations exist", async () => {
   for (const [, src] of landing.matchAll(/\bsrc="(\/[^"]+)"/g)) {
     assert((await fs.stat(path.join(output, src)).catch(() => null))?.isFile(), `Missing local asset ${src}`);
   }
+});
+
+test("the public installer ships the exact release-owned source as a download", async () => {
+  assert.deepEqual(await fs.readFile(path.join(output, 'install.sh')), await fs.readFile(path.join(root, 'deploy/install.sh')));
+  const headers = await fs.readFile(path.join(output, '_headers'), 'utf8');
+  assert.match(headers.replaceAll('\r\n', '\n'), /\/install\.sh\n  X-Robots-Tag: noindex\n  Content-Type: text\/plain; charset=utf-8\n  Content-Disposition: attachment; filename="vectory-install\.sh"/);
 });
 
 test("browser distributions expose the release notices and required upstream terms", async () => {
@@ -156,7 +176,7 @@ test("installed and public Help ship the source for their exact Pagefind browser
 test("public docs are complete and do not point at a nonexistent dashboard", async () => {
   assert(manifest.pages.length >= 20);
   const home = await fs.readFile(path.join(output, "help/index.html"), "utf8");
-  assert.match(home, /Vectory 0\.1\.1 developer preview/);
+  assert.match(home, /Vectory 0\.2\.0/);
   for (const relative of manifest.pages) {
     const file = path.join(output, "help", relative);
     const html = await fs.readFile(file, "utf8");
@@ -230,5 +250,8 @@ test("public pages have valid search metadata and usable branding assets", async
   assert.equal(preview.readUInt32BE(20), 630);
   assert.match(designer, /connect-src 'none'/);
   assert.match(designer, /Create a Vector configuration from an empty canvas/);
+  assert.match(designer, /<h1>Vector configuration designer<\/h1>/);
+  assert.match(designer, /<summary>About this tool<\/summary>/);
+  assert.match(designer, /Visualize and generate Vector configurations/);
   assert.match(designer, /name="twitter:card" content="summary_large_image"/);
 });

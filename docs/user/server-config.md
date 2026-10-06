@@ -4,23 +4,24 @@ Every environment variable that `vectory-server`, the validator, Docker Compose 
 
 ## Compose settings
 
-The prebuilt [server kit](install-server.md) writes `.env` during guided setup and uses image-only Compose. On the first start, it reads your hostname, TLS file paths and bind address, copies the TLS pair into its private Docker volume, and generates the setup secret there. Later starts use the retained files and image settings.
+The prebuilt [server kit](install-server.md) writes `.env` during guided setup and uses verified image-only Compose. Its default asks for a hostname, obtains dashboard HTTPS automatically and retains a private agent issuer. The custom certificate mode also asks for TLS file paths and a bind address. Later starts preserve optional settings and retained trust while selecting only the verified images for that kit.
 
 The table below describes the equivalent manual Compose settings. The contributor source Compose file, `deploy/compose.yaml`, reads them from `deploy/.env`; ordinary installation uses the prebuilt kit.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `VECTORY_HOSTNAME` | Required | DNS name for the dashboard and agents, for example `vectory.example.com`. |
-| `VECTORY_TLS_CERT_FILE` | Required | Host path of the TLS certificate chain (PEM). The proxy and the agent listener both serve it. |
-| `VECTORY_TLS_KEY_FILE` | Required | Host path of the certificate's private key. |
-| `VECTORY_BOOTSTRAP_SECRET_FILE` | Required | Host path of the bootstrap secret file. Compose mounts it for the server. |
+| `VECTORY_CERTIFICATE_MODE` | `automatic` in the server kit | Automatic public dashboard HTTPS with separate private agent trust. Set `custom` for your own certificate files. |
+| `VECTORY_TLS_CERT_FILE` | Custom mode only | Host path of the TLS certificate chain (PEM). Custom mode copies it into retained secrets. |
+| `VECTORY_TLS_KEY_FILE` | Custom mode only | Host path of the matching private key. |
+| `VECTORY_BOOTSTRAP_SECRET_FILE` | Required for manual source deployment | The server kit generates the one-time secret in its private volume automatically. |
 | `VECTORY_SERVER_PROJECT` | `vectory` | Compose project and private volume prefix for the prebuilt server kit. Keep the same value when stopping or resuming an instance. |
-| `VECTORY_BIND_IP` | `0.0.0.0` | Host address that ports 443 and 8443 listen on. |
+| `VECTORY_BIND_IP` | `0.0.0.0` | Host address for 443 and 8443, and 80 in automatic HTTPS mode. |
 | `VECTORY_RELEASES_DIRECTORY` | `./releases` | Host folder mounted read-only as the server's agent download mirror. |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | `16384` | Passed to the server; see below. |
 | `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Passed to the server; see below. |
 
-Compose sets the server's own variables (TLS paths, validator URL, data directory, and the proxy as the only peer the HTTP listener accepts) for you. Keep the four required files readable by UID/GID 10001 only.
+Compose sets the server's own variables (TLS paths, validator URL, data directory, and the proxy as the only peer the HTTP listener accepts) for you. The kit protects retained secrets for UID/GID 10001. In a manual source deployment, protect the supplied secrets for that identity too.
 
 ### Starter-managed values
 
@@ -103,7 +104,8 @@ The prebuilt [preview kit](quickstart.md) needs Docker Compose and verifies its 
 | `VECTORY_PREVIEW_PROJECT` | `vectory-preview` | Docker Compose project and private volume prefix. Use the same value when stopping or resuming. |
 | `VECTORY_PREVIEW_WEB_PORT` | `8080` | Dashboard port on 127.0.0.1. |
 | `VECTORY_PREVIEW_AGENT_PORT` | `8443` | TLS agent listener port on 127.0.0.1. |
-| `VECTORY_PREVIEW_RELEASE_DIR` | None | Optional offline directory containing the two image archives and their release `SHA256SUMS`. |
+| `VECTORY_RELEASE_DIR` | None | Optional directory with the signed release inventory and verification files. It does not replace independently trusted Sigstore material. |
+| `VECTORY_OFFLINE` | `false` | Reuse an authenticated prepared kit/cache and local images without network pulls. For first-time offline hosting, use [offline preparation](install-server.md#offline-installation). |
 
 The prebuilt validator has no host port. The preview manager reaches it at its private address on the internal Docker network.
 

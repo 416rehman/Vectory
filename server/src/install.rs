@@ -811,6 +811,18 @@ pub fn trust_for(settings: &Settings, agent_url: &str) -> Trust {
     }
 }
 
+/// Use the chain accepted by the live TLS listener after a renewal. Files are
+/// not reread here, so a failed replacement cannot change installation trust.
+pub fn trust_for_state(state: &State, agent_url: &str) -> Trust {
+    let mut settings = state.settings.clone();
+    if let Ok(current) = state.agent_tls.read() {
+        if let Some(current) = current.as_ref() {
+            settings.agent_certificate_pem = Some(current.certificate_pem.clone());
+        }
+    }
+    trust_for(&settings, agent_url)
+}
+
 // ---------------------------------------------------------------------------
 // Installer
 
@@ -1162,11 +1174,201 @@ vectory_install() {
 vectory_install ${1+"$@"}
 "#;
 
+/// Single-quote one literal for PowerShell, without interpolation.
+fn ps_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// The Windows installer has the same token-free, deterministic distribution
+/// contract as the POSIX installer. The dashboard verifies these bytes before
+/// execution; the script then verifies the native agent before invoking setup.
+pub fn render_install_ps1(
+    agent_url: &str,
+    pin: Option<&PinnedCa>,
+    dashboard_url: Option<&str>,
+    catalog: &Catalog,
+) -> String {
+    let mut platforms = String::new();
+    for release in catalog
+        .platforms()
+        .into_iter()
+        .filter(|r| r.os == "windows")
+    {
+        platforms.push_str(&format!(
+            "    {} {{ $version = {}; $expectedHash = {}; $expectedSize = {} }}\n",
+            ps_quote(&release.arch),
+            ps_quote(&release.version),
+            ps_quote(&release.sha256),
+            release.size,
+        ));
+    }
+    let (pin_sha, pin_pem) = pin.map_or((String::new(), String::new()), |ca| {
+        (ca.sha256.clone(), ca.pem.trim_end().to_owned())
+    });
+    INSTALL_PS1
+        .replace("@SERVER@", &ps_quote(agent_url))
+        .replace("@CA_SHA256@", &ps_quote(&pin_sha))
+        .replace("@CA_PEM@", &ps_quote(&pin_pem))
+        .replace("@DASHBOARD@", &ps_quote(dashboard_url.unwrap_or("")))
+        .replace("@PLATFORMS@", &platforms)
+}
+
+const INSTALL_PS1: &str = r#"# Vectory Windows agent installer, compatible with Windows PowerShell 5.1 and PowerShell 7.
+# Download this file and verify its SHA-256 using the Add device page before running it.
+# It contains no enrollment token. Native setup asks for the token in a hidden console prompt.
+# Setup discovers an installed Vector, checks this host and TLS, installs the agent in
+# Program Files, registers its unprivileged virtual service account and waits for a check-in.
+# It never installs Vector or takes over a running Vector without an explicit local choice.
+$ErrorActionPreference = 'Stop'
+$server = @SERVER@
+$caSHA256 = @CA_SHA256@
+$caPEM = @CA_PEM@
+$dashboard = @DASHBOARD@
+$setupOptions = @($args)
+$downloadCA = $null
+$caChosen = $false
+$pinChosen = $false
+
+for ($index = 0; $index -lt $setupOptions.Count; $index++) {
+    $option = [string]$setupOptions[$index]
+    if ($option.IndexOf([char]34) -ge 0) { throw 'An option contains a double quote. Use a path or value without double quotes.' }
+    if ($option -in @('--help', '-h', '-help')) {
+        Write-Output 'Usage: & .\vectory-install.ps1 [setup options]'
+        Write-Output 'Typical: & .\vectory-install.ps1 --name edge-01 --mode full'
+        Write-Output 'Options such as --vector-binary, --service, --dry-run and --token-file pass through to vectory setup.'
+        Write-Output 'Use --ca-file PATH for a reviewed private CA file, or --ca-file= for system trust. TLS checks cannot be disabled.'
+        exit 0
+    }
+    if ($option -match '^--?(server|agent-path|installer-preflight|dashboard-url)(=|$)') {
+        throw 'The server and installed agent path are set by this installer. Download it from the Vectory server this host uses.'
+    }
+    if ($option -match '^--?token(=|$)') { throw 'Paste the token at the hidden prompt, or use --token-file or --token-stdin. Do not put it in a command argument.' }
+    if ($option -match '^--?ca-sha256(=|$)') { $pinChosen = $true }
+    if ($option -match '^--?ca-file=(.*)$') {
+        if ($caChosen) { throw 'Pass --ca-file only once.' }
+        $downloadCA = $Matches[1]
+        $caChosen = $true
+    } elseif ($option -in @('--ca-file', '-ca-file')) {
+        if ($caChosen -or $index + 1 -ge $setupOptions.Count) { throw '--ca-file needs one reviewed certificate path, or use --ca-file= for system trust.' }
+        $index++
+        $downloadCA = [string]$setupOptions[$index]
+        $caChosen = $true
+    }
+}
+if ($env:OS -ne 'Windows_NT') { throw 'This installer is for Windows. Use install.sh on Linux or macOS.' }
+$architecture = $env:PROCESSOR_ARCHITEW6432
+if (-not $architecture) { $architecture = $env:PROCESSOR_ARCHITECTURE }
+$arch = switch ($architecture.ToUpperInvariant()) {
+    'AMD64' { 'amd64' }
+    'ARM64' { 'arm64' }
+    default { throw 'This Windows architecture has no supported prebuilt agent. Choose a supported platform on Add device.' }
+}
+$version = $null
+$expectedHash = $null
+$expectedSize = 0
+switch ($arch) {
+@PLATFORMS@    default { throw "This server has no verified Windows/$arch agent. Check its agent catalog on Add device." }
+}
+$curl = (Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+if (-not $curl) { throw 'Windows curl.exe is unavailable. Use the direct verified agent download on Add device, then run vectory.exe setup.' }
+if ($caChosen -and $downloadCA) {
+    if (-not [IO.Path]::IsPathRooted($downloadCA)) { throw '--ca-file must name an absolute certificate path on this device.' }
+    $caFile = Get-Item -LiteralPath $downloadCA -Force
+    if ($caFile.PSIsContainer -or ($caFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '--ca-file must name a regular certificate file, not a link or directory.' }
+    $downloadCA = $caFile.FullName
+}
+
+$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+$workName = 'vectory-install-' + [Guid]::NewGuid().ToString('N')
+$work = Join-Path $temporaryRoot $workName
+$created = $false
+$result = 1
+try {
+    # Create the random directory with its private ACL atomically, before any
+    # file is written. Do not inherit grants from a shared temporary root.
+    if (Test-Path -LiteralPath $work) { throw 'The private installer directory already exists. Run this installer again.' }
+    $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $security = New-Object Security.AccessControl.DirectorySecurity
+    $security.SetOwner($owner)
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($identity in @($owner, (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), (New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))) {
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+        $security.AddAccessRule($rule)
+    }
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        [IO.Directory]::CreateDirectory($work, $security) | Out-Null
+    } else {
+        [IO.FileSystemAclExtensions]::CreateDirectory($security, $work) | Out-Null
+    }
+    $created = $true
+    $directory = Get-Item -LiteralPath $work -Force
+    if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The installer directory is a link. Refusing to continue.' }
+    $secured = Get-Acl -LiteralPath $work
+    if (-not $secured.AreAccessRulesProtected -or $secured.Owner -ne $owner.Translate([Security.Principal.NTAccount]).Value) {
+        throw 'The installer directory access controls could not be verified.'
+    }
+    if (-not $caChosen -and $caPEM) {
+        $downloadCA = Join-Path $work 'server-ca.pem'
+        [IO.File]::WriteAllText($downloadCA, $caPEM + "`n", (New-Object Text.UTF8Encoding($false)))
+    }
+    $candidate = Join-Path $work 'vectory.exe'
+    $curlOptions = @('--fail', '--silent', '--show-error', '--proto', '=https', '--tlsv1.3', '--connect-timeout', '10', '--max-time', '180', '--retry', '2', '--retry-max-time', '200', '--max-filesize', [string]$expectedSize, '--output', $candidate)
+    # Private CAs commonly have no CRL distribution service. Schannel must
+    # still verify chain and hostname and refuse a known revocation, while
+    # tolerating only missing/offline revocation lists for this reviewed CA.
+    if ($downloadCA) { $curlOptions += @('--cacert', $downloadCA, '--ssl-revoke-best-effort') }
+    $curlOptions += "$server/agent/v1/downloads/windows/$arch"
+    & $curl @curlOptions
+    if ($LASTEXITCODE -ne 0) { throw 'The agent download failed. Check the server address and certificate trust, then run the installer again.' }
+    $binary = Get-Item -LiteralPath $candidate -Force
+    if ($binary.PSIsContainer -or ($binary.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $binary.Length -ne $expectedSize) {
+        throw 'The downloaded agent does not match its expected file size. Nothing was installed.'
+    }
+    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ne $expectedHash) {
+        throw 'The downloaded agent does not match its SHA-256. Nothing was installed.'
+    }
+    if (-not $caChosen -and -not $pinChosen) {
+        if ($caSHA256) { $setupOptions = @('--ca-sha256', $caSHA256) + $setupOptions }
+        else { $setupOptions = @('--ca-file=') + $setupOptions }
+    }
+    if ($dashboard) { $setupOptions = @('--dashboard-url', $dashboard) + $setupOptions }
+    Write-Output "Verified Vectory $version for Windows/$arch. Starting setup."
+    & $candidate setup --server $server @setupOptions
+    $result = $LASTEXITCODE
+} catch {
+    Write-Error -Message $_.Exception.Message -ErrorAction Continue
+    $result = 1
+} finally {
+    # Never delete a supplied path. Cleanup is limited to this run's GUID
+    # directory directly inside its original temporary root, without links.
+    if ($created -and [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($work)) -eq $temporaryRoot -and [IO.Path]::GetFileName($work) -match '^vectory-install-[0-9a-f]{32}$') {
+        $remaining = Get-Item -LiteralPath $work -Force -ErrorAction SilentlyContinue
+        if ($remaining -and -not ($remaining.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            Remove-Item -LiteralPath $work -Recurse -Force
+        }
+    }
+}
+exit $result
+"#;
+
 /// The installer for `agent_url` and its SHA-256.
 pub async fn installer(s: &State, agent_url: &str) -> (String, String) {
     let catalog = catalog(s).await;
-    let trust = trust_for(&s.settings, agent_url);
+    let trust = trust_for_state(s, agent_url);
     let script = render_install_sh(
+        agent_url,
+        trust.pin.as_ref(),
+        s.settings.public_url.as_deref(),
+        &catalog,
+    );
+    let sha = db::hash(&script);
+    (script, sha)
+}
+
+pub async fn windows_installer(s: &State, agent_url: &str) -> (String, String) {
+    let catalog = catalog(s).await;
+    let trust = trust_for_state(s, agent_url);
+    let script = render_install_ps1(
         agent_url,
         trust.pin.as_ref(),
         s.settings.public_url.as_deref(),
@@ -1202,21 +1404,32 @@ pub async fn install_sh(
     if s.settings.disable_public_agent_downloads {
         return Err(downloads_disabled());
     }
-    // The address's own budget first; the one every address shares only for
-    // what that lets through.
-    s.limit(
-        format!("agent-installer:{}", peer_key(peer)),
-        300,
-        Duration::from_secs(600),
-    )?;
-    s.limit(
-        "agent-installer".into(),
-        PUBLIC_REQUESTS_PER_MINUTE,
-        Duration::from_secs(60),
-    )?;
+    public_limits(&s, "agent-installer", peer)?;
     let agent_url = device_agent_url(&s.settings, &h, &uri)
         .ok_or_else(|| ApiError::invalid("Request the installer with the server's host name"))?;
     let (script, sha) = installer(&s, &agent_url).await;
+    Ok(installer_response(script, &sha))
+}
+
+/// `GET /agent/v1/install.ps1` uses the same distribution policy and request
+/// budgets as the POSIX installer. Neither endpoint accepts a token.
+pub async fn install_ps1(
+    AppState(s): AppState<State>,
+    ClientAddress(peer): ClientAddress,
+    h: HeaderMap,
+    uri: Uri,
+) -> Result<Response> {
+    if s.settings.disable_public_agent_downloads {
+        return Err(downloads_disabled());
+    }
+    public_limits(&s, "agent-installer", peer)?;
+    let agent_url = device_agent_url(&s.settings, &h, &uri)
+        .ok_or_else(|| ApiError::invalid("Request the installer with the server's host name"))?;
+    let (script, sha) = windows_installer(&s, &agent_url).await;
+    Ok(installer_response(script, &sha))
+}
+
+fn installer_response(script: String, sha: &str) -> Response {
     let mut response = script.into_response();
     let headers = response.headers_mut();
     headers.insert(
@@ -1227,7 +1440,7 @@ pub async fn install_sh(
         header::ETAG,
         HeaderValue::from_str(&format!("\"{sha}\"")).unwrap(),
     );
-    Ok(response)
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,9 +1453,9 @@ pub async fn details(AppState(s): AppState<State>, h: HeaderMap, uri: Uri) -> Re
     let catalog = catalog(&s).await;
     let agent_url = dashboard_agent_url(&s.settings, &h, &uri);
     let enabled = !s.settings.disable_public_agent_downloads;
-    let (trust, installer) = match &agent_url {
+    let (trust, installer, windows_installer) = match &agent_url {
         Some(url) => {
-            let trust = trust_for(&s.settings, url);
+            let trust = trust_for_state(&s, url);
             let script = render_install_sh(
                 url,
                 trust.pin.as_ref(),
@@ -1252,9 +1465,18 @@ pub async fn details(AppState(s): AppState<State>, h: HeaderMap, uri: Uri) -> Re
             let installer = enabled.then(|| {
                 json!({"url":format!("{url}/agent/v1/install.sh"),"sha256":db::hash(&script),"platforms":catalog.platforms().iter().filter(|r|r.os!="windows").map(|r|r.platform()).collect::<Vec<_>>()})
             });
-            (trust.summary, installer)
+            let windows_script = render_install_ps1(
+                url,
+                trust.pin.as_ref(),
+                s.settings.public_url.as_deref(),
+                &catalog,
+            );
+            let windows_installer = enabled.then(|| {
+                json!({"url":format!("{url}/agent/v1/install.ps1"),"sha256":db::hash(&windows_script),"platforms":catalog.platforms().iter().filter(|r|r.os=="windows").map(|r|r.platform()).collect::<Vec<_>>()})
+            });
+            (trust.summary, installer, windows_installer)
         }
-        None => (Value::Null, None),
+        None => (Value::Null, None, None),
     };
     let admin = user["role"] == "admin";
     Ok(Json(json!({
@@ -1265,6 +1487,7 @@ pub async fn details(AppState(s): AppState<State>, h: HeaderMap, uri: Uri) -> Re
         "certificate":trust,
         "downloads_enabled":enabled,
         "installer":installer,
+        "windows_installer":windows_installer,
         "default_install_dir":INSTALL_DIR,
         "releases":catalog.releases.iter().map(Release::summary).collect::<Vec<_>>(),
         "catalog_problems":if admin { json!(catalog.problems) } else { json!([]) },

@@ -85,8 +85,8 @@ PAGEFIND_UI_INPUTS = {
     'is-decimal': '2.0.1',
 }
 STARTER_FILES = {
-    'preview': {'start.sh', 'release-images.sh', 'compose.yaml', 'README.md', 'LICENSE', 'NOTICE', 'VERSION', 'SHA256SUMS'},
-    'server': {'start.sh', 'release-images.sh', 'compose.yaml', 'Caddyfile', '.env.example',
+    'preview': {'start.sh', 'release-images.sh', 'verify-release.sh', 'prepare-offline.sh', 'compose.yaml', 'README.md', 'LICENSE', 'NOTICE', 'VERSION', 'SHA256SUMS'},
+    'server': {'start.sh', 'start-auto.sh', 'release-images.sh', 'verify-release.sh', 'prepare-offline.sh', 'compose.yaml', 'compose.auto.yaml', 'Caddyfile', 'Caddyfile.auto', '.env.example',
                'README.md', 'LICENSE', 'NOTICE', 'VERSION', 'SHA256SUMS'},
 }
 
@@ -471,7 +471,8 @@ def required_starter_bundle(path, version, kind):
     """Require a small checksum-bound kit without duplicated image layers."""
     required_file(path, MAX_PREVIEW_BUNDLE_BYTES)
     files = STARTER_FILES[kind]
-    prefix = f'vectory-{version}-{kind}-linux-amd64/'
+    label = 'local' if kind == 'preview' and tuple(map(int, version.split('-')[0].split('.'))) >= (0, 2, 0) else kind
+    prefix = f'vectory-{version}-{label}-linux-amd64/'
     expected = {prefix + name for name in files}
     members = {}
     try:
@@ -954,7 +955,8 @@ def candidate_inventory(directory, require_status=True):
     debs = {f'vectory_{deb_version}_{arch}.deb' for arch in ('amd64', 'arm64')}
     rpms = {f'vectory-{rpm_version}-1.{arch}.rpm' for arch in ('x86_64', 'aarch64')}
     msi = f'vectory-{version}-windows-amd64.msi'
-    preview = f'vectory-{version}-preview-linux-amd64.tar.gz'
+    local_label = 'local' if tuple(map(int, core.split('.'))) >= (0, 2, 0) else 'preview'
+    preview = f'vectory-{version}-{local_label}-linux-amd64.tar.gz'
     serverkit = f'vectory-{version}-server-linux-amd64.tar.gz'
     expected = REQUIRED_CANDIDATE_FILES | agents | debs | rpms | {msi, preview, serverkit}
     missing, extra = expected - names, names - expected

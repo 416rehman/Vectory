@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build unsigned development release artifacts. Native validation is a separate gate."""
+"""Build deterministic release inputs. CI signing and native acceptance are separate gates."""
 import argparse
 import gzip
 import hashlib
@@ -70,7 +70,7 @@ def main():
         if args.no_archives:
             continue
         members = [('vectory.exe' if goos == 'windows' else 'vectory', binary.read_bytes(), 0o755),
-                   ('RELEASE-STATUS.txt', b'UNSIGNED DEVELOPMENT BUILD. Native OS/service acceptance and signing are separate gates. No enrollment secrets included.\n', 0o644)]
+                   ('RELEASE-STATUS.txt', b'Verify the enclosing release checksum inventory with its Sigstore bundle and the exact tagged GitHub release workflow identity before installation. Native OS signing is separate from Sigstore authentication. No enrollment secrets included.\n', 0o644)]
         for rel in ('LICENSE', 'NOTICE', 'docs/AGENT-INSTALL.md', 'docs/COMPATIBILITY.md'):
             file = ROOT / rel
             if file.exists():

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 
 	"github.com/vectory/vectory/agent/internal/agent"
@@ -246,12 +247,9 @@ func printGeneralHelp(w io.Writer) {
 	}
 	fmt.Fprintln(w, "\nOther\n  help [command]      Show help for a command\n  version             Print the agent version")
 	fmt.Fprintln(w, "\nExamples (Add device writes these for your server; never use curl -k, which turns certificate checks off)")
-	fmt.Fprintln(w, `  cd "$(mktemp -d)"`)
-	fmt.Fprintln(w, "  curl -fsSL --proto '=https' --proto-redir '=https' --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh")
-	fmt.Fprintln(w, "  echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -")
-	fmt.Fprintln(w, "  sudo sh vectory-install.sh")
-	fmt.Fprintln(w, "  sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>")
-	fmt.Fprintln(w, "  sudo vectory status")
+	for _, example := range setupExamples(runtime.GOOS)[:6] {
+		fmt.Fprintln(w, "  "+example)
+	}
 	fmt.Fprintln(w, "\nRun 'vectory help <command>' for details. Exit codes: 0 ok, 1 failed, 2 usage error, 3 setup finished but nothing keeps the agent running, 78 not installed or not enrolled, 130 setup interrupted.")
 }
 

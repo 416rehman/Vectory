@@ -1,0 +1,220 @@
+name: signed release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
+      - name: Require an exact stable version tag
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: python3 packaging/prepare-signed-release.py check-tag
+  checks:
+    needs: identity
+    uses: ./.github/workflows/ci.yml
+  native:
+    needs: identity
+    uses: ./.github/workflows/platforms.yml
+  candidate:
+    needs: identity
+    uses: ./.github/workflows/release-candidate.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with: { attest: false }
+  publish:
+    needs: [identity, checks, native, candidate]
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: { name: unsigned-release-candidate, path: artifacts/release }
+      - name: Refuse any existing release before publication side effects
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/existing-release.error"; then
+            echo '::error::A release or draft already exists for this tag. Inspect it before retrying publication.'
+            exit 1
+          elif ! grep -q '(HTTP 404)' "$RUNNER_TEMP/existing-release.error"; then
+            cat "$RUNNER_TEMP/existing-release.error" >&2
+            echo '::error::Could not establish that this release tag is unpublished.'
+            exit 1
+          fi
+      - name: Require complete candidate bytes and source identity
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          python3 packaging/prepare-signed-release.py check-tag
+          python3 packaging/verify-release.py artifacts/release
+          python3 packaging/prepare-signed-release.py check-source artifacts/release
+          python3 packaging/prepare-signed-release.py image-configs artifacts/release
+      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
+        with: { cosign-release: "v3.1.3" }
+      - name: Scan actual published image digests
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e
+        with:
+          version: v0.75.0
+          scan-type: image
+          input: artifacts/release/vectory-server-image.tar.gz
+          format: json
+          output: artifacts/release/server-image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+      - name: Scan actual validator image
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e
+        with:
+          version: v0.75.0
+          scan-type: image
+          input: artifacts/release/vectory-validator-image.tar.gz
+          format: json
+          output: artifacts/release/validator-image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+      - name: Scan pinned dashboard TLS proxy
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e
+        with:
+          version: v0.75.0
+          image-ref: caddy:2.11.7-alpine@sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb
+          format: json
+          output: artifacts/release/proxy-image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+      - name: Refuse critical and fixable high findings and retain all findings
+        run: python3 packaging/prepare-signed-release.py scan-gate artifacts/release
+      - name: Publish the tested image bytes to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTOR: ${{ github.actor }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GH_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1' EXIT
+          # Inspect BOTH existing version tags before changing either registry
+          # object. A retry may only reuse exactly the same image content.
+          for component in server validator; do
+            docker load --input "artifacts/release/vectory-$component-image.tar.gz"
+            image="ghcr.io/416rehman/vectory-$component:$RELEASE_TAG"
+            candidate_id=$(docker image inspect "vectory-$component:candidate" --format '{{.Id}}')
+            recorded_id=$(jq -er --arg tag "vectory-$component:candidate" '.[] | select(.RepoTags == [$tag]) | .Id' artifacts/release/images.json)
+            test "$candidate_id" = "$recorded_id" || { echo '::error::Loaded image differs from candidate metadata.'; exit 1; }
+            if docker buildx imagetools inspect --raw "$image" > "$RUNNER_TEMP/$component-existing-manifest.json" 2> "$RUNNER_TEMP/$component-existing-manifest.error"; then
+              existing_id=$(jq -r '.config.digest // empty' "$RUNNER_TEMP/$component-existing-manifest.json")
+              if test -z "$existing_id"; then
+                platform_manifest=$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("ambiguous release platform") end' "$RUNNER_TEMP/$component-existing-manifest.json")
+                existing_id=$(docker buildx imagetools inspect --raw "ghcr.io/416rehman/vectory-$component@$platform_manifest" | jq -er '.config.digest')
+              fi
+              expected_config=$(sed -n "s/^VECTORY_$(printf '%s' "$component" | tr '[:lower:]' '[:upper:]')_IMAGE=//p" artifacts/release/IMAGE-CONFIGS.env)
+              test "$existing_id" = "$expected_config" || { echo "::error::Refusing to replace a different existing $component version image."; exit 1; }
+              # Rootfs diff IDs and all configuration are authenticated by this
+              # config digest. Retain the existing compressed manifest bytes.
+              existing_digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$image" | jq -er '.digest')
+              [[ "$existing_digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+              printf 'ghcr.io/416rehman/vectory-%s@%s\n' "$component" "$existing_digest" > "$RUNNER_TEMP/$component-existing-digest"
+            elif ! grep -Eq 'MANIFEST_UNKNOWN|manifest unknown|NAME_UNKNOWN|name unknown|: not found$|404 Not Found' "$RUNNER_TEMP/$component-existing-manifest.error"; then
+              # GHCR may deny an anonymous/read token for a package that has
+              # never existed. Establish first-publication absence through
+              # the authenticated Packages API, never by treating auth or
+              # network errors themselves as proof that the tag is absent.
+              if gh api "users/416rehman/packages/container/vectory-$component" > "$RUNNER_TEMP/$component-package.json" 2> "$RUNNER_TEMP/$component-package.error"; then
+                cat "$RUNNER_TEMP/$component-existing-manifest.error" >&2
+                echo "::error::Package exists but its version state could not be verified for $component."
+                exit 1
+              elif ! grep -q '(HTTP 404)' "$RUNNER_TEMP/$component-package.error"; then
+                cat "$RUNNER_TEMP/$component-package.error" >&2
+                echo "::error::Could not establish registry version state for $component."
+                exit 1
+              fi
+            fi
+          done
+          for component in server validator; do
+            image="ghcr.io/416rehman/vectory-$component:$RELEASE_TAG"
+            if test -f "$RUNNER_TEMP/$component-existing-digest"; then
+              digest=$(cat "$RUNNER_TEMP/$component-existing-digest")
+            else
+              docker tag "vectory-$component:candidate" "$image"
+              docker push "$image"
+              digest=$(docker image inspect "$image" --format '{{join .RepoDigests "\n"}}' | grep -E "^ghcr.io/416rehman/vectory-$component@sha256:[a-f0-9]{64}$")
+            fi
+            test "$(printf '%s\n' "$digest" | wc -l)" -eq 1
+            printf 'VECTORY_%s_IMAGE=%s\n' "$(printf '%s' "$component" | tr '[:lower:]' '[:upper:]')" "$digest" >> artifacts/release/IMAGE-DIGESTS.env
+            cosign sign --yes "$digest"
+            cosign verify --certificate-identity "https://github.com/416rehman/Vectory/.github/workflows/release.yml@refs/tags/$RELEASE_TAG" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$digest" > "artifacts/release/$component-signature-verification.json"
+          done
+      - name: Require anonymous image access before promising public installation
+        run: |
+          set -euo pipefail
+          # First publication may require the owner to mark both GHCR packages
+          # Public. Fail closed until a fresh anonymous client can read them.
+          mkdir -p "$RUNNER_TEMP/anonymous-docker"
+          while IFS='=' read -r name image; do
+            DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker" docker buildx imagetools inspect "$image" > /dev/null
+          done < artifacts/release/IMAGE-DIGESTS.env
+      - name: Record distribution identity and sign the full release inventory
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 packaging/prepare-signed-release.py finalize artifacts/release
+          cosign sign-blob --yes --bundle artifacts/release/SHA256SUMS.sigstore.json artifacts/release/SHA256SUMS
+          cosign verify-blob --bundle artifacts/release/SHA256SUMS.sigstore.json --certificate-identity "https://github.com/416rehman/Vectory/.github/workflows/release.yml@$GITHUB_REF" --certificate-oidc-issuer https://token.actions.githubusercontent.com artifacts/release/SHA256SUMS
+      - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+        with: { subject-path: artifacts/release/SHA256SUMS }
+      - name: Verify real signed offline preparation without manager activation
+        timeout-minutes: 10
+        run: bash packaging/verify-offline-release.sh artifacts/release "$RUNNER_TEMP/signed-offline-release"
+      - name: Publish a stable release only after signature and public-access verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 packaging/prepare-signed-release.py notes artifacts/release > "$RUNNER_TEMP/release-notes.md"
+          # Do not silently modify a historical release or its asset inventory.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo '::error::A release already exists for this tag. Inspect it before retrying publication.'
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Vectory $RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md" artifacts/release/*
+          mkdir -p "$RUNNER_TEMP/public-release-check"
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/public-release-check"
+          cmp artifacts/release/SHA256SUMS "$RUNNER_TEMP/public-release-check/SHA256SUMS"
+          cmp artifacts/release/SHA256SUMS.sigstore.json "$RUNNER_TEMP/public-release-check/SHA256SUMS.sigstore.json"
+          (cd "$RUNNER_TEMP/public-release-check" && sha256sum --check --strict SHA256SUMS)
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+      - name: Deploy the public site and standalone designer through CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run public-site.yml --ref main
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: signed-release-distribution
+          path: artifacts/release
+          if-no-files-found: error

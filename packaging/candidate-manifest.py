@@ -20,7 +20,7 @@ PARTS = {
     'packages': lambda n: n.endswith(('.deb', '.rpm')),
     'msi': lambda n: n.endswith('.msi'),
     'images': lambda n: n.endswith('-image.tar.gz'),
-    'preview': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-preview-linux-amd64\.tar\.gz', n)),
+    'preview': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-(?:local|preview)-linux-amd64\.tar\.gz', n)),
     'serverkit': lambda n: bool(re.fullmatch(r'vectory-[0-9][^/]*-server-linux-amd64\.tar\.gz', n)),
     'sbom': lambda n: n.endswith('.cdx.json'),
     'legal': lambda n: n in {'LICENSE', 'NOTICE'},

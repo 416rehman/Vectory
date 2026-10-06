@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Vectory control plane",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "The HTTP API behind the Vectory dashboard. Everything the dashboard does goes through it.\n\n**Authentication.** Sign in with `POST /api/v1/login`. The reply sets the `vectory_session` cookie (HttpOnly, SameSite=Strict, 12 hours) and returns a `csrf_token`. Send the cookie with every request, and the token as the `X-CSRF-Token` header with every `POST`, `PUT` and `DELETE`. Requests run with your role. There are no separate API keys.\n\n**Agent protocol.** `/agent/v1/` operations are served only on the separate agent listener and authenticate devices with mutual TLS. A device ID in a request body is never trusted for authentication."
   },
   "servers": [
@@ -13838,6 +13838,72 @@
         ]
       }
     },
+    "/agent/v1/install.ps1": {
+      "get": {
+        "summary": "Windows PowerShell installer rendered for this server, with verified TLS and exact agent SHA-256; never contains enrollment tokens. Off with VECTORY_PUBLIC_AGENT_DOWNLOADS=false",
+        "operationId": "get__agent_v1_install_ps1",
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        },
+        "tags": [
+          "Agent protocol"
+        ]
+      }
+    },
     "/agent/v1/downloads/{os}/{arch}": {
       "get": {
         "summary": "The single agent build for a platform (os linux, darwin or windows; arch amd64 or arm64), rate-limited per client address and verified by the installer against its embedded SHA-256. Off with VECTORY_PUBLIC_AGENT_DOWNLOADS=false",
@@ -26452,6 +26518,37 @@
             "type": "boolean"
           },
           "installer": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "platforms": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "url",
+                  "sha256",
+                  "platforms"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "windows_installer": {
             "anyOf": [
               {
                 "type": "object",

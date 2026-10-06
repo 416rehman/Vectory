@@ -88,6 +88,6 @@ Editor and Operator are separate jobs, not levels. The server checks every permi
 
 ## Where to next
 
-- **Try it on one machine** with the prebuilt Docker preview: [Quickstart](quickstart.md).
-- **Self-host the developer preview:** [Install the server](install-server.md), then [Connect a device](installation.md) and [Deploy your first pipeline](first-pipeline.md).
+- **Start your server and first device** with one guided command: [Quickstart](quickstart.md).
+- **Self-host Vectory:** [Install the server](install-server.md), then [Connect a device](installation.md) and [Deploy your first pipeline](first-pipeline.md).
 - **Understand the guarantees:** [Security model](security.md).

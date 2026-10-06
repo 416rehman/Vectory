@@ -1,6 +1,6 @@
 # Try Vectory locally
 
-This starter runs the unsigned Vectory developer preview on **Linux x86-64** with Docker Engine and the Compose v2 plugin. It downloads the prebuilt server and Vector validator from the same GitHub release, verifies their SHA-256 checksums, and starts them. No Git, language toolchain, DNS name or TLS certificate is needed.
+This local evaluation starter runs Vectory on **Linux x86-64** with Docker Engine and the Compose v2 plugin. It verifies the tagged release Sigstore checksum bundle and pulls the signed server and validator from GHCR by immutable digest. No Git, language toolchain, DNS name or TLS certificate is needed.
 
 ## Start
 
@@ -8,7 +8,7 @@ This starter runs the unsigned Vectory developer preview on **Linux x86-64** wit
 ./start.sh
 ```
 
-The first start downloads the prebuilt server and Vector validator images. Later starts reuse verified downloads and your existing workspace. Retain `.cache` to restart offline; each start still checks its image archives against the retained release inventory.
+The first start authenticates and pulls the prebuilt server and Vector validator images. Later starts reuse verified downloads and your existing workspace. Retain `.cache`, the Sigstore verifier and all image digests. After a verified online start, use `VECTORY_OFFLINE=true ./start.sh` for an offline restart.
 
 1. Open **http://127.0.0.1:8080**.
 2. Paste the setup secret printed at the end of `./start.sh`, then create your administrator. Run `./start.sh setup-secret` if you need to see it again.
@@ -26,7 +26,7 @@ The agent adopts an existing supported Vector installation; it does not install 
 
 Stopping retains your workspace and device trust. `./start.sh status` shows the containers. The named Docker volumes `vectory-preview_data` and `vectory-preview_pki` hold the database and private certificates; retain both. The exported `setup-secret.txt` is private and is used only to create the first administrator.
 
-This preview listens only on this Linux host. Its test CA expires after seven days; it never installs a certificate into the host trust store, changes a host service, or silently replaces retained certificates. If it has expired, stop the preview, revoke enrolled trial devices if possible, and remove its two preview volumes only when you intend to start a fresh workspace. Existing trial devices must be enrolled against the new CA. For a lasting installation, follow [Install the server](https://vectory.ahmadz.ai/help/install-server/).
+This local evaluation listens only on this Linux host. Its test CA expires after seven days; it never installs a certificate into the host trust store, changes a host service, or silently replaces retained certificates. If it has expired, stop the preview, revoke enrolled trial devices if possible, and remove its two preview volumes only when you intend to start a fresh workspace. Existing trial devices must be enrolled against the new CA. For a lasting installation, follow [Install the server](https://vectory.ahmadz.ai/help/install-server/).
 
 ## Ports and multiple previews
 
@@ -42,4 +42,4 @@ Repeat those values when resuming. Only the web and agent ports are exposed loca
 
 The starter checks every bundle file before use and both image archives before Docker loads them. The release is unsigned: checksums detect corruption and bind files to the published inventory, but do not establish a separate publisher signing identity. Review the release and its known platform coverage before running it. The starter never executes a remote shell script.
 
-For an offline trial, retain both image archives and their release `SHA256SUMS` in one directory, then run `VECTORY_PREVIEW_RELEASE_DIR=/absolute/path/to/release ./start.sh`. Docker still needs to be installed; the two images contain everything this starter runs.
+For a first offline trial, run `./prepare-offline.sh /absolute/path/vectory-offline` from the verified kit on a connected Linux x86-64 Docker host. Transfer the entire resulting directory, including the independently verified Sigstore root and pinned verifier image, through a trusted channel. Then run `VECTORY_OFFLINE=true ./start.sh`. Signed archive checksums and exact immutable local image identities are checked before startup, with network pulls disabled. For later offline restarts, retain `.cache` and the Docker images. Preparation does not start a manager or activate a device.

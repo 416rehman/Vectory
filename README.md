@@ -4,7 +4,7 @@
 
 **Design, ship and roll back Vector pipelines across your fleet, from one self-hosted dashboard.**
 
-[Quickstart](docs/user/quickstart.md) · [Download 0.1.1](https://github.com/416rehman/Vectory/releases/tag/v0.1.1) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Project status](#project-status)
+[Quickstart](docs/user/quickstart.md) · [Download](https://github.com/416rehman/Vectory/releases/tag/v0.2.0) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Compatibility](#deployment-and-compatibility)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-editor-dark.png">
@@ -22,7 +22,7 @@ Vectory is an open-source control plane for [Vector](https://vector.dev/). Build
 | **A visual editor for real Vector** | Schema-driven settings for all 128 component types of Vector 0.58, eight starter pipelines that pass Vector 0.58.0's own validation, VRL with sample tests, and YAML, TOML or JSON import and export. Publication checks the pipeline structure and uses an isolated Vector 0.58 validator where safe; configuration providers and other device-only checks run on each device before it applies. |
 | **Rollouts you can trust** | Immutable versions with diffs, device and group targeting with a preview, canaries that advance only when devices confirm, schedules and one-step rollback. |
 | **Outbound-only agents** | The agent dials out over TLS 1.3 with mutual TLS. Nothing on your hosts listens for Vectory. |
-| **Your data stays yours** | Events flow from Vector to your destinations, never through Vectory. Supported credential fields use device-local `vectory-secret:NAME` references; headers and URLs cannot use them in this preview. |
+| **Your data stays yours** | Events flow from Vector to your destinations, never through Vectory. Supported credential fields use device-local `vectory-secret:NAME` references; headers and URLs require native Vector secret providers or host-managed environment references in full mode. |
 | **Guardrails built in** | Roles, two-factor sign-in and an exportable audit log. Signed per-device configurations. A local policy on each host that the server can't widen. |
 | **Self-hosted, no strings** | Docker Compose and SQLite. No cloud account, analytics or outside CDN. Apache-2.0. |
 
@@ -48,12 +48,25 @@ flowchart LR
 
 ## Get started
 
-- **Try it on one machine:** download the prebuilt Linux x86-64 preview kit and run `./start.sh` with Docker Compose. The [Quickstart](docs/user/quickstart.md) walks through administrator setup and connecting a test device. No Rust, Go, Node, or source build is required.
-- **Self-host the developer preview:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
-- **Understand the guarantees:** [Security model](docs/user/security.md).
-- **Create or inspect a configuration in your browser:** the [Vector configuration designer](https://vectory.ahmadz.ai/designer/) imports YAML, JSON, and TOML, reuses Vectory's diagram components, and exports the result without an account.
+On a Linux x86-64 server with Docker Engine and Compose v2 running, point a DNS name at the server and run:
 
-The [0.1.1 release page](https://github.com/416rehman/Vectory/releases/tag/v0.1.1) has the unsigned agent packages, Docker image archives, checksums and SBOMs. Check [platform coverage](docs/user/compatibility.md) before choosing a download.
+```sh
+curl -fsSL --proto '=https' https://vectory.ahmadz.ai/install.sh -o vectory-install.sh &&
+bash vectory-install.sh
+```
+
+Enter your hostname. The installer verifies the release signature and signed GHCR image digests, starts Vectory, and sets up automatic HTTPS. Open the printed URL and create your first administrator with the one-time setup secret. No Git, Rust, Go, Node.js or compiler is needed.
+
+Then open **Devices → Add device**. Copy the command for Linux, macOS or Windows, run it on a host with Vector 0.58.x installed, and paste the enrollment token when prompted. The agent download, certificate trust and service setup are handled for you. Tokens stay out of URLs and commands.
+
+- [Quickstart](docs/user/quickstart.md): server, first device and first pipeline.
+- [Server installation](docs/user/install-server.md): custom certificates, offline use and operations.
+- [Compatibility](docs/user/compatibility.md): platforms and actual test coverage.
+- [Security model](docs/user/security.md): roles, host permissions and signatures.
+
+Want to inspect a configuration first? The [standalone Vector designer](https://vectory.ahmadz.ai/designer/) creates, imports, visualizes and exports YAML, JSON and TOML in your browser without an account.
+
+The [0.2.0 release](https://github.com/416rehman/Vectory/releases/tag/v0.2.0) supplies prebuilt agents, server kits, image archives, checksums, Sigstore bundles, SBOMs and dependency scan results. Container images are available from GHCR by immutable digest. Release verification uses GitHub OIDC and Cosign; native OS trust prompts and the agent's runtime update signatures are separate mechanisms.
 
 The same guides ship inside every server as a searchable, offline Help center at `/help/`.
 
@@ -70,11 +83,13 @@ The same guides ship inside every server as a searchable, offline Help center at
   </tr>
 </table>
 
-## Project status
+## Deployment and compatibility
 
-Vectory is a **0.1 developer preview**. Its downloadable release artifacts are unsigned; device configurations and opt-in agent-update builds have their own runtime signatures. The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents on Linux, macOS and Windows. On every change CI runs the agent's native tests with Vector 0.58.0 on all three, a browser suite, and the Compose server stack on a clean runner. A second workflow, run on demand, installs the agent as a real operating-system service (systemd, launchd and the Windows service), runs the loop through it, restarts, kills and stops it, updates it to a newer build through a rollout and shows it taking back a build that fails; it also runs the first-use flows in Firefox and WebKit.
+Vectory runs the full build, publish, canary, apply and rollback workflow against real Vector 0.58.0 on Linux, macOS and Windows. CI tests the application, browser flows and isolated Compose stack. Tagged releases also run native operating-system service and update tests before images and downloads are published.
 
-The release supplies unsigned packages and Docker image archives as downloads, but there is no package repository or container registry yet. Also not done: signed release artifacts, reboot and upgrade tests, service tests on distributions other than Ubuntu 24.04, and tests on Arm64 hardware. Agent updates are built in and off until an administrator turns them on: a host agrees to them once, in the command that installs or upgrades it, and after that the dashboard rolls out signed builds with a canary first and an automatic rollback on each host. Any other agent is upgraded on its host, one command per device. See [Compatibility](docs/user/compatibility.md) for minimums and what is tested where, the [roadmap](docs/ROADMAP.md) for what's next, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the test behind each requirement.
+The server supports one Linux x86-64 installation with local SQLite storage. Agents ship for Linux x86-64 and Arm64, Intel and Apple silicon Macs, and Windows x86-64; Vector itself limits which hosts can run a managed pipeline. Cosign authenticates release artifacts and GHCR digests through the release workflow identity. It does not replace Windows Authenticode or Apple notarization, and it does not certify every customer's workload or host environment.
+
+See [Compatibility](docs/user/compatibility.md) for the exact tested systems, [Operational limits](docs/user/whats-new.md#known-limits) for remaining constraints, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the checks behind each requirement. Start new deployments with a canary and retain tested backups.
 
 ## Develop
 

@@ -296,11 +296,22 @@ async fn one_address_cannot_block_the_installer_or_downloads_for_everyone_else()
         }
     }
     assert_eq!((served, rate_limited), (300, 950));
+    // Choosing the other platform cannot bypass this address's installer cap.
+    let windows_same = f
+        .call(
+            "192.0.2.10",
+            "GET",
+            "/agent/v1/install.ps1",
+            Value::Null,
+            false,
+        )
+        .await;
+    assert_eq!(windows_same.status, StatusCode::TOO_MANY_REQUESTS);
     let other = f
         .call(
             "192.0.2.20",
             "GET",
-            "/agent/v1/install.sh",
+            "/agent/v1/install.ps1",
             Value::Null,
             false,
         )

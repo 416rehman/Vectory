@@ -19,11 +19,11 @@ declare -A seen=()
 [[ -f SHA256SUMS && ! -L SHA256SUMS ]] || fail "The preview bundle has no regular SHA256SUMS file. Download it again."
 while read -r checksum name extra; do
   [[ "$checksum" =~ ^[0-9a-f]{64}$ && -z "${extra:-}" ]] || fail "Malformed bundle checksum inventory. Download the bundle again."
-  case "$name" in start.sh|release-images.sh|compose.yaml|README.md|LICENSE|NOTICE|VERSION) ;; *) fail "Unexpected bundle checksum entry." ;; esac
+  case "$name" in start.sh|prepare-offline.sh|release-images.sh|verify-release.sh|compose.yaml|README.md|LICENSE|NOTICE|VERSION) ;; *) fail "Unexpected bundle checksum entry." ;; esac
   [[ -z "${seen[$name]:-}" && -f "$name" && ! -L "$name" ]] || fail "Missing, repeated or linked bundle file: $name"
   seen[$name]=1
 done < SHA256SUMS
-[[ ${#seen[@]} == 7 ]] || fail "The preview bundle is incomplete. Download it again."
+[[ ${#seen[@]} == 9 ]] || fail "The preview bundle is incomplete. Download it again."
 sha256sum --check --strict SHA256SUMS >/dev/null || fail "Preview bundle checksum failed. Download it again."
 version="$(cat VERSION)"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail "Invalid bundled version."

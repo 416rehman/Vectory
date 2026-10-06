@@ -4,6 +4,18 @@ const tabs = [...document.querySelectorAll('[role="tab"][data-step]')];
 const panels = [...document.querySelectorAll('[role="tabpanel"][data-step-panel]')];
 const flowPoints = [...document.querySelectorAll('.flow-point')];
 
+for (const menu of document.querySelectorAll('.tools-menu')) {
+  document.addEventListener('pointerdown', (event) => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+  menu.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && menu.open) {
+      menu.open = false;
+      menu.querySelector('summary').focus();
+    }
+  });
+}
+
 function selectStep(index, focus = false) {
   if (index < 0 || index >= tabs.length) return;
   const step = tabs[index].dataset.step;

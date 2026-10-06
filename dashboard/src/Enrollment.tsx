@@ -780,8 +780,7 @@ export function Enrollment({
 
   const operate = can(user, "operate");
   const winRelease = install ? releaseFor(install, "windows", "amd64") : null;
-  const installCommand =
-    install && os !== "windows" ? installerCommand(install, choices) : null;
+  const installCommand = install ? installerCommand(install, choices) : null;
   const manualCommand = install ? setupCommand(install, choices) : null;
   const windows =
     install && winRelease ? windowsCommand(install, choices, winRelease) : null;
@@ -1362,8 +1361,8 @@ export function Enrollment({
               ) : (
                 <p className="control-muted">
                   {os === "windows"
-                    ? "You'll download the agent, check its SHA-256 and run setup from an elevated PowerShell."
-                    : "The command downloads the installer, checks it against the SHA-256 shown here and runs it with sudo. Setup then asks for the enrollment token on the terminal."}
+                    ? "Run one command in PowerShell as Administrator. It downloads and verifies the installer and agent, then asks for the enrollment token."
+                    : "Run one command in Terminal. It downloads and verifies the installer and agent, then asks for the enrollment token."}
                 </p>
               )}
               {error && <ErrorBox message={error} />}
@@ -1456,7 +1455,18 @@ export function Enrollment({
             </div>
           ) : (
             <>
-              {shownOs === "windows" ? (
+              {shownInstallCommand && !shownNoDownload ? (
+                <CommandBlock
+                  command={shownInstallCommand}
+                  label={
+                    shownOs === "windows"
+                      ? "Windows install command"
+                      : "Install command"
+                  }
+                  focus={focusCommand}
+                  onFocused={commandFocused}
+                />
+              ) : shownOs === "windows" ? (
                 shownWinRelease && shownWindowsCommand ? (
                   <>
                     <p className="control-muted">
@@ -1493,13 +1503,6 @@ export function Enrollment({
                     />
                   </>
                 ) : null
-              ) : shownInstallCommand && !shownNoDownload ? (
-                <CommandBlock
-                  command={shownInstallCommand}
-                  label="Install command"
-                  focus={focusCommand}
-                  onFocused={commandFocused}
-                />
               ) : shownManualCommand ? (
                 <>
                   <p className="control-muted">

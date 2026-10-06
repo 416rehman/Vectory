@@ -129,6 +129,7 @@ function Designer() {
   const [format, setFormat] = useState<ConfigurationFormat>("yaml");
   const [name, setName] = useState("vector");
   const [view, setView] = useState<"details" | "code">("details");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [selection, setSelection] = useState<
     { type: "node" | "edge"; id: string } | undefined
   >();
@@ -150,6 +151,26 @@ function Designer() {
   const flow = useRef<ReactFlowInstance<any, any> | null>(null);
   const detailsTab = useRef<HTMLButtonElement>(null);
   const codeTab = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const guide = document.querySelector<HTMLDetailsElement>(".designer-guide");
+    function dismissGuide(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape" && guide?.open) {
+        guide.open = false;
+        guide.querySelector<HTMLElement>("summary")?.focus();
+      }
+    }
+    function outsideGuide(event: PointerEvent) {
+      if (guide?.open && !guide.contains(event.target as Node))
+        guide.open = false;
+    }
+    document.addEventListener("keydown", dismissGuide);
+    document.addEventListener("pointerdown", outsideGuide);
+    return () => {
+      document.removeEventListener("keydown", dismissGuide);
+      document.removeEventListener("pointerdown", outsideGuide);
+    };
+  }, []);
 
   useEffect(() => {
     const dialog = importDialog.current;
@@ -284,6 +305,7 @@ function Designer() {
     if (!next) return;
     event.preventDefault();
     setView(next);
+    setInspectorOpen(true);
     (next === "details" ? detailsTab : codeTab).current?.focus();
   }
 
@@ -298,6 +320,7 @@ function Designer() {
     if (codeDirty) {
       setNotice("Apply or discard your code edits before changing the graph.");
       setView("code");
+      setInspectorOpen(true);
       return false;
     }
     if (
@@ -363,6 +386,7 @@ function Designer() {
       setName(fileName.replace(/\.(yaml|yml|json|toml)$/i, "") || "vector");
       setSelection(undefined);
       setView("details");
+      setInspectorOpen(false);
       setImportError("");
       setImportOpen(false);
       setNotice(
@@ -489,6 +513,7 @@ function Designer() {
   function exportFile() {
     if (codeDirty) {
       setView("code");
+      setInspectorOpen(true);
       setNotice("Apply or discard your code edits before exporting.");
       return;
     }
@@ -538,6 +563,7 @@ function Designer() {
     if (replaceConfig(next, { type: "node", id }, true)) {
       setAddOpen(false);
       setView("details");
+      setInspectorOpen(true);
     }
   }
 
@@ -589,13 +615,6 @@ function Designer() {
     >
       <div className="designer-toolbar">
         <div className="designer-toolbar-lead">
-          <img
-            className="designer-toolbar-mark"
-            src="/designer/favicon.svg"
-            alt=""
-            width="34"
-            height="34"
-          />
           <div>
             <strong>Configuration workspace</strong>
             <small>Local to this browser tab</small>
@@ -694,11 +713,13 @@ function Designer() {
               onNodeClick={(_event, node) => {
                 setSelection({ type: "node", id: node.id });
                 setView("details");
+                setInspectorOpen(true);
               }}
               onEdgeClick={(_event, edge) => {
                 if (!edge.id.startsWith("pattern:")) {
                   setSelection({ type: "edge", id: edge.id });
                   setView("details");
+                  setInspectorOpen(true);
                 }
               }}
               onPaneClick={() => setSelection(undefined)}
@@ -732,7 +753,13 @@ function Designer() {
                   per component.
                 </p>
                 <div>
-                  <button type="button" onClick={() => setView("code")}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView("code");
+                      setInspectorOpen(true);
+                    }}
+                  >
                     Open Code
                   </button>
                 </div>
@@ -772,45 +799,65 @@ function Designer() {
         </div>
         <aside
           className="designer-inspector"
+          data-inspector-open={inspectorOpen}
           aria-label="Configuration inspector"
         >
-          <div
-            className="designer-inspector-tabs"
-            role="tablist"
-            aria-label="Inspector view"
-          >
-            <button
-              type="button"
-              ref={detailsTab}
-              id="designer-details-tab"
-              role="tab"
-              aria-controls="designer-details-panel"
-              aria-selected={view === "details"}
-              tabIndex={view === "details" ? 0 : -1}
-              onKeyDown={inspectorTabKeyDown}
-              onClick={() => setView("details")}
+          <div className="designer-inspector-bar">
+            <div
+              className="designer-inspector-tabs"
+              role="tablist"
+              aria-label="Inspector view"
             >
-              Details
-            </button>
+              <button
+                type="button"
+                ref={detailsTab}
+                id="designer-details-tab"
+                role="tab"
+                aria-controls="designer-details-panel"
+                aria-selected={view === "details"}
+                tabIndex={view === "details" ? 0 : -1}
+                onKeyDown={inspectorTabKeyDown}
+                onClick={() => {
+                  setView("details");
+                  setInspectorOpen(true);
+                }}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                ref={codeTab}
+                id="designer-code-tab"
+                role="tab"
+                aria-controls="designer-code-panel"
+                aria-selected={view === "code"}
+                tabIndex={view === "code" ? 0 : -1}
+                onKeyDown={inspectorTabKeyDown}
+                onClick={() => {
+                  setView("code");
+                  setInspectorOpen(true);
+                }}
+              >
+                <Code2 size={15} />
+                Code
+                {codeDirty && (
+                  <span
+                    className="designer-unsaved-dot"
+                    aria-label="Unapplied edits"
+                  />
+                )}
+              </button>
+            </div>
             <button
+              className="designer-inspector-close"
               type="button"
-              ref={codeTab}
-              id="designer-code-tab"
-              role="tab"
-              aria-controls="designer-code-panel"
-              aria-selected={view === "code"}
-              tabIndex={view === "code" ? 0 : -1}
-              onKeyDown={inspectorTabKeyDown}
-              onClick={() => setView("code")}
+              aria-label="Collapse inspector"
+              onClick={() => {
+                setInspectorOpen(false);
+                (view === "code" ? codeTab : detailsTab).current?.focus();
+              }}
             >
-              <Code2 size={15} />
-              Code
-              {codeDirty && (
-                <span
-                  className="designer-unsaved-dot"
-                  aria-label="Unapplied edits"
-                />
-              )}
+              <X size={17} />
             </button>
           </div>
           {view === "details" ? (
@@ -835,7 +882,13 @@ function Designer() {
                       This file is larger than the graph display limit. Open
                       Code to inspect, edit, and export the complete source.
                     </p>
-                    <button type="button" onClick={() => setView("code")}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setView("code");
+                        setInspectorOpen(true);
+                      }}
+                    >
                       <Code2 size={16} />
                       Open Code
                     </button>
@@ -889,7 +942,13 @@ function Designer() {
                       </p>
                     )}
                     <div className="designer-detail-footer">
-                      <button type="button" onClick={() => setView("code")}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setView("code");
+                          setInspectorOpen(true);
+                        }}
+                      >
                         <Braces size={15} />
                         Edit full configuration
                       </button>

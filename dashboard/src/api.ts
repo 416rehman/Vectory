@@ -1803,6 +1803,14 @@ export const AgentInstallSchema = z.object({
       platforms: z.array(z.string()),
     })
     .nullable(),
+  windows_installer: z
+    .object({
+      url: z.string(),
+      sha256: sha256Hex,
+      platforms: z.array(z.string()),
+    })
+    .nullable()
+    .optional(),
   default_install_dir: z.string(),
   releases: z.array(ReleaseSchema).max(100),
   catalog_problems: z.array(z.string()).max(200),

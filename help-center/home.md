@@ -9,9 +9,9 @@ next: false
 <p class="home-lead">Build a pipeline. Roll it out safely. Know what to do when something goes wrong.</p>
 
 <div class="help-paths">
-<a href="/help/quickstart/"><strong>Try Vectory →</strong><span>Start the prebuilt Docker preview, then connect a test device.</span></a>
+<a href="/help/quickstart/"><strong>Start Vectory →</strong><span>Run one guided server command, then connect your first device.</span></a>
 <a href="/help/getting-started/"><strong>Understand Vectory →</strong><span>How the server, agents and Vector fit together, in two minutes.</span></a>
-<a href="/help/installation/"><strong>Connect a device →</strong><span>Install the agent on Linux and macOS with one command, or on Windows from PowerShell.</span></a>
+<a href="/help/installation/"><strong>Connect a device →</strong><span>Copy one verified install command for Linux, macOS or Windows.</span></a>
 <a href="/help/pipelines/"><strong>Build pipelines →</strong><span>Work with the graph, component settings, VRL and tests.</span></a>
 <a href="/help/deployments/"><strong>Deploy with confidence →</strong><span>Versions, targets, canaries, schedules and rollback.</span></a>
 <a href="/help/troubleshooting/"><strong>Fix a problem →</strong><span>Offline devices, rejected versions and missing data.</span></a>
@@ -29,4 +29,4 @@ next: false
 
 ## About these guides
 
-These docs describe the **Vectory 0.1.1 developer preview** with **Vector 0.58.0**. They ship with your server, search included, so they work offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than the one you run. Every page is also available as plain Markdown, and [llms.txt](/help/llms.txt) lists them all for AI tools.
+These docs describe **Vectory 0.2.0** with **Vector 0.58.0**. They ship with your server, search included, so they work offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than the one you run. Every page is also available as plain Markdown, and [llms.txt](/help/llms.txt) lists them all for AI tools.

@@ -374,8 +374,10 @@ export function installerRun(
   head: string[],
   tail: string[],
 ): string | null {
+  if (choices.os === "windows")
+    return windowsInstallerRun(install, choices, [...head, ...tail]);
   const { installer, agent_url: origin } = install;
-  if (choices.os === "windows" || !installer || !origin) return null;
+  if (!installer || !origin) return null;
   return unlessUnquotable(() => {
     const trust = effectiveTrust(install, choices.trust);
     const steps: string[] = [
@@ -422,6 +424,67 @@ export function installerRun(
     // Each step's first line is indented; a certificate's own lines stay as
     // they are, inside their quotes.
     return ["(", ...steps.map((step) => `  ${step}`), ")"].join("\n");
+  });
+}
+
+/** Windows uses the same download, check, setup flow, without a manual save.
+ * Both PowerShell 5.1 and 7 create the temporary directory with a private ACL
+ * before writing any file. No enrollment token enters the command or URL. */
+export function windowsInstallerRun(
+  install: AgentInstall,
+  choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
+  args: string[],
+): string | null {
+  const installer = install.windows_installer;
+  const origin = install.agent_url;
+  if (!installer || !origin) return null;
+  return unlessUnquotable(() => {
+    const trust = effectiveTrust(install, choices.trust);
+    const steps = [
+      "& {",
+      "  $ErrorActionPreference = 'Stop'",
+      "  $taskTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)",
+      "  $dir = Join-Path $taskTempRoot ('vectory-' + [Guid]::NewGuid().ToString('N'))",
+      "  $acl = New-Object Security.AccessControl.DirectorySecurity",
+      "  $acl.SetAccessRuleProtection($true, $false)",
+      "  $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User",
+      "  $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')",
+      "  $acl.AddAccessRule($rule)",
+      "  if ($PSVersionTable.PSEdition -eq 'Desktop') { [IO.Directory]::CreateDirectory($dir, $acl) | Out-Null } else { [IO.FileSystemAclExtensions]::CreateDirectory($acl, $dir) | Out-Null }",
+      "  try {",
+      "    $script = Join-Path $dir 'vectory-install.ps1'",
+    ];
+    const curlTrust: string[] = [];
+    if (trust === "pinned") {
+      const pem = install.certificate?.ca_pem?.trimEnd();
+      if (!pem) return null;
+      if (!pemText.test(pem)) throw new CommandValueError("control");
+      steps.push(
+        "    $ca = Join-Path $dir 'vectory-ca.pem'",
+        `    [IO.File]::WriteAllText($ca, '${pem}', (New-Object Text.UTF8Encoding($false)))`,
+      );
+      curlTrust.push("--cacert $ca --ssl-revoke-best-effort");
+    } else if (trust === "file") {
+      const file = choices.caFile?.trim();
+      if (!file) return null;
+      curlTrust.push(`--cacert ${quote(file, "windows")} --ssl-revoke-best-effort`);
+    }
+    const setupTrust =
+      trust === "pinned" ? [] : trustArguments(install, choices)!;
+    steps.push(
+      `    curl.exe --fail --silent --show-error --proto '=https' --tlsv1.3 --connect-timeout 20 --max-time 120 --max-filesize 131072 ${curlTrust.join(" ")} --output $script ${quote(`${origin}/agent/v1/install.ps1`, "windows")}`,
+      "    if ($LASTEXITCODE -ne 0) { throw 'Could not download the installer. Check the server address and certificate trust.' }",
+      `    if ((Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash -ne '${sha256Text(installer.sha256)}') { throw 'Installer checksum did not match. Copy a fresh command from Add device.' }`,
+      `    powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script ${[...args, ...setupTrust].join(" ")}`,
+      "    if ($LASTEXITCODE -ne 0) { throw ('Agent setup failed with exit code ' + $LASTEXITCODE) }",
+      "  } finally {",
+      "    $resolved = [IO.Path]::GetFullPath($dir)",
+      "    if ([IO.Path]::GetDirectoryName($resolved) -ne $taskTempRoot -or [IO.Path]::GetFileName($resolved) -notmatch '^vectory-[0-9a-f]{32}$') { throw 'Refusing cleanup outside the installer temporary directory.' }",
+      "    Remove-Item -LiteralPath $resolved -Recurse -Force",
+      "  }",
+      "}",
+    );
+    return steps.join("\n");
   });
 }
 

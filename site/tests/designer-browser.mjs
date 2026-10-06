@@ -13,6 +13,7 @@ const output = path.join(root, "site/dist");
 const captures = path.join(root, ".local/site-browser");
 const require = createRequire(path.join(root, "dashboard/package.json"));
 const { chromium, expect } = require("@playwright/test");
+const AxeBuilder = require("@axe-core/playwright").default;
 const mime = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -112,10 +113,46 @@ try {
     );
   }
 
+  async function fillsViewport() {
+    assert(await page.evaluate(() => {
+      const tool = document.querySelector('.standalone-designer').getBoundingClientRect();
+      return tool.left === 0 && Math.abs(tool.right - innerWidth) <= 1 && Math.abs(tool.bottom - innerHeight) <= 1 && document.documentElement.scrollHeight <= innerHeight;
+    }), 'Designer should fill the viewport without a marketing intro or body scrolling');
+  }
+  async function accessible() {
+    const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+    assert.deepEqual(result.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)})), [], 'Page has accessibility violations');
+  }
+
+  await page.goto(origin + "/");
+  const toolsMenu = page.locator('.tools-menu');
+  await toolsMenu.locator('summary').click();
+  await expect(toolsMenu.getByRole('link', { name: /Vector configuration designer/ })).toBeVisible();
+  await toolsMenu.locator('summary').press('Escape');
+  await expect(toolsMenu).not.toHaveAttribute('open', '');
+  await expect(page.locator('.hero .button-dark')).toHaveAttribute('href', '#start');
+  const heroImage = await page.locator('.hero-product').boundingBox();
+  assert(heroImage && heroImage.y > 0 && heroImage.y + heroImage.height < 1000, 'Actual product image must be visible in the desktop hero');
+  await noOverflow();
+  await accessible();
+  await page.screenshot({ path: path.join(captures, 'landing-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow();
+  await accessible();
+  await page.screenshot({ path: path.join(captures, 'landing-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
   await page.goto(origin + "/designer/");
   await expect(
     page.getByRole("button", { name: "Import", exact: true }),
   ).toBeVisible();
+  await fillsViewport();
+  await accessible();
+  const about = page.locator('.designer-guide');
+  await about.locator('summary').click();
+  await expect(page.getByRole('heading', { name: 'Visualize and generate Vector configurations.' })).toBeVisible();
+  await about.locator('summary').press('Escape');
+  await expect(about).not.toHaveAttribute('open', '');
   await page.getByRole("button", { name: "Example", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(3);
   await expect(page.getByRole("status")).toContainText("Synthetic example");
@@ -318,6 +355,13 @@ try {
     )
     .toBe(true);
   await noOverflow();
+  await fillsViewport();
+  await page.getByRole('tab', { name: 'Code', exact: true }).click();
+  await expect(page.locator('#designer-code-panel')).toBeVisible();
+  await page.getByRole('button', { name: 'Collapse inspector' }).click();
+  await expect(page.locator('#designer-code-panel')).toBeHidden();
+  await expect(page.locator('.designer-canvas')).toBeVisible();
+  await accessible();
   await page.screenshot({
     path: path.join(captures, "designer-mobile.png"),
     fullPage: true,

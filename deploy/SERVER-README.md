@@ -1,27 +1,44 @@
 # Run the Vectory server
 
-This kit runs the unsigned Vectory developer preview on Linux x86-64 using verified, prebuilt Docker images. No Git, language toolchain or source build is required.
-
-You need Docker Engine with Compose v2, a DNS name pointing at this host, and a TLS certificate/full-chain PEM plus its private key for that name. The host must permit dashboard traffic on port 443 and agent traffic on port 8443. If you just want to try the product without DNS or certificates, download the separate local preview kit instead.
+The guided installer starts the full manager, dashboard, TLS proxy and isolated Vector validator on a Linux x86-64 Docker host. You need Docker Engine with Compose v2, curl, a public DNS name pointing to this host and inbound TCP ports 80, 443 and 8443. No source checkout, language toolchain or separately installed Cosign is needed.
 
 ```sh
-./start.sh
+curl -fsSL --proto '=https' https://vectory.ahmadz.ai/install.sh -o vectory-install.sh
+bash vectory-install.sh
 ```
 
-The script downloads the matching server and validator images from the GitHub release and checks their SHA-256 before loading them. It asks for your DNS name, readable certificate/key files at absolute paths, and the address to listen on. It verifies that the key matches the certificate, the certificate names the selected host, and the certificate is valid. It copies those files into a private Docker volume, generates the first-administrator setup secret there, writes `.env`, and waits for every service to be healthy.
+Enter your server DNS name. The installer verifies the exact release's Sigstore checksum bundle using a pinned Cosign container before extracting the server kit. The kit authenticates immutable GHCR image references and their Cosign signatures before starting them. A missing or invalid signature stops installation.
 
-The script prints your dashboard URL and setup secret. Create the administrator in that browser page, then select **Add device**. Devices must trust the certificate's issuing CA. For a private CA, include its public certificate after the server certificate in the full-chain file and retain a trusted public copy on each device; never distribute the CA's private key. The script checks the supplied pair and hostname, but does not establish your CA's trust for browsers or devices.
+Open the printed HTTPS address, paste the private setup secret and create your first administrator. Select **Add device** to get the verified platform download and setup command for a host that already runs a supported Vector installation.
 
-All containers use non-root accounts and read-only root filesystems. The validator runs on a network without an internet route; the dashboard HTTP listener accepts only its own loopback and the TLS proxy. The proxy image is pinned to a digest and Docker downloads it on the first start. The database and the certificate files remain in named volumes `vectory_data` and `vectory_secrets`; back up both and protect access to Docker itself.
+## Certificates
+
+The default setup uses Caddy's automatic public HTTPS certificates for the dashboard. Caddy retains its account and certificate data and renews certificates automatically. DNS and ports 80/443 must remain reachable for ACME validation. The separate agent HTTPS listener uses a retained private issuer. The authenticated Add device flow pins its public certificate; users do not need to locate or upload a CA file. The certificate sidecar renews the 90-day listener certificate before its last 30 days, keeping the same private issuer and leaf key. The manager validates replacements before using them for new connections. Its private issuer lasts ten years and then requires a reviewed trust rotation.
+
+For private networks or existing certificates, keep the manually supplied PEM option:
 
 ```sh
+VECTORY_TLS_CERT_FILE=/absolute/server-fullchain.pem \
+VECTORY_TLS_KEY_FILE=/absolute/server-key.pem ./start.sh
+```
+
+Supply the DNS name and listen address when asked. This mode validates the key, hostname and certificate dates and retains the pair privately. You own renewal of supplied certificates; valid replacements are reloaded by the manager, and the TLS proxy must be restarted after renewal. Include a private issuing CA's public certificate after the leaf in a full-chain file. Never distribute any CA private key.
+
+## Retained state
+
+```sh
+cd vectory
 ./start.sh status
 ./start.sh stop
 ./start.sh
 ```
 
-Stop and resume retain the database, certificate and setup secret. If first setup is interrupted before `.env` is complete, run `./start.sh` again: its nonsecret `.setup.env` journal finishes setup with the retained certificate. Retain that journal until setup succeeds. The starter refuses to overwrite existing certificate state if an established installation's `.env` was lost; restore that file from your backup. It does not rotate a certificate automatically; the [server guide](https://vectory.ahmadz.ai/help/install-server/) covers certificate maintenance and the remaining configuration options.
+Stop and resume preserve the database, issuer, leaf key and setup secret. Protect Docker access and back up `vectory_data`, `vectory_secrets`, `vectory_caddy_data` and `vectory_caddy_config`, together with the installation directory's `.env`. A separate project can use `VECTORY_SERVER_PROJECT` consistently on every command. Do not recreate private trust to repair a browser certificate or lost `.env`; restore the original state from your backup.
 
-For an unattended first start, provide `VECTORY_HOSTNAME`, `VECTORY_TLS_CERT_FILE`, `VECTORY_TLS_KEY_FILE` and `VECTORY_BIND_IP` as environment variables. For a separate instance, use `VECTORY_SERVER_PROJECT` consistently on every command. After a successful start, retain `.cache` and the loaded images to restart offline; the starter rechecks the image archives against its retained release inventory. For an offline first start, use `VECTORY_PREVIEW_RELEASE_DIR=/absolute/path/to/release` with both image archives and their release `SHA256SUMS`; pre-load the pinned proxy image too.
+For a first installation without internet access, run `./prepare-offline.sh /absolute/path/vectory-offline` from the verified kit on a connected Linux x86-64 Docker host. Preparation authenticates the real release, downloads its signed image archives and retains the pinned verifier, HTTPS proxy and independently verified Sigstore trust root. It does not start a manager. Transfer the complete output directory through a trusted channel. On the offline host, run `VECTORY_OFFLINE=true VECTORY_CERTIFICATE_MODE=custom ./start.sh` and supply your HTTPS certificate pair. The loader verifies the signed archive checksums and exact local image identities, and Compose refuses network pulls.
 
-This release is unsigned. Its checksums detect corruption and bind downloads to the published inventory; they do not establish a separate publisher signing identity. Review [platform coverage](https://vectory.ahmadz.ai/help/compatibility/) before relying on it. No download or file write is reported as a device activation: the enrolled agent must validate and run the pipeline before a device reports **Applied**.
+After a verified online start, `VECTORY_OFFLINE=true ./start.sh` also reuses the retained verification cache and exact local image identities. Retain `.cache` and all Docker images. Public ACME renewal still needs internet access; private/offline networks should use the supplied-certificate mode. `VECTORY_RELEASE_DIR=/absolute/release-folder` can provide signed release inventory files without public downloads; it never bypasses signature verification. A checksum copy alone does not establish Sigstore root trust.
+
+All containers run without root and with read-only root filesystems. The validator has no internet route. The native agent listener and the proxy are separate trust boundaries; HTTP accepts only the proxy and loopback. No download or file write is device activation: the enrolled agent must validate and run the pipeline before reporting **Applied**.
+
+Sigstore authentication is separate from Windows Authenticode or Apple Developer ID/notarization. Consult the release's `RELEASE.json`, vulnerability reports and [tested platform coverage](https://vectory.ahmadz.ai/help/compatibility/) before rollout. Release signing does not make a workload or operating system universally safe.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -37,21 +38,46 @@ func TestHelpAndVersionWorkBeforeTheCompatibilityForm(t *testing.T) {
 		}
 	}
 	// Examples teach download, check, run: never piping a script into a shell.
-	if _, stdout, _ := invoke("help"); strings.Contains(stdout, "| sudo sh") || !strings.Contains(stdout, "sha256sum -c -") {
-		t.Fatalf("help examples:\n%s", stdout)
-	}
-	if _, stdout, _ := invoke("help", "setup"); strings.Contains(stdout, "| sudo sh") || !strings.Contains(stdout, "sudo sh vectory-install.sh") {
-		t.Fatalf("setup examples:\n%s", stdout)
-	}
-	// ...in a directory only the person running them can enter, over https only,
-	// so nobody else on the host can swap a file between the check and the run.
 	for _, topic := range []string{"", "setup"} {
 		args := []string{"help"}
 		if topic != "" {
 			args = append(args, topic)
 		}
-		if _, stdout, _ := invoke(args...); !strings.Contains(stdout, `cd "$(mktemp -d)"`) || !strings.Contains(stdout, "--proto '=https' --proto-redir '=https'") {
-			t.Fatalf("%v examples don't keep their files private:\n%s", args, stdout)
+		_, stdout, _ := invoke(args...)
+		if strings.Contains(stdout, "| sudo sh") || strings.Contains(stdout, "Invoke-Expression") {
+			t.Fatalf("%v runs an unverified download:\n%s", args, stdout)
+		}
+		if runtime.GOOS == "windows" {
+			if !strings.Contains(stdout, "Get-FileHash -LiteralPath") || !strings.Contains(stdout, `-File .\vectory-install.ps1`) {
+				t.Fatalf("%v lacks Windows checksum/setup instructions:\n%s", args, stdout)
+			}
+		} else {
+			// Unix staging is private and download trust is explicit.
+			if !strings.Contains(stdout, `cd "$(mktemp -d)"`) || !strings.Contains(stdout, "--proto '=https' --proto-redir '=https'") {
+				t.Fatalf("%v examples don't keep their files private:\n%s", args, stdout)
+			}
+			checksum := "sha256sum -c -"
+			if runtime.GOOS == "darwin" {
+				checksum = "shasum -a 256 -c -"
+			}
+			if !strings.Contains(stdout, checksum) || !strings.Contains(stdout, "sudo sh vectory-install.sh --create-user") {
+				t.Fatalf("%v lacks this platform's checksum/setup instructions:\n%s", args, stdout)
+			}
+		}
+	}
+}
+
+func TestSetupExamplesUseTheHostPlatform(t *testing.T) {
+	for _, platform := range []string{"linux", "darwin", "windows"} {
+		text := strings.Join(setupExamples(platform), "\n")
+		if platform == "windows" {
+			if strings.Contains(text, "sudo") || strings.Contains(text, "mktemp") || !strings.Contains(text, "Get-FileHash") || !strings.Contains(text, "PowerShell as administrator") {
+				t.Fatalf("Windows examples need translation:\n%s", text)
+			}
+		} else if platform == "darwin" {
+			if strings.Contains(text, "sha256sum") || !strings.Contains(text, "shasum -a 256 -c -") {
+				t.Fatalf("macOS examples require a nonstandard checksum program:\n%s", text)
+			}
 		}
 	}
 }

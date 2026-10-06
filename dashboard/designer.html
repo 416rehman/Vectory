@@ -11,18 +11,20 @@
     />
     <meta
       name="description"
-      content="Design a Vector pipeline or visualize an existing YAML, JSON, or TOML configuration. Explore connections, edit components, and export the result in your browser with Vectory."
+      content="Visualize Vector configs or generate a pipeline. Import YAML, JSON or TOML, edit sources and transforms, then export. Free, private and browser-based."
     />
     <link rel="canonical" href="https://vectory.ahmadz.ai/designer/" />
     <link rel="icon" href="/designer/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/favicons/icon-180.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <title>Vector configuration designer and visualizer | Vectory</title>
+    <title>
+      Vector configuration visualizer and pipeline designer | Vectory
+    </title>
     <meta property="og:type" content="website" />
     <meta
       property="og:title"
-      content="Vector configuration designer and visualizer | Vectory"
+      content="Vector configuration visualizer and pipeline designer | Vectory"
     />
     <meta
       property="og:description"
@@ -43,7 +45,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="Vector configuration designer and visualizer | Vectory"
+      content="Vector configuration visualizer and pipeline designer | Vectory"
     />
     <meta
       name="twitter:description"
@@ -69,6 +71,12 @@
         "operatingSystem": "Any operating system with a modern browser",
         "browserRequirements": "Requires JavaScript",
         "isAccessibleForFree": true,
+        "featureList": [
+          "Visualize Vector YAML, JSON and TOML configurations",
+          "Generate Vector pipelines from sources, transforms and sinks",
+          "Import and edit existing configuration files",
+          "Export configuration locally without an account"
+        ],
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
         "publisher": {
@@ -89,28 +97,120 @@
           height="29"
         />Vectory</a
       >
+      <div class="designer-page-title">
+        <h1>Vector configuration designer</h1>
+        <span>Create, import, visualize and export</span>
+      </div>
       <nav aria-label="Site navigation">
-        <a href="/help/">Docs</a
-        ><a href="https://github.com/416rehman/Vectory">GitHub</a>
+        <a href="/help/pipelines/">Docs</a><a href="/#start">Install Vectory</a>
       </nav>
     </header>
     <main id="main">
-      <section class="designer-intro" aria-labelledby="designer-title">
-        <p class="designer-kicker">The open Vector canvas</p>
-        <h1 id="designer-title">Vector configuration, <em>made visual.</em></h1>
-        <p>
-          Create a Vector configuration from an empty canvas, or import YAML,
-          JSON, or TOML and see how sources, transforms, and destinations
-          connect. Edit a component, draw a connection, then export the
-          configuration when you are ready.
-        </p>
-        <p class="designer-intro-note">
-          This tool works entirely in your browser. It does not upload or
-          automatically save configurations. Local checks cannot replace
-          validation by the installed Vector binary.
-        </p>
-      </section>
       <div id="designer-app"></div>
+      <details class="designer-guide" id="designer-about">
+        <summary>About this tool</summary>
+        <div class="designer-guide-content">
+          <section class="designer-intro" aria-labelledby="designer-title">
+            <p class="designer-kicker">The open Vector canvas</p>
+            <h2 id="designer-title">
+              Visualize and generate Vector configurations.
+            </h2>
+            <p>
+              Create a Vector configuration from an empty canvas, or import
+              YAML, JSON, or TOML and see how sources, transforms, and
+              destinations connect. Edit a component, draw a connection, then
+              export the configuration when you are ready.
+            </p>
+            <p class="designer-intro-note">
+              This tool works entirely in your browser. It does not upload or
+              automatically save configurations. Local checks cannot replace
+              validation by the installed Vector binary.
+            </p>
+          </section>
+          <section class="designer-explainer" aria-labelledby="designer-how">
+            <h2 id="designer-how">From a file to a flow you can understand.</h2>
+            <div>
+              <p>
+                <strong>Start or import.</strong> Begin with a blank
+                configuration, open the labeled synthetic example, paste code,
+                or choose a local file up to 1 MiB.
+              </p>
+              <p>
+                <strong>Trace and edit.</strong> Inspect the components and
+                connections that make up your pipeline. The code view keeps
+                every supported unknown setting available for direct editing.
+              </p>
+              <p>
+                <strong>Export deliberately.</strong> Download YAML, JSON, or
+                TOML for your own Vector environment. Nothing on this page
+                publishes a configuration or activates a device.
+              </p>
+            </div>
+          </section>
+          <section
+            class="designer-explainer designer-faq"
+            aria-labelledby="designer-faq-heading"
+          >
+            <h2 id="designer-faq-heading">A few things to know.</h2>
+            <div>
+              <article>
+                <h3>Can I use an existing Vector configuration?</h3>
+                <p>
+                  Yes. Import a local YAML, JSON or TOML file, or paste its
+                  code. Sources, transforms and destinations appear on the
+                  canvas. Unknown settings stay in the configuration. Exporting
+                  without editing preserves the original text, including
+                  comments.
+                </p>
+              </article>
+              <article>
+                <h3>Does the tool send my configuration anywhere?</h3>
+                <p>
+                  No. Parsing and editing happen in this tab. The tool has no
+                  upload API or automatic storage. Export before closing or
+                  reloading the page to keep your changes.
+                </p>
+              </article>
+              <article>
+                <h3>Can I run the exported file without Vectory?</h3>
+                <p>
+                  Yes. It is a Vector configuration. Local checks use the Vector
+                  0.58 catalog; they do not execute VRL, access your host, or
+                  validate the full runtime. Check the file with your installed
+                  Vector binary before using it. See the
+                  <a href="https://vector.dev/docs/reference/configuration/"
+                    >Vector configuration reference</a
+                  >.
+                </p>
+              </article>
+            </div>
+          </section>
+          <section
+            class="designer-next"
+            aria-labelledby="designer-next-heading"
+          >
+            <div>
+              <h2 id="designer-next-heading">
+                Take your pipeline to your fleet.
+              </h2>
+              <p>
+                Export your configuration, then import it into your own Vectory
+                server to check it, release a version, and choose which devices
+                run it.
+              </p>
+            </div>
+            <a href="/#start"
+              >Install Vectory <span aria-hidden="true">&#8599;</span></a
+            >
+          </section>
+          <footer class="designer-site-footer">
+            <a href="/help/">Documentation</a
+            ><a href="/help/compatibility/">Compatibility and limits</a
+            ><a href="/NOTICE.txt">Notices</a
+            ><a href="https://github.com/416rehman/Vectory">Source code</a>
+          </footer>
+        </div>
+      </details>
       <noscript
         ><section class="designer-noscript">
           <h2>JavaScript is needed for the interactive designer</h2>
@@ -123,84 +223,7 @@
           </p>
         </section></noscript
       >
-      <section class="designer-explainer" aria-labelledby="designer-how">
-        <h2 id="designer-how">From a file to a flow you can understand.</h2>
-        <div>
-          <p>
-            <strong>Start or import.</strong> Begin with a blank configuration,
-            open the labeled synthetic example, paste code, or choose a local
-            file up to 1 MiB.
-          </p>
-          <p>
-            <strong>Trace and edit.</strong> Inspect the components and
-            connections that make up your pipeline. The code view keeps every
-            supported unknown setting available for direct editing.
-          </p>
-          <p>
-            <strong>Export deliberately.</strong> Download YAML, JSON, or TOML
-            for your own Vector environment. Nothing on this page publishes a
-            configuration or activates a device.
-          </p>
-        </div>
-      </section>
-      <section
-        class="designer-explainer designer-faq"
-        aria-labelledby="designer-faq-heading"
-      >
-        <h2 id="designer-faq-heading">A few things to know.</h2>
-        <div>
-          <article>
-            <h3>Can I use an existing Vector configuration?</h3>
-            <p>
-              Yes. Import a local YAML, JSON or TOML file, or paste its code.
-              Sources, transforms and destinations appear on the canvas. Unknown
-              settings stay in the configuration. Exporting without editing
-              preserves the original text, including comments.
-            </p>
-          </article>
-          <article>
-            <h3>Does the tool send my configuration anywhere?</h3>
-            <p>
-              No. Parsing and editing happen in this tab. The tool has no upload
-              API or automatic storage. Export before closing or reloading the
-              page to keep your changes.
-            </p>
-          </article>
-          <article>
-            <h3>Can I run the exported file without Vectory?</h3>
-            <p>
-              Yes. It is a Vector configuration. Local checks use the Vector
-              0.58 catalog; they do not execute VRL, access your host, or
-              validate the full runtime. Check the file with your installed
-              Vector binary before using it. See the
-              <a href="https://vector.dev/docs/reference/configuration/"
-                >Vector configuration reference</a
-              >.
-            </p>
-          </article>
-        </div>
-      </section>
-      <section class="designer-next" aria-labelledby="designer-next-heading">
-        <div>
-          <h2 id="designer-next-heading">Take your pipeline to your fleet.</h2>
-          <p>
-            Export your configuration, then import it into your own Vectory
-            server to check it, release a version, and choose which devices run
-            it.
-          </p>
-        </div>
-        <a href="/#start"
-          >Install Vectory <span aria-hidden="true">&#8599;</span></a
-        >
-      </section>
     </main>
-    <footer class="designer-site-footer">
-      <span>Vectory 0.1.1 unsigned developer preview</span
-      ><a href="/help/">Documentation</a
-      ><a href="/help/compatibility/">Compatibility and limits</a
-      ><a href="/NOTICE.txt">Notices</a
-      ><a href="https://github.com/416rehman/Vectory">Source code</a>
-    </footer>
     <script type="module" src="/src/StandaloneDesigner.tsx"></script>
   </body>
 </html>
