@@ -467,7 +467,9 @@ export function windowsInstallerRun(
     } else if (trust === "file") {
       const file = choices.caFile?.trim();
       if (!file) return null;
-      curlTrust.push(`--cacert ${quote(file, "windows")} --ssl-revoke-best-effort`);
+      curlTrust.push(
+        `--cacert ${quote(file, "windows")} --ssl-revoke-best-effort`,
+      );
     }
     const setupTrust =
       trust === "pinned" ? [] : trustArguments(install, choices)!;

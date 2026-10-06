@@ -231,7 +231,7 @@ class Fixture:
         # whose original Docker-save tag is also vectory-server:candidate.
         for key, image in (("candidate", self.args.candidate_image), ("validator", self.args.validator_image)):
             inspected = json.loads(self.docker("image", "inspect", image))[0]
-            require(inspected["Config"].get("Labels", {}).get("org.opencontainers.image.source") == SOURCE, "Image source is not the Vectory repository")
+            require((inspected["Config"].get("Labels") or {}).get("org.opencontainers.image.source") == SOURCE, "Image source is not the Vectory repository")
             identities[key] = inspected["Id"]
         prior_tag = subprocess.run(["docker", "image", "inspect", "vectory-server:candidate"], capture_output=True, timeout=15)
         require(prior_tag.returncode == 0 or missing_resource(prior_tag), "Cannot verify the preexisting candidate tag")
@@ -242,7 +242,11 @@ class Fixture:
             self.docker("load", "--input", baseline, timeout=180)
             inspected = json.loads(self.docker("image", "inspect", "vectory-server:candidate"))[0]
             require(inspected["Id"] in baseline_ids, "Loaded baseline image does not match the published configuration/OCI identity")
-            require(inspected["Config"].get("Labels", {}).get("org.opencontainers.image.source") == SOURCE, "Baseline image source differs")
+            baseline_source = (inspected["Config"].get("Labels") or {}).get("org.opencontainers.image.source")
+            # The exact published 0.1.1 archive predates our OCI source label.
+            # Its immutable archive and image bindings above remain mandatory;
+            # only this known historical absence is accepted.
+            require(baseline_source is None or baseline_source == SOURCE, "Baseline image source differs")
             identities["baseline"] = self.old_image = inspected["Id"]
         finally:
             if prior_tag_id:
@@ -327,7 +331,7 @@ class Fixture:
         require(identity["device_id"] == self.credentials["device_id"], "Original mTLS credential lost authorization")
         final_check = self.request(f"/api/v1/configurations/{pipeline['id']}/validate", "POST", {"config": config})
         require(final_check["valid"] and final_check["vector_validated"] and not final_check["deferred"], "Candidate pipeline did not pass actual Vector validation")
-        return {"baseline_version": "0.1.1", "candidate_version": self.args.candidate_version, "baseline_archive_sha256": BASELINE_SHA, "images": identities, "synthetic": True, "administrator_and_session_retained": True, "draft_and_published_artifact_retained": True, "desired_and_policy_generation_retained": True, "durable_keys_sha256": keys_before, "original_mtls_identity_authorized": True, "manifest_signature_verified_with_original_key": True, "native_vector_validation_before_and_after": True, "backup_inventory_and_sqlite_verified": True, "backup_manifest_sha256": digest(backup / "manifest.json"), "device_id": self.credentials["device_id"], "pipeline_id": pipeline["id"], "version_id": version["id"], "deployment_id": deployment["id"], "host_service_installed": False, "vector_activation_attempted": False}
+        return {"baseline_version": "0.1.1", "candidate_version": self.args.candidate_version, "baseline_archive_sha256": BASELINE_SHA, "baseline_image_source_label": baseline_source, "candidate_image_source_label": SOURCE, "validator_image_source_label": SOURCE, "images": identities, "synthetic": True, "administrator_and_session_retained": True, "draft_and_published_artifact_retained": True, "desired_and_policy_generation_retained": True, "durable_keys_sha256": keys_before, "original_mtls_identity_authorized": True, "manifest_signature_verified_with_original_key": True, "native_vector_validation_before_and_after": True, "backup_inventory_and_sqlite_verified": True, "backup_manifest_sha256": digest(backup / "manifest.json"), "device_id": self.credentials["device_id"], "pipeline_id": pipeline["id"], "version_id": version["id"], "deployment_id": deployment["id"], "host_service_installed": False, "vector_activation_attempted": False}
 
     def cleanup(self):
         failures = []

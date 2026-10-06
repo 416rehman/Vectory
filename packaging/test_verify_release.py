@@ -23,6 +23,21 @@ spec.loader.exec_module(verifier)
 image_spec = importlib.util.spec_from_file_location("check_image_agents", Path(__file__).with_name("check-image-agents.py"))
 image_agents = importlib.util.module_from_spec(image_spec)
 image_spec.loader.exec_module(image_agents)
+starter_spec = importlib.util.spec_from_file_location("build_starters", Path(__file__).with_name("build-preview-bundle.py"))
+starter_builder = importlib.util.module_from_spec(starter_spec)
+starter_spec.loader.exec_module(starter_builder)
+
+
+class StarterBuildVerification(unittest.TestCase):
+    def test_actual_built_kits_match_the_verified_inventory_and_executable_modes(self):
+        with tempfile.TemporaryDirectory(prefix='vectory-actual-starter-contract-') as directory:
+            for kind in ('preview', 'server'):
+                with self.subTest(kind=kind):
+                    archive = starter_builder.build(Path(directory), kind)
+                    with tarfile.open(archive, 'r:gz') as source:
+                        version_member = next(member for member in source if member.name.endswith('/VERSION'))
+                        version = source.extractfile(version_member).read().decode().strip()
+                    verifier.required_starter_bundle(archive, version, kind)
 
 
 class ArchiveVerification(unittest.TestCase):
@@ -470,7 +485,7 @@ class CandidateVerification(unittest.TestCase):
             with tarfile.open(fileobj=stream, mode='w:gz') as archive:
                 for part, content in files.items():
                     member = tarfile.TarInfo(prefix + part)
-                    member.mode = 0o755 if part == 'start.sh' else 0o644
+                    member.mode = 0o755 if part in {'start.sh', 'prepare-offline.sh'} else 0o644
                     member.size = len(content)
                     archive.addfile(member, io.BytesIO(content))
             return stream.getvalue()
@@ -714,6 +729,12 @@ class CandidateVerification(unittest.TestCase):
     def test_preview_rejects_nonexecutable_starter(self):
         self.assertEqual(self.manifest()['inventory_status'], 'complete')
         self.rewrite_preview(mode_change=('start.sh', 0o644))
+        with self.assertRaisesRegex(ValueError, 'unsafe or unexpected preview member'):
+            verifier.candidate_inventory(self.root, require_status=False)
+
+    def test_preview_rejects_nonexecutable_offline_preparation(self):
+        self.assertEqual(self.manifest()['inventory_status'], 'complete')
+        self.rewrite_preview(mode_change=('prepare-offline.sh', 0o644))
         with self.assertRaisesRegex(ValueError, 'unsafe or unexpected preview member'):
             verifier.candidate_inventory(self.root, require_status=False)
 

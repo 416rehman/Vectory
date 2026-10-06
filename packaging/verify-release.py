@@ -483,7 +483,7 @@ def required_starter_bundle(path, version, kind):
                     limit = MAX_PREVIEW_NOTICE_BYTES if member.name == prefix + 'NOTICE' else MAX_PREVIEW_MEMBER_BYTES
                     if (member.name not in expected or member.name in members
                             or not member.isfile() or not 0 < member.size <= limit
-                            or member.mode != (0o755 if member.name == prefix + 'start.sh' else 0o644)):
+                            or member.mode != (0o755 if member.name in {prefix + 'start.sh', prefix + 'prepare-offline.sh'} else 0o644)):
                         raise ValueError(f'{path.name} has an unsafe or unexpected {kind} member: {member.name}')
                     contents = archive.extractfile(member)
                     if contents is None:

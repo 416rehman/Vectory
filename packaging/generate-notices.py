@@ -45,7 +45,7 @@ source: https://github.com/vectordotdev/vector/tree/v0.58.0
 Immutable source: https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728
 Vectory modifications and reproducible catalog inputs are available in
 vector-catalog/ and dashboard/src/generated/ in the matching Vectory source
-release: https://github.com/416rehman/Vectory/tree/v0.1.1
+release: https://github.com/416rehman/Vectory/tree/v0.2.0
 Individual component artwork source URLs and SHA-256 digests are retained in
 dashboard/src/assets/component-icons/provenance.json and below. Names/logos
 identify their respective services; no endorsement is asserted.

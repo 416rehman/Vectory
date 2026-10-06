@@ -915,23 +915,35 @@ try {
       const f = await fixture({
         platform: "Windows",
         width: 375,
-        install: agentInstall({ windows_installer: {
-          url: "https://vectory.example.test:8443/agent/v1/install.ps1",
-          sha256: "9".repeat(64),
-          platforms: ["windows/amd64"],
-        } }),
+        install: agentInstall({
+          windows_installer: {
+            url: "https://vectory.example.test:8443/agent/v1/install.ps1",
+            sha256: "9".repeat(64),
+            platforms: ["windows/amd64"],
+          },
+        }),
       });
       try {
         await f.createCommand();
-        const command = f.page.getByLabel("Windows install command", { exact: true });
+        const command = f.page.getByLabel("Windows install command", {
+          exact: true,
+        });
         await expect(command).toBeVisible();
         const text = await commandText(f.page);
         expect(text).toContain("/agent/v1/install.ps1");
-        expect(text).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass -File");
+        expect(text).toContain(
+          "powershell.exe -NoProfile -ExecutionPolicy Bypass -File",
+        );
         expect(text).toContain("--ssl-revoke-best-effort");
         expect(text).not.toContain("--token");
-        await expect(f.page.getByRole("link", { name: /Download vectory\.exe/ })).toHaveCount(0);
-        expect(await f.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await expect(
+          f.page.getByRole("link", { name: /Download vectory\.exe/ }),
+        ).toHaveCount(0);
+        expect(
+          await f.page.evaluate(
+            () => document.documentElement.scrollWidth <= window.innerWidth,
+          ),
+        ).toBe(true);
       } finally {
         await f.context.close();
       }

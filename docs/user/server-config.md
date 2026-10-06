@@ -17,6 +17,7 @@ The table below describes the equivalent manual Compose settings. The contributo
 | `VECTORY_BOOTSTRAP_SECRET_FILE` | Required for manual source deployment | The server kit generates the one-time secret in its private volume automatically. |
 | `VECTORY_SERVER_PROJECT` | `vectory` | Compose project and private volume prefix for the prebuilt server kit. Keep the same value when stopping or resuming an instance. |
 | `VECTORY_BIND_IP` | `0.0.0.0` | Host address for 443 and 8443, and 80 in automatic HTTPS mode. |
+| `VECTORY_INSTALL_DIRECTORY` | `./vectory` | Empty destination for the downloaded server kit when running the website installer. Keep the completed kit for later starts and upgrades. |
 | `VECTORY_RELEASES_DIRECTORY` | `./releases` | Host folder mounted read-only as the server's agent download mirror. |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | `16384` | Passed to the server; see below. |
 | `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Passed to the server; see below. |
@@ -31,6 +32,7 @@ The prebuilt kits verify their image downloads and write these values themselves
 | --- | --- | --- |
 | `VECTORY_SERVER_IMAGE` | Server kit `.env` | Verified server image selected for this release. |
 | `VECTORY_VALIDATOR_IMAGE` | Server kit `.env` | Verified validator image selected for this release. |
+| `VECTORY_PROXY_IMAGE` | Server kit `.env` | Verified dashboard HTTPS proxy image. Guided setup preserves the authenticated selection. |
 | `VECTORY_SETUP_PROJECT` | Temporary server kit `.setup.env` | Project recorded while first setup completes, so an interrupted setup resumes with the same volumes. The starter removes the journal after setup. |
 | `VECTORY_PREVIEW_SERVER_IMAGE` | Preview kit `.preview.env` | Verified server image selected for the local preview. |
 | `VECTORY_PREVIEW_VALIDATOR_IMAGE` | Preview kit `.preview.env` | Verified validator image selected for the local preview. |
@@ -127,3 +129,5 @@ The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `nod
 `VECTORY_UPDATE_GOLDEN` is read only by the server's own tests: set to `1`, it rewrites the golden file of the release tests. It has no effect on a running server.
 
 `VECTORY_REQUEST_FIXTURES` is read only by the server's own tests, which then print query plans prefixed with `VECTORY_REQUEST_PLAN`. It has no effect on a running server.
+
+Release qualification uses `VECTORY_UNSIGNED_CANDIDATE=true` only for local CI artifacts before signing, with `VECTORY_PREVIEW_RELEASE_DIR` pointing to that workflow's artifact directory. These are maintainer test controls. Published installation verifies the signed release and does not use them.
