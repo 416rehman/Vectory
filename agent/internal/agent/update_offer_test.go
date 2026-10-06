@@ -73,7 +73,7 @@ func TestAnOfferIsVerifiedDownloadedAndStaged(t *testing.T) {
 	if rig.requests() != 1 {
 		t.Fatalf("the build was asked for %d times", rig.requests())
 	}
-	if !rig.said1("Downloading agent update 0.1.1") || !rig.said1("Agent update 0.1.1 ("+byteSize(int64(len(rig.build)))+") is staged. The update step applies it within a minute.") {
+	if !rig.said1("Downloading agent update "+rig.defaultVersion) || !rig.said1("Agent update "+rig.defaultVersion+" ("+byteSize(int64(len(rig.build)))+") is staged. The update step applies it within a minute.") {
 		t.Fatalf("the log said %q", rig.said)
 	}
 	// It is the service account's own: private files, in private directories.

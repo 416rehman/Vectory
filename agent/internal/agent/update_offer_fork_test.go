@@ -65,7 +65,7 @@ func (r *offerRig) offerFork() forkOf {
 func (r *offerRig) stepAnswers(fork forkOf, recorded bool) {
 	r.t.Helper()
 	r.step(func(s *UpdateStatus) {
-		s.Last = &UpdateLast{Release: r.releaseSHA, Outcome: UpdateOutcomeRefused, Code: "KEY_ROLLOVER_CONFLICT", At: time.Now().UTC().Truncate(time.Second), FromVersion: Version}
+		s.Last = &UpdateLast{Release: r.releaseSHA, Outcome: UpdateOutcomeRefused, Code: "KEY_ROLLOVER_CONFLICT", At: time.Now().UTC().Truncate(time.Second), FromVersion: r.e.State.Agent.Version}
 		if recorded {
 			s.RolloverConflict = fork.conflict(r.public)
 		}
@@ -144,7 +144,7 @@ func TestAForkIsRefusedAndHandedToTheUpdateStepAsEvidenceWithNoBuild(t *testing.
 	rig.requireEvidence(fork, 0)
 
 	// What `vectory update status` and `apply` read says there is no build to apply.
-	if staged := readStagedUpdate(rig.exchange()); staged == nil || staged.Complete || staged.ManifestSHA256 != rig.releaseSHA || staged.Version != "0.1.1" {
+	if staged := readStagedUpdate(rig.exchange()); staged == nil || staged.Complete || staged.ManifestSHA256 != rig.releaseSHA || staged.Version != rig.defaultVersion {
 		t.Fatalf("what the host's own commands read of it: %+v", staged)
 	}
 
@@ -307,8 +307,8 @@ func TestAForkReplacesWhatWasStagedForAnotherOffer(t *testing.T) {
 	fork := rig.newFork()
 	rig.build = append(bytes.Clone(rig.build), "next"...)
 	rig.release(func(m *ReleaseManifest) {
-		m.Version, m.Counter = "0.1.2", 8
-		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, "0.1.2")}
+		m.Version, m.Counter = rig.followingVersion, 8
+		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, rig.followingVersion)}
 	})
 	rig.offer(rig.manifest, rig.signatures, fork.statements)
 	rig.poll()
@@ -339,8 +339,8 @@ func TestOnceTheStepHasRecordedAForkALaterOfferWithOneStatementIsRefusedAndWitho
 	rig.requireNothingHandedOver()
 
 	manifest, err := BuildReleaseManifest(ReleaseManifest{
-		Version: "0.1.2", Counter: 8, IssuedAt: time.Now().UTC().Add(-time.Hour).Truncate(time.Second), ExpiresAt: time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second),
-		ServiceDefinition: 1, Artifacts: []ReleaseArtifact{platformArtifact(rig.build, "0.1.2")},
+		Version: rig.followingVersion, Counter: 8, IssuedAt: time.Now().UTC().Add(-time.Hour).Truncate(time.Second), ExpiresAt: time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second),
+		ServiceDefinition: 1, Artifacts: []ReleaseArtifact{platformArtifact(rig.build, rig.followingVersion)},
 	})
 	if err != nil {
 		t.Fatal(err)

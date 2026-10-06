@@ -209,6 +209,19 @@ func (s *liveServer) must(method, path string, body any) map[string]any {
 }
 
 func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
+	// The real agent reports Version. Offer its next patch so a release bump
+	// cannot turn this staging check into a correct ALREADY_RUNNING refusal.
+	runningVersion, err := ParseReleaseVersion(Version)
+	if err != nil {
+		t.Fatalf("the live update fixture needs a numeric running version: %v", err)
+	}
+	nextVersion := runningVersion
+	nextVersion.Patch++
+	offerVersion := nextVersion.String()
+	offeredVersion, err := ParseReleaseVersion(offerVersion)
+	if err != nil || offeredVersion.Compare(runningVersion) <= 0 || offeredVersion.Major != runningVersion.Major || offeredVersion.Minor != runningVersion.Minor {
+		t.Fatalf("the live update offer %q must be a newer patch than running agent %q", offerVersion, Version)
+	}
 	binary := os.Getenv("VECTORY_TEST_SERVER")
 	if binary == "" {
 		t.Skip("a live check of agent updates needs the compiled server: set VECTORY_TEST_SERVER to its path")
@@ -257,7 +270,7 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 		}
 	})
 
-	// The release mirror holds a build of 0.1.1 for this platform (and for the
+	// The release mirror holds that newer patch for this platform (and for the
 	// other architecture, which no host here runs).
 	build := bytes.Repeat([]byte("a build of the agent that a live check serves. "), 30_000)
 	buildSHA := Digest(build)
@@ -271,11 +284,11 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 		arch  string
 		bytes []byte
 	}{{runtime.GOARCH, build}, {otherArch, bytes.Repeat([]byte("a build for another architecture. "), 700)}} {
-		file := "vectory-0.1.1-" + runtime.GOOS + "-" + b.arch
+		file := "vectory-" + offerVersion + "-" + runtime.GOOS + "-" + b.arch
 		if err := os.WriteFile(filepath.Join(mirror, file), b.bytes, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		catalog = append(catalog, map[string]any{"name": file, "os": runtime.GOOS, "arch": b.arch, "version": "0.1.1", "sha256": Digest(b.bytes), "size": len(b.bytes)})
+		catalog = append(catalog, map[string]any{"name": file, "os": runtime.GOOS, "arch": b.arch, "version": offerVersion, "sha256": Digest(b.bytes), "size": len(b.bytes)})
 	}
 	if err := os.WriteFile(filepath.Join(mirror, "catalog.json"), mustJSON(t, catalog), 0o644); err != nil {
 		t.Fatal(err)
@@ -387,7 +400,7 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 	var release map[string]any
 	var manifest []byte
 	t.Run("a-release-the-teams-key-signs-is-ready", func(t *testing.T) {
-		release = srv.must("POST", "/agent-releases", map[string]any{"version": "0.1.1"})
+		release = srv.must("POST", "/agent-releases", map[string]any{"version": offerVersion})
 		id, _ := release["id"].(string)
 		status, raw, _ := srv.send("GET", "/api/v1/agent-releases/"+id+"/manifest", nil, true)
 		if status != http.StatusOK {
@@ -401,7 +414,7 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the agent can't read the manifest the server built: %v", err)
 		}
-		if mine, ok := parsed.ArtifactFor(runtime.GOOS, runtime.GOARCH); !ok || mine.SHA256 != buildSHA || mine.Size != int64(len(build)) {
+		if mine, ok := parsed.ArtifactFor(runtime.GOOS, runtime.GOARCH); !ok || mine.SHA256 != buildSHA || mine.Size != int64(len(build)) || parsed.Version != offerVersion {
 			t.Fatalf("the release names another build for this platform: %+v", parsed.Artifacts)
 		}
 		signatures, err := BuildReleaseSignatures([]ReleaseSignature{releaseSignatureBy(public, private.SignRelease(manifest))})
@@ -477,7 +490,7 @@ func TestAnAgentTakesAnOfferFromTheServer(t *testing.T) {
 		poll() // the report of the decision reaches the server with the next check-in
 		report := held()
 		t.Logf("the server holds: %v", report)
-		if report["state"] != "waiting_for_host" || report["release_version"] != "0.1.1" {
+		if report["state"] != "waiting_for_host" || report["release_version"] != offerVersion {
 			t.Fatalf("the report of a staged build on a host that asks first: %v", report)
 		}
 		targets := srv.must("GET", "/agent-update-rollouts/"+rollout+"/targets", nil)

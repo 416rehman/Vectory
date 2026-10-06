@@ -21,6 +21,7 @@ import (
 // then reviewed like any other change.
 func assertStatusGolden(t *testing.T, name, got string) {
 	t.Helper()
+	const historicalHeader = "Vectory agent 0.1.0"
 	path := filepath.Join("testdata", "status", name+".golden")
 	platformPath := filepath.Join("testdata", "status", name+"-"+runtime.GOOS+".golden")
 	if _, err := os.Stat(platformPath); err == nil {
@@ -30,7 +31,15 @@ func assertStatusGolden(t *testing.T, name, got string) {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(got), 0644); err != nil {
+		updated := got
+		if !strings.HasPrefix(name, "json-") {
+			currentHeader := "Vectory agent " + Version
+			if !strings.HasPrefix(updated, currentHeader+" · ") {
+				t.Fatalf("%s has no current product-version header", name)
+			}
+			updated = historicalHeader + strings.TrimPrefix(updated, currentHeader)
+		}
+		if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -38,7 +47,14 @@ func assertStatusGolden(t *testing.T, name, got string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text := strings.ReplaceAll(string(want), "\r\n", "\n"); text != got {
+	text := strings.ReplaceAll(string(want), "\r\n", "\n")
+	if !strings.HasPrefix(name, "json-") {
+		if !strings.HasPrefix(text, historicalHeader+" · ") || strings.Count(text, historicalHeader) != 1 {
+			t.Fatalf("%s must have exactly one historical product-version header", name)
+		}
+		text = "Vectory agent " + Version + strings.TrimPrefix(text, historicalHeader)
+	}
+	if text != got {
 		t.Fatalf("%s differs from its golden file.\n--- got\n%s--- want\n%s", name, got, text)
 	}
 }

@@ -74,7 +74,7 @@ func TestACutOffTransferLeavesNothingAndIsTriedAgainThreeTimes(t *testing.T) {
 		t.Fatalf("%d failures counted", rig.e.update.failures[rig.releaseSHA])
 	}
 	rig.neverLeftAFileUnderAFinalName()
-	if !rig.said1("The download of agent update 0.1.1 failed (1 of 3): The server closed the connection before the whole build arrived. The agent tries again at its next check-in.") {
+	if !rig.said1("The download of agent update " + rig.defaultVersion + " failed (1 of 3): The server closed the connection before the whole build arrived. The agent tries again at its next check-in.") {
 		t.Fatalf("the log said %q", rig.said)
 	}
 	beat := rig.untilReports("failed")
@@ -92,7 +92,7 @@ func TestACutOffTransferLeavesNothingAndIsTriedAgainThreeTimes(t *testing.T) {
 	if rig.requests() != 3 || rig.beat()["state"] != "failed" {
 		t.Fatalf("a release that failed three times was tried again: %d requests, %v", rig.requests(), rig.beat())
 	}
-	if !rig.said1("The download of agent update 0.1.1 failed 3 times, and the agent stops trying it") {
+	if !rig.said1("The download of agent update " + rig.defaultVersion + " failed 3 times, and the agent stops trying it") {
 		t.Fatalf("the log said %q", rig.said)
 	}
 }
@@ -150,7 +150,7 @@ func TestATransferWithTooManyOrTooFewBytesOrOtherBytesIsNotTheSignedBuild(t *tes
 				t.Fatalf("%d requests", rig.requests())
 			}
 			rig.neverLeftAFileUnderAFinalName()
-			if !rig.said1("The download of agent update 0.1.1 failed (1 of 3): ") {
+			if !rig.said1("The download of agent update " + rig.defaultVersion + " failed (1 of 3): ") {
 				t.Fatalf("the log said %q", rig.said)
 			}
 		})
@@ -173,7 +173,7 @@ func TestAServerThatStoppedOfferingTheBuildIsLeftAloneForAWhile(t *testing.T) {
 				t.Fatalf("after the server stopped serving the build the host reports %v", beat)
 			}
 			rig.neverLeftAFileUnderAFinalName()
-			if !rig.said1("The server no longer serves agent update 0.1.1.") {
+			if !rig.said1("The server no longer serves agent update " + rig.defaultVersion + ".") {
 				t.Fatalf("the log said %q", rig.said)
 			}
 			// Not asked again at the next check-ins...
@@ -239,7 +239,7 @@ func TestABusyServerIsWaitedOutWithItsRetryAfter(t *testing.T) {
 			if rig.requests() != 2 {
 				t.Fatalf("%d requests", rig.requests())
 			}
-			if !rig.said1("Downloading agent update 0.1.1 waits: The server is busy (HTTP " + strconv.Itoa(tc.status) + "). The agent asks again in ") {
+			if !rig.said1("Downloading agent update " + rig.defaultVersion + " waits: The server is busy (HTTP " + strconv.Itoa(tc.status) + "). The agent asks again in ") {
 				t.Fatalf("the log said %q", rig.said)
 			}
 		})
@@ -393,8 +393,8 @@ func TestAChangedOfferEndsTheTransferInProgress(t *testing.T) {
 	// The next release, of another build.
 	rig.build = append(bytes.Clone(rig.build), "a newer build"...)
 	rig.release(func(m *ReleaseManifest) {
-		m.Version, m.Counter = "0.1.2", 8
-		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, "0.1.2")}
+		m.Version, m.Counter = rig.followingVersion, 8
+		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, rig.followingVersion)}
 	})
 	rig.answerWith(nil)
 	rig.settle()

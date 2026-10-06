@@ -128,7 +128,7 @@ func TestSetupDryRunPlanWithoutAServiceManager(t *testing.T) {
 [ok] Mode         restricted: reviewed components; this host approves files, destinations and listeners
 [i]  Account      Won't be created: --create-user makes the service's account, and no service is registered here.
                   Without a service, the agent runs as whoever starts it.
-[..] Agent        Would run <agent> 0.1.0, where the installer puts it.
+[..] Agent        Would run <agent> ` + Version + `, where the installer puts it.
 [..] Install      Would create <state> and adopt Vector at <vector>.
 [..] Enroll       Would enroll as setup-edge (asks for the token).
 [!!] Service      No supported service manager here (systemd isn't running), so the agent would stop after its first check-in.

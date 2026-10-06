@@ -42,7 +42,7 @@ func TestAWithdrawnOfferDeletesWhatWasStaged(t *testing.T) {
 	if beat := rig.beat(); beat["state"] != "idle" || beat["release"] != nil {
 		t.Fatalf("a host whose offer was withdrawn reports %v", beat)
 	}
-	if !rig.said1("The server no longer offers agent update 0.1.1. What was staged for it is deleted.") {
+	if !rig.said1("The server no longer offers agent update " + rig.defaultVersion + ". What was staged for it is deleted.") {
 		t.Fatalf("the log said %q", rig.said)
 	}
 	if health, err := ReadUpdateHealth(rig.exchange().Health); err != nil || health.Offer != "" {
@@ -60,7 +60,7 @@ func TestAWithdrawnOfferKeepsWhatTheStepStartedOnUntilItHasAResult(t *testing.T)
 	rig := newOfferRig(t)
 	rig.stageIt()
 	rig.step(func(s *UpdateStatus) {
-		s.Stage, s.Release, s.FromVersion, s.ToVersion = UpdateStageSwapping, rig.releaseSHA, Version, "0.1.1"
+		s.Stage, s.Release, s.FromVersion, s.ToVersion = UpdateStageSwapping, rig.releaseSHA, rig.e.State.Agent.Version, rig.defaultVersion
 	})
 	rig.withdraw()
 	rig.poll()
@@ -77,7 +77,7 @@ func TestAWithdrawnOfferKeepsWhatTheStepStartedOnUntilItHasAResult(t *testing.T)
 
 	// The step ends: committed, and idle.
 	rig.step(func(s *UpdateStatus) {
-		s.Last = &UpdateLast{Release: rig.releaseSHA, Outcome: UpdateOutcomeCommitted, At: time.Now().UTC().Truncate(time.Second), FromVersion: Version, ToVersion: "0.1.1"}
+		s.Last = &UpdateLast{Release: rig.releaseSHA, Outcome: UpdateOutcomeCommitted, At: time.Now().UTC().Truncate(time.Second), FromVersion: rig.e.State.Agent.Version, ToVersion: rig.defaultVersion}
 	})
 	rig.poll()
 	if got := rig.staged(); len(got) != 0 {
@@ -105,7 +105,7 @@ func TestAReleaseTheStepHasAResultForIsNotStagedAgain(t *testing.T) {
 			rig.stageIt()
 			requests := rig.requests()
 			rig.step(func(s *UpdateStatus) {
-				s.Last = &UpdateLast{Release: rig.releaseSHA, Outcome: outcome.outcome, Code: outcome.code, At: time.Now().UTC().Truncate(time.Second), FromVersion: Version, ToVersion: "0.1.1"}
+				s.Last = &UpdateLast{Release: rig.releaseSHA, Outcome: outcome.outcome, Code: outcome.code, At: time.Now().UTC().Truncate(time.Second), FromVersion: rig.e.State.Agent.Version, ToVersion: rig.defaultVersion}
 			})
 			for i := 0; i < 3; i++ {
 				rig.poll()
@@ -124,8 +124,8 @@ func TestAReleaseTheStepHasAResultForIsNotStagedAgain(t *testing.T) {
 			// The next release is another matter.
 			rig.build = append(bytes.Clone(rig.build), "next"...)
 			rig.release(func(m *ReleaseManifest) {
-				m.Version, m.Counter = "0.1.2", 8
-				m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, "0.1.2")}
+				m.Version, m.Counter = rig.followingVersion, 8
+				m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, rig.followingVersion)}
 			})
 			rig.stageIt()
 		})
@@ -138,8 +138,8 @@ func TestAChangedOfferReplacesWhatWasStaged(t *testing.T) {
 	first := rig.releaseSHA
 	rig.build = append(bytes.Clone(rig.build), "next"...)
 	rig.release(func(m *ReleaseManifest) {
-		m.Version, m.Counter = "0.1.2", 8
-		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, "0.1.2")}
+		m.Version, m.Counter = rig.followingVersion, 8
+		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, rig.followingVersion)}
 	})
 	rig.stageIt()
 	if got := rig.staged(); !slices.Equal(got, []string{rig.releaseSHA}) || rig.releaseSHA == first {
@@ -428,17 +428,17 @@ func TestTheReportsOfAFullRunInOrder(t *testing.T) {
 	rig.poll()
 	seen()
 	rig.step(func(s *UpdateStatus) {
-		s.Stage, s.Release, s.FromVersion, s.ToVersion = UpdateStageSwapping, rig.releaseSHA, Version, "0.1.1"
+		s.Stage, s.Release, s.FromVersion, s.ToVersion = UpdateStageSwapping, rig.releaseSHA, rig.e.State.Agent.Version, rig.defaultVersion
 	})
 	rig.poll()
 	seen()
 	rig.step(func(s *UpdateStatus) {
-		s.Stage, s.Release, s.FromVersion, s.ToVersion, s.Deadline = UpdateStageTrial, rig.releaseSHA, Version, "0.1.1", time.Now().UTC().Add(5*time.Minute).Truncate(time.Second)
+		s.Stage, s.Release, s.FromVersion, s.ToVersion, s.Deadline = UpdateStageTrial, rig.releaseSHA, rig.e.State.Agent.Version, rig.defaultVersion, time.Now().UTC().Add(5*time.Minute).Truncate(time.Second)
 	})
 	rig.poll()
 	seen()
 	rig.step(func(s *UpdateStatus) {
-		s.Last = &UpdateLast{Release: rig.releaseSHA, Outcome: UpdateOutcomeCommitted, At: time.Now().UTC().Truncate(time.Second), FromVersion: Version, ToVersion: "0.1.1"}
+		s.Last = &UpdateLast{Release: rig.releaseSHA, Outcome: UpdateOutcomeCommitted, At: time.Now().UTC().Truncate(time.Second), FromVersion: rig.e.State.Agent.Version, ToVersion: rig.defaultVersion}
 	})
 	rig.poll()
 	rig.poll()

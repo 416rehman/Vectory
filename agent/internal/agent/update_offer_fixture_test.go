@@ -26,11 +26,12 @@ const defaultRollout = "c3a1d5e8-6f0b-4a53-9a84-52d7f0a1b6e4"
 
 type offerRig struct {
 	*checkDevice
-	t       *testing.T
-	paths   UpdatePaths
-	private ReleasePrivateKey
-	public  ReleaseKey
-	said    []string
+	t                                *testing.T
+	paths                            UpdatePaths
+	private                          ReleasePrivateKey
+	public                           ReleaseKey
+	said                             []string
+	defaultVersion, followingVersion string
 
 	// The release in the offer.
 	build      []byte
@@ -54,8 +55,24 @@ func platformArtifact(build []byte, version string) ReleaseArtifact {
 	return ReleaseArtifact{OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "executable", File: file, Size: int64(len(build)), SHA256: Digest(build)}
 }
 
-// newOfferRig is a device whose host consented (auto, patch releases, any time),
-// whose step ran a moment ago and is idle, and that is offered agent 0.1.1.
+func nextOfferVersion(t *testing.T, running string) string {
+	t.Helper()
+	current, err := ParseReleaseVersion(running)
+	if err != nil {
+		t.Fatalf("the offer fixture needs a numeric running version: %v", err)
+	}
+	next := current
+	next.Patch++
+	parsed, err := ParseReleaseVersion(next.String())
+	if err != nil || parsed.Compare(current) <= 0 || parsed.Major != current.Major || parsed.Minor != current.Minor {
+		t.Fatalf("the offer fixture %q must be a newer patch than %q", next.String(), running)
+	}
+	return next.String()
+}
+
+// newOfferRig uses the compiled agent's actual version and offers its next
+// patch. The following patch is a distinct replacement offer, so product
+// release bumps cannot collapse either transition into ALREADY_RUNNING.
 func newOfferRig(t *testing.T) *offerRig {
 	t.Helper()
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
@@ -64,6 +81,8 @@ func newOfferRig(t *testing.T) *offerRig {
 	requireRootOwnedWriter(t) // the host's policy and the step's status are root's to write
 	d := newCheckDevice(t)
 	rig := &offerRig{checkDevice: d, t: t, paths: useUpdateRoots(t)}
+	rig.defaultVersion = nextOfferVersion(t, Version)
+	rig.followingVersion = nextOfferVersion(t, rig.defaultVersion)
 	rig.private = testPrivateKey(t, 1)
 	rig.public = testPublicKey(t, rig.private, "team")
 	rig.build = bytes.Repeat([]byte("a build of the agent. "), 20_000)
@@ -165,7 +184,7 @@ func (r *offerRig) readStatus() UpdateStatus {
 	return status
 }
 
-// release signs a release of agent 0.1.1 for this platform (counter 7, issued an
+// release signs the fixture's next patch for this platform (counter 7, issued an
 // hour ago, valid for 90 days), after the test changed it, and has the manifest
 // offer it.
 func (r *offerRig) release(change func(*ReleaseManifest)) {
@@ -216,8 +235,8 @@ func (r *offerRig) craft(change func(manifest string) string) {
 // defaultRelease is the manifest release offers when a test changes nothing.
 func (r *offerRig) defaultRelease() ReleaseManifest {
 	return ReleaseManifest{
-		Version: "0.1.1", Counter: 7, IssuedAt: time.Now().UTC().Add(-time.Hour).Truncate(time.Second), ExpiresAt: time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second),
-		ServiceDefinition: 1, Artifacts: []ReleaseArtifact{platformArtifact(r.build, "0.1.1")},
+		Version: r.defaultVersion, Counter: 7, IssuedAt: time.Now().UTC().Add(-time.Hour).Truncate(time.Second), ExpiresAt: time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Second),
+		ServiceDefinition: 1, Artifacts: []ReleaseArtifact{platformArtifact(r.build, r.defaultVersion)},
 	}
 }
 

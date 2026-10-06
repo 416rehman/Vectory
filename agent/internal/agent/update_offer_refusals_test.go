@@ -13,11 +13,11 @@ import (
 // downloaded, with the code of the contract, and a build is never staged for it. The
 // host tells the server which release it refused and why.
 
-func otherPlatform() ReleaseArtifact {
+func otherPlatform(version string) ReleaseArtifact {
 	build := []byte("a build for another platform")
-	artifact := ReleaseArtifact{OS: "windows", Arch: "amd64", Format: "executable", File: "vectory-0.1.1-windows-amd64.exe", Size: int64(len(build)), SHA256: Digest(build)}
+	artifact := ReleaseArtifact{OS: "windows", Arch: "amd64", Format: "executable", File: "vectory-" + version + "-windows-amd64.exe", Size: int64(len(build)), SHA256: Digest(build)}
 	if runtime.GOOS == "windows" {
-		artifact.OS, artifact.File = "linux", "vectory-0.1.1-linux-amd64"
+		artifact.OS, artifact.File = "linux", "vectory-"+version+"-linux-amd64"
 	}
 	return artifact
 }
@@ -91,14 +91,14 @@ func TestEveryRefusalHappensBeforeAnyDownloadAndStagesNothing(t *testing.T) {
 			r.offer(r.manifest, r.signatures, envelopes)
 		}, "MANIFEST_INVALID", false},
 		{"the release has no build for this platform", func(t *testing.T, r *offerRig) {
-			r.release(func(m *ReleaseManifest) { m.Artifacts = []ReleaseArtifact{otherPlatform()} })
+			r.release(func(m *ReleaseManifest) { m.Artifacts = []ReleaseArtifact{otherPlatform(r.defaultVersion)} })
 			// The server still names a build; it can't be this platform's.
-			r.offerMember(map[string]any{"artifact": map[string]any{"sha256": otherPlatform().SHA256, "size": otherPlatform().Size, "path": updateReleasePath + otherPlatform().SHA256}})
+			r.offerMember(map[string]any{"artifact": map[string]any{"sha256": otherPlatform(r.defaultVersion).SHA256, "size": otherPlatform(r.defaultVersion).Size, "path": updateReleasePath + otherPlatform(r.defaultVersion).SHA256}})
 		}, "PLATFORM_NOT_IN_RELEASE", false},
 		{"this build was tried here and rolled back", func(t *testing.T, r *offerRig) {
 			r.step(func(s *UpdateStatus) {
 				s.HighestCounters = attempted(r)
-				s.Last = &UpdateLast{Release: r.releaseSHA, Outcome: UpdateOutcomeRolledBack, Code: "START_FAILED", At: time.Now().UTC().Truncate(time.Second), FromVersion: "0.1.0", ToVersion: "0.1.1"}
+				s.Last = &UpdateLast{Release: r.releaseSHA, Outcome: UpdateOutcomeRolledBack, Code: "START_FAILED", At: time.Now().UTC().Truncate(time.Second), FromVersion: r.e.State.Agent.Version, ToVersion: r.defaultVersion}
 			})
 		}, "RELEASE_ALREADY_TRIED", false},
 		{"the counter is at or below the highest this host attempted", func(t *testing.T, r *offerRig) {
@@ -106,8 +106,8 @@ func TestEveryRefusalHappensBeforeAnyDownloadAndStagesNothing(t *testing.T) {
 		}, "COUNTER_REPLAYED", false},
 		{"the host already runs this version", func(t *testing.T, r *offerRig) {
 			r.release(func(m *ReleaseManifest) {
-				m.Version = Version
-				m.Artifacts = []ReleaseArtifact{platformArtifact(r.build, Version)}
+				m.Version = r.e.State.Agent.Version
+				m.Artifacts = []ReleaseArtifact{platformArtifact(r.build, m.Version)}
 			})
 		}, "ALREADY_RUNNING", false},
 		{"the version is older than the one that runs", func(t *testing.T, r *offerRig) {
@@ -118,12 +118,18 @@ func TestEveryRefusalHappensBeforeAnyDownloadAndStagesNothing(t *testing.T) {
 		}, "DOWNGRADE_REFUSED", false},
 		{"the version isn't on the host's track", func(t *testing.T, r *offerRig) {
 			r.release(func(m *ReleaseManifest) {
-				m.Version = "0.2.0"
-				m.Artifacts = []ReleaseArtifact{platformArtifact(r.build, "0.2.0")}
+				offTrack, err := ParseReleaseVersion(r.e.State.Agent.Version)
+				if err != nil {
+					t.Fatal(err)
+				}
+				offTrack.Minor++
+				offTrack.Patch = 0
+				m.Version = offTrack.String()
+				m.Artifacts = []ReleaseArtifact{platformArtifact(r.build, m.Version)}
 			})
 		}, "VERSION_NOT_ON_TRACK", false},
 		{"the release can't be taken from the version that runs", func(t *testing.T, r *offerRig) {
-			r.release(func(m *ReleaseManifest) { m.MinFrom = "0.1.1" })
+			r.release(func(m *ReleaseManifest) { m.MinFrom = r.defaultVersion })
 		}, "AGENT_TOO_OLD", false},
 		{"the release needs a newer service definition", func(t *testing.T, r *offerRig) {
 			r.release(func(m *ReleaseManifest) { m.ServiceDefinition = 2 })
@@ -275,8 +281,8 @@ func TestAReleaseSignedByTheSuccessorOfAPinnedKeyIsStagedWithItsStatement(t *tes
 func TestAReleaseTheHostAlreadyRunsIsRefusedWithoutAWord(t *testing.T) {
 	rig := newOfferRig(t)
 	rig.release(func(m *ReleaseManifest) {
-		m.Version = Version
-		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, Version)}
+		m.Version = rig.e.State.Agent.Version
+		m.Artifacts = []ReleaseArtifact{platformArtifact(rig.build, m.Version)}
 	})
 	rig.poll()
 	rig.poll()

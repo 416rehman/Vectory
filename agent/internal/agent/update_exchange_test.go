@@ -77,8 +77,10 @@ func TestTheMemberIsSentOnlyToAServerThatListsTheFeature(t *testing.T) {
 // Old servers see today's heartbeat, byte for byte: the member is the last field,
 // and absent unless a verified manifest lists the feature.
 func TestAHeartbeatWithoutTheMemberIsWhatItAlwaysWas(t *testing.T) {
+	// This golden describes the historical wire shape, with fixed data rather
+	// than the changing version of the agent compiled to run the test.
 	heartbeat := Heartbeat{
-		ProtocolVersion: 1, RequestID: "request", Nonce: "nonce", BootID: "boot", AgentVersion: Version, VectorVersion: VectorVersion,
+		ProtocolVersion: 1, RequestID: "request", Nonce: "nonce", BootID: "boot", AgentVersion: "0.1.0", VectorVersion: VectorVersion,
 		ConfigurationMode: "restricted", ReportedGeneration: 2, PolicyGeneration: 3, ActualSHA256: "actual", ApplyState: "verified_applied",
 		ServiceManager: "systemd", AgentSHA256: "build", StateDir: "/var/lib/vectory",
 	}
