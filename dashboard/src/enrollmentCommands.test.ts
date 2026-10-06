@@ -107,7 +107,9 @@ describe("install commands", () => {
       [
         "(",
         "  set -e",
-        "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+        "  taskTempRoot=${TMPDIR:-/tmp}",
+        `  case "$taskTempRoot" in /*) ;; *) echo 'TMPDIR must be an absolute directory.' >&2; exit 1 ;; esac`,
+        '  dir=$(mktemp -d "${taskTempRoot%/}/vectory.XXXXXXXXXX")',
         `  trap 'rm -rf "$dir"' EXIT`,
         `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
         `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,
@@ -183,7 +185,9 @@ describe("install commands", () => {
       [
         "(",
         "  set -e",
-        "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+        "  taskTempRoot=${TMPDIR:-/tmp}",
+        `  case "$taskTempRoot" in /*) ;; *) echo 'TMPDIR must be an absolute directory.' >&2; exit 1 ;; esac`,
+        '  dir=$(mktemp -d "${taskTempRoot%/}/vectory.XXXXXXXXXX")',
         `  trap 'rm -rf "$dir"' EXIT`,
         "  curl -fsSL --proto '=https' --proto-redir '=https' \\",
         "    --cacert /etc/vectory/server-ca.pem \\",
@@ -206,7 +210,7 @@ describe("install commands", () => {
     ).toContain("  --ca-file /etc/vectory/server-ca.pem \\");
     // The host's own trusted certificates: an explicit, empty --ca-file=.
     const system = installerCommand(install, choices({ trust: "system" }))!;
-    expect(system.split("\n").slice(4, 7)).toEqual([
+    expect(system.split("\n").slice(6, 9)).toEqual([
       "  curl -fsSL --proto '=https' --proto-redir '=https' \\",
       `    -o "$dir/vectory-install.sh" \\`,
       "    https://vectory.example.test:8443/agent/v1/install.sh",

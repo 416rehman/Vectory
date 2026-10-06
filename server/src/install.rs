@@ -1038,7 +1038,9 @@ vectory_install() {
 	if [ -z "$dry_run" ] && [ -f "$target" ] && [ "$(digest "$target")" = "$sha256" ]; then
 		step '[ok]' Agent "$target is already $version for $os/$arch (SHA-256 $short... verified)"
 	else
-		tmp=$(mktemp -d 2>/dev/null || mktemp -d -t vectory) || fail Agent "Can't create a temporary directory."
+		task_temp_root=${TMPDIR:-/tmp}
+		case "$task_temp_root" in /*) ;; *) fail Agent "TMPDIR must be an absolute directory." ;; esac
+		tmp=$(mktemp -d "${task_temp_root%/}/vectory.XXXXXXXXXX") || fail Agent "Can't create a temporary directory."
 		candidate=
 		backup_dir= backup= promotion_started= committed=
 		cleanup_install() {

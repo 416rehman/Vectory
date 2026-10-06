@@ -393,8 +393,11 @@ export function installerRun(
     const trust = effectiveTrust(install, choices.trust);
     const steps: string[] = [
       "set -e",
-      // The installer's own idiom: BSD mktemp before macOS 10.12 wants -t.
-      "dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+      // An explicit template keeps GNU and BSD on the chosen scratch path;
+      // macOS's implicit -t mode prefers its configured user temp directory.
+      "taskTempRoot=${TMPDIR:-/tmp}",
+      `case "$taskTempRoot" in /*) ;; *) echo 'TMPDIR must be an absolute directory.' >&2; exit 1 ;; esac`,
+      'dir=$(mktemp -d "${taskTempRoot%/}/vectory.XXXXXXXXXX")',
       `trap 'rm -rf "$dir"' EXIT`,
     ];
     const cacert: string[] = [];

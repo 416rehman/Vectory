@@ -64,7 +64,12 @@ On **Add device**, choose **One device** or **Many devices**, explicitly choose 
 ```sh
 (
   set -e
-  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)
+  taskTempRoot=${TMPDIR:-/tmp}
+  case "$taskTempRoot" in
+    /*) ;;
+    *) echo 'TMPDIR must be an absolute directory.' >&2; exit 1 ;;
+  esac
+  dir=$(mktemp -d "${taskTempRoot%/}/vectory.XXXXXXXXXX")
   trap 'rm -rf "$dir"' EXIT
   printf '%s\n' '-----BEGIN CERTIFICATE-----
 <your server's CA certificate, as Add device shows it>
@@ -81,7 +86,7 @@ On **Add device**, choose **One device** or **Many devices**, explicitly choose 
 )
 ```
 
-Every step checks what it receives, and nothing turns certificate verification off. The command works in a directory only you can enter, so no one else on the host can swap a file between the check and the run. It stops at the first step that fails and removes the directory when it ends. It saves your server's CA certificate (public, like its fingerprint) there as `vectory-ca.pem`, and curl verifies the server against it; `--proto` and `--proto-redir` keep every request, a redirect included, on https. The SHA-256 from your dashboard then proves the installer is the one the page describes, and the installer checks the agent and pins the CA for setup. The command works in any POSIX shell: sh, dash, bash and zsh. With another choice under [**How the host checks this server**](#trust-the-server-certificate), curl uses that CA file or the host's own certificate store instead.
+Every step checks what it receives, and nothing turns certificate verification off. The command works in a directory only you can enter, so no one else on the host can swap a file between the check and the run. It stops at the first step that fails and removes the directory when it ends. It saves your server's CA certificate (public, like its fingerprint) there as `vectory-ca.pem`, and curl verifies the server against it; `--proto` and `--proto-redir` keep every request, a redirect included, on https. The SHA-256 from your dashboard then proves the installer is the one the page describes, and the installer checks the agent and pins the CA for setup. The command works in any POSIX shell: sh, dash, bash and zsh. If you set `TMPDIR`, use an existing absolute directory; both Linux and macOS use that chosen path. With another choice under [**How the host checks this server**](#trust-the-server-certificate), curl uses that CA file or the host's own certificate store instead.
 
 #### macOS
 

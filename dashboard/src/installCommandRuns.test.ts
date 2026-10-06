@@ -115,12 +115,17 @@ describe.skipIf(!usable)("the install command, run", () => {
     shell: string,
     command: string,
     env: Record<string, string> = {},
+    options: {
+      temporaryDirectoryName?: string;
+      createTemporaryDirectory?: boolean;
+    } = {},
   ) {
     const fake = mkdtempSync(join(root, "fake-"));
     const bin = join(fake, "bin");
     const work = join(fake, "work");
-    const temp = join(fake, "tmp");
-    for (const directory of [bin, work, temp]) mkdirSync(directory);
+    const temp = join(fake, options.temporaryDirectoryName ?? "tmp");
+    for (const directory of [bin, work]) mkdirSync(directory);
+    if (options.createTemporaryDirectory !== false) mkdirSync(temp);
     writeFileSync(join(fake, "installer.sh"), installerScript);
     for (const [name, text] of [
       ["curl", curlStandIn],
@@ -148,7 +153,7 @@ describe.skipIf(!usable)("the install command, run", () => {
       status: result.status,
       output: `${result.stdout}${result.stderr}`,
       work: readdirSync(work),
-      temp: readdirSync(temp),
+      temp: existsSync(temp) ? readdirSync(temp) : [],
       curlArgs: read("curl.args"),
       sudoArgs: read("sudo.args"),
       sudoScript: read("sudo.script"),
@@ -219,6 +224,70 @@ describe.skipIf(!usable)("the install command, run", () => {
       const result = run(shell, command, { FAKE_CURL_FAIL: "1" });
       expect(result.status).not.toBe(0);
       expect(result.sudoArgs).toBeNull();
+      expect(result.work).toEqual([]);
+      expect(result.temp).toEqual([]);
+    });
+
+    it("uses the chosen absolute scratch path with spaces and an apostrophe", () => {
+      const result = run(
+        shell,
+        installerCommand(install(), choices(), presentation)!,
+        {},
+        { temporaryDirectoryName: "owner's scratch space" },
+      );
+      expect(result.status, result.output).toBe(0);
+      expect(realpathSync(dirname(result.directoryPath!))).toBe(
+        realpathSync(result.temporaryRoot),
+      );
+      expect(result.directoryMode).toBe("drwx------\n");
+      expect(result.sudoScript).toBe(installerScript);
+      expect(result.caSeen).toBe(caPem);
+      expect(result.installerArgs).toBe("--mode\nrestricted\n--create-user\n");
+      expect(result.work).toEqual([]);
+      expect(result.temp).toEqual([]);
+    });
+
+    it("rejects a relative scratch path before downloading or running anything", () => {
+      const result = run(
+        shell,
+        installerCommand(install(), choices(), presentation)!,
+        { TMPDIR: "relative-scratch" },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain("TMPDIR must be an absolute directory.");
+      expect(result.curlArgs).toBeNull();
+      expect(result.sudoArgs).toBeNull();
+      expect(result.work).toEqual([]);
+      expect(result.temp).toEqual([]);
+    });
+
+    it("refuses a missing scratch directory before downloading or running anything", () => {
+      const result = run(
+        shell,
+        installerCommand(install(), choices(), presentation)!,
+        {},
+        { createTemporaryDirectory: false },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.curlArgs).toBeNull();
+      expect(result.sudoArgs).toBeNull();
+      expect(result.work).toEqual([]);
+      expect(result.temp).toEqual([]);
+    });
+
+    it("uses the private default scratch directory when TMPDIR is empty", () => {
+      const result = run(
+        shell,
+        installerCommand(install(), choices(), presentation)!,
+        { TMPDIR: "" },
+      );
+      expect(result.status, result.output).toBe(0);
+      expect(realpathSync(dirname(result.directoryPath!))).toBe(
+        realpathSync("/tmp"),
+      );
+      expect(result.directoryMode).toBe("drwx------\n");
+      expect(result.sudoScript).toBe(installerScript);
+      expect(existsSync(result.directoryPath!)).toBe(false);
       expect(result.work).toEqual([]);
       expect(result.temp).toEqual([]);
     });

@@ -130,6 +130,41 @@ def safe_files(root):
     return files
 
 
+def common_license_entries(output):
+    """Resolve only direct Debian license aliases into regular payload files."""
+    if not output or len(output.encode('utf-8')) > 64 * 1024:
+        raise ValueError('Common-license listing is empty or exceeds its bound')
+    entries = {}
+    for line in output.splitlines():
+        fields = line.split('\t')
+        if len(fields) != 4 or fields[3] != '.':
+            raise ValueError('Common-license listing has an invalid entry')
+        kind, name, target, _ = fields
+        if (kind not in ('f', 'l') or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,119}', name)
+                or name in entries or len(entries) >= 256):
+            raise ValueError('Common-license entry is not a unique direct safe file')
+        if ((kind == 'f' and target) or (kind == 'l' and
+                not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,119}', target))):
+            raise ValueError('Common-license alias does not name a direct license file')
+        entries[name] = (kind, target)
+    for kind, target in entries.values():
+        if kind == 'l' and (target not in entries or entries[target][0] != 'f'):
+            raise ValueError('Common-license alias must resolve directly to a listed regular file')
+    return [(name, entries[name][1] if entries[name][0] == 'l' else name) for name in sorted(entries)]
+
+
+def copy_common_licenses(image, copy):
+    directory = '/usr/share/common-licenses'
+    listing = image_run(image, '/usr/bin/find', directory, '-mindepth', '1', '-maxdepth', '1',
+                        '-printf', '%y\t%f\t%l\t.\n')
+    # Directory copies preserve nested links, and some Docker stores mishandle
+    # relative aliases even with cp -L. Copy the validated direct regular target
+    # into each entry's output name; no link resolution is needed during copy.
+    # copy_image and the final inventory still refuse every payload link.
+    for name, regular in common_license_entries(listing):
+        copy(directory + '/' + regular, name)
+
+
 def elf64(path):
     with path.open('rb') as source:
         header = source.read(64)
@@ -228,7 +263,8 @@ def build(out, server_image, validator_image, sbom_dir, payload_dir=None):
                         'image': role, 'source_archive': 'Debian source package ' + source_name + '=' + source_version}
                     path = '/usr/share/doc/' + name.split(':')[0] + '/copyright'
                     copy_image(container, role, path, role + '-root' + path)
-                copy_image(container, role, '/usr/share/common-licenses', role + '-root/usr/share/common-licenses')
+                copy_common_licenses(image, lambda source, name: copy_image(container, role, source,
+                    role + '-root/usr/share/common-licenses/' + name))
                 copy_image(container, role, '/etc/os-release', role + '-root/etc/os-release')
                 if role == 'server':
                     for source, target in [('/app/dashboard', 'dashboard'), ('/app/agent-releases', 'agents'),

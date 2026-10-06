@@ -403,7 +403,9 @@ const linuxDevice = (extra = {}) => ({
 const upgradeCommandText = [
   "(",
   "  set -e",
-  "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+  "  taskTempRoot=${TMPDIR:-/tmp}",
+  `  case "$taskTempRoot" in /*) ;; *) echo 'TMPDIR must be an absolute directory.' >&2; exit 1 ;; esac`,
+  '  dir=$(mktemp -d "${taskTempRoot%/}/vectory.XXXXXXXXXX")',
   `  trap 'rm -rf "$dir"' EXIT`,
   `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
   `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,

@@ -864,14 +864,17 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     );
     fake(
         "curl",
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\nif [ -n \"$ca\" ]; then cp \"$ca\" \"$FAKE_CURL_CA\" || exit 60; else echo 'system trust' > \"$FAKE_CURL_CA\"; fi\nif [ -f \"$FAKE_CURL_REFUSE_FILE\" ]; then exit 60; fi\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\nprintf '%s\\n' \"$out\" > \"$FAKE_CURL_OUTPUT\"\nLC_ALL=C ls -ld \"$(dirname \"$out\")\" | cut -c1-10 > \"$FAKE_CURL_DIRECTORY_MODE\"\nif [ -n \"$ca\" ]; then cp \"$ca\" \"$FAKE_CURL_CA\" || exit 60; else echo 'system trust' > \"$FAKE_CURL_CA\"; fi\nif [ -f \"$FAKE_CURL_REFUSE_FILE\" ]; then exit 60; fi\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
     );
     let download = root.join("download");
-    let run_with = |bytes: &[u8], install_dir: &Path, extra: &[&str]| {
+    let scratch = root.join("owner's scratch space");
+    std::fs::create_dir(&scratch).unwrap();
+    let make_run_with = |bytes: &[u8], install_dir: &Path, extra: &[&str]| {
         std::fs::write(&download, bytes).unwrap();
         // A hardened host's root umask must not hide the agent from the
         // service account.
-        std::process::Command::new("sh")
+        let mut command = std::process::Command::new("sh");
+        command
             .args(["-c", "umask 077; exec sh \"$0\" \"$@\""])
             .arg(&path)
             .args(["--install-dir"])
@@ -890,6 +893,9 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             .env("FAKE_CURL_URL", root.join("curl-url"))
             .env("FAKE_CURL_ARGS", root.join("curl-args"))
             .env("FAKE_CURL_CA", root.join("curl-ca.pem"))
+            .env("FAKE_CURL_OUTPUT", root.join("curl-output"))
+            .env("FAKE_CURL_DIRECTORY_MODE", root.join("curl-directory-mode"))
+            .env("TMPDIR", &scratch)
             .env("FAKE_CURL_REFUSE_FILE", root.join("curl-refuse"))
             .env("FAKE_AGENT_ARGS", root.join("agent-args"))
             .env("FAKE_AGENT_CALLS", root.join("agent-calls"))
@@ -905,11 +911,29 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             .env(
                 "FAKE_FINAL_SETUP_SIGNAL_FILE",
                 root.join("final-setup-signal"),
-            )
-            .output()
-            .unwrap()
+            );
+        command
+    };
+    let run_with = |bytes: &[u8], install_dir: &Path, extra: &[&str]| {
+        make_run_with(bytes, install_dir, extra).output().unwrap()
     };
     let run = |bytes: &[u8], install_dir: &Path| run_with(bytes, install_dir, &[]);
+    for (name, bad_scratch) in [
+        (
+            "relative-scratch",
+            std::path::PathBuf::from("relative-scratch"),
+        ),
+        ("missing-scratch", root.join("missing-scratch")),
+    ] {
+        let destination = root.join(name).join("agent");
+        let refused = make_run_with(&d.mirror_linux, &destination, &[])
+            .env("TMPDIR", bad_scratch)
+            .output()
+            .unwrap();
+        assert!(!refused.status.success(), "invalid TMPDIR was accepted");
+        assert!(!root.join("curl-url").exists(), "invalid TMPDIR downloaded");
+        assert!(!destination.join("vectory").exists());
+    }
     // A download that doesn't match the embedded SHA-256 installs nothing.
     let rejected = root.join("rejected");
     let output = run(b"#!/bin/sh\necho tampered\n", &rejected);
@@ -939,6 +963,19 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         !Path::new(staged.trim()).exists(),
         "staged file was not removed"
     );
+    let curl_output = std::fs::read_to_string(root.join("curl-output")).unwrap();
+    let staging = Path::new(curl_output.trim()).parent().unwrap();
+    assert_eq!(
+        staging.parent().unwrap().canonicalize().unwrap(),
+        scratch.canonicalize().unwrap(),
+        "download escaped the chosen scratch directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("curl-directory-mode")).unwrap(),
+        "drwx------\n"
+    );
+    assert!(!staging.exists(), "private scratch directory remained");
+    assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -984,6 +1021,19 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         ]
     );
     // Go's boolean flags accept numeric values and the last value wins.
+    let default_destination = root.join("empty-scratch-default");
+    let default_scratch = make_run_with(&d.mirror_linux, &default_destination, &[])
+        .env("TMPDIR", "")
+        .output()
+        .unwrap();
+    assert!(default_scratch.status.success(), "{default_scratch:?}");
+    let curl_output = std::fs::read_to_string(root.join("curl-output")).unwrap();
+    let staging = Path::new(curl_output.trim()).parent().unwrap();
+    assert_eq!(
+        staging.parent().unwrap().canonicalize().unwrap(),
+        Path::new("/tmp").canonicalize().unwrap()
+    );
+    assert!(!staging.exists());
     let false_last = root.join("false-last");
     let output = run_with(
         &d.mirror_linux,
