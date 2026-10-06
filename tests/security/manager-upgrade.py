@@ -10,6 +10,7 @@ import argparse
 import base64
 import hashlib
 import http.cookiejar
+import io
 import json
 import os
 from pathlib import Path
@@ -127,6 +128,30 @@ def private_write(path, content):
         file.write(content)
 
 
+def extract_private_backup(payload, destination):
+    """Receive only bounded regular files, without tar's path/link extraction."""
+    require(len(payload) <= 66 << 20, "Private backup export exceeded its byte bound")
+    members, names, total = [], set(), 0
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+        for member in archive:
+            name = Path(member.name)
+            require(member.isfile() and not name.is_absolute() and name.parts and ".." not in name.parts and not any(c in member.name for c in ("\\", ":", "\x00")), "Private backup export contains an unsafe member")
+            require(member.name not in names, "Private backup export contains duplicate members")
+            names.add(member.name)
+            total += member.size
+            require(len(names) <= 1024 and 0 <= member.size <= 32 << 20 and total <= 64 << 20, "Private backup export exceeded its file bound")
+            members.append(member)
+        require("manifest.json" in names and "vectory.db" in names, "Private backup export is incomplete")
+        # Creating the destination exclusively also refuses a late path collision.
+        destination.mkdir(mode=0o700)
+        for member in members:
+            path = destination / member.name
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            content = archive.extractfile(member).read(member.size + 1)
+            require(len(content) == member.size, "Private backup export member was truncated")
+            private_write(path, content)
+
+
 class Fixture:
     def __init__(self, args):
         self.args = args
@@ -205,8 +230,23 @@ class Fixture:
             try:
                 return self.request("/api/v1/status")
             except (OSError, RuntimeError):
+                state = self.owned("container", self.server)["State"]
+                if state.get("Status") in ("exited", "dead"):
+                    self.private_startup_failure(state)
+                    raise RuntimeError("The owned manager exited before becoming ready")
                 time.sleep(0.5)
+        self.private_startup_failure(self.owned("container", self.server)["State"])
         raise RuntimeError("The owned manager did not become ready within 90 seconds")
+
+    def private_startup_failure(self, state):
+        # Preserve bounded stdout AND stderr outside public artifact uploads.
+        # A startup error may name private fixture paths, so never put it in
+        # the public receipt or print the raw Docker/server output.
+        destination = self.args.private_backup_dir.with_name(self.args.private_backup_dir.name + "-startup.private.log")
+        result = subprocess.run(["docker", "logs", "--tail", "100", self.server], capture_output=True, timeout=15)
+        content = json.dumps({"status": state.get("Status"), "exit_code": state.get("ExitCode")}).encode() + b"\n" + result.stdout + result.stderr
+        require(len(content) <= 1 << 20, "Startup diagnostic exceeded its private bound")
+        private_write(destination, content)
 
     def key_hashes(self):
         script = "import hashlib,json; from pathlib import Path; p=Path('/var/lib/vectory/keys'); print(json.dumps({str(f.relative_to(p)):hashlib.sha256(f.read_bytes()).hexdigest() for f in p.rglob('*') if f.is_file()},sort_keys=True))"
@@ -300,7 +340,11 @@ class Fixture:
         require(before["desired"]["version_id"] == version["id"], "Baseline assignment did not reach the authenticated protocol client")
         keys_before = self.key_hashes()
         self.docker("exec", self.server, "python3", "/app/operations/backup.py", "backup", "--state", "/var/lib/vectory", "--out", "/tmp/upgrade-backup", timeout=90)
-        self.docker("cp", f"{self.server}:/tmp/upgrade-backup", self.args.private_backup_dir, timeout=90)
+        # Docker's archive endpoint does not see tmpfs files. Export from inside
+        # the container, without shell pipes or putting credentials in logs.
+        export = "import sys,tarfile; from pathlib import Path; p=Path('/tmp/upgrade-backup'); files=sorted(f for f in p.rglob('*') if f.is_file()); assert len(files)<=1024 and sum(f.stat().st_size for f in files)<=64<<20 and all(not f.is_symlink() for f in files); t=tarfile.open(fileobj=sys.stdout.buffer,mode='w|'); [t.add(f,arcname=str(f.relative_to(p)),recursive=False) for f in files]; t.close()"
+        exported = self.docker("exec", self.server, "python3", "-c", export, timeout=90)
+        extract_private_backup(exported, self.args.private_backup_dir)
         backup = self.args.private_backup_dir
         os.chmod(backup, 0o700)
         backup_manifest = json.loads((backup / "manifest.json").read_text())

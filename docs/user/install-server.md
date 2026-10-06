@@ -24,7 +24,7 @@ The downloaded installer is a readable shell script. It verifies the release's S
 
 Enter the hostname when asked. The default uses automatic HTTPS: Caddy obtains and renews the public dashboard certificate. A separate retained private CA protects agent connections, and its listener certificate renews automatically without disconnecting enrolled devices. **Add device** includes the correct agent trust in each install command. There is no CA file to distribute by hand.
 
-Your DNS records and firewall must allow the certificate authority to reach this server. If you use a reverse proxy or Cloudflare, route the dashboard hostname appropriately and keep port 8443 reachable directly by your agents. Do not proxy the agent listener through an ordinary HTTP proxy that terminates its mutual TLS.
+Point the hostname's DNS record directly to your server and open the ports listed above. With Cloudflare DNS, select [DNS only](https://developers.cloudflare.com/dns/proxy-status/) for this server hostname so devices reach its mutual-TLS listener directly. A custom reverse proxy must keep port 8443 as TCP passthrough; ordinary HTTP proxying terminates the device connection's TLS.
 
 ## Create the first administrator
 

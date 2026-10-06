@@ -1,8 +1,10 @@
 """Boundary tests for the maintainer upgrade harness, without a Docker daemon."""
 import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -14,6 +16,29 @@ spec.loader.exec_module(upgrade)
 
 
 class UpgradeBoundaryTests(unittest.TestCase):
+    def test_private_backup_archive_cannot_escape_or_link(self):
+        for name, kind in (("../outside", tarfile.REGTYPE), ("keys/private", tarfile.SYMTYPE)):
+            with tempfile.TemporaryDirectory() as root:
+                root = Path(root)
+                payload = io.BytesIO()
+                with tarfile.open(fileobj=payload, mode="w") as archive:
+                    member = tarfile.TarInfo(name)
+                    member.type = kind
+                    member.linkname = "../../outside" if kind == tarfile.SYMTYPE else ""
+                    archive.addfile(member)
+                with self.assertRaisesRegex(RuntimeError, "unsafe member"):
+                    upgrade.extract_private_backup(payload.getvalue(), root / "backup")
+                self.assertFalse((root / "backup").exists())
+
+    def test_private_backup_archive_requires_inventory_and_database(self):
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w") as archive:
+            member = tarfile.TarInfo("manifest.json")
+            archive.addfile(member)
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                upgrade.extract_private_backup(payload.getvalue(), Path(root) / "backup")
+
     def test_linked_private_parent_cannot_enter_uploaded_artifacts(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

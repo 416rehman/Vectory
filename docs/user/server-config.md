@@ -130,4 +130,4 @@ The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `nod
 
 `VECTORY_REQUEST_FIXTURES` is read only by the server's own tests, which then print query plans prefixed with `VECTORY_REQUEST_PLAN`. It has no effect on a running server.
 
-Release qualification uses `VECTORY_UNSIGNED_CANDIDATE=true` only for local CI artifacts before signing, with `VECTORY_PREVIEW_RELEASE_DIR` pointing to that workflow's artifact directory. These are maintainer test controls. Published installation verifies the signed release and does not use them.
+Maintainer tests use `VECTORY_UNSIGNED_CANDIDATE=true` only for local CI artifacts before signing, with `VECTORY_PREVIEW_RELEASE_DIR` pointing to that workflow's artifact directory. Published installation verifies the signed release and does not use these test controls.
