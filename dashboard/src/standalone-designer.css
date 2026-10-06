@@ -732,7 +732,7 @@ body {
   font-size: 12px;
   font-weight: 650;
 }
-.designer-kind-tabs button[aria-selected="true"] {
+.designer-kind-tabs button[aria-pressed="true"] {
   border-bottom-color: var(--designer-blue);
   color: var(--designer-blue);
 }

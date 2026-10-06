@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   Background,
@@ -142,6 +148,8 @@ function Designer() {
   const addDialog = useRef<HTMLDialogElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const flow = useRef<ReactFlowInstance<any, any> | null>(null);
+  const detailsTab = useRef<HTMLButtonElement>(null);
+  const codeTab = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const dialog = importDialog.current;
@@ -261,6 +269,23 @@ function Designer() {
         left.label.localeCompare(right.label),
     )
     .slice(0, 60);
+
+  function inspectorTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    const next =
+      event.key === "Home"
+        ? "details"
+        : event.key === "End"
+          ? "code"
+          : event.key === "ArrowRight" || event.key === "ArrowLeft"
+            ? view === "details"
+              ? "code"
+              : "details"
+            : null;
+    if (!next) return;
+    event.preventDefault();
+    setView(next);
+    (next === "details" ? detailsTab : codeTab).current?.focus();
+  }
 
   function fitSoon() {
     window.setTimeout(
@@ -756,16 +781,26 @@ function Designer() {
           >
             <button
               type="button"
+              ref={detailsTab}
+              id="designer-details-tab"
               role="tab"
+              aria-controls="designer-details-panel"
               aria-selected={view === "details"}
+              tabIndex={view === "details" ? 0 : -1}
+              onKeyDown={inspectorTabKeyDown}
               onClick={() => setView("details")}
             >
               Details
             </button>
             <button
               type="button"
+              ref={codeTab}
+              id="designer-code-tab"
               role="tab"
+              aria-controls="designer-code-panel"
               aria-selected={view === "code"}
+              tabIndex={view === "code" ? 0 : -1}
+              onKeyDown={inspectorTabKeyDown}
               onClick={() => setView("code")}
             >
               <Code2 size={15} />
@@ -779,212 +814,248 @@ function Designer() {
             </button>
           </div>
           {view === "details" ? (
-            <div className="designer-inspector-body" role="tabpanel">
-              {graphOmitted ? (
-                <div className="designer-inspector-empty">
-                  <div className="designer-inspector-glyph" aria-hidden="true">
-                    <Braces size={25} />
-                  </div>
-                  <h2>Configuration preserved.</h2>
-                  <p>
-                    This file is larger than the graph display limit. Open Code
-                    to inspect, edit, and export the complete source.
-                  </p>
-                  <button type="button" onClick={() => setView("code")}>
-                    <Code2 size={16} />
-                    Open Code
-                  </button>
-                </div>
-              ) : selectedNode && selectedComponent && selectedKind ? (
-                <>
-                  <div
-                    className="designer-detail-heading"
-                    data-pipeline-category={selectedKind}
-                  >
-                    <small>{kindNames[selectedKind].slice(0, -1)}</small>
-                    <h2>{selectedNode.id}</h2>
-                    <code>{selectedComponent.type || "No type"}</code>
-                  </div>
-                  {issues.filter((issue) => issue.id === selectedNode.id)
-                    .length > 0 && (
-                    <div className="designer-detail-problems">
-                      <strong>Needs attention</strong>
-                      <ul>
-                        {issues
-                          .filter((issue) => issue.id === selectedNode.id)
-                          .slice(0, 6)
-                          .map((issue, index) => (
-                            <li key={`${issue.message}-${index}`}>
-                              {issue.message}
-                            </li>
-                          ))}
-                      </ul>
-                    </div>
-                  )}
-                  <p className="designer-detail-intro">
-                    Change fields below, or use Code for every setting. Drag
-                    from an output to an input to connect components.
-                  </p>
-                  {selectedDefinition ? (
-                    <PipelineSchemaFields
-                      key={selectedNode.id}
-                      schema={
-                        componentSchema(selectedDefinition) ||
-                        fallbackSchema(selectedDefinition)
-                      }
-                      root={vectorSchema}
-                      component={selectedComponent}
-                      onChange={changeComponent}
-                      editable
-                    />
-                  ) : (
-                    <p className="designer-unknown">
-                      This component is outside the bundled catalog. Its
-                      settings are preserved. Open Code to edit them directly.
-                    </p>
-                  )}
-                  <div className="designer-detail-footer">
-                    <button type="button" onClick={() => setView("code")}>
-                      <Braces size={15} />
-                      Edit full configuration
-                    </button>
-                    <button
-                      type="button"
-                      className="designer-danger-link"
-                      onClick={removeComponent}
-                    >
-                      Remove component
-                    </button>
-                  </div>
-                </>
-              ) : selectedEdge ? (
-                <>
-                  <div className="designer-detail-heading">
-                    <small>Connection</small>
-                    <h2>
-                      {selectedEdge.source} → {selectedEdge.target}
-                    </h2>
-                  </div>
-                  <p className="designer-detail-intro">
-                    This connection adds an input reference to{" "}
-                    <code>{selectedEdge.target}</code>. Drag a component output
-                    to another input to create a connection.
-                  </p>
-                  <button
-                    type="button"
-                    className="designer-danger-link"
-                    onClick={removeConnection}
-                  >
-                    Disconnect
-                  </button>
-                </>
-              ) : (
-                <>
+            <>
+              <div
+                id="designer-details-panel"
+                className="designer-inspector-body"
+                role="tabpanel"
+                aria-labelledby="designer-details-tab"
+                tabIndex={0}
+              >
+                {graphOmitted ? (
                   <div className="designer-inspector-empty">
                     <div
                       className="designer-inspector-glyph"
                       aria-hidden="true"
                     >
-                      ↗
+                      <Braces size={25} />
                     </div>
-                    <h2>Follow the flow.</h2>
+                    <h2>Configuration preserved.</h2>
                     <p>
-                      Select a component or connection to inspect its settings.
-                      Draw between handles to connect steps.
+                      This file is larger than the graph display limit. Open
+                      Code to inspect, edit, and export the complete source.
                     </p>
-                    <button type="button" onClick={() => setAddOpen(true)}>
-                      <Plus size={16} />
-                      Add component
+                    <button type="button" onClick={() => setView("code")}>
+                      <Code2 size={16} />
+                      Open Code
                     </button>
                   </div>
-                  <div
-                    className="designer-check-summary"
-                    data-tone={
-                      graphOmitted ? "skipped" : issueCount ? "error" : "clear"
-                    }
-                  >
-                    <strong>
-                      {graphOmitted || issueCount ? (
-                        <CircleAlert size={16} />
-                      ) : (
-                        <Check size={16} />
-                      )}
-                      Local structure check
-                    </strong>
-                    <p>
-                      {graphOmitted
-                        ? "Graph and local checks were skipped because this configuration exceeds the display limit."
-                        : issueCount
-                          ? `${issueCount} local ${issueCount === 1 ? "error" : "errors"} to review.`
-                          : "No local structural errors detected."}{" "}
-                      The installed Vector binary must validate the final file.
+                ) : selectedNode && selectedComponent && selectedKind ? (
+                  <>
+                    <div
+                      className="designer-detail-heading"
+                      data-pipeline-category={selectedKind}
+                    >
+                      <small>{kindNames[selectedKind].slice(0, -1)}</small>
+                      <h2>{selectedNode.id}</h2>
+                      <code>{selectedComponent.type || "No type"}</code>
+                    </div>
+                    {issues.filter((issue) => issue.id === selectedNode.id)
+                      .length > 0 && (
+                      <div className="designer-detail-problems">
+                        <strong>Needs attention</strong>
+                        <ul>
+                          {issues
+                            .filter((issue) => issue.id === selectedNode.id)
+                            .slice(0, 6)
+                            .map((issue, index) => (
+                              <li key={`${issue.message}-${index}`}>
+                                {issue.message}
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+                    <p className="designer-detail-intro">
+                      Change fields below, or use Code for every setting. Drag
+                      from an output to an input to connect components.
                     </p>
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <div className="designer-code-pane" role="tabpanel">
-              <div className="designer-code-head">
-                <label htmlFor="designer-format">Format</label>
-                <select
-                  id="designer-format"
-                  value={format}
-                  onChange={(event) =>
-                    changeFormat(event.target.value as ConfigurationFormat)
-                  }
-                >
-                  <option value="yaml">YAML</option>
-                  <option value="json">JSON</option>
-                  <option value="toml">TOML</option>
-                </select>
-                <span>
-                  {byteLength(code).toLocaleString()} / 1,048,576 bytes
-                </span>
+                    {selectedDefinition ? (
+                      <PipelineSchemaFields
+                        key={selectedNode.id}
+                        schema={
+                          componentSchema(selectedDefinition) ||
+                          fallbackSchema(selectedDefinition)
+                        }
+                        root={vectorSchema}
+                        component={selectedComponent}
+                        onChange={changeComponent}
+                        editable
+                      />
+                    ) : (
+                      <p className="designer-unknown">
+                        This component is outside the bundled catalog. Its
+                        settings are preserved. Open Code to edit them directly.
+                      </p>
+                    )}
+                    <div className="designer-detail-footer">
+                      <button type="button" onClick={() => setView("code")}>
+                        <Braces size={15} />
+                        Edit full configuration
+                      </button>
+                      <button
+                        type="button"
+                        className="designer-danger-link"
+                        onClick={removeComponent}
+                      >
+                        Remove component
+                      </button>
+                    </div>
+                  </>
+                ) : selectedEdge ? (
+                  <>
+                    <div className="designer-detail-heading">
+                      <small>Connection</small>
+                      <h2>
+                        {selectedEdge.source} → {selectedEdge.target}
+                      </h2>
+                    </div>
+                    <p className="designer-detail-intro">
+                      This connection adds an input reference to{" "}
+                      <code>{selectedEdge.target}</code>. Drag a component
+                      output to another input to create a connection.
+                    </p>
+                    <button
+                      type="button"
+                      className="designer-danger-link"
+                      onClick={removeConnection}
+                    >
+                      Disconnect
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="designer-inspector-empty">
+                      <div
+                        className="designer-inspector-glyph"
+                        aria-hidden="true"
+                      >
+                        ↗
+                      </div>
+                      <h2>Follow the flow.</h2>
+                      <p>
+                        Select a component or connection to inspect its
+                        settings. Draw between handles to connect steps.
+                      </p>
+                      <button type="button" onClick={() => setAddOpen(true)}>
+                        <Plus size={16} />
+                        Add component
+                      </button>
+                    </div>
+                    <div
+                      className="designer-check-summary"
+                      data-tone={
+                        graphOmitted
+                          ? "skipped"
+                          : issueCount
+                            ? "error"
+                            : "clear"
+                      }
+                    >
+                      <strong>
+                        {graphOmitted || issueCount ? (
+                          <CircleAlert size={16} />
+                        ) : (
+                          <Check size={16} />
+                        )}
+                        Local structure check
+                      </strong>
+                      <p>
+                        {graphOmitted
+                          ? "Graph and local checks were skipped because this configuration exceeds the display limit."
+                          : issueCount
+                            ? `${issueCount} local ${issueCount === 1 ? "error" : "errors"} to review.`
+                            : "No local structural errors detected."}{" "}
+                        The installed Vector binary must validate the final
+                        file.
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
-              <ConfigurationCodeEditor
-                value={code}
-                format={format}
-                onChange={setCode}
-                diagnostics={sourceDiagnosis.diagnostics}
-                label="Vector configuration code"
+              <div
+                id="designer-code-panel"
+                role="tabpanel"
+                aria-labelledby="designer-code-tab"
+                hidden
               />
-              <div className="designer-code-foot">
-                <span>
-                  {sourceDiagnosis.diagnostics.filter(
-                    (item) => item.severity === "error",
-                  ).length ? (
-                    <>
-                      <CircleAlert size={15} />
-                      Local errors found
-                    </>
-                  ) : (
-                    "Local structural checks only. Vector validates on your host."
-                  )}
-                </span>
-                <div>
-                  <button
-                    type="button"
-                    disabled={!codeDirty}
-                    onClick={discardCodeEdits}
-                  >
-                    Discard edits
-                  </button>
-                  <button
-                    type="button"
-                    className="designer-apply"
-                    disabled={
-                      !codeDirty ||
-                      !sourceDiagnosis.config ||
-                      byteLength(code) > MAX_CONFIGURATION_BYTES
+            </>
+          ) : (
+            <>
+              <div
+                id="designer-details-panel"
+                role="tabpanel"
+                aria-labelledby="designer-details-tab"
+                hidden
+              />
+              <div
+                id="designer-code-panel"
+                className="designer-code-pane"
+                role="tabpanel"
+                aria-labelledby="designer-code-tab"
+                tabIndex={0}
+              >
+                <div className="designer-code-head">
+                  <label htmlFor="designer-format">Format</label>
+                  <select
+                    id="designer-format"
+                    value={format}
+                    onChange={(event) =>
+                      changeFormat(event.target.value as ConfigurationFormat)
                     }
-                    onClick={applyCode}
                   >
-                    Apply code
-                  </button>
+                    <option value="yaml">YAML</option>
+                    <option value="json">JSON</option>
+                    <option value="toml">TOML</option>
+                  </select>
+                  <span>
+                    {byteLength(code).toLocaleString()} / 1,048,576 bytes
+                  </span>
+                </div>
+                <ConfigurationCodeEditor
+                  value={code}
+                  format={format}
+                  onChange={setCode}
+                  diagnostics={sourceDiagnosis.diagnostics}
+                  label="Vector configuration code"
+                />
+                <div className="designer-code-foot">
+                  <span>
+                    {sourceDiagnosis.diagnostics.filter(
+                      (item) => item.severity === "error",
+                    ).length ? (
+                      <>
+                        <CircleAlert size={15} />
+                        Local errors found
+                      </>
+                    ) : (
+                      "Local structural checks only. Vector validates on your host."
+                    )}
+                  </span>
+                  <div>
+                    <button
+                      type="button"
+                      disabled={!codeDirty}
+                      onClick={discardCodeEdits}
+                    >
+                      Discard edits
+                    </button>
+                    <button
+                      type="button"
+                      className="designer-apply"
+                      disabled={
+                        !codeDirty ||
+                        !sourceDiagnosis.config ||
+                        byteLength(code) > MAX_CONFIGURATION_BYTES
+                      }
+                      onClick={applyCode}
+                    >
+                      Apply code
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
         </aside>
       </div>
@@ -1119,14 +1190,13 @@ function Designer() {
         </p>
         <div
           className="designer-kind-tabs"
-          role="tablist"
+          role="group"
           aria-label="Component category"
         >
           {kinds.map((kind) => (
             <button
               type="button"
-              role="tab"
-              aria-selected={addKind === kind}
+              aria-pressed={addKind === kind}
               key={kind}
               onClick={() => setAddKind(kind)}
             >

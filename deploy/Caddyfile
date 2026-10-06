@@ -1,8 +1,8 @@
 {
   admin off
   auto_https off
-  # Caddy 2.11.6 can crash when proxying HTTP/2 request bodies. Re-enable h2
-  # after pinning an official 2.11.7-or-newer image and checking its advisories.
+  # The 0.1 release serves the dashboard through HTTP/1.1. Enable h2 only
+  # after the patched proxy passes a separate HTTP/2 integration check.
   servers {
     protocols h1
   }

@@ -355,7 +355,7 @@ export function homeMarkdown(source) {
       const label = node.childNodes?.find(child => child.tagName === "strong");
       const description = node.childNodes?.find(child => child.tagName === "span");
       if (label && description)
-        return `- [${text(label).trim().replace(/\s*→$/, "")}](${canonicalLink(attrs.href || "", "index")}) — ${text(description).trim()}`;
+        return `- [${text(label).trim().replace(/\s*→$/, "")}](${canonicalLink(attrs.href || "", "index")}) · ${text(description).trim()}`;
       return `[${children}](${canonicalLink(attrs.href || "", "index")})`;
     }
     if (node.tagName === "strong") return `**${children}**`;

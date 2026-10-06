@@ -890,8 +890,8 @@ jobs:
           curl -fsS --retry 30 --retry-delay 2 --retry-connrefused --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | tee "$RUNNER_TEMP/status-before.json"
           echo
           jq -e '.initialized == false' "$RUNNER_TEMP/status-before.json"
-          # Caddy 2.11.6's HTTP/2 reverse-proxy regression requires h1 until
-          # the patched official image is available and the workaround is removed.
+          # Caddy is patched, but proxy HTTP/2 is not qualified for 0.1. Keep
+          # the release's explicit HTTP/1.1 policy until separate h2 checks pass.
           version=$(curl --http2 -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" -o /dev/null -w '%{http_version}' https://localhost/api/v1/status)
           echo "Proxy negotiated HTTP/$version"
           test "$version" = 1.1

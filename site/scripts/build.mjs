@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { buildBrandAssets } from "./brand-assets.mjs";
+import { publicMarkdown } from "./public-docs.mjs";
 
 const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(siteRoot, "..");
@@ -84,6 +86,8 @@ for (const file of helpPages) {
   html = html.replace(headerLink, '<a class="help-open-app" href="/" aria-label="Vectory home">Home <span aria-hidden="true">↗</span></a>');
   html = html.replace(/<a\b[^>]*\bhref="\/#\/[^\"]+"[^>]*>([\s\S]*?)<\/a>/g,
     (_match, label) => `<span class="help-local-app-reference" title="Open this view in your own Vectory server">${label}</span>`);
+  html = html.replace(/<a\b[^>]*\bhref="\/api-reference\.html"[^>]*>([\s\S]*?)<\/a>/g,
+    (_match, label) => `<span class="help-local-app-reference">${label} on your own Vectory server at <code>/api-reference.html</code></span>`);
   assert(!/href="\/#\//.test(html), `Public docs contain an unusable dashboard link: ${relative}`);
   if (relative !== "404.html") {
     const title = html.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.replace(/&amp;/g, "&") || "Vectory guide";
@@ -91,9 +95,19 @@ for (const file of helpPages) {
       url:`${origin}${pathname}`, inLanguage:"en", publisher:{"@type":"Organization",name:"Vectory",url:origin}}).replaceAll("<", "\\u003c");
     html = html.replace("</head>", `<link rel="canonical" href="${origin}${pathname}"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="apple-touch-icon" href="/favicons/icon-180.png"><meta property="og:url" content="${origin}${pathname}"><meta property="og:image" content="${origin}/social-preview.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:image" content="${origin}/social-preview.png"><script type="application/ld+json">${article}</script></head>`);
     publicPaths.push(pathname);
+  } else {
+    html = html.replace("</head>", '<meta name="robots" content="noindex"></head>');
   }
   await fs.writeFile(file, html);
 }
+
+for (const entry of manifest.markdown) {
+  const file = path.join(output, entry.path);
+  const markdown = publicMarkdown(await fs.readFile(file, "utf8"));
+  await fs.writeFile(file, markdown);
+  entry.sha256 = createHash("sha256").update(markdown).digest("hex");
+}
+await fs.writeFile(path.join(output, "help/help-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 
 const sitemapPaths = ["/", "/designer/", ...publicPaths.sort()];
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapPaths.map((pathname) => `  <url><loc>${origin}${pathname}</loc></url>`).join("\n")}\n</urlset>\n`;

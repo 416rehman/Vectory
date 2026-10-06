@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+import { publicMarkdown } from "../scripts/public-docs.mjs";
+import { markdownReferences } from "../../help-center/scripts/markdown.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const output = path.join(root, "site/dist");
@@ -45,12 +48,37 @@ test("public docs are complete and do not point at a nonexistent dashboard", asy
     assert(!/href="\/#\//.test(html), `${relative} retains a local dashboard route`);
     assert.match(html, /href="\/" aria-label="Vectory home"/);
     if (relative !== "404.html") assert.match(html, /rel="canonical" href="https:\/\/vectory\.ahmadz\.ai\/help\//);
+    else assert.match(html, /name="robots" content="noindex"/);
+    for (const [, href] of html.matchAll(/\bhref="(\/[^"]*)"/g)) {
+      const pathname = new URL(href, "https://vectory.ahmadz.ai/").pathname;
+      const target = path.join(output, pathname, pathname.endsWith("/") ? "index.html" : "");
+      assert((await fs.stat(target).catch(() => null))?.isFile(), `${relative} links to missing ${href}`);
+    }
   }
 });
 
 test("the installed Help center keeps its dashboard route", async () => {
   const embedded = await fs.readFile(path.join(root, "dashboard/dist/help/index.html"), "utf8");
   assert.match(embedded, /href="\/#\/overview" aria-label="Open Vectory"/);
+  const api = await fs.readFile(path.join(root, "dashboard/dist/help/api/index.html"), "utf8");
+  assert.match(api, /href="\/api-reference.html"/);
+});
+
+test("public Markdown is usable outside an installed server and matches its inventory", async () => {
+  for (const entry of manifest.markdown) {
+    const markdown = await fs.readFile(path.join(output, entry.path), "utf8");
+    assert(!markdown.includes("\u2014"), `${entry.slug} Markdown uses an em dash`);
+    assert.equal(createHash("sha256").update(markdown).digest("hex"), entry.sha256);
+    assert(!markdownReferences(markdown).some((href) => href.startsWith("/#/") || href === "/api-reference.html"), `${entry.slug} retains an installed-server link`);
+  }
+});
+
+test("public documentation instructions preserve literal configuration examples", () => {
+  const example = "```text\n[Devices](/#/devices)\n```\n\n`[API](/api-reference.html)`";
+  const markdown = publicMarkdown(`# Guide\n\n[Devices](/#/devices) and [API](/api-reference.html).\n\n${example}\n`);
+  assert(markdown.includes(example), "Code example was rewritten");
+  assert(markdown.includes("API on your own Vectory server at `/api-reference.html`"));
+  assert.deepEqual(markdownReferences(markdown), []);
 });
 
 test("sitemap, machine-readable docs and static hosting files ship", async () => {
