@@ -132,9 +132,9 @@ try {
   await expect(toolsMenu).not.toHaveAttribute('open', '');
   await expect(page.locator('.hero .button-dark')).toHaveAttribute('href', '#start');
   const heroImage = await page.locator('.hero-art img').boundingBox();
-  const heroCopy = await page.locator('.hero-copy').boundingBox();
-  assert(heroImage && heroImage.y > 0 && heroImage.y + heroImage.height < 1000, 'Original artwork must be visible in the desktop hero');
-  assert(heroCopy && heroImage.x >= heroCopy.x + heroCopy.width, 'Hero artwork must stay clear of the copy and actions');
+  const heroViewportWidth = await page.evaluate(() => document.documentElement.clientWidth);
+  assert(heroImage && Math.abs(heroImage.x) <= 1 && Math.abs(heroImage.width - heroViewportWidth) <= 1, 'Original artwork must span both screen edges');
+  assert(heroImage.y > 0 && heroImage.y < 1000, 'Original artwork must be visible in the desktop hero');
   await noOverflow();
   await accessible();
   await page.screenshot({ path: path.join(captures, 'landing-desktop.png') });
