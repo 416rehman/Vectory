@@ -56,8 +56,8 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline
 .tools-menu small { margin-top: 7px; font-size: 12px; line-height: 1.5; font-weight: 400; color: var(--muted); }
 .hero { position: relative; overflow: hidden; isolation: isolate; background: var(--paper); }
 .hero::before { content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none; background: repeating-linear-gradient(to right, transparent 0, transparent calc(25% - 1px), rgb(32 33 34 / 5%) calc(25% - 1px), rgb(32 33 34 / 5%) 25%); opacity: .45; }
-.hero-inner { position: relative; z-index: 1; padding-top: clamp(70px, 7vw, 110px); }
-.hero-copy { max-width: 650px; }
+.hero-inner { position: relative; z-index: 1; padding-top: clamp(70px, 7vw, 110px); pointer-events: none; }
+.hero-copy { max-width: 650px; pointer-events: auto; }
 .eyebrow { margin: 0; font-size: 12px; line-height: 1.3; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .hero h1 { margin: 25px 0; font-size: clamp(64px, 5.7vw, 86px); font-weight: 600; line-height: .97; letter-spacing: -.077em; }
 .hero h1 em { color: var(--blue); font-style: normal; }

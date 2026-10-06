@@ -140,6 +140,10 @@ try {
   await page.screenshot({ path: path.join(captures, 'landing-desktop.png') });
   const sculpture = page.locator('.hero-art-sculpture');
   const light = page.locator('.hero-art-light');
+  await sculpture.hover({ position: { x: heroImage.width * .922, y: heroImage.height * .147 } });
+  await expect(light).toHaveCSS('opacity', '1');
+  await page.locator('.hero h1').hover();
+  await expect(light).toHaveCSS('opacity', '0');
   await sculpture.hover({ position: { x: heroImage.width * .153, y: heroImage.height * .692 } });
   await expect(light).toHaveCSS('opacity', '1');
   await expect(light).toHaveCSS('mask-image', /radial-gradient/);
