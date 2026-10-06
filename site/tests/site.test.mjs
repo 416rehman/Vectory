@@ -76,6 +76,37 @@ test("browser distributions expose the release notices and required upstream ter
   }
 });
 
+test("public HTML opts out of edge rewriting without changing asset cache policies", async () => {
+  const headers = (await fs.readFile(path.join(output, "_headers"), "utf8")).replaceAll("\r\n", "\n");
+  const blocks = headers.trim().split(/\n\s*\n/);
+  const rules = new Map(blocks.map((block) => {
+    const [route, ...entries] = block.split("\n");
+    return [route, entries.map((entry) => entry.trim())];
+  }));
+  assert.equal(rules.size, blocks.length, "duplicate _headers routes could override the HTML policy");
+
+  const sitemap = await fs.readFile(path.join(output, "sitemap.xml"), "utf8");
+  const htmlRoutes = [
+    ...[...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map(([, url]) => new URL(url).pathname),
+    "/404.html",
+    "/help/404.html",
+  ].sort();
+  const policy = "Cache-Control: public, max-age=0, must-revalidate, no-transform";
+  for (const route of htmlRoutes) {
+    assert.deepEqual(rules.get(`https://vectory.ahmadz.ai${route}`), [policy], `${route} must retain HTML caching and prevent edge injection`);
+  }
+  assert.deepEqual(
+    [...rules].filter(([, entries]) => entries.some((entry) => entry.includes("no-transform"))).map(([route]) => route).sort(),
+    htmlRoutes.map((route) => `https://vectory.ahmadz.ai${route}`).sort(),
+    "only this domain's HTML routes should opt out of transformation",
+  );
+  assert.deepEqual(rules.get("/media/*"), ["Cache-Control: public, max-age=3600"]);
+  assert.deepEqual(rules.get("/fonts/*"), ["Cache-Control: public, max-age=31536000, immutable"]);
+  assert.deepEqual(rules.get("/favicons/*"), ["Cache-Control: public, max-age=86400"]);
+  assert(!rules.get("/*").some((entry) => entry.startsWith("Cache-Control:")));
+  assert(rules.get("/designer/*").some((entry) => entry.startsWith("Content-Security-Policy: ")));
+});
+
 test("installed and public Help ship the source for their exact Pagefind browser binaries", async () => {
   const manifestBytes = await fs.readFile(path.join(root, "help-center/legal/pagefind-1.5.2-source.json"));
   const manifest = JSON.parse(manifestBytes.toString("utf8"));

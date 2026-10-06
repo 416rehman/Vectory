@@ -114,7 +114,15 @@ const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://w
 await fs.writeFile(path.join(output, "sitemap.xml"), sitemap);
 await fs.writeFile(path.join(output, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
 await fs.writeFile(path.join(output, "llms.txt"), `# Vectory\n\n> Self-hosted Vector control plane. Vectory 0.1.1 is an unsigned developer preview.\n\n- [Overview](${origin}/)\n- [Vector configuration designer](${origin}/designer/): Create, import, visualize and export YAML, JSON and TOML locally in your browser.\n- [Quickstart](${origin}/help/_markdown/quickstart.md)\n- [Security model](${origin}/help/_markdown/security.md)\n- [Known limits](${origin}/help/whats-new/#known-limits)\n- [All guides](${origin}/help/llms.txt)\n`);
-await fs.copyFile(path.join(siteRoot, "src/_headers"), path.join(output, "_headers"));
+// Cloudflare JavaScript Detections may rewrite HTML unless the origin sends
+// no-transform. Keep the existing HTML cache policy and target only HTML
+// routes so asset caching and compression retain their current behavior.
+const htmlRoutes = [...sitemapPaths, "/404.html", "/help/404.html"];
+const baseHeaders = await fs.readFile(path.join(siteRoot, "src/_headers"), "utf8");
+const htmlHeaders = htmlRoutes.map((route) =>
+  `${origin}${route}\n  Cache-Control: public, max-age=0, must-revalidate, no-transform`,
+).join("\n\n");
+await fs.writeFile(path.join(output, "_headers"), `${baseHeaders.trimEnd()}\n\n${htmlHeaders}\n`);
 await fs.copyFile(path.join(siteRoot, "src/_redirects"), path.join(output, "_redirects"));
 await fs.copyFile(path.join(siteRoot, "src/404.html"), path.join(output, "404.html"));
 console.log(`Built public site with ${publicPaths.length} documentation pages at ${output}`);
