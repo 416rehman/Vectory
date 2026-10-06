@@ -60,14 +60,22 @@ units=(vectory-native-validator vectory-native-certificates vectory-native-serve
 
 root_directory() {
   local path="$1" part
-  [[ -d "$path" && ! -L "$path" && "$(realpath -e "$path")" == "$path" ]] || fail 'An installation directory is missing or linked.'
+  [[ -d "$path" && ! -L "$path" && "$(realpath -e "$path" 2>/dev/null)" == "$path" ]] || fail 'An installation directory is missing or linked.'
   while :; do
-    [[ "$(stat -c %u "$path")" == 0 ]] || fail 'Installation directories must belong to root.'
-    part="$(stat -c %a "$path")"
+    [[ "$(stat -c %u "$path" 2>/dev/null)" == 0 ]] || fail 'Installation directories must belong to root.'
+    part="$(stat -c %a "$path" 2>/dev/null)"
     (( (8#$part & 8#22) == 0 )) || fail 'Installation directories must not be writable by another account.'
     [[ "$path" == / ]] && break
     path="$(dirname -- "$path")"
   done
+}
+worker_root_identity() {
+  local observed="$1" expected="$2" authenticated actual
+  root_directory "$expected"
+  [[ -d "$observed" ]] || fail 'The running validator root is not a directory.'
+  authenticated="$(stat -Lc '%d:%i' -- "$expected" 2>/dev/null)" || fail 'The authenticated validator root metadata is unavailable.'
+  actual="$(stat -Lc '%d:%i' -- "$observed" 2>/dev/null)" || fail 'The running validator root metadata is unavailable.'
+  [[ "$authenticated" =~ ^[0-9]+:[1-9][0-9]*$ && "$actual" =~ ^[0-9]+:[1-9][0-9]*$ && "$actual" == "$authenticated" ]] || fail 'The running validator root object differs from its authenticated payload.'
 }
 regular() { [[ -f "$1" && ! -L "$1" && "$(realpath -e "$1")" == "$1" ]] || fail 'A required file is missing or linked.'; }
 verify_service_units() {
@@ -134,7 +142,8 @@ isolation_check() {
   [[ "$(cat "/sys/fs/cgroup$group/memory.max")" == 536870912 && "$(cat "/sys/fs/cgroup$group/memory.swap.max")" == 0 && "$(cat "/sys/fs/cgroup$group/pids.max")" == 64 ]] || fail 'The kernel did not apply the validator memory, swap or process limit.'
   read -r quota period < "/sys/fs/cgroup$group/cpu.max"
   [[ "$quota" =~ ^[1-9][0-9]*$ && "$period" =~ ^[1-9][0-9]*$ ]] && (( quota <= period )) || fail 'The kernel did not apply the validator CPU limit.'
-  [[ "$pid" =~ ^[1-9][0-9]*$ && "$(readlink "/proc/$pid/root")" == "$kit/validator-root" ]] || fail 'The running validator has the wrong filesystem root.'
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || fail 'The running validator has no valid process identity.'
+  worker_root_identity "/proc/$pid/root" "$kit/validator-root"
   [[ "$(cat "/proc/$pid/cgroup")" == "0::$group" ]] || fail 'The running validator is outside its resource control group.'
   actual="$(awk '$1=="Uid:" {print $2":"$3":"$4":"$5}' "/proc/$pid/status")"
   [[ "$actual" == "$(id -u vectory-validator):$(id -u vectory-validator):$(id -u vectory-validator):$(id -u vectory-validator)" ]] || fail 'The running validator has the wrong user identity.'

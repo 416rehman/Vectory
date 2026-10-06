@@ -344,6 +344,30 @@ def check_worker_runtime_mount(root, worker_uid, worker_gid):
         raise RuntimeError('Private worker runtime mount could not be safely checked') from None
 
 
+def check_worker_root_identity(observed, expected):
+    """Compare actual root objects; namespace path labels are not identities."""
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError(message) from None
+
+    try:
+        authenticated = expected.lstat()
+        require(stat.S_ISDIR(authenticated.st_mode) and authenticated.st_uid == 0 and
+                authenticated.st_mode & 0o022 == 0 and expected.is_absolute(),
+                'Authenticated worker root is not a canonical protected directory')
+        try:
+            canonical = expected.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise RuntimeError('Actual worker root metadata could not be safely checked') from None
+        require(canonical == expected, 'Authenticated worker root is not a canonical protected directory')
+        actual = observed.stat()
+        require(stat.S_ISDIR(actual.st_mode) and actual.st_uid == 0 and actual.st_mode & 0o022 == 0 and
+                (actual.st_dev, actual.st_ino) == (authenticated.st_dev, authenticated.st_ino),
+                'Actual worker root object differs from the authenticated private payload')
+    except OSError:
+        raise RuntimeError('Actual worker root metadata could not be safely checked') from None
+
+
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -445,7 +469,7 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
         check(unreachable.returncode != 0, 'Worker network namespace can reach the host API')
         verified.add('network_namespace')
         installed = Path('/opt/vectory-server') / version
-        check(os.readlink(proc / 'root') == str(installed / 'validator-root'), 'Actual worker root differs from the authenticated private payload')
+        check_worker_root_identity(proc / 'root', installed / 'validator-root')
         root = proc / 'root'
         check(not (root / 'etc/.vectory-native-ci-sentinel').exists() and not (root / 'etc/vectory-server').exists()
             and not (root / 'var/lib/vectory-server').exists() and not (root / 'var/run/docker.sock').exists(),

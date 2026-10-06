@@ -318,6 +318,229 @@ class RetainedWorkerErrorTests(unittest.TestCase):
             self.assertNotIn(str(root), str(failure.exception))
 
 
+@unittest.skipUnless(platform.system() == 'Linux' and shutil.which('bash') and shutil.which('stat'),
+    'Launcher identity fixtures require Linux GNU stat; no services execute')
+class NativeLauncherRootIdentityTests(unittest.TestCase):
+    def invoke(self, root, observed, expected, attack='none'):
+        launcher = Path(__file__).resolve().parents[1] / 'deploy/native/start.sh'
+        source = launcher.read_text()
+        import re
+        functions = []
+        for name in ('root_directory', 'worker_root_identity'):
+            found = re.search(r'^' + name + r'\(\) \{\n.*?^\}', source, re.M | re.S)
+            self.assertIsNotNone(found)
+            functions.append(found.group())
+        fail = re.search(r'^fail\(\) \{.*\}$', source, re.M)
+        self.assertIsNotNone(fail)
+        program = root / 'probe.sh'
+        program.write_text('set -euo pipefail\nnative_failure_line=0\n' + fail.group() + '\n' +
+            '\n'.join(functions) + '\nworker_root_identity "$1" "$2"\n')
+        shim = root / 'tools'
+        shim.mkdir(exist_ok=True)
+        original = shutil.which('stat')
+        script = shim / 'stat'
+        script.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+path="${@: -1}"
+if [[ "$1" == -c && "$2" == %u ]]; then
+  if [[ "$path" == "$ROOT_IDENTITY_EXPECTED" && "$ROOT_IDENTITY_ATTACK" == owner ]]; then printf '12345\\n'; else printf '0\\n'; fi
+elif [[ "$1" == -c && "$2" == %a ]]; then
+  if [[ "$path" == "$ROOT_IDENTITY_EXPECTED" && "$ROOT_IDENTITY_ATTACK" == mode ]]; then printf '777\\n'; else printf '755\\n'; fi
+elif [[ "$1" == -Lc && "$2" == %d:%i ]]; then
+  if [[ "$path" == "$ROOT_IDENTITY_OBSERVED" ]]; then
+    case "$ROOT_IDENTITY_ATTACK" in
+      error) printf 'synthetic-private-stat-error:%s\\n' "$path" >&2; exit 1 ;;
+      malformed) printf 'synthetic-private-metadata\\n'; exit 0 ;;
+      device|inode)
+        value="$("$ROOT_IDENTITY_REAL_STAT" "$@")"
+        device="${value%%:*}"; inode="${value#*:}"
+        if [[ "$ROOT_IDENTITY_ATTACK" == device ]]; then device=$((device + 1)); else inode=$((inode + 1)); fi
+        printf '%s:%s\\n' "$device" "$inode"; exit 0 ;;
+    esac
+  fi
+  exec "$ROOT_IDENTITY_REAL_STAT" "$@"
+else exit 90
+fi
+''')
+        script.chmod(0o755)
+        readlink = shim / 'readlink'
+        readlink.write_text('#!/usr/bin/env bash\nprintf "unexpected namespace label read\\n" >&2\nexit 91\n')
+        readlink.chmod(0o755)
+        environment = os.environ.copy()
+        environment.update(PATH=str(shim) + os.pathsep + environment['PATH'],
+            ROOT_IDENTITY_EXPECTED=str(expected), ROOT_IDENTITY_OBSERVED=str(observed),
+            ROOT_IDENTITY_ATTACK=attack, ROOT_IDENTITY_REAL_STAT=original)
+        return subprocess.run(['bash', str(program), str(observed), str(expected)], env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+
+    def test_exact_launcher_helper_accepts_real_same_inode_alias_without_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            expected = root / 'authenticated-root'
+            expected.mkdir()
+            observed = root / 'namespace-root-label'
+            observed.symlink_to(expected, target_is_directory=True)
+            result = self.invoke(root, observed, expected)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b'')
+            self.assertEqual(result.stderr, b'')
+
+    def test_exact_launcher_helper_refuses_wrong_objects_and_metadata_errors_privately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            expected, other = root / 'authenticated-root', root / 'different-root'
+            expected.mkdir(); other.mkdir()
+            observed = root / 'namespace-root-label'
+            observed.symlink_to(expected, target_is_directory=True)
+            for candidate, attack in ((other, 'none'), (Path('/proc/self/root'), 'none'),
+                    (observed, 'device'), (observed, 'inode'), (observed, 'error'), (observed, 'malformed')):
+                with self.subTest(attack=attack, candidate=candidate.name):
+                    result = self.invoke(root, candidate, expected, attack)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, b'')
+                    self.assertNotIn(str(root).encode(), result.stderr)
+                    self.assertNotIn(str(candidate).encode(), result.stderr)
+                    self.assertNotIn(b'synthetic-private', result.stderr)
+
+    def test_exact_launcher_helper_keeps_canonical_directory_ownership_and_mode_guards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            expected = root / 'authenticated-root'
+            expected.mkdir()
+            observed = root / 'namespace-root-label'
+            observed.symlink_to(expected, target_is_directory=True)
+            linked = root / 'linked-expected'
+            linked.symlink_to(expected, target_is_directory=True)
+            missing = root / 'missing-expected'
+            file = root / 'file-expected'
+            file.write_bytes(b'synthetic protected root fixture')
+            for candidate, attack in ((expected, 'owner'), (expected, 'mode'), (linked, 'none'),
+                                      (missing, 'none'), (file, 'none')):
+                with self.subTest(attack=attack, candidate=candidate.name):
+                    result = self.invoke(root, observed, candidate, attack)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, b'')
+                    self.assertNotIn(str(root).encode(), result.stderr)
+
+
+@unittest.skipUnless(os.name == 'posix', 'Root identity fixtures use only private POSIX temporary directories')
+class NativeWorkerRootIdentityTests(unittest.TestCase):
+    @contextmanager
+    def directories(self, expected_changes=None, actual_changes=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            expected = root / 'authenticated-root'
+            expected.mkdir(mode=0o755)
+            observed = root / 'observed-root'
+            observed.symlink_to(expected, target_is_directory=True)
+            original_lstat, original_stat = Path.lstat, Path.stat
+
+            def changed(record, changes):
+                fields = list(record)
+                fields[4] = 0
+                for index, value in (changes or {}).items():
+                    fields[index] = value(fields[index]) if callable(value) else value
+                return os.stat_result(fields)
+
+            def lstat(path):
+                record = original_lstat(path)
+                return changed(record, expected_changes) if path.name == expected.name else record
+
+            def stat_path(path, *args, **options):
+                record = original_stat(path, *args, **options)
+                return changed(record, actual_changes) if path == observed else record
+
+            with mock.patch.object(Path, 'lstat', lstat), mock.patch.object(Path, 'stat', stat_path):
+                yield root, expected, observed
+
+    def test_same_actual_object_is_accepted_without_reading_namespace_path_labels(self):
+        with self.directories() as (root, expected, observed):
+            original = os.readlink
+
+            def label(path, *args, **options):
+                return '/' if Path(path) == observed else original(path, *args, **options)
+
+            with mock.patch.object(smoke.os, 'readlink', side_effect=label) as labels:
+                smoke.check_worker_root_identity(observed, expected)
+                self.assertFalse(any(Path(call.args[0]) == observed for call in labels.call_args_list))
+
+    def test_wrong_root_device_inode_type_owner_and_permissions_are_refused(self):
+        changes = ({2: lambda value: value + 1}, {1: lambda value: value + 1},
+                   {0: stat.S_IFREG | 0o755}, {4: 12345}, {0: stat.S_IFDIR | 0o777})
+        for change in changes:
+            with self.subTest(change=change), self.directories(actual_changes=change) as (root, expected, observed), \
+                    self.assertRaises(RuntimeError) as failure:
+                smoke.check_worker_root_identity(observed, expected)
+            self.assertEqual(str(failure.exception), 'Actual worker root object differs from the authenticated private payload')
+        with self.directories() as (root, expected, observed), self.assertRaises(RuntimeError):
+            smoke.check_worker_root_identity(Path('/'), expected)
+
+    def test_expected_root_must_be_protected_root_owned_and_a_directory(self):
+        for change in ({4: 12345}, {0: stat.S_IFDIR | 0o777}, {0: stat.S_IFREG | 0o755}):
+            with self.subTest(change=change), self.directories(expected_changes=change) as (root, expected, observed):
+                original = Path.stat
+                with mock.patch.object(Path, 'stat', autospec=True, side_effect=original) as actual, \
+                        self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_root_identity(observed, expected)
+                self.assertFalse(any(call.args[0] == observed for call in actual.call_args_list))
+            self.assertEqual(str(failure.exception), 'Authenticated worker root is not a canonical protected directory')
+
+    def test_broken_linked_and_noncanonical_expected_roots_are_refused(self):
+        with self.directories() as (root, expected, observed):
+            linked = root / 'linked-expected'
+            linked.symlink_to(expected, target_is_directory=True)
+            broken = root / 'broken-expected'
+            broken.symlink_to(root / 'missing-expected', target_is_directory=True)
+            parent = root / 'linked-parent'
+            parent.symlink_to(root, target_is_directory=True)
+            for candidate in (linked, broken, parent / expected.name, Path('.')):
+                with self.subTest(candidate=candidate.name), self.assertRaises(RuntimeError):
+                    smoke.check_worker_root_identity(observed, candidate)
+            protected = expected.lstat()
+            with mock.patch.object(Path, 'lstat', return_value=protected), \
+                    mock.patch.object(Path, 'resolve') as resolve, self.assertRaises(RuntimeError):
+                smoke.check_worker_root_identity(observed, Path('.'))
+            resolve.assert_not_called()
+
+    def test_missing_and_inaccessible_metadata_never_render_private_paths(self):
+        with self.directories() as (root, expected, observed):
+            with self.assertRaises(RuntimeError) as missing:
+                smoke.check_worker_root_identity(observed, root / 'missing-expected')
+            self.assertEqual(str(missing.exception), 'Actual worker root metadata could not be safely checked')
+            self.assertNotIn(str(root), ''.join(traceback.format_exception(missing.exception)))
+            original = Path.stat
+
+            def refuse(path, *args, **options):
+                if path == observed:
+                    raise OSError(errno.EACCES, 'synthetic private root refusal', str(path))
+                return original(path, *args, **options)
+
+            with mock.patch.object(Path, 'stat', refuse), self.assertRaises(RuntimeError) as failure:
+                smoke.check_worker_root_identity(observed, expected)
+            self.assertEqual(str(failure.exception), 'Actual worker root metadata could not be safely checked')
+            rendered = ''.join(traceback.format_exception(failure.exception))
+            self.assertNotIn(str(root), rendered)
+            self.assertNotIn('synthetic private root refusal', rendered)
+            with mock.patch.object(Path, 'resolve', side_effect=RuntimeError('synthetic private resolution ' + str(expected))), \
+                    self.assertRaises(RuntimeError) as resolution:
+                smoke.check_worker_root_identity(observed, expected)
+            self.assertEqual(str(resolution.exception), 'Actual worker root metadata could not be safely checked')
+            rendered = ''.join(traceback.format_exception(resolution.exception))
+            self.assertNotIn(str(root), rendered)
+            self.assertNotIn('synthetic private resolution', rendered)
+
+    def test_refusal_suppresses_active_caller_filename_context(self):
+        with self.directories(actual_changes={1: lambda value: value + 1}) as (root, expected, observed):
+            try:
+                raise OSError(errno.EIO, 'synthetic private caller refusal', str(root / 'private-caller-file'))
+            except OSError:
+                with self.assertRaises(RuntimeError) as failure:
+                    smoke.check_worker_root_identity(observed, expected)
+            rendered = ''.join(traceback.format_exception(failure.exception))
+            self.assertNotIn(str(root), rendered)
+            self.assertNotIn('synthetic private caller refusal', rendered)
+
+
 @unittest.skipUnless(os.name == 'posix', 'Runtime mount fixtures use only private POSIX temporary directories')
 class NativeWorkerRuntimeMountTests(unittest.TestCase):
     @contextmanager
