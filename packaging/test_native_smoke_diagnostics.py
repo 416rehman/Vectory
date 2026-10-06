@@ -1,5 +1,7 @@
 """Static native failure diagnostics fixtures; no native service execution."""
 import importlib.util
+from contextlib import contextmanager
+import os
 from pathlib import Path
 import platform
 import shlex
@@ -21,7 +23,7 @@ with mock.patch.dict(sys.modules, {} if importlib.util.find_spec('pwd') else {'p
 
 
 def marker(phase='host_preflight', status=1, line=40):
-    return f'VECTORY_NATIVE_FAILURE phase={phase} status={status} line={line}'.encode()
+    return f'VECTORY-NATIVE-FAILURE phase={phase} status={status} line={line}'.encode()
 
 
 class NativeSmokeDiagnosticsTests(unittest.TestCase):
@@ -39,7 +41,7 @@ class NativeSmokeDiagnosticsTests(unittest.TestCase):
                    marker(status=0), marker(status=256), marker(status=-1), marker(status=2),
                    marker(line=0), marker(line=-1), marker(line=401), marker(line='040'),
                    marker(status='01'), marker() + b' secret=synthetic', b'prefix ' + marker(),
-                   marker() + b'\n' + marker(), marker() + b'\nVECTORY_NATIVE_FAILURE malformed',
+                   marker() + b'\n' + marker(), marker() + b'\nVECTORY-NATIVE-FAILURE malformed',
                    marker() + b'\n' + b'x' * smoke.PRIVATE_LOG_LIMIT)
         for data in attacks:
             with self.subTest(data=data[:100]):
@@ -77,6 +79,197 @@ class NativeSmokeDiagnosticsTests(unittest.TestCase):
         smoke.check_native_start(subprocess.CompletedProcess([], 0), log, launcher, 'startup')
         log.open.assert_not_called()
         launcher.open.assert_not_called()
+
+
+@unittest.skipUnless(os.name == 'posix', 'Descriptor permission fixtures require POSIX; no global directory is changed')
+class NativeSmokeParentTests(unittest.TestCase):
+    @contextmanager
+    def owner(self, uid=0):
+        original_stat, original_fstat = os.stat, os.fstat
+
+        def changed(record):
+            fields = list(record)
+            fields[4] = uid
+            return os.stat_result(fields)
+
+        with mock.patch.object(smoke.os, 'stat', side_effect=lambda *args, **kwargs: changed(original_stat(*args, **kwargs))), \
+                mock.patch.object(smoke.os, 'fstat', side_effect=lambda *args, **kwargs: changed(original_fstat(*args, **kwargs))):
+            yield
+
+    def test_descriptor_changes_only_write_bits_on_parent_and_restores_after_stopped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / 'parent'
+            parent.mkdir()
+            parent.chmod(0o1777)
+            child = parent / 'child'
+            child.mkdir()
+            child.chmod(0o777)
+            file = child / 'fixture'
+            file.write_text('synthetic permission fixture')
+            file.chmod(0o666)
+            with self.owner(), mock.patch.object(smoke.os, 'open', wraps=os.open) as opened:
+                prepared = smoke.harden_smoke_install_parent(parent)
+                try:
+                    self.assertEqual(prepared['original_mode'], 0o1777)
+                    self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o1755)
+                    self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o777)
+                    self.assertEqual(stat.S_IMODE(file.stat().st_mode), 0o666)
+                    flags = opened.call_args[0][1]
+                    self.assertTrue(flags & os.O_NOFOLLOW and flags & os.O_DIRECTORY and flags & os.O_CLOEXEC)
+                    smoke.restore_smoke_install_parent(prepared, True)
+                    self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o1777)
+                    self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o777)
+                    self.assertEqual(stat.S_IMODE(file.stat().st_mode), 0o666)
+                finally:
+                    os.close(prepared['descriptor'])
+
+    def test_link_nondirectory_and_nonroot_ownership_are_refused_without_chmod(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / 'target'
+            target.mkdir()
+            target.chmod(0o777)
+            link = root / 'link'
+            link.symlink_to(target, target_is_directory=True)
+            file = root / 'file'
+            file.write_text('synthetic file')
+            with self.owner(), mock.patch.object(smoke.os, 'fchmod') as chmod:
+                for path in (link, file):
+                    with self.subTest(path=path.name), self.assertRaises((RuntimeError, OSError)):
+                        smoke.harden_smoke_install_parent(path)
+                chmod.assert_not_called()
+            with self.owner(uid=12345), mock.patch.object(smoke.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                smoke.harden_smoke_install_parent(target)
+            chmod.assert_not_called()
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o777)
+
+    def test_restore_refuses_unverified_services_changed_identity_or_permissions(self):
+        for attack in ('running', 'new_inode', 'changed_mode', 'new_owner'):
+            with self.subTest(attack=attack), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'parent'
+                path.mkdir()
+                path.chmod(0o777)
+                with self.owner():
+                    prepared = smoke.harden_smoke_install_parent(path)
+                try:
+                    if attack == 'new_inode':
+                        path.rename(Path(directory) / 'retained')
+                        path.mkdir()
+                        path.chmod(0o777)
+                    elif attack == 'changed_mode':
+                        path.chmod(0o750)
+                    with self.owner(uid=12345 if attack == 'new_owner' else 0), \
+                            mock.patch.object(smoke.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                        smoke.restore_smoke_install_parent(prepared, attack != 'running')
+                    chmod.assert_not_called()
+                    if attack == 'running':
+                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755)
+                finally:
+                    os.close(prepared['descriptor'])
+
+    def test_unavailable_service_query_or_active_pid_blocks_restoration(self):
+        failures = (subprocess.CompletedProcess([], 1, b''),
+                    subprocess.CompletedProcess([], 0, b'LoadState=loaded\nActiveState=inactive\nMainPID=42\n'))
+        for failure in failures:
+            with self.subTest(status=failure.returncode), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'parent'
+                path.mkdir()
+                path.chmod(0o777)
+                with self.owner():
+                    prepared = smoke.harden_smoke_install_parent(path)
+                    try:
+                        with mock.patch.object(smoke, 'run', return_value=failure):
+                            stopped = smoke.native_services_stopped()
+                        self.assertFalse(stopped)
+                        with mock.patch.object(smoke.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                            smoke.restore_smoke_install_parent(prepared, stopped)
+                        chmod.assert_not_called()
+                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755)
+                    finally:
+                        os.close(prepared['descriptor'])
+
+    def test_changed_inode_during_protection_refuses_and_closes_owned_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'parent'
+            path.mkdir()
+            path.chmod(0o777)
+            fields = list(path.stat())
+            fields[4] = 0
+            initial = os.stat_result(fields)
+            fields[1] += 1
+            changed = os.stat_result(fields)
+            with self.owner(), mock.patch.object(smoke.os, 'stat', side_effect=[initial, changed]), \
+                    mock.patch.object(smoke.os, 'close', wraps=os.close) as close, self.assertRaises(RuntimeError):
+                smoke.harden_smoke_install_parent(path)
+            close.assert_called_once()
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755)
+
+    def test_failed_stop_cannot_restore_even_when_unit_queries_would_report_stopped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'parent'
+            path.mkdir()
+            path.chmod(0o777)
+            sentinel = Path(directory) / 'sentinel'
+            sentinel.write_text('synthetic host sentinel')
+            with self.owner():
+                prepared = smoke.harden_smoke_install_parent(path)
+                inactive = subprocess.CompletedProcess([], 0, b'LoadState=loaded\nActiveState=inactive\nMainPID=0\n')
+                with mock.patch.object(smoke, 'run', side_effect=[subprocess.CompletedProcess([], 1)] + [inactive] * 4) as stop, \
+                        mock.patch.object(smoke.os, 'fchmod') as chmod, \
+                        mock.patch.object(smoke.os, 'close', wraps=os.close) as close, self.assertRaises(RuntimeError):
+                    smoke.cleanup_native_smoke(prepared, 'synthetic-launcher', {}, True, sentinel, False)
+                stop.assert_called_once_with('synthetic-launcher', 'stop', env={}, check=False)
+                chmod.assert_not_called()
+                close.assert_called_once_with(prepared['descriptor'])
+                self.assertFalse(sentinel.exists())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755)
+
+    def test_successful_combined_cleanup_verifies_all_units_then_restores_and_closes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'parent'
+            path.mkdir()
+            path.chmod(0o777)
+            sentinel = Path(directory) / 'sentinel'
+            sentinel.write_text('synthetic host sentinel')
+            with self.owner():
+                prepared = smoke.harden_smoke_install_parent(path)
+                inactive = subprocess.CompletedProcess([], 0, b'LoadState=loaded\nActiveState=inactive\nMainPID=0\n')
+                with mock.patch.object(smoke, 'run', side_effect=[subprocess.CompletedProcess([], 0)] + [inactive] * 4) as run, \
+                        mock.patch.object(smoke.os, 'close', wraps=os.close) as close:
+                    self.assertTrue(smoke.cleanup_native_smoke(prepared, 'synthetic-launcher', {}, True, sentinel, False))
+                self.assertEqual(run.call_args_list, [mock.call('synthetic-launcher', 'stop', env={}, check=False)] +
+                    [mock.call('systemctl', 'show', unit, '--property=LoadState,ActiveState,MainPID', check=False)
+                     for unit in smoke.UNITS])
+                close.assert_called_once_with(prepared['descriptor'])
+                self.assertFalse(sentinel.exists())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+
+
+class NativeSmokeStoppedTests(unittest.TestCase):
+    def test_all_four_units_must_have_proven_stopped_states(self):
+        states = (subprocess.CompletedProcess([], 0, b'LoadState=loaded\nActiveState=inactive\nMainPID=0\n'),
+                  subprocess.CompletedProcess([], 0, b'ActiveState=failed\nMainPID=0\nLoadState=loaded\n'))
+        for state in states:
+            with self.subTest(state=state.stdout), mock.patch.object(smoke, 'run', return_value=state) as run:
+                self.assertTrue(smoke.native_services_stopped())
+                self.assertEqual(run.call_args_list, [mock.call('systemctl', 'show', unit,
+                    '--property=LoadState,ActiveState,MainPID', check=False) for unit in smoke.UNITS])
+        for active in (b'active', b'activating', b'deactivating', b'reloading', b'maintenance', b'unknown'):
+            result = subprocess.CompletedProcess([], 0, b'LoadState=loaded\nActiveState=' + active + b'\nMainPID=0\n')
+            with self.subTest(active=active), mock.patch.object(smoke, 'run', return_value=result):
+                self.assertFalse(smoke.native_services_stopped())
+        malformed = (subprocess.CompletedProcess([], 1, b'LoadState=loaded\nActiveState=inactive\nMainPID=0\n'),
+                     subprocess.CompletedProcess([], 0, b'LoadState=not-found\nActiveState=inactive\nMainPID=0\n'),
+                     subprocess.CompletedProcess([], 2, b'LoadState=loaded\nActiveState=inactive\nMainPID=0\n'),
+                     subprocess.CompletedProcess([], 0, b'LoadState=loaded\nActiveState=inactive\nMainPID=42\n'),
+                     subprocess.CompletedProcess([], 0, b'ActiveState=inactive\nActiveState=inactive\nMainPID=0\n'),
+                     subprocess.CompletedProcess([], 0, b'synthetic private log text'),
+                     subprocess.CompletedProcess([], 0, b'x' * 257))
+        for result in malformed:
+            with self.subTest(result=result.stdout[:80]), mock.patch.object(smoke, 'run', return_value=result):
+                self.assertFalse(smoke.native_services_stopped())
+        with mock.patch.object(smoke, 'run', side_effect=[states[0]] * 3 + [malformed[0]]):
+            self.assertFalse(smoke.native_services_stopped())
 
 
 @unittest.skipUnless(platform.system() == 'Linux' and shutil.which('bash') and shutil.which('systemd-analyze'),

@@ -19,7 +19,9 @@ import re
 import secrets
 import shutil
 import ssl
+import stat
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -38,10 +40,10 @@ def native_failure_marker(output, launcher_line_count, returncode):
             type(launcher_line_count) is not int or not 0 < launcher_line_count <= 65536 or
             type(returncode) is not int or not 0 < returncode <= 255):
         return None
-    markers = [line for line in output.splitlines() if b'VECTORY_NATIVE_FAILURE' in line]
+    markers = [line for line in output.splitlines() if b'VECTORY-NATIVE-FAILURE' in line]
     if len(markers) != 1:
         return None
-    match = re.fullmatch(rb'VECTORY_NATIVE_FAILURE phase=([a-z_]+) status=([1-9][0-9]{0,2}) line=([1-9][0-9]{0,5})', markers[0])
+    match = re.fullmatch(rb'VECTORY-NATIVE-FAILURE phase=([a-z_]+) status=([1-9][0-9]{0,2}) line=([1-9][0-9]{0,5})', markers[0])
     if match is None:
         return None
     phase = match[1].decode('ascii')
@@ -69,6 +71,83 @@ def check_native_start(outcome, log, launcher_source, operation):
     if marker is not None:
         description += f" at phase={marker['phase']} line={marker['line']} status={marker['status']}"
     raise RuntimeError(description + '; private output was not published')
+
+
+def harden_smoke_install_parent(directory):
+    """Prepare only the parent inode on this explicitly disposable smoke host."""
+    check(directory.resolve(strict=True) == directory, 'Smoke installation parent is not canonical')
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        original = os.fstat(descriptor)
+        current = os.stat(directory, follow_symlinks=False)
+        check(stat.S_ISDIR(original.st_mode) and original.st_uid == 0 and
+              stat.S_ISDIR(current.st_mode) and current.st_uid == 0 and
+              (original.st_dev, original.st_ino) == (current.st_dev, current.st_ino),
+              'Smoke installation parent is not a stable root-owned directory')
+        original_mode = stat.S_IMODE(original.st_mode)
+        protected_mode = original_mode & ~0o022
+        os.fchmod(descriptor, protected_mode)
+        check(stat.S_IMODE(os.fstat(descriptor).st_mode) == protected_mode,
+              'Smoke installation parent permissions were not protected')
+        current = os.stat(directory, follow_symlinks=False)
+        check(stat.S_ISDIR(current.st_mode) and current.st_uid == 0 and
+              (original.st_dev, original.st_ino) == (current.st_dev, current.st_ino),
+              'Smoke installation parent identity changed during protection')
+        return {'descriptor': descriptor, 'directory': directory,
+                'identity': (original.st_dev, original.st_ino),
+                'original_mode': original_mode, 'protected_mode': protected_mode}
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def restore_smoke_install_parent(parent, services_stopped):
+    check(services_stopped is True, 'Smoke parent remains protected because services are not confirmed stopped')
+    descriptor, directory = parent['descriptor'], parent['directory']
+    original = os.fstat(descriptor)
+    current = os.stat(directory, follow_symlinks=False)
+    check(stat.S_ISDIR(original.st_mode) and original.st_uid == 0 and
+          stat.S_ISDIR(current.st_mode) and current.st_uid == 0 and
+          (original.st_dev, original.st_ino) == (current.st_dev, current.st_ino) == parent['identity'] and
+          stat.S_IMODE(original.st_mode) == parent['protected_mode'],
+          'Smoke parent identity or protected mode changed; permissions were not restored')
+    os.fchmod(descriptor, parent['original_mode'])
+
+
+def native_services_stopped():
+    for unit in UNITS:
+        result = run('systemctl', 'show', unit, '--property=LoadState,ActiveState,MainPID', check=False)
+        if result.returncode != 0 or len(result.stdout) > 256:
+            return False
+        records = [line.partition(b'=') for line in result.stdout.splitlines()]
+        if len(records) != 3 or any(separator != b'=' for _, separator, _ in records):
+            return False
+        fields = {key: value for key, _, value in records}
+        if set(fields) != {b'LoadState', b'ActiveState', b'MainPID'}:
+            return False
+        if fields[b'LoadState'] != b'loaded' or fields[b'ActiveState'] not in (b'inactive', b'failed') or fields[b'MainPID'] != b'0':
+            return False
+    return True
+
+
+def stop_native_smoke_services(launcher, environment, stop_required):
+    if stop_required and run(launcher, 'stop', env=environment, check=False).returncode != 0:
+        return False
+    return native_services_stopped()
+
+
+def cleanup_native_smoke(parent, launcher, environment, stop_required, sentinel, failed):
+    try:
+        stopped = stop_native_smoke_services(launcher, environment, stop_required)
+        sentinel.unlink(missing_ok=True)
+        if parent is not None and stopped:
+            restore_smoke_install_parent(parent, True)
+        elif parent is not None and not failed:
+            raise RuntimeError('Native stop could not be proved; the smoke parent remains protected')
+        return stopped
+    finally:
+        if parent is not None:
+            os.close(parent['descriptor'])
 
 
 def run(*args, check=True, env=None, timeout=180):
@@ -129,7 +208,12 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
     sentinel.write_text('synthetic publicly readable host sentinel\n')
     sentinel.chmod(0o644)
     started = False
+    parent = None
     try:
+        # Hosted build images intentionally make /opt writable. The product
+        # installer must refuse that; this fresh CI host receives the normal
+        # protected parent prerequisite without changing any descendants.
+        parent = harden_smoke_install_parent(Path('/opt'))
         with tempfile.TemporaryDirectory(prefix='vectory-native-private-log-') as temporary:
             log = Path(temporary) / 'startup.log'
             install_command = [launcher, *arguments]
@@ -294,11 +378,10 @@ def smoke(kit, archive, out, release_dir=None, bootstrap_script=None):
               'Native restart lost its first account or retained agent issuer')
         verified.add('restart_state_preserved')
     finally:
-        if started or Path('/etc/vectory-server/instance.conf').exists():
-            run(launcher, 'stop', env=environment, check=False)
-        sentinel.unlink(missing_ok=True)
-    check(all(run('systemctl', 'is-active', '--quiet', unit, check=False).returncode != 0 for unit in UNITS),
-          'Native stop left a service active')
+        failed = sys.exc_info()[0] is not None
+        stopped = cleanup_native_smoke(parent, launcher, environment,
+            started or Path('/etc/vectory-server/instance.conf').exists(), sentinel, failed)
+    check(stopped, 'Native stop left a service active or unverified')
     verified.add('stop')
     evidence = {'passed': True, 'version': version, 'source_commit': proof['source_commit'],
         'archive_sha256': digest(archive), 'verified': sorted(verified),

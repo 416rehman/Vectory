@@ -11,7 +11,7 @@ native_failure() {
   native_failure_emitted=1
   [[ "$native_failure_line" == 0 ]] || line="$native_failure_line"
   [[ "$line" =~ ^[1-9][0-9]*$ ]] || line=1
-  printf 'VECTORY_NATIVE_FAILURE phase=%s status=%s line=%s\n' "$native_failure_phase" "$status" "$line" >&2
+  printf 'VECTORY-NATIVE-FAILURE phase=%s status=%s line=%s\n' "$native_failure_phase" "$status" "$line" >&2
 }
 trap 'native_failure_line=$LINENO' ERR
 trap 'native_failure "$?" "$LINENO"' EXIT
