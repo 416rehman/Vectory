@@ -81,6 +81,222 @@ class NativeSmokeDiagnosticsTests(unittest.TestCase):
         launcher.open.assert_not_called()
 
 
+class RetainedWorkerObservationTests(unittest.TestCase):
+    def record(self, **changes):
+        fields = {'LoadState': 'loaded', 'Result': 'exit-code', 'ExecMainCode': '1',
+                  'ExecMainStatus': '1', 'ActiveState': 'failed', 'SubState': 'failed'}
+        fields.update(changes)
+        return ''.join(key + '=' + value + '\n' for key, value in fields.items()).encode('ascii')
+
+    def query(self, output=None, status=0):
+        def invoke(arguments, **options):
+            options['stdout'].write(self.record() if output is None else output)
+            return subprocess.CompletedProcess(arguments, status)
+        return invoke
+
+    def test_only_fixed_enums_and_canonical_numbers_are_returned(self):
+        expected = {'LoadState': 'loaded', 'Result': 'exit-code', 'ExecMainCode': 1,
+                    'ExecMainStatus': 1, 'ActiveState': 'failed', 'SubState': 'failed'}
+        self.assertEqual(smoke.retained_worker_observation(self.record()), expected)
+        for key, values in (('Result', smoke.SERVICE_RESULTS),
+                            ('ActiveState', smoke.SERVICE_ACTIVE_STATES),
+                            ('SubState', smoke.SERVICE_SUB_STATES)):
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(smoke.retained_worker_observation(
+                        self.record(**{key: value.decode('ascii')}))[key], value.decode('ascii'))
+        for code, status in ((0, 0), (6, 255)):
+            self.assertEqual(smoke.retained_worker_observation(self.record(
+                ExecMainCode=str(code), ExecMainStatus=str(status)))['ExecMainStatus'], status)
+
+    def test_unknown_duplicate_oversized_and_private_fields_are_refused(self):
+        valid = self.record()
+        attacks = (b'', valid.decode(), valid + b'\n', valid + b'x' * 513,
+                   valid.replace(b'LoadState=loaded', b'LoadState=not-found'),
+                   valid.replace(b'Result=exit-code', b'Result=outside/path'),
+                   valid.replace(b'ActiveState=failed', b'ActiveState=unknown'),
+                   valid.replace(b'SubState=failed', b'SubState=unknown'),
+                   valid.replace(b'ExecMainCode=1', b'ExecMainCode=7'),
+                   valid.replace(b'ExecMainCode=1', b'ExecMainCode=01'),
+                   valid.replace(b'ExecMainStatus=1', b'ExecMainStatus=256'),
+                   valid.replace(b'ExecMainStatus=1', b'ExecMainStatus=-1'),
+                   valid.replace(b'ExecMainStatus=1', b'ExecMainStatus=01'),
+                   valid.replace(b'ExecMainStatus=1', b'ExecMainStatus=+1'),
+                   valid.replace(b'ExecMainStatus=1', b'ExecMainStatus=\xff'),
+                   valid.replace(b'ExecMainStatus=1\n', b''),
+                   valid.replace(b'ExecMainStatus=1', b'Result=exit-code'),
+                   valid + b'Environment=synthetic-private-secret\n',
+                   valid.replace(b'Result=exit-code', b'Result=exit-code\nsynthetic-private-text'))
+        for data in attacks:
+            with self.subTest(data=repr(data)[:100]):
+                self.assertIsNone(smoke.retained_worker_observation(data))
+
+    def test_fixed_query_uses_short_timeout_and_discards_stderr(self):
+        with mock.patch.object(smoke.subprocess, 'run', side_effect=self.query()) as query:
+            observed = smoke.observe_retained_worker()
+        self.assertEqual(observed['Result'], 'exit-code')
+        self.assertNotIn('synthetic-private', repr(observed))
+        query.assert_called_once_with(('systemctl', 'show', 'vectory-native-validator.service',
+            '--property=LoadState,Result,ExecMainCode,ExecMainStatus,ActiveState,SubState'),
+            stdout=mock.ANY, stderr=subprocess.DEVNULL, check=False, timeout=5)
+        self.assertTrue(query.call_args.kwargs['stdout'].closed)
+
+    def test_failed_malformed_missing_and_timed_out_queries_are_unavailable(self):
+        for output, status in ((self.record(), 1), (b'x' * 513, 0),
+                               (self.record() + b'Path=synthetic\n', 0)):
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=self.query(output, status)):
+                self.assertIsNone(smoke.observe_retained_worker())
+        for error in (OSError('synthetic-private-path'),
+                      subprocess.TimeoutExpired(['synthetic-private-argv'], 5,
+                          output=b'synthetic-private-output', stderr=b'synthetic-private-stderr')):
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=error):
+                self.assertIsNone(smoke.observe_retained_worker())
+
+    def test_query_reads_only_the_size_bound_plus_one_and_closes_private_output(self):
+        output = mock.MagicMock()
+        output.__enter__.return_value = output
+        output.read.return_value = self.record() + b'x' * 513
+        with mock.patch.object(smoke.tempfile, 'TemporaryFile', return_value=output), \
+                mock.patch.object(smoke.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            self.assertIsNone(smoke.observe_retained_worker())
+        output.read.assert_called_once_with(513)
+        output.__exit__.assert_called_once()
+
+    def test_worker_failure_still_raises_with_labeled_safe_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log, launcher = root / 'private.log', root / 'launcher.sh'
+            launcher.write_bytes(b'fixed launcher source line\n' * 80)
+            log.write_bytes(b'synthetic-private-secret\n' + marker(phase='validator_readiness') + b'\n')
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=self.query()) as query, self.assertRaises(RuntimeError) as failure:
+                smoke.check_native_start(subprocess.CompletedProcess([], 1), log, launcher, 'startup')
+            self.assertEqual(str(failure.exception), 'Native startup failed at phase=validator_readiness line=40 status=1; retained worker observation after launcher cleanup=LoadState=loaded,Result=exit-code,ExecMainCode=1,ExecMainStatus=1,ActiveState=failed,SubState=failed; retained observed worker error=unavailable; private output was not published')
+            self.assertNotIn('synthetic-private', str(failure.exception))
+            self.assertNotIn(str(root), str(failure.exception))
+            self.assertEqual(query.call_count, 2)
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=OSError('synthetic-private-path')), self.assertRaises(RuntimeError) as failure:
+                smoke.check_native_start(subprocess.CompletedProcess([], 1), log, launcher, 'restart')
+            self.assertEqual(str(failure.exception), 'Native restart failed at phase=validator_readiness line=40 status=1; retained worker observation after launcher cleanup=unavailable; retained observed worker error=unavailable; private output was not published')
+
+    def test_success_nonworker_and_invalid_markers_never_query_service_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log, launcher = root / 'private.log', root / 'launcher.sh'
+            launcher.write_bytes(b'fixed launcher source line\n' * 80)
+            with mock.patch.object(smoke.subprocess, 'run') as query:
+                smoke.check_native_start(subprocess.CompletedProcess([], 0), log, launcher, 'startup')
+                for data in (marker(), marker(phase='validator_readiness') + b'\n' + marker()):
+                    log.write_bytes(data)
+                    with self.assertRaises(RuntimeError):
+                        smoke.check_native_start(subprocess.CompletedProcess([], 1), log, launcher, 'startup')
+                query.assert_not_called()
+
+
+class RetainedWorkerErrorTests(unittest.TestCase):
+    def test_exact_public_worker_sentences_and_fixed_signal_lines_return_only_ids(self):
+        root = Path(__file__).resolve().parents[1]
+        public_source = (root / 'server/src/bin/vector-validator.rs').read_bytes()
+        public_source += (root / 'server/src/validation_socket.rs').read_bytes()
+        for sentence, identifier in smoke.WORKER_ERROR_SENTENCES.items():
+            with self.subTest(identifier=identifier):
+                self.assertIn(sentence.removeprefix(b'Error: '), public_source)
+                self.assertEqual(smoke.retained_worker_error(sentence + b'\n'), identifier)
+                self.assertEqual(smoke.retained_worker_error(
+                    b'synthetic-private-message\n' + sentence + b'\n' + sentence + b'\n'), identifier)
+        for sentence in smoke.SYSTEMD_WORKER_ERROR_LINES:
+            self.assertEqual(smoke.retained_worker_error(sentence), 'syscall_signal')
+
+    def test_unknown_ambiguous_malformed_and_private_injections_are_unavailable(self):
+        known = next(iter(smoke.WORKER_ERROR_SENTENCES))
+        different = list(smoke.WORKER_ERROR_SENTENCES)[1]
+        signal = next(iter(smoke.SYSTEMD_WORKER_ERROR_LINES))
+        attacks = (b'', known.decode(), b'synthetic-private-message', b'Error: synthetic-private-error',
+                   known + b' synthetic-private-path', b'prefix ' + known, b'\x00' + known,
+                   b'\xff' + known, known + b'\n' + different, known + b'\n' + signal,
+                   known + b'\nError: synthetic-private-error', known + b'\n' + b'x' * 8193,
+                   signal.replace(b'vectory-native-validator.service', b'other.service'),
+                   signal.replace(b'status=31/SYS', b'status=15/TERM'),
+                   signal + b'\n' + smoke.WORKER_EXIT_COMPANION)
+        for data in attacks:
+            with self.subTest(data=repr(data)[:100]):
+                self.assertIsNone(smoke.retained_worker_error(data))
+
+    def test_exit_companion_is_ignored_only_with_one_exact_worker_error(self):
+        companion = smoke.WORKER_EXIT_COMPANION
+        known, identifier = next(iter(smoke.WORKER_ERROR_SENTENCES.items()))
+        self.assertIsNone(smoke.retained_worker_error(companion))
+        self.assertEqual(smoke.retained_worker_error(known + b'\n' + companion), identifier)
+        self.assertIsNone(smoke.retained_worker_error(b'Error: synthetic-private-error\n' + companion))
+        signal = next(iter(smoke.SYSTEMD_WORKER_ERROR_LINES))
+        self.assertIsNone(smoke.retained_worker_error(known + b'\n' + signal + b'\n' + companion))
+
+    def test_private_fixed_query_has_bounded_read_permissions_timeout_and_cleanup(self):
+        known, identifier = next(iter(smoke.WORKER_ERROR_SENTENCES.items()))
+        paths = []
+
+        def invoke(arguments, **options):
+            path = Path(options['stdout'].name)
+            paths.append(path)
+            if os.name == 'posix':
+                self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            options['stdout'].write(b'synthetic-private-message\n' + known + b'\n')
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with mock.patch.object(smoke.subprocess, 'run', side_effect=invoke) as query, \
+                mock.patch.object(smoke, 'retained_worker_error', wraps=smoke.retained_worker_error) as classify:
+            self.assertEqual(smoke.observe_retained_worker_error(), identifier)
+        query.assert_called_once_with(('journalctl', '--boot=0',
+            '--unit=vectory-native-validator.service', '--output=cat', '--no-pager', '--lines=40'),
+            stdout=mock.ANY, stderr=subprocess.DEVNULL, check=False, timeout=5)
+        self.assertTrue(query.call_args.kwargs['stdout'].closed)
+        self.assertEqual(classify.call_count, 1)
+        self.assertTrue(all(not path.exists() and not path.parent.exists() for path in paths))
+
+    def test_overbound_failed_and_timed_out_queries_never_return_private_content(self):
+        known = next(iter(smoke.WORKER_ERROR_SENTENCES))
+        for content, status in ((known + b'\n' + b'x' * 16384, 0), (known, 1),
+                                (b'Error: synthetic-private-error', 0)):
+            paths = []
+
+            def invoke(arguments, **options):
+                paths.append(Path(options['stdout'].name))
+                options['stdout'].write(content)
+                return subprocess.CompletedProcess(arguments, status)
+
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=invoke), \
+                    mock.patch.object(smoke, 'retained_worker_error', wraps=smoke.retained_worker_error) as classify:
+                self.assertIsNone(smoke.observe_retained_worker_error())
+            if status == 0:
+                self.assertLessEqual(len(classify.call_args.args[0]), 8193)
+            self.assertTrue(all(not path.exists() and not path.parent.exists() for path in paths))
+        for error in (OSError('synthetic-private-path'),
+                      subprocess.TimeoutExpired(['synthetic-private-argv'], 5,
+                          output=b'synthetic-private-output', stderr=b'synthetic-private-stderr')):
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=error):
+                self.assertIsNone(smoke.observe_retained_worker_error())
+
+    def test_combined_failure_discloses_only_an_observed_identifier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log, launcher = root / 'private.log', root / 'launcher.sh'
+            launcher.write_bytes(b'fixed launcher source line\n' * 80)
+            log.write_bytes(b'synthetic-private-secret\n' + marker(phase='validator_readiness') + b'\n')
+            sentence = next(line for line, identifier in smoke.WORKER_ERROR_SENTENCES.items()
+                if identifier == 'socket_parent_mode')
+
+            def invoke(arguments, **options):
+                options['stdout'].write(sentence if arguments[0] == 'journalctl' else b'unknown-private-state')
+                return subprocess.CompletedProcess(arguments, 0)
+
+            with mock.patch.object(smoke.subprocess, 'run', side_effect=invoke), self.assertRaises(RuntimeError) as failure:
+                smoke.check_native_start(subprocess.CompletedProcess([], 1), log, launcher, 'startup')
+            self.assertEqual(str(failure.exception), 'Native startup failed at phase=validator_readiness line=40 status=1; retained worker observation after launcher cleanup=unavailable; retained observed worker error=socket_parent_mode; private output was not published')
+            self.assertNotIn(sentence.decode(), str(failure.exception))
+            self.assertNotIn('synthetic-private', str(failure.exception))
+            self.assertNotIn(str(root), str(failure.exception))
+
+
 @unittest.skipUnless(os.name == 'posix', 'Descriptor permission fixtures require POSIX; no global directory is changed')
 class NativeSmokeParentTests(unittest.TestCase):
     @contextmanager

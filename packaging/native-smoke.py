@@ -32,6 +32,116 @@ FAILURE_PHASES = frozenset(('argument_parse', 'host_preflight', 'retained_instan
     'payload_install', 'service_identity', 'state_prepare', 'configuration_install', 'unit_verification',
     'validator_start', 'validator_readiness', 'validator_isolation', 'public_start', 'public_readiness',
     'final_isolation', 'initialization_status'))
+# Fixed string tables from systemd v255 src/core/service.c and src/basic/unit-def.c.
+SERVICE_RESULTS = frozenset((b'success', b'resources', b'protocol', b'timeout', b'exit-code',
+    b'signal', b'core-dump', b'watchdog', b'start-limit-hit', b'oom-kill', b'exec-condition'))
+SERVICE_ACTIVE_STATES = frozenset((b'active', b'reloading', b'inactive', b'failed',
+    b'activating', b'deactivating', b'maintenance'))
+SERVICE_SUB_STATES = frozenset((b'dead', b'condition', b'start-pre', b'start', b'start-post',
+    b'running', b'exited', b'reload', b'reload-signal', b'reload-notify', b'stop',
+    b'stop-watchdog', b'stop-sigterm', b'stop-sigkill', b'stop-post', b'final-watchdog',
+    b'final-sigterm', b'final-sigkill', b'failed', b'dead-before-auto-restart',
+    b'failed-before-auto-restart', b'dead-resources-pinned', b'auto-restart',
+    b'auto-restart-queued', b'cleaning'))
+WORKER_OBSERVATION_PROPERTIES = 'LoadState,Result,ExecMainCode,ExecMainStatus,ActiveState,SubState'
+WORKER_ERROR_SENTENCES = {
+    b'Error: Validator must run in a separately isolated worker with no production mounts/secrets and restricted network/resources; set VECTORY_VALIDATOR_ISOLATED=true only in that runtime': 'isolated_runtime_required',
+    b'Error: Choose only one of VECTORY_VALIDATOR_SOCKET and VECTORY_VALIDATOR_ADDR': 'socket_transport_conflict',
+    b'Error: Validator socket must be a clean absolute Linux path of at most 100 bytes': 'socket_path_policy',
+    b'Error: Validator socket parent must be an unlinked private directory with mode 0750': 'socket_parent_mode',
+    b'Error: Validator socket ancestors must be unlinked directories owned by root or the worker, with no group or other write access': 'socket_ancestors',
+    b'Error: Validator socket must be an unlinked socket owned by its worker directory\'s user and group, with mode 0660': 'socket_mode_owner',
+    b'Error: Validator Vector path must be absolute': 'vector_absolute_path',
+    b'Error: Validator requires the pinned Vector version': 'vector_version',
+}
+# Exact systemd v255 unit_log_process_exit messages, not a cause attribution.
+SYSTEMD_WORKER_ERROR_LINES = {
+    b'vectory-native-validator.service: Main process exited, code=killed, status=31/SYS': 'syscall_signal',
+    b'vectory-native-validator.service: Main process exited, code=dumped, status=31/SYS': 'syscall_signal',
+}
+WORKER_EXIT_COMPANION = b'vectory-native-validator.service: Main process exited, code=exited, status=1/FAILURE'
+
+
+def retained_worker_error(output):
+    """Classify exact public error sentences without returning journal content."""
+    if not isinstance(output, bytes) or len(output) > 8192:
+        return None
+    if any(byte < 32 and byte not in (9, 10, 13) or byte == 127 for byte in output):
+        return None
+    try:
+        output.decode('utf-8')
+    except UnicodeError:
+        return None
+    identifiers = set()
+    companion = False
+    for line in output.splitlines():
+        if line == WORKER_EXIT_COMPANION:
+            companion = True
+            continue
+        if b'Error:' in line or b'Main process exited' in line:
+            identifier = WORKER_ERROR_SENTENCES.get(line, SYSTEMD_WORKER_ERROR_LINES.get(line))
+            if identifier is None:
+                return None
+            identifiers.add(identifier)
+    if len(identifiers) != 1:
+        return None
+    identifier = next(iter(identifiers))
+    return identifier if not companion or identifier in WORKER_ERROR_SENTENCES.values() else None
+
+
+def observe_retained_worker_error():
+    """Read only bounded private messages for this boot's fixed worker unit."""
+    try:
+        with tempfile.TemporaryDirectory(prefix='vectory-native-private-diagnostic-') as directory:
+            parent = Path(directory)
+            parent.chmod(0o700)
+            private = parent / 'journal'
+            with private.open('x+b') as output:
+                private.chmod(0o600)
+                result = subprocess.run(('journalctl', '--boot=0',
+                    '--unit=vectory-native-validator.service', '--output=cat', '--no-pager', '--lines=40'),
+                    stdout=output, stderr=subprocess.DEVNULL, check=False, timeout=5)
+                if result.returncode == 0:
+                    output.seek(0)
+                    return retained_worker_error(output.read(8193))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def retained_worker_observation(output):
+    """Return only bounded status enums and numbers, never other service data."""
+    if not isinstance(output, bytes) or len(output) > 512:
+        return None
+    records = [line.partition(b'=') for line in output.splitlines()]
+    if len(records) != 6 or any(separator != b'=' for _, separator, _ in records):
+        return None
+    fields = {key: value for key, _, value in records}
+    if set(fields) != {part.encode('ascii') for part in WORKER_OBSERVATION_PROPERTIES.split(',')}:
+        return None
+    if (fields[b'LoadState'] != b'loaded' or fields[b'Result'] not in SERVICE_RESULTS or
+            fields[b'ActiveState'] not in SERVICE_ACTIVE_STATES or fields[b'SubState'] not in SERVICE_SUB_STATES or
+            re.fullmatch(rb'[0-6]', fields[b'ExecMainCode']) is None or
+            re.fullmatch(rb'(0|[1-9][0-9]{0,2})', fields[b'ExecMainStatus']) is None or
+            int(fields[b'ExecMainStatus']) > 255):
+        return None
+    return {key.decode('ascii'): (int(value) if key in (b'ExecMainCode', b'ExecMainStatus')
+            else value.decode('ascii')) for key, value in fields.items()}
+
+
+def observe_retained_worker():
+    """Observe the fixed worker after launcher cleanup; this is not a cause claim."""
+    try:
+        with tempfile.TemporaryFile() as output:
+            result = subprocess.run(('systemctl', 'show', 'vectory-native-validator.service',
+                '--property=' + WORKER_OBSERVATION_PROPERTIES), stdout=output,
+                stderr=subprocess.DEVNULL, check=False, timeout=5)
+            if result.returncode == 0:
+                output.seek(0)
+                return retained_worker_observation(output.read(513))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
 
 
 def native_failure_marker(output, launcher_line_count, returncode):
@@ -70,6 +180,16 @@ def check_native_start(outcome, log, launcher_source, operation):
     description = 'Native ' + operation + ' failed'
     if marker is not None:
         description += f" at phase={marker['phase']} line={marker['line']} status={marker['status']}"
+        if marker['phase'] in ('validator_start', 'validator_readiness', 'validator_isolation'):
+            observation = observe_retained_worker()
+            description += '; retained worker observation after launcher cleanup='
+            if observation is None:
+                description += 'unavailable'
+            else:
+                description += ','.join(key + '=' + str(observation[key])
+                    for key in WORKER_OBSERVATION_PROPERTIES.split(','))
+            error = observe_retained_worker_error()
+            description += '; retained observed worker error=' + (error if error is not None else 'unavailable')
     raise RuntimeError(description + '; private output was not published')
 
 
