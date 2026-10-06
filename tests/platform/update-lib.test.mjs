@@ -37,6 +37,8 @@ test("an edit that finds its place once is made, and one that doesn't is refused
 test("every build's edits apply to the product's source exactly where they are meant to", () => {
   assert.equal(BUILDS.length, new Set(BUILDS.map((b) => b.version)).size);
   assert.equal(BUILDS[0].version, "0.1.0");
+  const original = read("agent/internal/agent/types.go");
+  const originalVersion = original.match(/^const Version = "([^"]+)"$/m)[1];
   for (const build of BUILDS) {
     const edits = editsFor(build, read);
     assert.match(
@@ -46,12 +48,11 @@ test("every build's edits apply to the product's source exactly where they are m
         "m",
       ),
     );
-    const original = read("agent/internal/agent/types.go");
     assert.equal(
       edits["agent/internal/agent/types.go"]
         .split("\n")
         .filter((l, i) => l !== original.split("\n")[i]).length,
-      build.version === "0.1.0" ? 0 : 1,
+      build.version === originalVersion ? 0 : 1,
       "only the version constant differs",
     );
     const reconcile = edits["agent/internal/agent/reconcile.go"];
@@ -74,6 +75,27 @@ test("every build's edits apply to the product's source exactly where they are m
       );
     } else assert.equal(reconcile, undefined);
   }
+});
+
+test("native update fixtures retain their baseline after the product version advances", () => {
+  const newer = 'const Version = "0.1.1"\nconst VectorVersion = "0.58.0"\n';
+  assert.equal(
+    setVersion(newer, "0.1.0"),
+    'const Version = "0.1.0"\nconst VectorVersion = "0.58.0"\n',
+  );
+  assert.equal(setVersion(newer, "0.1.1"), newer);
+  assert.throws(
+    () => setVersion('const VectorVersion = "0.58.0"', "0.1.0"),
+    /exactly one/,
+  );
+  assert.throws(
+    () => setVersion(newer + 'const Version = "0.1.2"\n', "0.1.0"),
+    /exactly one/,
+  );
+  assert.throws(
+    () => setVersion(newer, '0.1.0"\nconst Surprise = true'),
+    /numeric/,
+  );
 });
 
 test("the crash is where the service runs and not where the probe does", () => {

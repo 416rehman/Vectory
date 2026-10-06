@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f3f1eb" />
-    <meta name="description" content="Vectory is the self-hosted control plane for Vector. Design pipelines, release them to your hosts, and see what is actually running. Explore the 0.1.0 developer preview." />
+    <meta name="description" content="Vectory is the self-hosted control plane for Vector. Design pipelines, release them to your hosts, and see what is actually running. Explore the 0.1.1 developer preview." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Vectory" />
     <meta property="og:title" content="Vectory | Vector pipelines under your control" />
@@ -27,7 +27,7 @@
     <link rel="stylesheet" href="/site.css" />
     <script src="/site.js" defer></script>
     <title>Vectory | Open-source Vector pipeline manager</title>
-    <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://vectory.ahmadz.ai/#organization","name":"Vectory","url":"https://vectory.ahmadz.ai/","logo":"https://vectory.ahmadz.ai/favicons/icon-512.png","email":"416rehman@ahmadz.ai","sameAs":["https://github.com/416rehman/Vectory"]},{"@type":"WebSite","@id":"https://vectory.ahmadz.ai/#website","name":"Vectory","url":"https://vectory.ahmadz.ai/","publisher":{"@id":"https://vectory.ahmadz.ai/#organization"}},{"@type":"SoftwareApplication","name":"Vectory","url":"https://vectory.ahmadz.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"Linux with Docker Compose","softwareVersion":"0.1.0","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source, self-hosted control plane for Vector pipelines, with visual editing, immutable versions, device targeting, canaries, and rollback.","downloadUrl":"https://github.com/416rehman/Vectory/releases/tag/v0.1.0"}]}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://vectory.ahmadz.ai/#organization","name":"Vectory","url":"https://vectory.ahmadz.ai/","logo":"https://vectory.ahmadz.ai/favicons/icon-512.png","email":"416rehman@ahmadz.ai","sameAs":["https://github.com/416rehman/Vectory"]},{"@type":"WebSite","@id":"https://vectory.ahmadz.ai/#website","name":"Vectory","url":"https://vectory.ahmadz.ai/","publisher":{"@id":"https://vectory.ahmadz.ai/#organization"}},{"@type":"SoftwareApplication","name":"Vectory","url":"https://vectory.ahmadz.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"Linux with Docker Compose","softwareVersion":"0.1.1","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source, self-hosted control plane for Vector pipelines, with visual editing, immutable versions, device targeting, canaries, and rollback.","downloadUrl":"https://github.com/416rehman/Vectory/releases/tag/v0.1.1"}]}</script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -94,13 +94,13 @@
                 <li><span>02</span><div><strong>Extract and start</strong><small>From the extracted kit directory, run the local start script.</small></div></li>
                 <li><span>03</span><div><strong>Open 127.0.0.1:8080</strong><small>Create the first administrator, then connect a test device.</small></div></li>
               </ol>
-              <div class="setup-command"><div><span>Run in a Linux terminal with Docker ready</span><button type="button" class="copy-command" data-copy-command="start-command" aria-label="Copy download, verify and start commands">Copy <span aria-hidden="true">↗</span></button></div><code id="start-command" tabindex="0">curl -fL --proto '=https' https://github.com/416rehman/Vectory/releases/download/v0.1.0/vectory-0.1.0-preview-linux-amd64.tar.gz -o vectory-0.1.0-preview-linux-amd64.tar.gz &amp;&amp;
-curl -fsSL --proto '=https' https://github.com/416rehman/Vectory/releases/download/v0.1.0/SHA256SUMS -o release-SHA256SUMS &amp;&amp;
-grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]0-preview-linux-amd64[.]tar[.]gz$' release-SHA256SUMS | sha256sum --check --strict - &amp;&amp;
-tar -xzf vectory-0.1.0-preview-linux-amd64.tar.gz &amp;&amp;
-cd vectory-0.1.0-preview-linux-amd64 &amp;&amp;
+              <div class="setup-command"><div><span>Run in a Linux terminal with Docker ready</span><button type="button" class="copy-command" data-copy-command="start-command" aria-label="Copy download, verify and start commands">Copy <span aria-hidden="true">↗</span></button></div><code id="start-command" tabindex="0">curl -fL --proto '=https' https://github.com/416rehman/Vectory/releases/download/v0.1.1/vectory-0.1.1-preview-linux-amd64.tar.gz -o vectory-0.1.1-preview-linux-amd64.tar.gz &amp;&amp;
+curl -fsSL --proto '=https' https://github.com/416rehman/Vectory/releases/download/v0.1.1/SHA256SUMS -o release-SHA256SUMS &amp;&amp;
+grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]1-preview-linux-amd64[.]tar[.]gz$' release-SHA256SUMS | sha256sum --check --strict - &amp;&amp;
+tar -xzf vectory-0.1.1-preview-linux-amd64.tar.gz &amp;&amp;
+cd vectory-0.1.1-preview-linux-amd64 &amp;&amp;
 ./start.sh</code><span class="copy-feedback" aria-live="polite"></span></div>
-              <a class="button button-lime" href="https://github.com/416rehman/Vectory/releases/download/v0.1.0/vectory-0.1.0-preview-linux-amd64.tar.gz">Download preview kit <span aria-hidden="true">↓</span></a>
+              <a class="button button-lime" href="https://github.com/416rehman/Vectory/releases/download/v0.1.1/vectory-0.1.1-preview-linux-amd64.tar.gz">Download preview kit <span aria-hidden="true">↓</span></a>
               <span class="choice-foot"><a href="/help/quickstart/">Read the quickstart and checksum steps</a> before running it.</span>
             </article>
             <article class="install-choice">
@@ -112,11 +112,11 @@ cd vectory-0.1.0-preview-linux-amd64 &amp;&amp;
               <figure class="install-inset"><img src="/media/product-devices.png" width="1440" height="900" loading="lazy" alt="Device list in Vectory from a labeled synthetic demo fleet" /><figcaption>Actual interface · synthetic demo data.</figcaption></figure>
             </article>
           </div>
-          <div class="download-note"><div><strong>Vectory 0.1.0 is a developer preview.</strong><p>Downloads are unsigned; there is no package repository or container registry yet. Check supported platforms, known limits, and the security model before consequential use.</p></div><div class="download-links"><a href="https://github.com/416rehman/Vectory/releases/tag/v0.1.0">Download release <span aria-hidden="true">↗</span></a><a href="/help/compatibility/">Platform coverage <span aria-hidden="true">↗</span></a><a href="/help/whats-new/#known-limits">Known limits <span aria-hidden="true">↗</span></a></div></div>
+          <div class="download-note"><div><strong>Vectory 0.1.1 is a developer preview.</strong><p>Downloads are unsigned; there is no package repository or container registry yet. Check supported platforms, known limits, and the security model before consequential use.</p></div><div class="download-links"><a href="https://github.com/416rehman/Vectory/releases/tag/v0.1.1">Download release <span aria-hidden="true">↗</span></a><a href="/help/compatibility/">Platform coverage <span aria-hidden="true">↗</span></a><a href="/help/whats-new/#known-limits">Known limits <span aria-hidden="true">↗</span></a></div></div>
         </div>
       </section>
     </main>
 
-    <footer class="footer"><div class="wrap footer-main"><div><a class="brand" href="/"><img src="/favicon.svg" width="31" height="31" alt="" /><span>Vectory</span></a><p>The self-hosted control plane for Vector.</p><small>Independent project. Not affiliated with or endorsed by Datadog or the Vector project.</small></div><div class="footer-cols"><div><strong>Learn</strong><a href="/help/">Documentation</a><a href="/help/quickstart/">Quickstart</a><a href="/help/security/">Security model</a></div><div><strong>Project</strong><a href="https://github.com/416rehman/Vectory">GitHub</a><a href="https://github.com/416rehman/Vectory/releases/tag/v0.1.0">Downloads</a><a href="https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md">Contribute</a><a href="/NOTICE.txt">Notices</a><a href="mailto:416rehman@ahmadz.ai">Contact</a></div></div></div><div class="wrap footer-bottom"><span>© 2026 Vectory contributors · Apache-2.0</span><span>0.1.0 developer preview</span></div></footer>
+    <footer class="footer"><div class="wrap footer-main"><div><a class="brand" href="/"><img src="/favicon.svg" width="31" height="31" alt="" /><span>Vectory</span></a><p>The self-hosted control plane for Vector.</p><small>Independent project. Not affiliated with or endorsed by Datadog or the Vector project.</small></div><div class="footer-cols"><div><strong>Learn</strong><a href="/help/">Documentation</a><a href="/help/quickstart/">Quickstart</a><a href="/help/security/">Security model</a></div><div><strong>Project</strong><a href="https://github.com/416rehman/Vectory">GitHub</a><a href="https://github.com/416rehman/Vectory/releases/tag/v0.1.1">Downloads</a><a href="https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md">Contribute</a><a href="/NOTICE.txt">Notices</a><a href="mailto:416rehman@ahmadz.ai">Contact</a></div></div></div><div class="wrap footer-bottom"><span>© 2026 Vectory contributors · Apache-2.0</span><span>0.1.1 developer preview</span></div></footer>
   </body>
 </html>

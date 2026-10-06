@@ -2,6 +2,8 @@
 
 Vectory 0.1 is a developer preview. The whole loop works today against real Vector 0.58.0: build, publish, canary, apply and roll back.
 
+Version 0.1.1 fixes local preview startup with Docker Engine 29.1.3 by reaching the isolated validator through its private Docker address instead of a published host port. The highlights below describe the 0.1 feature set.
+
 ## Highlights
 
 - **Visual pipeline editor** for all 128 component types of Vector 0.58.0, with typed settings, a code view (YAML, TOML or JSON), import and export of one or several selected files, VRL and pipeline tests, and immutable history with diffs.

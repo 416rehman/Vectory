@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 // VectorVersion is the Vector release this agent is built and tested with.
 // Any patch release of the same minor version is supported (VectorSeries).

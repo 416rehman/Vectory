@@ -14,6 +14,8 @@ Which ports to open, which way each connection goes, and how Vectory works with 
 
 Nothing on a device listens for Vectory: every connection starts at the agent.
 
+The local preview kit binds its dashboard to loopback port 8080 and its agent listener to loopback port 8443. Its validator stays on a private Docker network with no host port.
+
 ## Firewall rules
 
 **Server host**

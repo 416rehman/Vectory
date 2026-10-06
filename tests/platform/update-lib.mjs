@@ -30,7 +30,7 @@ import { root, run, sha256File } from "./lib.mjs";
  * that cites the green run: the step that is proven is the step that ships.
  */
 export const BUILDS = [
-  { version: "0.1.0", kind: "source", what: "the source as it is" },
+  { version: "0.1.0", kind: "source", what: "the baseline test build" },
   { version: "0.1.1", kind: "good", what: "a good update" },
   { version: "0.1.2", kind: "crash", what: "panics at the start of every run" },
   {
@@ -87,9 +87,17 @@ export const SOURCE = {
 };
 
 export function setVersion(source, version) {
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version))
+    throw new Error("The agent fixture version must be numeric major.minor.patch.");
+  const declarations =
+    source.match(/^const Version = "[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?"$/gm) ?? [];
+  if (declarations.length !== 1)
+    throw new Error(
+      "The agent's source must contain exactly one canonical version constant.",
+    );
   return replaceOnce(
     source,
-    'const Version = "0.1.0"',
+    declarations[0],
     `const Version = "${version}"`,
     "The agent's version constant",
   );

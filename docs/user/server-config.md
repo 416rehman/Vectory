@@ -101,8 +101,9 @@ The prebuilt [preview kit](quickstart.md) needs Docker Compose and verifies its 
 | `VECTORY_PREVIEW_PROJECT` | `vectory-preview` | Docker Compose project and private volume prefix. Use the same value when stopping or resuming. |
 | `VECTORY_PREVIEW_WEB_PORT` | `8080` | Dashboard port on 127.0.0.1. |
 | `VECTORY_PREVIEW_AGENT_PORT` | `8443` | TLS agent listener port on 127.0.0.1. |
-| `VECTORY_PREVIEW_VALIDATOR_PORT` | `18081` | Isolated validator's loopback host port. |
 | `VECTORY_PREVIEW_RELEASE_DIR` | None | Optional offline directory containing the two image archives and their release `SHA256SUMS`. |
+
+The prebuilt validator has no host port. The preview manager reaches it at its private address on the internal Docker network.
 
 ### Source development preview
 
@@ -113,7 +114,6 @@ Contributors can use `scripts/preview.sh` and the [source quickstart](https://gi
 | `VECTORY_PREVIEW_DIR` | `.local/preview` | State, logs and the bootstrap secret for the preview. |
 | `VECTORY_PREVIEW_WEB_PORT` | `8080` | Dashboard port on 127.0.0.1. |
 | `VECTORY_PREVIEW_AGENT_PORT` | `8443` | Agent listener port on 127.0.0.1. |
-| `VECTORY_PREVIEW_VALIDATOR_PORT` | `8081` | Validator port on 127.0.0.1. |
 | `VECTORY_PREVIEW_VECTOR` | First `.local/tools/*/bin/vector` | Vector binary for the preview's validator. Without one, checks are structural only. |
 | `VECTORY_PREVIEW_AGENT_TARGETS` | Every supported platform | Space-separated `os/arch` list of bundled agents to build, for example `linux/amd64 darwin/arm64`, for a faster first start. |
 

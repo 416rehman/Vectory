@@ -4,18 +4,18 @@ Try Vectory on a Linux x86-64 machine with Docker. The preview kit downloads ver
 
 ## 1. Download the preview kit
 
-You need **Docker Engine running with Compose v2**, plus curl and sha256sum. Use a local Linux x86-64 host with free ports 8080, 8443 and 18081.
+You need **Docker Engine running with Compose v2**, plus curl and sha256sum. Use a local Linux x86-64 host with free ports 8080 and 8443. The isolated validator does not publish a host port.
 
-Download **[vectory-0.1.0-preview-linux-amd64.tar.gz](https://github.com/416rehman/Vectory/releases/download/v0.1.0/vectory-0.1.0-preview-linux-amd64.tar.gz)** from the [0.1.0 release](https://github.com/416rehman/Vectory/releases/tag/v0.1.0). In the directory containing your download, verify it against the release inventory before extracting or starting it:
+Download **[vectory-0.1.1-preview-linux-amd64.tar.gz](https://github.com/416rehman/Vectory/releases/download/v0.1.1/vectory-0.1.1-preview-linux-amd64.tar.gz)** from the [0.1.1 release](https://github.com/416rehman/Vectory/releases/tag/v0.1.1). In the directory containing your download, verify it against the release inventory before extracting or starting it:
 
 ```sh
 curl -fsSL --proto '=https' \
-  https://github.com/416rehman/Vectory/releases/download/v0.1.0/SHA256SUMS \
+  https://github.com/416rehman/Vectory/releases/download/v0.1.1/SHA256SUMS \
   -o release-SHA256SUMS &&
-grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]0-preview-linux-amd64[.]tar[.]gz$' \
+grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]1-preview-linux-amd64[.]tar[.]gz$' \
   release-SHA256SUMS | sha256sum --check --strict - &&
-tar -xzf vectory-0.1.0-preview-linux-amd64.tar.gz &&
-cd vectory-0.1.0-preview-linux-amd64 &&
+tar -xzf vectory-0.1.1-preview-linux-amd64.tar.gz &&
+cd vectory-0.1.1-preview-linux-amd64 &&
 ./start.sh
 ```
 

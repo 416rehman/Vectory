@@ -29,4 +29,4 @@ next: false
 
 ## About these guides
 
-These docs describe the **Vectory 0.1.0 developer preview** with **Vector 0.58.0**. They ship with your server, search included, so they work offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than the one you run. Every page is also available as plain Markdown, and [llms.txt](/help/llms.txt) lists them all for AI tools.
+These docs describe the **Vectory 0.1.1 developer preview** with **Vector 0.58.0**. They ship with your server, search included, so they work offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than the one you run. Every page is also available as plain Markdown, and [llms.txt](/help/llms.txt) lists them all for AI tools.

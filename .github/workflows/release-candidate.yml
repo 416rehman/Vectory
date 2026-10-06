@@ -420,7 +420,6 @@ jobs:
           export VECTORY_PREVIEW_PROJECT="$project"
           export VECTORY_PREVIEW_WEB_PORT=18080
           export VECTORY_PREVIEW_AGENT_PORT=18443
-          export VECTORY_PREVIEW_VALIDATOR_PORT=18081
           cleanup() {
             local result=$?
             trap - EXIT
@@ -460,7 +459,90 @@ jobs:
           test -s "$starter/ca.pem"
           test -s "$starter/setup-secret.txt"
           test "$(stat -c %a "$starter/setup-secret.txt")" = 600
-          echo 'Candidate images served a healthy loopback preview and reported first-account setup available; no device activation was attempted.'
+          python3 - "$starter" "$project" <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          starter, project = Path(sys.argv[1]), sys.argv[2]
+          compose = [
+              'docker', 'compose', '--project-name', project,
+              '--env-file', str(starter / '.preview.env'),
+              '-f', str(starter / 'compose.yaml'),
+          ]
+
+          def inspect(container_id):
+              return json.loads(subprocess.check_output(['docker', 'inspect', container_id]))[0]
+
+          validator_id = subprocess.check_output(compose + ['ps', '-q', 'validator'], text=True).strip()
+          server_id = subprocess.check_output(compose + ['ps', '-q', 'server'], text=True).strip()
+          assert validator_id and server_id, 'both preview containers must be running'
+          validator, server = inspect(validator_id), inspect(server_id)
+          assert not validator['HostConfig']['PortBindings'], 'validator published a host port'
+          assert all(not bindings for bindings in (validator['NetworkSettings']['Ports'] or {}).values()), 'validator has a published port'
+          networks = validator['NetworkSettings']['Networks']
+          assert len(networks) == 1, 'validator must have exactly one network'
+          network_name, attachment = next(iter(networks.items()))
+          network = json.loads(subprocess.check_output(['docker', 'network', 'inspect', network_name]))[0]
+          assert network['Internal'] is True, 'validator network is not internal'
+          worker_ip = attachment['IPAddress']
+          assert worker_ip, 'validator has no address on its internal network'
+          environment = dict(item.split('=', 1) for item in server['Config']['Env'] if '=' in item)
+          validation_url = urlsplit(environment.get('VECTORY_VALIDATION_URL', ''))
+          assert validation_url.scheme == 'http' and validation_url.hostname == worker_ip and validation_url.port == 8081, 'manager does not target its isolated validator'
+          assert worker_ip in environment.get('NO_PROXY', '').split(','), 'manager proxy bypass omits the validator'
+          assert environment.get('no_proxy') == environment.get('NO_PROXY'), 'manager proxy bypass differs by case'
+          PY
+          python3 - "$starter/setup-secret.txt" <<'PY'
+          import http.cookiejar
+          import json
+          import secrets
+          import sys
+          import urllib.request
+          from pathlib import Path
+
+          base = 'http://127.0.0.1:18080'
+          opener = urllib.request.build_opener(
+              urllib.request.ProxyHandler({}),
+              urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+          )
+
+          def post(path, payload, csrf=None):
+              headers = {'Content-Type': 'application/json'}
+              if csrf:
+                  headers['X-CSRF-Token'] = csrf
+              request = urllib.request.Request(base + path, data=json.dumps(payload).encode(), headers=headers)
+              with opener.open(request, timeout=60) as response:
+                  assert response.status == 200, f'{path} returned {response.status}'
+                  return json.load(response)
+
+          secret = Path(sys.argv[1]).read_text(encoding='utf-8').strip()
+          assert len(secret) >= 24, 'preview setup secret missing'
+          session = post('/api/v1/bootstrap', {
+              'name': 'Candidate smoke administrator',
+              'email': 'candidate-smoke@example.invalid',
+              'password': secrets.token_urlsafe(32),
+              'bootstrap_secret': secret,
+          })
+          csrf = session['csrf_token']
+          config = {
+              'sources': {'sample': {'type': 'demo_logs', 'format': 'json'}},
+              'sinks': {'discard': {'type': 'blackhole', 'inputs': ['sample']}},
+          }
+          created = post('/api/v1/configurations', {
+              'name': 'Synthetic candidate validator check',
+              'description': 'CI-only validation; never deployed',
+              'graph': {'nodes': [], 'edges': []},
+              'config': config,
+          }, csrf)
+          result = post(f"/api/v1/configurations/{created['id']}/validate", {'config': config}, csrf)
+          assert result['valid'] is True, 'synthetic pipeline failed validation'
+          assert result['vector_validated'] is True, 'manager did not run native Vector validation'
+          assert result['deferred'] is False, 'synthetic pipeline validation was deferred'
+          PY
+          echo 'Candidate images passed loopback preview, isolated worker topology, and manager-mediated native Vector validation; no device activation was attempted.'
       - name: Start the released server kit with verified TLS, bootstrap and resume
         run: |
           set -euo pipefail

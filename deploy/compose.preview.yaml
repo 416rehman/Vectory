@@ -20,7 +20,9 @@ services:
       VECTORY_TLS_CERT: /run/preview/pki/agent-chain.pem
       VECTORY_TLS_KEY: /run/preview/pki/server-key.pem
       VECTORY_BOOTSTRAP_SECRET_FILE: /run/preview/bootstrap
-      VECTORY_VALIDATION_URL: http://127.0.0.1:${VECTORY_PREVIEW_VALIDATOR_PORT:-18081}
+      VECTORY_VALIDATION_URL: ${VECTORY_PREVIEW_VALIDATION_URL:?Run ./start.sh first}
+      NO_PROXY: ${VECTORY_PREVIEW_NO_PROXY:?Run ./start.sh first}
+      no_proxy: ${VECTORY_PREVIEW_NO_PROXY:?Run ./start.sh first}
       VECTORY_INSTANCE_NAME: Local preview
     volumes:
       - data:/var/lib/vectory
@@ -47,8 +49,6 @@ services:
     pids_limit: 64
     environment:
       VECTORY_VALIDATOR_ISOLATED: "true"
-    ports:
-      - 127.0.0.1:${VECTORY_PREVIEW_VALIDATOR_PORT:-18081}:8081
     networks: [validation]
     healthcheck:
       test:

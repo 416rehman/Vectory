@@ -45,7 +45,7 @@ await run(process.execPath, ["node_modules/vite/bin/vite.js", "build", "--config
 await run(process.execPath, ["scripts/build.mjs"], helpRoot);
 const helpOutput = path.join(helpRoot, "dist");
 const manifest = JSON.parse(await fs.readFile(path.join(helpOutput, "help-manifest.json"), "utf8"));
-assert.equal(manifest.version, "0.1.0", "Public preview copy and built docs must describe the same release");
+assert.equal(manifest.version, "0.1.1", "Public preview copy and built docs must describe the same release");
 assert(manifest.pages.length >= 20, "A partial Help center must not be published");
 
 await fs.rm(output, { recursive: true, force: true });
@@ -113,7 +113,7 @@ const sitemapPaths = ["/", "/designer/", ...publicPaths.sort()];
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapPaths.map((pathname) => `  <url><loc>${origin}${pathname}</loc></url>`).join("\n")}\n</urlset>\n`;
 await fs.writeFile(path.join(output, "sitemap.xml"), sitemap);
 await fs.writeFile(path.join(output, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
-await fs.writeFile(path.join(output, "llms.txt"), `# Vectory\n\n> Self-hosted Vector control plane. Vectory 0.1.0 is an unsigned developer preview.\n\n- [Overview](${origin}/)\n- [Vector configuration designer](${origin}/designer/): Create, import, visualize and export YAML, JSON and TOML locally in your browser.\n- [Quickstart](${origin}/help/_markdown/quickstart.md)\n- [Security model](${origin}/help/_markdown/security.md)\n- [Known limits](${origin}/help/whats-new/#known-limits)\n- [All guides](${origin}/help/llms.txt)\n`);
+await fs.writeFile(path.join(output, "llms.txt"), `# Vectory\n\n> Self-hosted Vector control plane. Vectory 0.1.1 is an unsigned developer preview.\n\n- [Overview](${origin}/)\n- [Vector configuration designer](${origin}/designer/): Create, import, visualize and export YAML, JSON and TOML locally in your browser.\n- [Quickstart](${origin}/help/_markdown/quickstart.md)\n- [Security model](${origin}/help/_markdown/security.md)\n- [Known limits](${origin}/help/whats-new/#known-limits)\n- [All guides](${origin}/help/llms.txt)\n`);
 await fs.copyFile(path.join(siteRoot, "src/_headers"), path.join(output, "_headers"));
 await fs.copyFile(path.join(siteRoot, "src/_redirects"), path.join(output, "_redirects"));
 await fs.copyFile(path.join(siteRoot, "src/404.html"), path.join(output, "404.html"));

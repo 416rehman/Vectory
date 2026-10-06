@@ -4,7 +4,7 @@
 
 **Design, ship and roll back Vector pipelines across your fleet, from one self-hosted dashboard.**
 
-[Quickstart](docs/user/quickstart.md) · [Download 0.1.0](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Project status](#project-status)
+[Quickstart](docs/user/quickstart.md) · [Download 0.1.1](https://github.com/416rehman/Vectory/releases/tag/v0.1.1) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Project status](#project-status)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-editor-dark.png">
@@ -53,7 +53,7 @@ flowchart LR
 - **Understand the guarantees:** [Security model](docs/user/security.md).
 - **Create or inspect a configuration in your browser:** the [Vector configuration designer](https://vectory.ahmadz.ai/designer/) imports YAML, JSON, and TOML, reuses Vectory's diagram components, and exports the result without an account.
 
-The [0.1.0 release page](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) has the unsigned agent packages, Docker image archives, checksums and SBOMs. Check [platform coverage](docs/user/compatibility.md) before choosing a download.
+The [0.1.1 release page](https://github.com/416rehman/Vectory/releases/tag/v0.1.1) has the unsigned agent packages, Docker image archives, checksums and SBOMs. Check [platform coverage](docs/user/compatibility.md) before choosing a download.
 
 The same guides ship inside every server as a searchable, offline Help center at `/help/`.
 

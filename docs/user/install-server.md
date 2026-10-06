@@ -20,16 +20,16 @@ The server kit is an **unsigned developer preview**. Review [platform coverage](
 
 ## 1. Download and extract
 
-Download **[vectory-0.1.0-server-linux-amd64.tar.gz](https://github.com/416rehman/Vectory/releases/download/v0.1.0/vectory-0.1.0-server-linux-amd64.tar.gz)** from the [0.1.0 release](https://github.com/416rehman/Vectory/releases/tag/v0.1.0).
+Download **[vectory-0.1.1-server-linux-amd64.tar.gz](https://github.com/416rehman/Vectory/releases/download/v0.1.1/vectory-0.1.1-server-linux-amd64.tar.gz)** from the [0.1.1 release](https://github.com/416rehman/Vectory/releases/tag/v0.1.1).
 
 ```sh
 curl -fsSL --proto '=https' \
-  https://github.com/416rehman/Vectory/releases/download/v0.1.0/SHA256SUMS \
+  https://github.com/416rehman/Vectory/releases/download/v0.1.1/SHA256SUMS \
   -o release-SHA256SUMS &&
-grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]0-server-linux-amd64[.]tar[.]gz$' \
+grep -E '^[0-9a-f]{64}  vectory-0[.]1[.]1-server-linux-amd64[.]tar[.]gz$' \
   release-SHA256SUMS | sha256sum --check --strict - &&
-tar -xzf vectory-0.1.0-server-linux-amd64.tar.gz &&
-cd vectory-0.1.0-server-linux-amd64 &&
+tar -xzf vectory-0.1.1-server-linux-amd64.tar.gz &&
+cd vectory-0.1.1-server-linux-amd64 &&
 ./start.sh
 ```
 

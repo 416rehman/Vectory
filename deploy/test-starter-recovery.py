@@ -114,16 +114,70 @@ if operation == 'info':
     if args:
         print('linux/x86_64')
     sys.exit(0)
-if operation in ('image', 'volume', 'load', 'tag'):
+if operation == 'image':
+    if '--format' in args:
+        print('sha256:' + 'f' * 64)
+    sys.exit(0)
+if operation == 'network':
+    if args[0] != 'inspect' or '--format' not in args:
+        refuse('unknown network operation')
+    project = os.environ.get('VECTORY_PREVIEW_PROJECT', 'vectory-preview')
+    print('|'.join(['a' * 64, 'false' if point == 'noninternal-network' else 'true',
+                    'other-project' if point == 'wrong-network-owner' else project,
+                    'validation', 'bridge']))
+    sys.exit(0)
+if operation == 'inspect':
+    if '--format' not in args or args[-1] != 'b' * 64:
+        refuse('unknown container inspection')
+    template = args[args.index('--format') + 1]
+    if '.Config.Labels' in template:
+        project = os.environ.get('VECTORY_PREVIEW_PROJECT', 'vectory-preview')
+        print('|'.join(['other-project' if point == 'wrong-worker-owner' else project,
+                        'server' if point == 'wrong-worker-service' else 'validator',
+                        'sha256:' + ('e' if point == 'wrong-worker-image' else 'f') * 64]))
+    elif '.HostConfig.PortBindings' in template:
+        print('1|published' if point == 'published-worker-port' else '0|')
+    elif '.NetworkSettings.Networks' in template:
+        address = os.environ.get('STUB_VALIDATOR_IP', '172.28.0.2')
+        if point == 'malicious-worker-ip':
+            address = '$(touch ' + str(bundle / 'must-not-execute') + ')'
+        elif point == 'invalid-worker-ip':
+            address = '172.28.0.300'
+        elif point == 'loopback-worker-ip':
+            address = '127.0.0.1'
+        print('|'.join([('c' if point == 'wrong-worker-network' else 'a') * 64,
+                        address, '2' if point == 'extra-worker-network' else '1']))
+    else:
+        refuse('unknown container inspection template')
+    sys.exit(0)
+if operation in ('volume', 'load', 'tag'):
     sys.exit(0)
 if operation == 'compose':
     if args == ['version']:
         sys.exit(0)
+    if os.environ['STUB_KIND'] == 'preview':
+        generated = ('VECTORY_PREVIEW_SERVER_IMAGE', 'VECTORY_PREVIEW_VALIDATOR_IMAGE',
+                     'VECTORY_PREVIEW_WEB_PORT', 'VECTORY_PREVIEW_AGENT_PORT',
+                     'VECTORY_PREVIEW_VALIDATION_URL', 'VECTORY_PREVIEW_NO_PROXY')
+        if any(key in os.environ for key in generated):
+            refuse('caller environment can override checked preview configuration')
+        environment = dict(line.split('=', 1) for line in (bundle / '.preview.env').read_text().splitlines())
     for argument in args:
-        if argument in ('config', 'logs', 'stop', 'ps'):
+        if argument in ('config', 'logs', 'stop'):
+            sys.exit(0)
+        if argument == 'ps':
+            if '-q' in args and args[-1] == 'validator':
+                if point != 'missing-worker':
+                    print('b' * 64)
             sys.exit(0)
         if argument == 'exec':
-            print('{"initialized":true}')
+            if args[-1].endswith('/health'):
+                if point == 'unreachable-worker':
+                    sys.exit(7)
+                print(json.dumps({'status':'ok','vector_version':'0.59.0' if point == 'wrong-worker-version' else '0.58.0',
+                                  'worker_protocol':20 if point == 'wrong-worker-protocol' else 2}))
+            else:
+                print('{"initialized":true}')
             sys.exit(0)
         if argument == 'up':
             if os.environ['STUB_KIND'] == 'preview':
@@ -131,6 +185,17 @@ if operation == 'compose':
                 chain = pki / 'agent-chain.pem'
                 if not chain.is_file() or chain.read_bytes() != (pki / 'server.pem').read_bytes() + (pki / 'ca.pem').read_bytes():
                     refuse('preview served chain is missing or incomplete')
+                if args[-1] == 'validator':
+                    if point == 'validator-start-failed':
+                        sys.exit(91)
+                    if environment['VECTORY_PREVIEW_VALIDATION_URL'] != 'http://127.0.0.1:9':
+                        refuse('initial validator phase did not fail closed')
+                else:
+                    ip = os.environ.get('STUB_VALIDATOR_IP', '172.28.0.2')
+                    if environment['VECTORY_PREVIEW_VALIDATION_URL'] != 'http://' + ip + ':8081':
+                        refuse('manager started with stale validator URL')
+                    if environment['VECTORY_PREVIEW_NO_PROXY'] != 'localhost,127.0.0.1,::1,' + ip:
+                        refuse('manager has no direct worker proxy exclusion')
             elif not all((volume / part).is_file() for part in ('server_cert', 'server_key', 'bootstrap')):
                 refuse('server retained setup is incomplete')
             sys.exit(0)
@@ -221,11 +286,11 @@ class Fixture:
                 'VECTORY_TLS_KEY_FILE': str(directory / 'key.pem'),
             })
 
-    def run(self, failpoint='', umask=-1):
+    def run(self, failpoint='', umask=-1, action=None):
         env = self.env.copy()
         env['STUB_FAILPOINT'] = failpoint
         return subprocess.run(
-            ['/bin/bash', str(self.bundle / 'start.sh')], cwd=self.bundle,
+            ['/bin/bash', str(self.bundle / 'start.sh'), *([action] if action else [])], cwd=self.bundle,
             env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
             umask=umask,
         )
@@ -326,6 +391,72 @@ class StarterRecoveryTests(unittest.TestCase):
                          retained['pki/server.pem'] + retained['pki/ca.pem'])
         self.assertFalse(any('--days' in command['args'] for command in fixture.commands()))
         self.assert_no_network(fixture)
+
+    def test_preview_starts_only_owned_validator_before_manager_and_checks_from_manager(self):
+        fixture = self.fixture('preview')
+        fixture.env.update({'VECTORY_PREVIEW_VALIDATION_URL':'http://untrusted.example.invalid:8081',
+                            'VECTORY_PREVIEW_NO_PROXY':'untrusted.example.invalid',
+                            'VECTORY_PREVIEW_SERVER_IMAGE':'untrusted-server:stale',
+                            'VECTORY_PREVIEW_VALIDATOR_IMAGE':'untrusted-worker:stale',
+                            'VECTORY_PREVIEW_WEB_PORT':'18080',
+                            'VECTORY_PREVIEW_AGENT_PORT':'18443'})
+        self.assert_success(fixture.run())
+        ups = [c['args'] for c in fixture.commands() if c['tool']=='docker' and c['args'][0]=='compose' and 'up' in c['args']]
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[0][-1], 'validator')
+        self.assertIn('--no-deps', ups[0])
+        self.assertNotEqual(ups[1][-1], 'validator')
+        env = (fixture.bundle / '.preview.env').read_text()
+        self.assertIn('VECTORY_PREVIEW_VALIDATION_URL=http://172.28.0.2:8081\n', env)
+        self.assertIn('VECTORY_PREVIEW_NO_PROXY=localhost,127.0.0.1,::1,172.28.0.2\n', env)
+        self.assertIn('VECTORY_PREVIEW_SERVER_IMAGE=vectory-preview-server:0.1.0-', env)
+        self.assertIn('VECTORY_PREVIEW_VALIDATOR_IMAGE=vectory-preview-validator:0.1.0-', env)
+        self.assertIn('VECTORY_PREVIEW_WEB_PORT=18080\n', env)
+        self.assertIn('VECTORY_PREVIEW_AGENT_PORT=18443\n', env)
+        health = [c['args'] for c in fixture.commands() if c['tool']=='docker' and 'exec' in c['args'] and c['args'][-1].endswith('/health')]
+        self.assertEqual(len(health), 1)
+        self.assertIn('server', health[0])
+        self.assertIn('--noproxy', health[0])
+        self.assertEqual(health[0][-1], 'http://172.28.0.2:8081/health')
+        self.assert_no_network(fixture)
+
+    def test_preview_stop_resume_reresolves_worker_ip_without_replacing_trust(self):
+        fixture = self.fixture('preview')
+        self.assert_success(fixture.run())
+        retained = fixture.retained_files()
+        self.assert_success(fixture.run(action='stop'))
+        fixture.env['STUB_VALIDATOR_IP'] = '172.28.0.3'
+        fixture.clear_log()
+        self.assert_success(fixture.run())
+        self.assertEqual(retained, fixture.retained_files())
+        self.assertIn('VECTORY_PREVIEW_VALIDATION_URL=http://172.28.0.3:8081\n', (fixture.bundle / '.preview.env').read_text())
+        self.assert_no_network(fixture)
+
+    def test_preview_refuses_missing_wrong_or_unisolated_worker_before_manager_start(self):
+        cases = ('validator-start-failed','missing-worker','wrong-worker-owner','wrong-worker-service',
+                 'wrong-worker-image','published-worker-port','wrong-network-owner','noninternal-network','wrong-worker-network',
+                 'extra-worker-network','malicious-worker-ip','invalid-worker-ip','loopback-worker-ip')
+        for point in cases:
+            with self.subTest(point=point):
+                fixture = self.fixture('preview', point)
+                result = fixture.run(point)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('Open http://', result.stdout)
+                self.assertFalse((fixture.bundle / 'must-not-execute').exists())
+                ups = [c['args'] for c in fixture.commands() if c['tool']=='docker' and c['args'][0]=='compose' and 'up' in c['args']]
+                self.assertEqual(len(ups), 1)
+                self.assertEqual(ups[0][-1], 'validator')
+                self.assert_no_network(fixture)
+
+    def test_preview_refuses_unreachable_or_wrong_protocol_worker_without_reporting_success(self):
+        for point in ('unreachable-worker','wrong-worker-version','wrong-worker-protocol'):
+            with self.subTest(point=point):
+                fixture = self.fixture('preview', point)
+                result = fixture.run(point)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('Open http://', result.stdout)
+                self.assertNotIn(BOOTSTRAP.decode().strip(), result.stdout)
+                self.assert_no_network(fixture)
 
     def test_server_recovers_each_commit_interruption(self):
         for point in ('after-first-cert', 'after-bootstrap', 'before-env-commit'):

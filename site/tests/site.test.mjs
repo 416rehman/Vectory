@@ -14,7 +14,7 @@ const manifest = JSON.parse(await fs.readFile(path.join(output, "help/help-manif
 
 test("public landing describes the preview and labels demo evidence", () => {
   const body = landing.slice(landing.indexOf("<body>"));
-  assert.match(body, /0\.1\.0 is a developer preview/);
+  assert.match(body, /0\.1\.1 is a developer preview/);
   assert.match(body, /Downloads are unsigned/);
   assert.match(body, /synthetic demo/);
   assert.match(landing, /rel="canonical" href="https:\/\/vectory\.ahmadz\.ai\/"/);
@@ -125,7 +125,7 @@ test("installed and public Help ship the source for their exact Pagefind browser
 test("public docs are complete and do not point at a nonexistent dashboard", async () => {
   assert(manifest.pages.length >= 20);
   const home = await fs.readFile(path.join(output, "help/index.html"), "utf8");
-  assert.match(home, /Vectory 0\.1\.0 developer preview/);
+  assert.match(home, /Vectory 0\.1\.1 developer preview/);
   for (const relative of manifest.pages) {
     const file = path.join(output, "help", relative);
     const html = await fs.readFile(file, "utf8");

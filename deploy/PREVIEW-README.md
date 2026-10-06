@@ -36,7 +36,7 @@ If a port is in use, choose unused ports before starting:
 VECTORY_PREVIEW_WEB_PORT=18080 VECTORY_PREVIEW_AGENT_PORT=18443 ./start.sh
 ```
 
-Repeat those values when resuming. The validator defaults to loopback port 18081; change it with `VECTORY_PREVIEW_VALIDATOR_PORT`. For an independent workspace, set `VECTORY_PREVIEW_PROJECT` to a different name on every command, including stop. The project name controls its container and volume names.
+Repeat those values when resuming. Only the web and agent ports are exposed locally; the Vector validator stays on its private internal network. For an independent workspace, set `VECTORY_PREVIEW_PROJECT` to a different name on every command, including stop. The project name controls its container and volume names.
 
 ## Download verification
 

@@ -1,6 +1,11 @@
 # Changelog
 
-All notable changes to Vectory. Version 0.1.0 is an unsigned developer preview.
+All notable changes to Vectory. Version 0.1.1 is an unsigned developer preview.
+
+## 0.1.1 (developer preview patch)
+
+- Fixed the prebuilt local preview on Docker Engine 29.1.3, which did not make the validator's loopback-published port usable from outside an internal-only network. The preview manager now reaches the isolated validator at its private container address. The validator has no published host port, external network route, production files or secrets.
+- The preview still starts from verified prebuilt images with Docker Compose. It needs no Rust, Go, Node.js or compiler on the host.
 
 ## 0.1.0 (developer preview)
 
