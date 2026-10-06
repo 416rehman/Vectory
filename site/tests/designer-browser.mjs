@@ -199,7 +199,8 @@ try {
   await page
     .getByRole("combobox", { name: "Format", exact: true })
     .selectOption("toml");
-  assert((await exported("toml")).includes('future_setting = "kept"'));
+  const convertedToml = await exported("toml");
+  assert(convertedToml.includes('future_setting = "kept"'));
 
   const largeRoute = JSON.stringify({
     sources: { events: { type: "demo_logs" } },
@@ -287,6 +288,35 @@ try {
     .locator(".standalone-designer")
     .screenshot({ path: path.join(captures, "designer-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
+  await importSource(convertedToml, "toml");
+  await expect(page.locator(".react-flow__node")).toHaveCount(3);
+  await page.locator(".react-flow__controls-fitview").click();
+  await expect
+    .poll(() =>
+      page.locator(".designer-canvas").evaluate((canvas) => {
+        const flow = canvas.querySelector(".react-flow");
+        const canvasRect = canvas.getBoundingClientRect();
+        const flowRect = flow.getBoundingClientRect();
+        const nodes = [...flow.querySelectorAll(".react-flow__node")];
+        return (
+          canvasRect.height >= 430 &&
+          flowRect.height >= 430 &&
+          nodes.length === 3 &&
+          nodes.every((node) => {
+            const rect = node.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              rect.left >= flowRect.left - 1 &&
+              rect.right <= flowRect.right + 1 &&
+              rect.top >= flowRect.top - 1 &&
+              rect.bottom <= flowRect.bottom + 1
+            );
+          })
+        );
+      }),
+    )
+    .toBe(true);
   await noOverflow();
   await page.screenshot({
     path: path.join(captures, "designer-mobile.png"),
@@ -312,7 +342,7 @@ try {
   assert.deepEqual(errors, [], "The designer raised page errors");
   await context.close();
   console.log(
-    "Designer browser regression passed: import/export, formats, bounded graph, preserved source, privacy, desktop and mobile.",
+    "Designer browser regression passed: import/export, formats, bounded graph, preserved source, privacy, desktop and visible mobile graph.",
   );
 } finally {
   await browser?.close();

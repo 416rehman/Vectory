@@ -892,6 +892,8 @@ body {
     flex-direction: column;
   }
   .designer-canvas {
+    flex: none;
+    height: 460px;
     min-height: 460px;
   }
   .designer-inspector {
@@ -959,6 +961,7 @@ body {
     font-size: 10px;
   }
   .designer-canvas {
+    height: 430px;
     min-height: 430px;
   }
   .designer-empty {
