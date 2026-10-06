@@ -1,10 +1,10 @@
 # What's new
 
-Vectory 0.2.0 simplifies full self-hosting and adds verified release distribution. The complete workflow remains build, publish, canary, apply and roll back with Vector 0.58.x.
+Vectory 0.2.1 adds guided Docker setup on Windows and macOS, a prebuilt native Linux server, reusable fleet installation commands and clearer setup documentation. The complete workflow remains build, publish, canary, apply and roll back with Vector 0.58.x.
 
-- **One guided server command:** prebuilt containers, a hostname, automatic HTTPS, and a one-time administrator setup secret.
+- **One guided server command:** choose Docker on Windows, macOS or Linux, or the prebuilt native Linux kit. Enter a hostname for automatic HTTPS and create the first administrator with a one-time setup secret. No compiling is required.
 - **Signed distribution:** server and validator images in GHCR, immutable digests, Cosign signatures through GitHub OIDC, and Sigstore bundles for download checksums.
-- **One copied device command on every OS:** Linux, macOS and Windows download and verify a prebuilt agent, prompt privately for the enrollment token, and start the native service.
+- **One copied device command on every OS:** Linux, macOS and Windows download and verify a prebuilt agent, prompt privately for the enrollment token or read a protected token file, and start the native service. Choose **Many devices** for a reusable, time-limited command.
 - **A full-screen standalone designer:** create or import YAML, JSON and TOML, inspect the graph, edit settings and export without an account. The main website introduces the full control plane and links the tool separately.
 
 ## Highlights
@@ -51,7 +51,7 @@ Vectory 0.2.0 simplifies full self-hosting and adds verified release distributio
 
 ## Known limits
 
-- The server kit targets Linux x86-64. Other server architectures are not qualified. GHCR images and download inventories have Cosign signatures; package-manager repositories, Windows Authenticode and Apple notarization are not supplied.
+- The native server kit targets Linux x86-64 with systemd 252 or later and cgroup v2. Docker server images are Linux x86-64; Windows and macOS run them through Docker Desktop, and Arm hosts require explicit amd64 emulation. Native Arm server images are not supplied. GHCR images and download inventories have Cosign signatures; package-manager repositories, Windows Authenticode and Apple notarization are not supplied.
 - Agent release downloads are authenticated by the signed checksum inventory. A self-hosted server serves its own verified agent catalog; runtime agent updates require a separately pinned release key and host consent.
 - A host takes agent updates only after someone ran a command on it that agreed to them. Hosts that haven't, agents that predate updates and platforms a release doesn't carry are upgraded on the host, one command per device; see [Upgrade many devices](agents.md#upgrade-many-devices).
 - Agent updates have no major track: a host takes patch releases, or minor releases too, and a new major version is an upgrade by hand. Who holds the release key is fixed while updates are on.

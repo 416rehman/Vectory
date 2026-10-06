@@ -140,6 +140,7 @@ type Command = {
   // A token is issued for one set of host choices. Keep every command and
   // receipt tied to that same snapshot even if install metadata refreshes.
   issued: {
+    enrollmentKind: "device" | "fleet";
     choices: SetupChoices;
     install: AgentInstall;
     updatesOn: boolean;
@@ -147,6 +148,7 @@ type Command = {
     noDownload: boolean;
     winRelease: Release | null;
     installCommand: string | null;
+    oneLineInstallCommand: string | null;
     manualCommand: string | null;
     windowsCommand: string | null;
     agentRun: string;
@@ -350,14 +352,18 @@ function CommandBlock({
   label,
   focus = false,
   onFocused,
+  compactCommand,
 }: {
   command: string;
   label: string;
   /** Move focus here once, after the command was created. */
   focus?: boolean;
   onFocused?: () => void;
+  compactCommand?: string | null;
 }) {
   const block = useRef<HTMLPreElement>(null);
+  const [readable, setReadable] = useState(false);
+  const displayed = compactCommand && !readable ? compactCommand : command;
   useEffect(() => {
     if (!focus) return;
     block.current?.focus();
@@ -365,11 +371,33 @@ function CommandBlock({
   }, [focus, onFocused]);
   return (
     <div className="enroll-command">
+      {compactCommand && (
+        <div
+          className="enroll-command-format"
+          role="group"
+          aria-label="Command format"
+        >
+          <button
+            type="button"
+            aria-pressed={!readable}
+            onClick={() => setReadable(false)}
+          >
+            One line
+          </button>
+          <button
+            type="button"
+            aria-pressed={readable}
+            onClick={() => setReadable(true)}
+          >
+            Readable
+          </button>
+        </div>
+      )}
       <pre ref={block} tabIndex={0} aria-label={label}>
-        <code>{command}</code>
+        <code>{displayed}</code>
       </pre>
       <CopyButton
-        text={command}
+        text={displayed}
         ariaLabel={`Copy ${label.toLowerCase()}`}
         copiedMessage={`${label} copied.`}
       />
@@ -426,7 +454,10 @@ export function Enrollment({
   navigate: (path: string) => void;
 }) {
   const details = useResource<unknown>("/agent-install", null);
-  const tokens = useResource<Token[]>("/tokens", []);
+  const [fleetPolling, setFleetPolling] = useState(false);
+  const tokens = useResource<Token[]>("/tokens", [], 0, {
+    interval: fleetPolling ? 5000 : 15000,
+  });
   // Agent updates: while they are on, how this host takes them is a step of
   // its own and its consent goes in the command. While they are off the step
   // doesn't exist and the command is what it always was.
@@ -442,6 +473,11 @@ export function Enrollment({
   const [os, setOs] = useState<HostOS>(detectOS);
   const [mode, setMode] = useState<Mode | "">("");
   const [name, setName] = useState("");
+  const [enrollmentKind, setEnrollmentKind] = useState<"device" | "fleet">(
+    "device",
+  );
+  const [tokenInput, setTokenInput] = useState<"prompt" | "file">("prompt");
+  const [tokenFile, setTokenFile] = useState("");
   const [service, setService] = useState<ServiceChoice>("auto");
   const [serviceUser, setServiceUser] = useState("");
   const [createUser, setCreateUser] = useState(true);
@@ -512,7 +548,7 @@ export function Enrollment({
   const choices: SetupChoices = {
     os,
     mode: mode || "restricted",
-    name,
+    name: enrollmentKind === "fleet" ? "" : name,
     service,
     serviceUser,
     createUser,
@@ -520,13 +556,14 @@ export function Enrollment({
     managedConfig,
     capabilityPolicy,
     vectorBinary,
+    tokenFile: tokenInput === "file" ? tokenFile : undefined,
     updates: updatesChoice ? updateRead.consent : undefined,
     trust: trust || undefined,
     caFile,
     installDir: os === "windows" ? "" : directoryPath(installDir),
   };
   const trustChoice = install ? effectiveTrust(install, choices.trust) : null;
-  const trimmedName = name.trim();
+  const trimmedName = choices.name.trim();
   const nameValid = !trimmedName || deviceNamePattern.test(trimmedName);
   const {
     existing,
@@ -566,6 +603,12 @@ export function Enrollment({
         ? "Choose a directory of its own for the agent, not /."
         : pathProblem(agentDirectory, false, "Agent install directory");
   const prefixValid = /^[a-z0-9-]{0,80}$/.test(prefix);
+  const tokenFileProblem =
+    tokenInput === "file"
+      ? tokenFile.trim()
+        ? pathProblem(tokenFile, false, "Enrollment token file")
+        : "Enter the protected token file path on each host."
+      : "";
   const prefixMatches =
     !prefix || !trimmedName || trimmedName.toLowerCase().startsWith(prefix);
   const preapproved = parsePreapprovedNames(
@@ -598,6 +641,7 @@ export function Enrollment({
     !pathProblem(vectorBinary) &&
     !caFileProblem &&
     !installDirProblem &&
+    !tokenFileProblem &&
     prefixValid &&
     prefixMatches &&
     !preapproved.error &&
@@ -618,7 +662,7 @@ export function Enrollment({
   const [watchSlowly, setWatchSlowly] = useState(false);
   // Keep following this one device after its first check-in. Its identity or
   // service may change while this page remains open, including revocation.
-  const watching = !!command;
+  const watching = !!command && command.issued.enrollmentKind !== "fleet";
   const watch = useEnrollmentWatch(
     command,
     watching,
@@ -644,14 +688,77 @@ export function Enrollment({
       : null;
   useEffect(() => setWatchSlowly(kept === "unsupervised"), [kept]);
   const reloadTokens = tokens.reload;
+  useEffect(
+    () =>
+      setFleetPolling(
+        command?.issued.enrollmentKind === "fleet" &&
+          finished !== command.tokenId &&
+          Date.parse(command.expiresAt) > Date.now() &&
+          (!commandToken || tokenStatus(commandToken) === "Available"),
+      ),
+    [command, commandToken, finished],
+  );
   useEffect(() => {
+    if (
+      command?.issued.enrollmentKind !== "fleet" ||
+      finished === command.tokenId
+    )
+      return;
+    // The issued response already gives the expiry. A failed token-list read
+    // must not keep the secret alive, and a suspended tab checks on return.
+    const expiresAt = Date.parse(command.expiresAt);
+    let timer: number | undefined;
+    const checkExpiry = () => {
+      window.clearTimeout(timer);
+      const remaining = expiresAt - Date.now();
+      if (!(remaining > 0)) {
+        setFinished(command.tokenId);
+        setFleetPolling(false);
+        setSecret(null);
+        setShown(false);
+        tokenFlow.current?.finish();
+        // Storage cleanup may fail; drop the flow's in-memory copy anyway.
+        tokenFlow.current?.discard();
+        return;
+      }
+      timer = window.setTimeout(checkExpiry, Math.min(remaining, 60000));
+    };
+    checkExpiry();
+    document.addEventListener("visibilitychange", checkExpiry);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", checkExpiry);
+    };
+  }, [command, finished]);
+  useEffect(() => {
+    if (command?.issued.enrollmentKind === "fleet") {
+      if (
+        commandToken &&
+        tokenStatus(commandToken) !== "Available" &&
+        finished !== command.tokenId
+      ) {
+        setFinished(command.tokenId);
+        setSecret(null);
+        setShown(false);
+        tokenFlow.current?.finish();
+        tokenFlow.current?.discard();
+      }
+      return;
+    }
     // The token did its job once the device checked in: drop the in-page copy.
     if (!command || !state?.checkedIn || finished === command.tokenId) return;
     setFinished(command.tokenId);
     setFirstCheckIn(state.device?.last_seen || null);
     tokenFlow.current?.finish();
     void reloadTokens();
-  }, [command, state?.checkedIn, state?.device, finished, reloadTokens]);
+  }, [
+    command,
+    commandToken,
+    state?.checkedIn,
+    state?.device,
+    finished,
+    reloadTokens,
+  ]);
 
   async function createCommand() {
     setError("");
@@ -675,6 +782,7 @@ export function Enrollment({
       minute: "2-digit",
     });
     const issued: Command["issued"] = {
+      enrollmentKind,
       choices: structuredClone(choices),
       install,
       updatesOn,
@@ -682,15 +790,19 @@ export function Enrollment({
       noDownload,
       winRelease,
       installCommand,
+      oneLineInstallCommand: installerCommand(install, choices, "one-line"),
       manualCommand,
       windowsCommand: windows,
       agentRun,
     };
     const record = await tokenFlow.current?.create(
       {
-        name: trimmedName
-          ? `${trimmedName} install command`
-          : `Install command, ${stamp}`,
+        name:
+          enrollmentKind === "fleet"
+            ? `Fleet install, ${stamp}`
+            : trimmedName
+              ? `${trimmedName} install command`
+              : `Install command, ${stamp}`,
         expires_hours: hours,
         max_uses: maxUses ? Number(maxUses) : null,
         name_prefix: prefix || null,
@@ -913,6 +1025,41 @@ export function Enrollment({
           aria-labelledby="enroll-host"
         >
           <h2 id="enroll-host">1. Choose the host</h2>
+          <fieldset
+            className="enroll-os enroll-scope"
+            disabled={busy || !!command}
+          >
+            <legend className="sr-only">Installation scope</legend>
+            {(
+              [
+                ["device", "One device"],
+                ["fleet", "Many devices"],
+              ] as const
+            ).map(([value, label]) => (
+              <label key={value} className="enroll-os-option">
+                <input
+                  type="radio"
+                  name="enroll-scope"
+                  value={value}
+                  checked={enrollmentKind === value}
+                  onChange={() => {
+                    setEnrollmentKind(value);
+                    setMaxUses(value === "fleet" ? "100" : "1");
+                    setHours(value === "fleet" ? 24 : 1);
+                  }}
+                />
+                {label}
+              </label>
+            ))}
+          </fieldset>
+          {enrollmentKind === "fleet" && (
+            <p className="control-muted">
+              Reuse the command across hosts with this operating system. Each
+              host uses its own name. This token allows {maxUses || "unlimited"}{" "}
+              enrollments for {hours} hours; change limits, allowed names and
+              labels under Advanced.
+            </p>
+          )}
           {command && (
             <p className="control-muted" role="status">
               These host settings are fixed for this command. To change them,
@@ -939,6 +1086,49 @@ export function Enrollment({
             onChange={setMode}
             disabled={busy || !!command}
           />
+          <fieldset className="enroll-token-input" disabled={busy || !!command}>
+            <legend>Enrollment token</legend>
+            <label>
+              <input
+                type="radio"
+                name="enroll-token-input"
+                checked={tokenInput === "prompt"}
+                onChange={() => setTokenInput("prompt")}
+              />{" "}
+              Paste at the hidden prompt
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="enroll-token-input"
+                checked={tokenInput === "file"}
+                onChange={() => setTokenInput("file")}
+              />{" "}
+              Read a protected file on each host
+            </label>
+            {tokenInput === "file" && (
+              <Field
+                label="Enrollment token file"
+                hint={
+                  tokenFileProblem ||
+                  "Provision the token through your secret manager. Linux/macOS: owner-only mode 0600. Windows: restrict its ACL to the installing identity, SYSTEM and Administrators."
+                }
+              >
+                <input
+                  value={tokenFile}
+                  onChange={(event) => setTokenFile(event.target.value)}
+                  aria-invalid={!!tokenFileProblem}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={
+                    os === "windows"
+                      ? "C:\\ProgramData\\Provisioning\\vectory-token.txt"
+                      : "/run/secrets/vectory-enrollment"
+                  }
+                />
+              </Field>
+            )}
+          </fieldset>
           <details className="enroll-advanced">
             <summary>
               Advanced
@@ -957,11 +1147,14 @@ export function Enrollment({
                 hint={
                   !nameValid
                     ? "Use up to 100 letters, numbers, dots, hyphens or underscores, starting with a letter or number."
-                    : "Leave empty to use the host's own name."
+                    : enrollmentKind === "fleet"
+                      ? "Each host uses its own name for fleet setup."
+                      : "Leave empty to use the host's own name."
                 }
               >
                 <input
                   value={name}
+                  disabled={enrollmentKind === "fleet"}
                   maxLength={100}
                   aria-invalid={!nameValid}
                   onChange={(event) => setName(event.target.value)}
@@ -1458,6 +1651,7 @@ export function Enrollment({
               {shownInstallCommand && !shownNoDownload ? (
                 <CommandBlock
                   command={shownInstallCommand}
+                  compactCommand={issued?.oneLineInstallCommand}
                   label={
                     shownOs === "windows"
                       ? "Windows install command"
@@ -1539,6 +1733,11 @@ export function Enrollment({
                 </Button>
                 <CopyButton
                   text={() => {
+                    if (
+                      issued?.enrollmentKind === "fleet" &&
+                      !(Date.parse(command.expiresAt) > Date.now())
+                    )
+                      throw Error("This enrollment token has expired.");
                     const flow = tokenFlow.current;
                     if (!flow)
                       throw Error("The token is no longer shown here.");
@@ -1562,9 +1761,14 @@ export function Enrollment({
                 )}
               </div>
               <p className="control-muted enroll-secret-hint">
-                Paste it when setup asks. This page keeps it only until the
-                device connects or you leave. Start over revokes it, so no
-                device can use this command.
+                {issued?.choices.tokenFile
+                  ? "Provision it in the protected token file on each host before running the command. "
+                  : "Paste it when setup asks. "}
+                {issued?.enrollmentKind === "fleet"
+                  ? "This page keeps it until the token expires, is used up, is revoked or you leave. "
+                  : "This page keeps it only until the device connects or you leave. "}
+                Start over revokes the token and stops new enrollments; existing
+                devices stay connected.
               </p>
               {problem && !shownInstall?.certificate?.publicly_trusted && (
                 <div className="control-note">{problem}</div>
@@ -1637,7 +1841,39 @@ export function Enrollment({
           aria-labelledby="enroll-watch"
         >
           <h2 id="enroll-watch">{shownUpdatesOn ? 4 : 3}. Watch it connect</h2>
-          {!command ? (
+          {command?.issued.enrollmentKind === "fleet" ? (
+            <div className="enroll-fleet-progress">
+              <p className="control-muted" role="status">
+                {commandToken
+                  ? `${commandToken.uses} devices enrolled${commandToken.max_uses ? ` out of ${commandToken.max_uses}` : ""}. ${tokenStatus(commandToken)}.`
+                  : "Loading fleet enrollment progress."}
+              </p>
+              <p>
+                Run the command on each matching host. Enrollment does not
+                assign a pipeline or add a device to a group. Open a device to
+                check its service and deployment status.
+              </p>
+              {commandToken?.devices?.length ? (
+                <ul>
+                  {commandToken.devices.map((device) => (
+                    <li key={device.id}>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => navigate(`devices/${device.id}`)}
+                      >
+                        {device.name}
+                      </button>{" "}
+                      <DateCell value={device.enrolled_at} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <Button variant="secondary" onClick={() => navigate("devices")}>
+                View all devices
+              </Button>
+            </div>
+          ) : !command ? (
             <>
               {notes.length > 0 && (
                 <ol className="enroll-timeline enroll-earlier">
@@ -1889,7 +2125,11 @@ export function Enrollment({
             // The live timeline shows a waiting command's attempts; once its
             // device checked in, they belong to the history again.
             currentTokenId={
-              command && !state?.checkedIn ? command.tokenId : null
+              command &&
+              command.issued.enrollmentKind !== "fleet" &&
+              !state?.checkedIn
+                ? command.tokenId
+                : null
             }
           />
         )}

@@ -1,0 +1,30 @@
+[Unit]
+Description=Vectory retained agent listener certificates
+Before=vectory-native-server.service
+
+[Service]
+Type=exec
+User=vectory-server
+Group=vectory-server
+EnvironmentFile=/etc/vectory-server/certificates.env
+ExecStartPre=@KIT_ROOT@/bin/vectory-server-pki --out /var/lib/vectory-server/secrets --hostname ${VECTORY_HOSTNAME}
+ExecStart=@KIT_ROOT@/bin/vectory-server-pki --out /var/lib/vectory-server/secrets --hostname ${VECTORY_HOSTNAME} --watch
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/vectory-server/secrets
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+MemoryMax=64M
+TasksMax=16
+KillMode=control-group
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

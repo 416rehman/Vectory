@@ -189,6 +189,17 @@ jobs:
       - name: Verify real signed offline preparation without manager activation
         timeout-minutes: 10
         run: bash packaging/verify-offline-release.sh artifacts/release "$RUNNER_TEMP/signed-offline-release"
+      - name: Verify real signed native installation on a fresh systemd host
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("agent/internal/agent/types.go").read(), re.M).group(1))')
+          archive="$PWD/artifacts/release/vectory-$version-server-native-linux-amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/signed-native-kit"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/signed-native-kit"
+          kit="$RUNNER_TEMP/signed-native-kit/vectory-$version-server-native-linux-amd64"
+          cmp deploy/install-native.sh artifacts/release/install-native.sh
+          sudo python3 packaging/native-smoke.py --kit "$kit" --archive "$archive" --release-dir "$PWD/artifacts/release" --bootstrap-script "$PWD/artifacts/release/install-native.sh" --out "$RUNNER_TEMP/signed-native-smoke.json"
       - name: Publish a stable release only after signature and public-access verification
         env:
           GH_TOKEN: ${{ github.token }}

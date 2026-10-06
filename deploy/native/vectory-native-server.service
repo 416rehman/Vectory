@@ -1,0 +1,40 @@
+[Unit]
+Description=Vectory control plane
+Requires=vectory-native-validator.service vectory-native-certificates.service
+After=network-online.target vectory-native-validator.service vectory-native-certificates.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=vectory-server
+Group=vectory-server
+SupplementaryGroups=vectory-validator
+EnvironmentFile=/etc/vectory-server/server.env
+UnsetEnvironment=VECTORY_VALIDATION_URL VECTORY_DEVELOPMENT
+ExecStart=@KIT_ROOT@/server-root/lib64/ld-linux-x86-64.so.2 --library-path @KIT_ROOT@/server-root/lib/x86_64-linux-gnu:@KIT_ROOT@/server-root/usr/lib/x86_64-linux-gnu @KIT_ROOT@/server-root/usr/local/bin/vectory-server
+WorkingDirectory=/var/lib/vectory-server/data
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/vectory-server/data
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+UMask=0077
+MemoryMax=1G
+TasksMax=128
+LimitNOFILE=65536
+KillMode=control-group
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

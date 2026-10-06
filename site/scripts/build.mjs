@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { buildBrandAssets } from "./brand-assets.mjs";
 import { publicMarkdown } from "./public-docs.mjs";
+import { publicGuideMetadata, publicDiscoveryIndex } from "./seo.mjs";
 
 const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(siteRoot, "..");
@@ -45,7 +46,7 @@ await run(process.execPath, ["node_modules/vite/bin/vite.js", "build", "--config
 await run(process.execPath, ["scripts/build.mjs"], helpRoot);
 const helpOutput = path.join(helpRoot, "dist");
 const manifest = JSON.parse(await fs.readFile(path.join(helpOutput, "help-manifest.json"), "utf8"));
-assert.equal(manifest.version, "0.2.0", "Public release copy and built docs must describe the same release");
+assert.equal(manifest.version, "0.2.1", "Public release copy and built docs must describe the same release");
 assert(manifest.pages.length >= 20, "A partial Help center must not be published");
 
 await fs.rm(output, { recursive: true, force: true });
@@ -63,7 +64,9 @@ for (const [name, attribute] of [["site.css", "href"], ["site.js", "src"]]) {
 await fs.writeFile(path.join(output, "index.html"), landingSource);
 await fs.copyFile(path.join(siteRoot, "src/site.css"), path.join(output, "site.css"));
 await fs.copyFile(path.join(siteRoot, "src/site.js"), path.join(output, "site.js"));
-await fs.copyFile(path.join(repoRoot, "deploy/install.sh"), path.join(output, "install.sh"));
+for (const name of ["install.sh", "install-desktop.sh", "install.ps1", "install-native.sh"]) {
+  await fs.copyFile(path.join(repoRoot, "deploy", name), path.join(output, name));
+}
 await fs.copyFile(path.join(repoRoot, "dashboard/public/favicon.svg"), path.join(output, "favicon.svg"));
 await fs.mkdir(path.join(output, "fonts"), { recursive: true });
 await fs.copyFile(path.join(helpOutput, "fonts/instrument-sans-latin.woff2"), path.join(output, "fonts/instrument-sans-latin.woff2"));
@@ -98,10 +101,9 @@ for (const file of helpPages) {
     (_match, label) => `<span class="help-local-app-reference">${label} on your own Vectory server at <code>/api-reference.html</code></span>`);
   assert(!/href="\/#\//.test(html), `Public docs contain an unusable dashboard link: ${relative}`);
   if (relative !== "404.html") {
-    const title = html.match(/<title>([\s\S]*?)<\/title>/)?.[1]?.replace(/&amp;/g, "&") || "Vectory guide";
-    const article = JSON.stringify({"@context":"https://schema.org", "@type":"TechArticle", headline:title,
-      url:`${origin}${pathname}`, inLanguage:"en", publisher:{"@type":"Organization",name:"Vectory",url:origin}}).replaceAll("<", "\\u003c");
-    html = html.replace("</head>", `<link rel="canonical" href="${origin}${pathname}"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="apple-touch-icon" href="/favicons/icon-180.png"><meta property="og:url" content="${origin}${pathname}"><meta property="og:image" content="${origin}/social-preview.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:image" content="${origin}/social-preview.png"><script type="application/ld+json">${article}</script></head>`);
+    const slug = relative === "index.html" ? "index" : relative.replace(/\/index\.html$/, "");
+    const page = manifest.markdown.find((entry) => entry.slug === slug);
+    html = publicGuideMetadata(html, { origin, pathname, page });
     publicPaths.push(pathname);
   } else {
     html = html.replace("</head>", '<meta name="robots" content="noindex"></head>');
@@ -121,7 +123,7 @@ const sitemapPaths = ["/", "/designer/", ...publicPaths.sort()];
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapPaths.map((pathname) => `  <url><loc>${origin}${pathname}</loc></url>`).join("\n")}\n</urlset>\n`;
 await fs.writeFile(path.join(output, "sitemap.xml"), sitemap);
 await fs.writeFile(path.join(output, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
-await fs.writeFile(path.join(output, "llms.txt"), `# Vectory\n\n> Self-hosted Vector control plane. Vectory 0.2.0 uses signed prebuilt images and downloads.\n\n- [Overview](${origin}/)\n- [Vector configuration designer](${origin}/designer/): Create, import, visualize and export YAML, JSON and TOML locally in your browser.\n- [Quickstart](${origin}/help/_markdown/quickstart.md)\n- [Security model](${origin}/help/_markdown/security.md)\n- [Known limits](${origin}/help/whats-new/#known-limits)\n- [All guides](${origin}/help/llms.txt)\n`);
+await fs.writeFile(path.join(output, "llms.txt"), publicDiscoveryIndex(origin, manifest.version));
 // Cloudflare JavaScript Detections may rewrite HTML unless the origin sends
 // no-transform. Keep the existing HTML cache policy and target only HTML
 // routes so asset caching and compression retain their current behavior.

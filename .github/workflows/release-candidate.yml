@@ -335,6 +335,40 @@ jobs:
           name: candidate-images
           path: artifacts/images
           if-no-files-found: error
+  native-server:
+    name: native Linux server (prebuilt install and isolation)
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: { name: candidate-images, path: artifacts/images }
+      - name: Check native archive and corresponding-source negative fixtures
+        run: python3 packaging/test_native_kit.py
+      - name: Extract exact prebuilt images into the bounded native kit
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          docker load --input artifacts/images/vectory-server-image.tar.gz
+          docker load --input artifacts/images/vectory-validator-image.tar.gz
+          docker pull caddy:2.11.7-alpine@sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb
+          python3 packaging/build-native-kit.py --out artifacts/native --sbom-dir artifacts/images --payload-dir "$RUNNER_TEMP/native-payload"
+      - name: Retain exact authenticated runtime corresponding sources
+        timeout-minutes: 20
+        run: python3 packaging/build-native-runtime-source.py --provenance artifacts/native/native-kit-provenance.json --out artifacts/native
+      - name: Install prebuilt native bytes and prove real isolation and readiness
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          version=$(cat "$RUNNER_TEMP/native-payload/VERSION")
+          sudo python3 packaging/native-smoke.py --kit "$RUNNER_TEMP/native-payload" --archive "artifacts/native/vectory-$version-server-native-linux-amd64.tar.gz" --out artifacts/native/native-smoke.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: candidate-native-server
+          path: artifacts/native
+          if-no-files-found: error
   starters:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -814,7 +848,7 @@ jobs:
           echo 'Automatic HTTPS fixture passed both verified TLS issuers and retained-trust restart. Public ACME issuance and host activation were not attempted.'
       - name: Qualify published manager state and trust across the version transition
         timeout-minutes: 15
-        run: python3 tests/security/manager-upgrade.py --run --candidate-image vectory-server:candidate --validator-image vectory-validator:candidate --candidate-version 0.2.0 --output artifacts/manager-upgrade/0.1.1-to-0.2.0.json --private-backup-dir "$RUNNER_TEMP/manager-upgrade-private-backup"
+        run: python3 tests/security/manager-upgrade.py --run --candidate-image vectory-server:candidate --validator-image vectory-validator:candidate --candidate-version 0.2.1 --output artifacts/manager-upgrade/0.1.1-to-0.2.1.json --private-backup-dir "$RUNNER_TEMP/manager-upgrade-private-backup"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ !cancelled() && hashFiles('artifacts/manager-upgrade/*.json') != '' }}
         with:
@@ -888,7 +922,7 @@ jobs:
           path: artifacts/sbom
           if-no-files-found: error
   assemble:
-    needs: [agents, packages, msi, images, sbom, starters, preview-smoke]
+    needs: [agents, packages, msi, images, sbom, starters, preview-smoke, native-server]
     if: ${{ !cancelled() && needs.agents.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -907,6 +941,7 @@ jobs:
           SBOM_RESULT: ${{ needs.sbom.result }}
           STARTERS_RESULT: ${{ needs.starters.result }}
           PREVIEW_SMOKE_RESULT: ${{ needs['preview-smoke'].result }}
+          NATIVE_SERVER_RESULT: ${{ needs['native-server'].result }}
         run: |
           set -euo pipefail
           out=artifacts/unsigned-release-candidate

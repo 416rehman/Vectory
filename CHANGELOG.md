@@ -2,6 +2,14 @@
 
 All notable changes to Vectory.
 
+## 0.2.1
+
+- Added guided Docker server installation on Windows and macOS, including deliberate amd64 emulation, verified release images, retained certificate trust and restartable setup.
+- Added a prebuilt native Linux server kit with bundled runtime libraries, automatic HTTPS and a validator isolated by systemd. Native installation authenticates signed release bytes before extraction and execution.
+- Added reusable fleet installation commands, a protected token-file option and one-line or readable command views. Enrollment progress follows the bounded token inventory without claiming pipeline activation.
+- Added platform choices to the public install page and improved guide metadata, structured data, sitemap and machine-readable documentation links.
+- Preserved the full-width artwork and added a cursor-controlled light reveal.
+
 ## 0.2.0
 
 - Added stable release automation with fresh application and native-platform gates, public GHCR server and validator images, Cosign signatures from GitHub OIDC, authenticated checksum bundles, SBOMs and vulnerability scan gates.

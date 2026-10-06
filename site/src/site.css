@@ -174,6 +174,19 @@ h2, h3, p { overflow-wrap: break-word; }
 .setup-command code { display: block; overflow-x: auto; padding-top: 11px; color: #fff; white-space: pre; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .setup-command code:focus-visible { outline-color: var(--lime); }
 .copy-feedback { display: block; min-height: 15px; margin-top: 6px; color: var(--lime); font-size: 11px; }
+.install-platforms { display: inline-flex; gap: 3px; padding: 4px; margin-bottom: 14px; border: 1px solid rgb(32 33 34 / 40%); }
+.install-platforms button { padding: 9px 15px; border: 0; color: var(--ink); background: transparent; font-size: 13px; font-weight: 600; cursor: pointer; }
+.install-platforms button[aria-selected="true"] { color: #fff; background: var(--ink); }
+[data-install-panel] { width: 100%; min-width: 0; }
+.install-choice p.platform-note { min-height: 0; margin: -6px 0 21px; font-size: 12px; line-height: 1.5; }
+.agent-setup-steps { border-color: #55595a; }
+.agent-setup-steps li { border-color: #55595a; }
+.agent-setup-steps small { color: #c8ccca; }
+.native-install { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; padding: 42px 0; margin-top: 25px; border-bottom: 1px solid var(--line); }
+.native-install h3 { margin: 18px 0; font-size: clamp(30px, 3.8vw, 50px); font-weight: 550; line-height: 1.05; letter-spacing: -.05em; }
+.native-install p { max-width: 520px; margin: 0; color: var(--muted); font-size: 16px; line-height: 1.55; }
+.native-install > div:last-child { min-width: 0; align-self: center; }
+@media (max-width: 800px) { .native-install { grid-template-columns: 1fr; gap: 25px; } }
 .button-lime { background: var(--ink); border-color: var(--ink); color: #fff; }
 .button-lime:hover { background: var(--blue); border-color: var(--blue); color: #fff; }
 .button-outline-light { border-color: #a2a3a0; color: #fff; }

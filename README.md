@@ -4,7 +4,7 @@
 
 **Design, ship and roll back Vector pipelines across your fleet, from one self-hosted dashboard.**
 
-[Quickstart](docs/user/quickstart.md) · [Download](https://github.com/416rehman/Vectory/releases/tag/v0.2.0) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Compatibility](#deployment-and-compatibility)
+[Quickstart](docs/user/quickstart.md) · [Download](https://github.com/416rehman/Vectory/releases/tag/v0.2.1) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Compatibility](#deployment-and-compatibility)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-editor-dark.png">
@@ -48,14 +48,39 @@ flowchart LR
 
 ## Get started
 
-On a Linux x86-64 server with Docker Engine and Compose v2 running, point a DNS name at the server and run:
+Choose Docker on Windows, macOS or Linux, or install the prebuilt Linux server without Docker. Point a DNS name at the computer and choose your command. No source build is required.
+
+**Linux with Docker**, after starting Docker Engine and Compose:
 
 ```sh
 curl -fsSL --proto '=https' https://vectory.ahmadz.ai/install.sh -o vectory-install.sh &&
 bash vectory-install.sh
 ```
 
-Enter your hostname. The installer verifies the release signature and signed GHCR image digests, starts Vectory, and sets up automatic HTTPS. Open the printed URL and create your first administrator with the one-time setup secret. No Git, Rust, Go, Node.js or compiler is needed.
+**macOS**, after starting Docker Desktop:
+
+```sh
+curl -fsSL --proto '=https' https://vectory.ahmadz.ai/install-desktop.sh -o vectory-install.sh &&
+bash vectory-install.sh
+```
+
+**Windows**, in PowerShell after starting Docker Desktop in Linux container mode:
+
+```powershell
+curl.exe -fsSL --proto '=https' https://vectory.ahmadz.ai/install.ps1 -o vectory-install.ps1; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vectory-install.ps1 } else { throw 'Installer download failed' }
+```
+
+**Linux without Docker**, on an x86-64 host with systemd 252 or later and cgroup v2:
+
+```sh
+curl -fsSL --proto '=https' \
+  https://vectory.ahmadz.ai/install-native.sh -o vectory-install-native.sh &&
+sudo bash vectory-install-native.sh
+```
+
+Enter your hostname. The installer verifies the release signature, starts Vectory and sets up automatic HTTPS. Docker installations also verify immutable GHCR image identities. The native Linux kit includes prebuilt server, validator, Vector, proxy and signature-verifier executables, with the validator isolated by systemd. Open the printed URL and create your first administrator with the one-time setup secret. No Git, Rust, Go, Node.js or compiler is needed.
+
+The prebuilt server images are Linux x86-64. Apple silicon uses Docker Desktop's amd64 emulation after you confirm that choice; it does not download a native Arm server image. Allow inbound TCP 80 and 443 for HTTPS and 8443 from your managed devices. Keep Docker running and retain its named data and certificate volumes. The [server guide](docs/user/install-server.md) covers prerequisites, configurable settings, certificate choices and compatibility limits.
 
 Then open **Devices → Add device**. Copy the command for Linux, macOS or Windows, run it on a host with Vector 0.58.x installed, and paste the enrollment token when prompted. The agent download, certificate trust and service setup are handled for you. Tokens stay out of URLs and commands.
 
@@ -66,7 +91,7 @@ Then open **Devices → Add device**. Copy the command for Linux, macOS or Windo
 
 Want to inspect a configuration first? The [standalone Vector designer](https://vectory.ahmadz.ai/designer/) creates, imports, visualizes and exports YAML, JSON and TOML in your browser without an account.
 
-The [0.2.0 release](https://github.com/416rehman/Vectory/releases/tag/v0.2.0) supplies prebuilt agents, server kits, image archives, checksums, Sigstore bundles, SBOMs and dependency scan results. Container images are available from GHCR by immutable digest. Release verification uses GitHub OIDC and Cosign; native OS trust prompts and the agent's runtime update signatures are separate mechanisms.
+The [0.2.1 release](https://github.com/416rehman/Vectory/releases/tag/v0.2.1) supplies prebuilt agents, server kits, image archives, checksums, Sigstore bundles, SBOMs and dependency scan results. Container images are available from GHCR by immutable digest. Release verification uses GitHub OIDC and Cosign; native OS trust prompts and the agent's runtime update signatures are separate mechanisms.
 
 The same guides ship inside every server as a searchable, offline Help center at `/help/`.
 
@@ -87,7 +112,7 @@ The same guides ship inside every server as a searchable, offline Help center at
 
 Vectory runs the full build, publish, canary, apply and rollback workflow against real Vector 0.58.0 on Linux, macOS and Windows. CI tests the application, browser flows and isolated Compose stack. Tagged releases also run native operating-system service and update tests before images and downloads are published.
 
-The server supports one Linux x86-64 installation with local SQLite storage. Agents ship for Linux x86-64 and Arm64, Intel and Apple silicon Macs, and Windows x86-64; Vector itself limits which hosts can run a managed pipeline. Cosign authenticates release artifacts and GHCR digests through the release workflow identity. It does not replace Windows Authenticode or Apple notarization, and it does not certify every customer's workload or host environment.
+The Docker server uses Linux x86-64 images on Docker Engine or Docker Desktop, with local SQLite storage in its retained data volume. Apple silicon requires amd64 emulation. Agents ship for Linux x86-64 and Arm64, Intel and Apple silicon Macs, and Windows x86-64; Vector itself limits which hosts can run a managed pipeline. Cosign authenticates release artifacts and GHCR digests through the release workflow identity. It does not replace Windows Authenticode or Apple notarization, and it does not certify every customer's workload or host environment.
 
 See [Compatibility](docs/user/compatibility.md) for the exact tested systems, [Operational limits](docs/user/whats-new.md#known-limits) for remaining constraints, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the checks behind each requirement. Start new deployments with a canary and retain tested backups.
 

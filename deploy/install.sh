@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download, verify and start the official server kit. No root or compiler needed.
 set -euo pipefail
-version='0.2.0'
+version='0.2.1'
 fail() { printf 'Vectory: %s\n' "$*" >&2; exit 1; }
 [[ $# -le 1 ]] || fail 'Usage: bash vectory-install.sh [server.example.com]'
 [[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] || fail 'The manager needs a Linux x86-64 Docker host. Agents are available separately for Linux, macOS and Windows.'

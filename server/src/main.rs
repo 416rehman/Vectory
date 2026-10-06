@@ -96,13 +96,24 @@ fn optional_origin(key: &str, schemes: &[&str]) -> anyhow::Result<Option<String>
 fn validation_url_for_mode(
     development: bool,
     value: Option<String>,
+    socket: Option<String>,
 ) -> anyhow::Result<Option<String>> {
     let url = value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    let url = if let Some(socket) = socket {
+        if url.is_some() {
+            anyhow::bail!(
+                "Choose only one of VECTORY_VALIDATION_SOCKET and VECTORY_VALIDATION_URL"
+            );
+        }
+        Some(vectory_server::validation_socket::endpoint(&socket)?)
+    } else {
+        url
+    };
     if !development && url.is_none() {
         anyhow::bail!(
-            "Production requires VECTORY_VALIDATION_URL for the isolated Vector 0.58 validator; use VECTORY_DEVELOPMENT=true only for an explicitly local structural-only preview"
+            "Production requires VECTORY_VALIDATION_URL or VECTORY_VALIDATION_SOCKET for the isolated Vector 0.58 validator; use VECTORY_DEVELOPMENT=true only for an explicitly local structural-only preview"
         );
     }
     Ok(url)
@@ -208,8 +219,11 @@ async fn main() -> anyhow::Result<()> {
     if !secure && !development {
         anyhow::bail!("Insecure cookies require VECTORY_DEVELOPMENT=true")
     }
-    let validation_url =
-        validation_url_for_mode(development, env::var("VECTORY_VALIDATION_URL").ok())?;
+    let validation_url = validation_url_for_mode(
+        development,
+        env::var("VECTORY_VALIDATION_URL").ok(),
+        env::var(vectory_server::validation_socket::SERVER_VARIABLE).ok(),
+    )?;
     let schedule_late_start_seconds = vectory_server::schedule::late_start_from(
         env::var("VECTORY_SCHEDULE_LATE_START_SECONDS")
             .ok()
@@ -384,21 +398,44 @@ mod tests {
     #[test]
     fn production_requires_configured_isolated_validator() {
         for value in [None, Some(String::new()), Some("  \t  ".into())] {
-            let error = validation_url_for_mode(false, value).unwrap_err();
+            let error = validation_url_for_mode(false, value, None).unwrap_err();
             assert!(error.to_string().contains("VECTORY_VALIDATION_URL"));
         }
         assert_eq!(
-            validation_url_for_mode(false, Some(" http://validator:8081/ ".into())).unwrap(),
+            validation_url_for_mode(false, Some(" http://validator:8081/ ".into()), None).unwrap(),
             Some("http://validator:8081/".into())
         );
     }
 
     #[test]
     fn explicit_development_can_use_structural_only_preview() {
-        assert_eq!(validation_url_for_mode(true, None).unwrap(), None);
+        assert_eq!(validation_url_for_mode(true, None, None).unwrap(), None);
         assert_eq!(
-            validation_url_for_mode(true, Some("   ".into())).unwrap(),
+            validation_url_for_mode(true, Some("   ".into()), None).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn validator_socket_never_falls_back_to_a_tcp_url() {
+        assert!(
+            validation_url_for_mode(
+                false,
+                Some("http://validator:8081".into()),
+                Some("/run/validator/socket".into())
+            )
+            .is_err()
+        );
+        assert!(validation_url_for_mode(true, None, Some(String::new())).is_err());
+        assert!(validation_url_for_mode(true, None, Some("relative/socket".into())).is_err());
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            validation_url_for_mode(false, None, Some("/run/validator/socket".into())).unwrap(),
+            Some("unix:/run/validator/socket".into())
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            validation_url_for_mode(false, None, Some("/run/validator/socket".into())).is_err()
         );
     }
 

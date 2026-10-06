@@ -8,6 +8,39 @@ on:
 permissions:
   contents: read
 jobs:
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: { python-version: "3.13" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: "22" }
+      - name: Check portable installer control flow with fixture transports
+        if: runner.os != 'Windows'
+        env: { VECTORY_TEST_BASH: /bin/bash }
+        run: python3 deploy/test-desktop-installer.py
+      - name: Check Windows PowerShell installer boundaries
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./deploy/test-desktop-installer.ps1
+      - name: Check Windows installer control flow with fixture transports
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:VECTORY_TEST_BASH = 'C:\Program Files\Git\bin\bash.exe'
+          python deploy/test-desktop-installer.py
+      - name: Install command test dependencies
+        run: npm ci
+        working-directory: dashboard
+      - name: Run generated commands through native shells with fixture installers
+        run: node node_modules/vitest/vitest.mjs run src/enrollmentCommands.test.ts src/oneLineInstallCommand.test.ts src/installCommandRuns.test.ts
+        working-directory: dashboard
   server:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -583,7 +616,9 @@ jobs:
           go test -json ./... > ../artifacts/agent-go-test.json
       - name: Run the agent tests (go test -json)
         if: runner.os == 'Windows'
-        timeout-minutes: 10
+        # Allow compilation, the full native suite and final JSON output.
+        # The completion proof below still rejects any truncated stream.
+        timeout-minutes: 15
         shell: pwsh
         working-directory: agent
         run: |

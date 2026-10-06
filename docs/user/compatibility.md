@@ -2,6 +2,18 @@
 
 Which platforms, Vector versions and browsers Vectory supports today, what each needs at a minimum, and what has been tested on each. This release targets **Vector 0.58**: devices accept any 0.58.x release, the automated tests use 0.58.0, and the validator on your server runs 0.58.0.
 
+## Server installation choices
+
+| Host and method | What runs | Requirements |
+| --- | --- | --- |
+| Linux with Docker | Signed prebuilt Linux x86-64 containers | Docker Engine, Compose and local Docker storage. |
+| Windows with Docker Desktop | The same Linux x86-64 containers | A Windows version supported by Docker Desktop, its Linux container engine and PowerShell 5.1 or later. This is not a native Windows server executable. |
+| Intel Mac with Docker Desktop | The same Linux x86-64 containers | Docker Desktop and macOS's system Bash. No Homebrew toolchain is required. |
+| Apple silicon with Docker Desktop | Linux x86-64 containers under amd64 emulation | Explicit emulation consent and a Docker backend that executes amd64 images. No native Arm server image is supplied. |
+| Native Linux without Docker | Prebuilt server, proxy and an isolated systemd validator | Linux x86-64 booted with systemd 252 or later, unified cgroup v2 and local storage. The kit carries its own executable runtime libraries; it targets Ubuntu 24.04. |
+
+The desktop fixture tests check consent, platform selection, checksum and signature-refusal handling, certificate setup recovery, private file access and retained configuration. They do not stand in for running Docker Desktop on physical Apple hardware. Docker Desktop's own supported OS requirements still apply. A server installed on a sleeping or stopped desktop is unavailable until that computer and Docker resume.
+
 ## Devices
 
 Vectory manages an installed Vector; it never installs or upgrades it. Match both the operating system and the CPU when you download the agent.
@@ -33,7 +45,7 @@ What each part needs, where that is established. "Not yet established" means not
 | Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
 | Browser | Not yet established | Chromium is tested on every change; Firefox and WebKit run four first-use flows on demand (see [Browsers](#browsers)). |
 
-The prebuilt Linux x86-64 server and local evaluation kits require Docker Engine with Compose v2. Normal installation needs no Rust, Go, Node, or compiler. Other server architectures and Docker Desktop installations are not qualified yet. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
+The prebuilt server images and local evaluation kit are Linux x86-64. Normal installation needs no Rust, Go, Node or compiler. The Docker Desktop bootstrap runs those same signed images and original Compose templates on Windows or macOS. Apple silicon uses explicit amd64 emulation; there is no native Arm server image. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
 
 ## Tested on
 
@@ -70,7 +82,9 @@ Checks that need the device itself, such as local files, run on the device befor
 
 ## Server
 
-- **Prebuilt kits for Linux x86-64**, with Docker Engine, Compose v2 and local disk. The server kit verifies Cosign-signed GHCR image digests; signed release inventories also authenticate downloadable image archives. No compiler or source build is needed.
+- **Prebuilt Linux x86-64 images**, with Docker Engine or Docker Desktop, Compose and local Docker storage. Linux uses the signed starter directly. Windows uses the HTTPS-delivered PowerShell bootstrap; macOS uses the portable Bash bootstrap. Both authenticate the unchanged kit and image manifests before using its Compose templates. No compiler or source build is needed.
+- **Apple silicon requires amd64 emulation**, explicitly selected in the bootstrap and every service's platform. This is not a native Arm server release.
+- **The native Linux kit needs systemd and cgroup v2**. Its server and proxy are separate from the validator, which uses a private Unix socket and an independent filesystem and network sandbox. Installing it does not install or update Vector on your managed devices.
 - On every change, CI builds the server stack from source on a clean Ubuntu 24.04 runner, starts it, waits for healthy services, creates the first administrator, enrolls a device with the Add device installer and checks validator isolation. Release gates also test the prebuilt kits, HTTPS and HTTP/2, certificate retention, and a manager upgrade from 0.1.1 with real validation and retained identity. A customer's public DNS, certificate issuance and network still need their own checks.
 - One server per data directory. SQLite doesn't support network filesystems or active-active replicas.
 
@@ -80,7 +94,7 @@ The dashboard and this Help center are tested with Chromium on desktop and phone
 
 ## Offline use
 
-The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. The first online start verifies and pulls images from GHCR. For a first offline installation, use [prepare-offline.sh](install-server.md#offline-installation) on a connected machine and transfer its complete kit, cache and verification material through your trusted channel. Previously verified installations can also restart with `VECTORY_OFFLINE=true` and their retained cache and images. Public HTTPS renewal needs internet access; offline servers use custom certificates. Devices need an existing supported Vector installation, which can be supplied offline. Links to [vector.dev](https://vector.dev/docs/) may describe a newer Vector than 0.58.0.
+The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. Docker's first online start verifies and pulls images from GHCR. For a first offline installation, use the Linux Docker kit's [prepare-offline.sh](install-server.md#offline-installation) on a connected machine and transfer its complete kit, cache and verification material through your trusted channel. Its previously verified Linux starter can restart with `VECTORY_OFFLINE=true` and retained cache and images. The desktop bootstrap verifies signatures and pulls images online when starting; the native bootstrap needs online authentication for first installation. Public HTTPS renewal needs internet access; offline servers use custom certificates. Devices need an existing supported Vector installation, which can be supplied offline. Links to [vector.dev](https://vector.dev/docs/) may describe a newer Vector than 0.58.0.
 
 ## References
 

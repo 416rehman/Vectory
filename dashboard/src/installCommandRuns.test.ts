@@ -159,9 +159,16 @@ describe.skipIf(!usable)("the install command, run", () => {
     };
   }
 
-  describe.each(shells)("in %s", (shell) => {
+  describe.each(
+    shells.flatMap((shell) =>
+      (["readable", "one-line"] as const).map((presentation) => ({
+        shell,
+        presentation,
+      })),
+    ),
+  )("in $shell ($presentation)", ({ shell, presentation }) => {
     it("downloads into a private directory, checks it, runs it and leaves nothing behind", () => {
-      const command = installerCommand(install(), choices())!;
+      const command = installerCommand(install(), choices(), presentation)!;
       const result = run(shell, command);
       expect(result.output).toContain("OK");
       expect(result.status, result.output).toBe(0);
@@ -193,7 +200,7 @@ describe.skipIf(!usable)("the install command, run", () => {
     });
 
     it("never runs an installer that fails its check, and cleans up", () => {
-      const command = installerCommand(install(), choices())!;
+      const command = installerCommand(install(), choices(), presentation)!;
       const result = run(shell, command, { FAKE_ALTERED: "1" });
       expect(result.status).not.toBe(0);
       expect(result.output).toMatch(/FAILED|did NOT match/i);
@@ -204,7 +211,7 @@ describe.skipIf(!usable)("the install command, run", () => {
     });
 
     it("stops when the download fails, and cleans up", () => {
-      const command = installerCommand(install(), choices())!;
+      const command = installerCommand(install(), choices(), presentation)!;
       const result = run(shell, command, { FAKE_CURL_FAIL: "1" });
       expect(result.status).not.toBe(0);
       expect(result.sudoArgs).toBeNull();
@@ -220,7 +227,9 @@ describe.skipIf(!usable)("the install command, run", () => {
           managedConfig: "/srv/owner's data/vector.json",
           installDir: "/opt/vectory agent/bin",
           createUser: false,
+          tokenFile: "/private/provisioning/owner's token.txt",
         }),
+        presentation,
       )!;
       const result = run(shell, command);
       expect(result.status, result.output).toBe(0);
@@ -234,6 +243,8 @@ describe.skipIf(!usable)("the install command, run", () => {
           "edge-01",
           "--managed-config",
           "/srv/owner's data/vector.json",
+          "--token-file",
+          "/private/provisioning/owner's token.txt",
           "",
         ].join("\n"),
       );
@@ -245,6 +256,7 @@ describe.skipIf(!usable)("the install command, run", () => {
         installerCommand(
           install(),
           choices({ trust: "file", caFile: "/etc/vectory/server ca.pem" }),
+          presentation,
         )!,
         {},
       );
@@ -255,7 +267,11 @@ describe.skipIf(!usable)("the install command, run", () => {
       );
       const system = run(
         shell,
-        installerCommand(install(true), choices({ trust: "system" }))!,
+        installerCommand(
+          install(true),
+          choices({ trust: "system" }),
+          presentation,
+        )!,
       );
       expect(system.status).toBe(0);
       expect(system.curlArgs).not.toContain("--cacert");

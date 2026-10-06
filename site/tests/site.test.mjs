@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { publicMarkdown } from "../scripts/public-docs.mjs";
+import { publicGuideMetadata } from "../scripts/seo.mjs";
 import { markdownReferences } from "../../help-center/scripts/markdown.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -16,10 +17,18 @@ test("public landing describes the install path and labels demo evidence", () =>
   const body = landing.slice(landing.indexOf("<body>"));
   assert.match(body, /No Rust, Go or Node toolchain is needed/);
   assert.match(body, /https:\/\/vectory\.ahmadz\.ai\/install.sh/);
-  assert.match(body, /Download\.<br \/>Run\. Connect\./);
+  assert.match(body, /Choose your OS\.<br \/>Start your server\./);
   assert.match(body, /synthetic demo/);
   assert.match(landing, /rel="canonical" href="https:\/\/vectory\.ahmadz\.ai\/"/);
   assert.match(landing, /name="description"/);
+  assert.doesNotMatch(body, /Actual interface/);
+  for (const name of ["linux", "macos", "windows"]) {
+    assert.match(body, new RegExp(`id="install-${name}-tab"`));
+    assert.match(body, new RegExp(`id="install-${name}-panel"`));
+  }
+  assert.match(body, /install-native\.sh/);
+  assert.match(body, /install-desktop\.sh/);
+  assert.match(body, /install\.ps1/);
 });
 
 test("the product leads the landing page and the standalone designer remains a tool", () => {
@@ -44,6 +53,11 @@ test("public landing's local destinations exist", async () => {
     }
     const target = path.join(output, url.pathname, url.pathname.endsWith("/") ? "index.html" : "");
     assert((await fs.stat(target).catch(() => null))?.isFile(), `Missing local destination ${href}`);
+    if (url.hash) {
+      const html = await fs.readFile(target, 'utf8');
+      const targetIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+      assert(targetIds.has(decodeURIComponent(url.hash.slice(1))), `Missing destination section ${href}`);
+    }
   }
   for (const [, src] of landing.matchAll(/\bsrc="(\/[^"]+)"/g)) {
     const pathname = new URL(src, "https://vectory.ahmadz.ai/").pathname;
@@ -51,13 +65,20 @@ test("public landing's local destinations exist", async () => {
   }
 });
 
-test("the public installer ships the exact release-owned source as a download", async () => {
-  assert(
-    (await fs.readFile(path.join(output, 'install.sh'))).equals(await fs.readFile(path.join(root, 'deploy/install.sh'))),
-    'The public installer differs from its release-owned source',
-  );
+test("public installers ship exact release-owned bytes with fresh download headers", async () => {
   const headers = await fs.readFile(path.join(output, '_headers'), 'utf8');
-  assert.match(headers.replaceAll('\r\n', '\n'), /\/install\.sh\n  X-Robots-Tag: noindex\n  Content-Type: text\/plain; charset=utf-8\n  Content-Disposition: attachment; filename="vectory-install\.sh"/);
+  for (const name of ["install.sh", "install-desktop.sh", "install.ps1", "install-native.sh"]) {
+    const bytes = await fs.readFile(path.join(output, name));
+    assert(bytes.equals(await fs.readFile(path.join(root, "deploy", name))), `${name} differs from its release-owned source`);
+    const pinned = name.endsWith('.ps1') ? /^\$version = '([^']+)'$/m : /^version='([^']+)'$/m;
+    assert.equal(pinned.exec(bytes.toString('utf8'))?.[1], manifest.version, `${name} does not install the advertised release`);
+    const section = headers.replaceAll("\r\n", "\n").split(`/${name}\n`)[1]?.split("\n\n")[0];
+    assert(section, `Missing headers for ${name}`);
+    assert.match(section, /X-Robots-Tag: noindex/);
+    assert.match(section, /Content-Type: text\/plain; charset=utf-8/);
+    assert.match(section, /Content-Disposition: attachment/);
+    assert.match(section, /Cache-Control: no-store, max-age=0/);
+  }
 });
 
 test("browser distributions expose the release notices and required upstream terms", async () => {
@@ -229,6 +250,70 @@ test("sitemap, machine-readable docs and static hosting files ship", async () =>
   for (const name of ["robots.txt", "llms.txt", "_headers", "_redirects", "404.html", "favicon.svg", "favicon.ico", "site.webmanifest", "social-preview.png", "favicons/icon-180.png", "designer/index.html", "site.css", "site.js", "media/flow-art.webp", "fonts/instrument-sans-latin.woff2"]) {
     assert((await fs.stat(path.join(output, name)).catch(() => null))?.isFile(), `${name} missing`);
   }
+});
+
+test("every sitemap page has one indexable canonical and distinct source-based metadata", async () => {
+  const origin = "https://vectory.ahmadz.ai";
+  const sitemap = await fs.readFile(path.join(output, "sitemap.xml"), "utf8");
+  const urls = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map(([, url]) => url);
+  assert.equal(new Set(urls).size, urls.length, "Sitemap contains duplicate destinations");
+  const titles = new Set();
+  for (const url of urls) {
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, origin);
+    assert.equal(parsed.search + parsed.hash, "", `Noncanonical sitemap destination: ${url}`);
+    assert(parsed.pathname.endsWith("/"), `Canonical page must use its trailing slash: ${url}`);
+    const html = await fs.readFile(path.join(output, parsed.pathname, "index.html"), "utf8");
+    const head = html.slice(0, html.indexOf("</head>"));
+    const canonical = [...head.matchAll(/<link\b[^>]*\brel="canonical"[^>]*>/g)];
+    assert.equal(canonical.length, 1, `Ambiguous canonical for ${url}`);
+    assert(canonical[0][0].includes(`href="${url}"`), `Canonical differs from sitemap: ${url}`);
+    assert.doesNotMatch(head, /<meta\b[^>]*name="robots"[^>]*content="[^"]*noindex/, `${url} is in the sitemap but not indexable`);
+    const title = head.match(/<title>([\s\S]*?)<\/title>/)?.[1].trim();
+    assert(title && !titles.has(title), `Missing or repeated page title: ${url}`);
+    titles.add(title);
+    for (const [attribute, key] of [["name", "description"], ["property", "og:title"], ["property", "og:description"], ["property", "og:url"], ["name", "twitter:card"]]) {
+      const tags = [...head.matchAll(new RegExp(`<meta\\b[^>]*\\b${attribute}="${key}"[^>]*>`, "g"))];
+      assert.equal(tags.length, 1, `Missing or duplicate ${key}: ${url}`);
+      assert.match(tags[0][0], /content="[^\"]+"/, `Empty ${key}: ${url}`);
+    }
+    if (parsed.pathname.startsWith("/help/")) {
+      const structured = [...head.matchAll(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)].flatMap(([, json]) => JSON.parse(json)["@graph"] || []);
+      const document = structured.find((node) => node["@type"] === (parsed.pathname === "/help/" ? "CollectionPage" : "TechArticle"));
+      assert.equal(document?.url, url, `Guide schema does not describe this page: ${url}`);
+      assert(document.description, `Guide schema needs the source description: ${url}`);
+      const breadcrumbs = structured.find((node) => node["@type"] === "BreadcrumbList")?.itemListElement;
+      assert.equal(breadcrumbs?.at(-1)?.item, url, `Guide hierarchy ends elsewhere: ${url}`);
+      breadcrumbs.forEach((entry, index) => {
+        assert.equal(entry.position, index + 1);
+        assert(entry.name);
+        assert(urls.includes(entry.item), `Breadcrumb points outside the canonical inventory: ${url}`);
+      });
+    }
+  }
+  const robots = await fs.readFile(path.join(output, "robots.txt"), "utf8");
+  assert.match(robots, /User-agent: \*\nAllow: \/\n/);
+  assert(robots.includes(`Sitemap: ${origin}/sitemap.xml`));
+  const discovery = await fs.readFile(path.join(output, "llms.txt"), "utf8");
+  assert.match(discovery, /Vector pipeline and fleet manager/);
+  for (const href of markdownReferences(discovery)) {
+    const destination = new URL(href);
+    assert.equal(destination.origin, origin);
+    const file = path.join(output, destination.pathname, destination.pathname.endsWith("/") ? "index.html" : "");
+    assert((await fs.stat(file).catch(() => null))?.isFile(), `Machine-readable index links to missing ${href}`);
+  }
+});
+
+test("public guide metadata escapes source text while preserving article content", () => {
+  const title = 'A & "quoted" </script> title';
+  const input = '<html><head><title>Old</title><meta name="description" content="Old"><link rel="canonical" href="https://example.invalid/"></head><body><p>Original guide</p></body></html>';
+  const html = publicGuideMetadata(input, { origin: "https://vectory.ahmadz.ai", pathname: "/help/pipelines/", page: { title, description: 'A "source" & description' } });
+  assert(html.endsWith('<body><p>Original guide</p></body></html>'));
+  assert.equal((html.match(/rel="canonical"/g) || []).length, 1);
+  assert.equal((html.match(/name="description"/g) || []).length, 1);
+  assert(html.includes('A &amp; &quot;quoted&quot; &lt;/script&gt; title'));
+  const json = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
+  assert.equal(JSON.parse(json)["@graph"][0].headline, title);
 });
 
 test("public pages have valid search metadata and usable branding assets", async () => {

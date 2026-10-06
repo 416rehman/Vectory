@@ -32,6 +32,11 @@ REQUIRED_CANDIDATE_FILES = {
     'npm-dependency-audit.json', 'install.log', 'uninstall.log',
 }
 REQUIRED_JOBS = ('packages', 'msi', 'images', 'sbom', 'starters', 'preview_smoke')
+NATIVE_INSTALLERS = {'install.sh', 'install-desktop.sh', 'install.ps1', 'install-native.sh'}
+NATIVE_FILES = {'native-kit-provenance.json', 'native-smoke.json', 'vectory-native.spdx.json', 'native-runtime-source.json'} | NATIVE_INSTALLERS
+NATIVE_CHECKS = {'prebuilt_identity', 'preflight_guards', 'service_sandbox', 'network_namespace',
+    'private_filesystem', 'resource_limits', 'worker_uds', 'vector_validation', 'synthetic_transform',
+    'dashboard_https', 'agent_tls', 'wrong_ca_rejected', 'bootstrap', 'restart_state_preserved', 'stop'}
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_TEXT_BYTES = 32 * 1024 * 1024
 MAX_AGENT_CATALOG_BYTES = 1024 * 1024
@@ -47,6 +52,7 @@ MAX_IMAGE_BYTES = 16 * 1024 * 1024 * 1024
 MAX_IMAGE_UNPACKED_BYTES = 64 * 1024 * 1024 * 1024
 MAX_IMAGE_MEMBERS = 10_000
 MAX_IMAGE_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_IDENTITY_BYTES = 64 * 1024 * 1024
 MAX_IMAGE_READ_BYTES = 16 * 1024 * 1024
 MAX_IMAGE_PATH_BYTES = 1024
 MAX_PREVIEW_BUNDLE_BYTES = 4 * 1024 * 1024
@@ -792,15 +798,18 @@ def image_layer_link_target(name, linkname):
     return resolved
 
 
-def required_image(path):
+def required_image(path, expected_tag=None, *, identity=False, uncompressed=False):
     required_file(path, MAX_IMAGE_BYTES)
-    expected_tag = f"{path.name.removesuffix('-image.tar.gz')}:candidate"
+    if expected_tag is None and not identity:
+        expected_tag = f"{path.name.removesuffix('-image.tar.gz')}:candidate"
     files = {}
     layer_links = {}
     manifest_bytes = None
+    metadata = {}
+    metadata_bytes = 0
     unpacked = 0
     try:
-        with gzip.open(path, 'rb') as compressed:
+        with (path.open('rb') if uncompressed else gzip.open(path, 'rb')) as compressed:
             source = BoundedImageReader(compressed, path.name)
             with tarfile.open(fileobj=source, mode='r|', tarinfo=BoundedTarInfo) as archive:
                 for index, member in enumerate(archive):
@@ -833,8 +842,16 @@ def required_image(path):
                     contents = archive.extractfile(member)
                     if contents is None:
                         raise ValueError(f'{path.name} has an unreadable image member')
-                    if name == 'manifest.json':
-                        manifest_bytes = contents.read()
+                    if name == 'manifest.json' or (identity and member.size <= MAX_IMAGE_MANIFEST_BYTES and
+                            (name.endswith('.json') or name == 'oci-layout' or name.startswith('blobs/sha256/'))):
+                        data = contents.read()
+                        if name == 'manifest.json':
+                            manifest_bytes = data
+                        if identity:
+                            metadata_bytes += len(data)
+                            if metadata_bytes > MAX_IMAGE_IDENTITY_BYTES:
+                                raise ValueError(f'{path.name} has oversized image identity metadata')
+                            metadata[name] = data
                     else:
                         for chunk in iter(lambda: contents.read(1024 * 1024), b''):
                             pass
@@ -859,9 +876,12 @@ def required_image(path):
         raise ValueError(f'{path.name} has no single Docker image in its manifest')
     image = manifest[0]
     config, layers, tags = image.get('Config'), image.get('Layers'), image.get('RepoTags')
+    if identity and expected_tag is None and tags is None:
+        tags = []
     if (not isinstance(config, str) or not isinstance(layers, list) or not layers
             or any(not isinstance(layer, str) for layer in layers)
-            or not isinstance(tags, list) or expected_tag not in tags):
+            or not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags)
+            or (expected_tag is not None and (tags != [expected_tag] if identity else expected_tag not in tags))):
         raise ValueError(f'{path.name} has no expected Docker image or layer inventory')
     if not isinstance(files.get(config), int) or files[config] <= 0:
         raise ValueError(f'{path.name} lacks a referenced Docker image member: {config}')
@@ -871,6 +891,118 @@ def required_image(path):
         target = layer_links.get(name, name)
         if not isinstance(files.get(target), int) or files[target] <= 0:
             raise ValueError(f'{path.name} lacks a regular referenced Docker layer: {name}')
+    if identity:
+        config_bytes = metadata.get(config)
+        if not config_bytes:
+            raise ValueError('Saved image lacks bounded exact configuration bytes')
+        configuration = json.loads(config_bytes)
+        if (not isinstance(configuration, dict) or configuration.get('architecture') != 'amd64'
+                or configuration.get('os') != 'linux' or not isinstance(configuration.get('config'), dict)
+                or not isinstance(configuration.get('rootfs'), dict)
+                or configuration['rootfs'].get('type') != 'layers'
+                or not isinstance(configuration['rootfs'].get('diff_ids'), list)
+                or len(configuration['rootfs']['diff_ids']) != len(layers)
+                or any(not isinstance(layer, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', layer)
+                       for layer in configuration['rootfs']['diff_ids'])):
+            raise ValueError('Saved configuration is not an exact Linux amd64 layered image')
+        config_id = 'sha256:' + hashlib.sha256(config_bytes).hexdigest()
+        return {'config_id': config_id, 'configuration': configuration,
+                'execution_ids': saved_oci_execution_ids(metadata, config_id, len(layers)), 'repo_tags': tags}
+
+
+def saved_oci_execution_ids(metadata, config_id, layer_count):
+    """Bind Docker 29 index/manifest identities to the one saved platform config.
+
+    Classic stores execute the config digest. Containerd stores may execute an
+    OCI manifest or index instead. Only exact, hash-checked archive descriptors
+    that resolve uniquely to the same Linux amd64 config are accepted.
+    """
+    identities = {config_id}
+    if 'index.json' not in metadata:
+        if 'oci-layout' in metadata:
+            raise ValueError('Saved OCI image lacks its index')
+        return sorted(identities)
+    if json.loads(metadata.get('oci-layout', b'{}')) != {'imageLayoutVersion': '1.0.0'}:
+        raise ValueError('Saved image has an unsupported OCI layout')
+    index_types = {'application/vnd.oci.image.index.v1+json',
+                   'application/vnd.docker.distribution.manifest.list.v2+json'}
+    manifest_types = {'application/vnd.oci.image.manifest.v1+json',
+                      'application/vnd.docker.distribution.manifest.v2+json'}
+    config_types = {'application/vnd.oci.image.config.v1+json',
+                    'application/vnd.docker.container.image.v1+json'}
+
+    def exact_bytes(descriptor):
+        if (not isinstance(descriptor, dict) or not isinstance(descriptor.get('digest'), str)
+                or not re.fullmatch(r'sha256:[a-f0-9]{64}', descriptor['digest'])
+                or type(descriptor.get('size')) is not int or not 0 < descriptor['size'] <= MAX_IMAGE_MANIFEST_BYTES):
+            raise ValueError('Saved OCI image has an unsafe descriptor')
+        blob = metadata.get('blobs/sha256/' + descriptor['digest'].removeprefix('sha256:'))
+        if blob is None or len(blob) != descriptor['size'] or 'sha256:' + hashlib.sha256(blob).hexdigest() != descriptor['digest']:
+            raise ValueError('Saved OCI descriptor bytes differ from their digest or size')
+        return blob
+
+    def children(document, depth, ancestors):
+        if (not isinstance(document, dict) or document.get('schemaVersion') != 2
+                or not isinstance(document.get('manifests'), list) or not 0 < len(document['manifests']) <= 128):
+            raise ValueError('Saved OCI image has no bounded manifest index')
+        selected = []
+        seen = set()
+        for descriptor in document['manifests']:
+            if not isinstance(descriptor, dict):
+                raise ValueError('Saved OCI index has an invalid descriptor')
+            platform = descriptor.get('platform')
+            if platform is not None:
+                if not isinstance(platform, dict):
+                    raise ValueError('Saved OCI descriptor has an invalid platform')
+                if (platform.get('os'), platform.get('architecture')) != ('linux', 'amd64'):
+                    continue
+                if platform.get('variant') not in (None, ''):
+                    raise ValueError('Saved OCI image uses an unreviewed platform variant')
+            digest = descriptor.get('digest')
+            if digest in seen:
+                raise ValueError('Saved OCI index repeats a platform descriptor')
+            seen.add(digest)
+            selected.append(descriptor)
+        if len(selected) != 1:
+            raise ValueError('Saved OCI index does not uniquely identify Linux amd64')
+        visit(selected[0], depth + 1, ancestors)
+
+    def visit(descriptor, depth, ancestors):
+        if depth > 4 or descriptor.get('digest') in ancestors:
+            raise ValueError('Saved OCI image descriptor graph is cyclic or too deep')
+        blob = exact_bytes(descriptor)
+        document = json.loads(blob)
+        media = descriptor.get('mediaType')
+        if not isinstance(document, dict) or document.get('schemaVersion') != 2:
+            raise ValueError('Saved OCI manifest document is malformed')
+        if media in index_types:
+            children(document, depth, ancestors | {descriptor['digest']})
+        elif media in manifest_types:
+            config = document.get('config')
+            if (not isinstance(config, dict) or config.get('mediaType') not in config_types
+                    or config.get('digest') != config_id):
+                raise ValueError('Saved OCI manifest differs from the Docker-save configuration')
+            exact_bytes(config)
+            layers = document.get('layers')
+            if not isinstance(layers, list) or len(layers) != layer_count:
+                raise ValueError('Saved OCI manifest has a different layer count')
+            for layer in layers:
+                if (not isinstance(layer, dict) or not isinstance(layer.get('digest'), str)
+                        or not re.fullmatch(r'sha256:[a-f0-9]{64}', layer['digest'])
+                        or type(layer.get('size')) is not int or not 0 < layer['size'] <= MAX_IMAGE_UNPACKED_BYTES
+                        or layer.get('mediaType') not in (
+                            'application/vnd.oci.image.layer.v1.tar',
+                            'application/vnd.oci.image.layer.v1.tar+gzip',
+                            'application/vnd.oci.image.layer.v1.tar+zstd',
+                            'application/vnd.docker.image.rootfs.diff.tar',
+                            'application/vnd.docker.image.rootfs.diff.tar.gzip')):
+                    raise ValueError('Saved OCI manifest has an unsafe layer descriptor')
+        else:
+            raise ValueError('Saved OCI image uses an unsupported manifest type')
+        identities.add(descriptor['digest'])
+
+    children(json.loads(metadata['index.json']), 0, set())
+    return sorted(identities)
 
 
 def required_sbom(path):
@@ -941,6 +1073,258 @@ def non_agent_contents(directory, debs, rpms, msi, preview, serverkit, version):
         raise ValueError('images.json does not identify both candidate images')
 
 
+def has_native_server(version):
+    return tuple(map(int, version.split('-')[0].split('.'))) >= (0, 2, 1)
+
+
+def native_candidate_image_identity(directory, role, source_image, image_records):
+    if not isinstance(image_records, list) or len(image_records) != 2:
+        raise ValueError('Native package lacks both independent image records')
+    records = [record for record in image_records if isinstance(record, dict)
+               and record.get('RepoTags') == [f'vectory-{role}:candidate']]
+    if len(records) != 1 or not isinstance(source_image, dict):
+        raise ValueError('Native package has an ambiguous source image record')
+    record = records[0]
+    saved = required_image(directory / f'vectory-{role}-image.tar.gz', f'vectory-{role}:candidate', identity=True)
+    user = '10001:10001' if role == 'server' else '10002:10002'
+    if (source_image.get('config_id') != saved['config_id']
+            or source_image.get('execution_id') != record.get('Id')
+            or record.get('Id') not in saved['execution_ids']
+            or (record.get('Architecture'), record.get('Os')) != ('amd64', 'linux')
+            or (source_image.get('architecture'), source_image.get('os')) != ('amd64', 'linux')
+            or not isinstance(record.get('RootFS'), dict) or record['RootFS'].get('Type') != 'layers'
+            or record['RootFS'].get('Layers') != saved['configuration']['rootfs']['diff_ids']
+            or not isinstance(record.get('Config'), dict) or record['Config'].get('User') != user
+            or saved['configuration']['config'].get('User') != user):
+        raise ValueError('Native bytes do not identify the exact candidate images')
+
+
+def required_native_bundle(directory, version):
+    """Bind every native payload byte to its bounded source-image inventory."""
+    name = f'vectory-{version}-server-native-linux-amd64.tar.gz'
+    path, prefix = directory / name, name.removesuffix('.tar.gz') + '/'
+    required_file(path, 2 * 1024 * 1024 * 1024)
+    proof_bytes = (directory / 'native-kit-provenance.json').read_bytes()
+    proof = required_json(directory / 'native-kit-provenance.json')
+    if not isinstance(proof, dict) or (proof.get('schema'), proof.get('version'), proof.get('platform')) != (1, version, 'linux-amd64-systemd'):
+        raise ValueError('Native package provenance has the wrong version or platform')
+    if not re.fullmatch(r'[0-9a-f]{40}', proof.get('source_commit', '')):
+        raise ValueError('Native package has no exact source commit')
+    source_images = proof.get('images')
+    if not isinstance(source_images, dict) or set(source_images) != {'server', 'validator', 'proxy'} or any(not isinstance(record, dict) for record in source_images.values()):
+        raise ValueError('Native package has no complete source-image identities')
+    image_records = required_json(directory / 'images.json')
+    for role in ('server', 'validator'):
+        native_candidate_image_identity(directory, role, source_images[role], image_records)
+    if (source_images['proxy'].get('config_id') != 'sha256:f77f856a30f0004200b36b322d61da17fade31e24875699d77fb968399b9eb77'
+            or source_images['proxy'].get('execution_id') not in (
+                'sha256:f77f856a30f0004200b36b322d61da17fade31e24875699d77fb968399b9eb77',
+                'sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb')
+            or source_images['proxy'].get('reference') != 'caddy:2.11.7-alpine@sha256:d76116d819d5162f464b0f2cd09bd28c568a86148c7bc539ce17c33eb22d8bbb'
+            or (source_images['proxy'].get('architecture'), source_images['proxy'].get('os')) != ('amd64', 'linux')):
+        raise ValueError('Native proxy comes from a different platform image')
+    records = proof.get('files')
+    if not isinstance(records, list) or not 0 < len(records) <= 20000:
+        raise ValueError('Native package has no bounded file inventory')
+    expected = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError('Native file inventory contains a malformed record')
+        member = record.get('path', '')
+        if (not re.fullmatch(r'[A-Za-z0-9._+@/-]+', member) or PurePosixPath(member).is_absolute()
+                or '..' in PurePosixPath(member).parts or str(PurePosixPath(member)) != member
+                or len(member.encode()) > 240 or member in expected
+                or not re.fullmatch(r'[0-9a-f]{64}', record.get('sha256', ''))
+                or record.get('mode') not in ('0644', '0755')
+                or type(record.get('bytes')) is not int or not 0 < record['bytes'] <= MAX_AGENT_BINARY_BYTES):
+            raise ValueError('Native file inventory contains an unsafe or repeated record')
+        expected[member] = record
+    minimum = {'VERSION', 'LICENSE', 'NOTICE', 'README.md', 'start.sh', 'admin.sh', 'deploy/native/start.sh', 'deploy/native/admin.sh',
+        'server-root/usr/local/bin/vectory-server', 'server-root/usr/local/bin/vectory-admin',
+        'server-root/lib64/ld-linux-x86-64.so.2', 'validator-root/usr/local/bin/vector-validator',
+        'validator-root/usr/bin/vector', 'validator-root/lib64/ld-linux-x86-64.so.2',
+        'validator-root/usr/share/vector/NOTICE', 'validator-root/usr/share/vector/LICENSE-3rdparty.csv',
+        'dashboard/index.html', 'dashboard/NOTICE.txt', 'agents/catalog.json',
+        'bin/caddy', 'bin/cosign', 'bin/vectory-local-pki', 'bin/vectory-server-pki',
+        'legal/cosign/LICENSE', 'sbom/cosign-linux-amd64_3.1.3_linux_amd64.sbom.json',
+        'sbom/vectory-server-image.spdx.json', 'sbom/vectory-validator-image.spdx.json',
+        *(f'deploy/native/vectory-native-{role}.service' for role in ('server', 'validator', 'proxy', 'certificates'))}
+    if not minimum <= expected.keys():
+        raise ValueError('Native package is missing a required prebuilt component or safety template')
+    if expected['bin/cosign']['sha256'] != '4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71':
+        raise ValueError('Native signing bootstrap differs from its reviewed executable')
+    captures, seen, hashes, total = {}, set(), {}, 0
+    class NativeReader(BoundedImageReader):
+        def read(self, size):
+            data = super().read(size)
+            if self.total > 2 * 1024 * 1024 * 1024 + 32 * 1024 * 1024:
+                raise ValueError('Native archive exceeds its expanded size bound')
+            return data
+    try:
+        with gzip.open(path, 'rb') as compressed:
+            source = NativeReader(compressed, name)
+            with tarfile.open(fileobj=source, mode='r|', tarinfo=BoundedTarInfo) as archive:
+                for item in archive:
+                    member = item.name.removeprefix(prefix)
+                    if (not item.name.startswith(prefix) or member in seen or not item.isfile()
+                            or member not in expected.keys() | {'SHA256SUMS', 'NATIVE-PROVENANCE.json'}
+                            or item.mode not in (0o644, 0o755) or not 0 < item.size <= MAX_AGENT_BINARY_BYTES):
+                        raise ValueError('Native archive contains an unexpected or unsafe member')
+                    seen.add(member)
+                    total += item.size
+                    if total > 2 * 1024 * 1024 * 1024:
+                        raise ValueError('Native payload exceeds its expanded size bound')
+                    data = archive.extractfile(item)
+                    digest = hashlib.sha256()
+                    length, capture = 0, bytearray()
+                    keep = member in {'VERSION', 'LICENSE', 'NOTICE', 'agents/catalog.json', 'SHA256SUMS', 'NATIVE-PROVENANCE.json'}
+                    while chunk := data.read(1024 * 1024):
+                        digest.update(chunk)
+                        length += len(chunk)
+                        if keep:
+                            if length > MAX_JSON_BYTES:
+                                raise ValueError('Native metadata exceeds its bound')
+                            capture.extend(chunk)
+                    if length != item.size:
+                        raise ValueError('Native member is truncated')
+                    hashes[member] = digest.hexdigest()
+                    if member in expected and (hashes[member] != expected[member]['sha256']
+                            or length != expected[member]['bytes']
+                            or item.mode != int(expected[member]['mode'], 8)):
+                        raise ValueError('Native member differs from its source inventory')
+                    if keep:
+                        captures[member] = bytes(capture)
+                for chunk in iter(lambda: archive.fileobj.read(1024 * 1024), b''):
+                    if chunk.strip(b'\0'):
+                        raise ValueError('Native archive has trailing nonzero data')
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                if chunk.strip(b'\0'):
+                    raise ValueError('Native archive has trailing nonzero data')
+    except (OSError, EOFError, tarfile.TarError) as error:
+        raise ValueError('Native archive is not an intact bounded gzip tar') from error
+    if seen != expected.keys() | {'SHA256SUMS', 'NATIVE-PROVENANCE.json'} or captures['NATIVE-PROVENANCE.json'] != proof_bytes:
+        raise ValueError('Native archive inventory or external provenance differs')
+    if captures['VERSION'].decode().strip() != version:
+        raise ValueError('Native kit version differs from the release')
+    for legal in ('LICENSE', 'NOTICE'):
+        if captures[legal] != (directory / legal).read_bytes():
+            raise ValueError('Native legal text differs from the release')
+    if captures['agents/catalog.json'] != (directory / 'catalog.json').read_bytes():
+        raise ValueError('Native bundled agent catalog differs from the release')
+    for item in json.loads(captures['agents/catalog.json']):
+        if hashes.get('agents/' + item['name']) != item['sha256']:
+            raise ValueError('Native bundled agent bytes differ from the release catalog')
+    inventory = ''.join(f'{hashes[member]}  {member}\n' for member in sorted(seen - {'SHA256SUMS'}))
+    if captures['SHA256SUMS'].decode() != inventory:
+        raise ValueError('Native inner checksum inventory is incomplete or differs')
+    return proof
+
+
+def required_native_evidence(directory, version, proof):
+    evidence = required_json(directory / 'native-smoke.json')
+    archive = directory / f'vectory-{version}-server-native-linux-amd64.tar.gz'
+    if (evidence.get('passed') is not True or evidence.get('version') != version
+            or evidence.get('source_commit') != proof['source_commit']
+            or evidence.get('archive_sha256') != sha(archive)
+            or set(evidence.get('verified', [])) != NATIVE_CHECKS):
+        raise ValueError('Native candidate lacks complete successful runtime isolation and readiness proof')
+    required_sbom(directory / 'vectory-native.spdx.json')
+    required_text(directory / 'install-native.sh', 'Authenticate prebuilt release bytes')
+    if f"version='{version}'" not in (directory / 'install-native.sh').read_text():
+        raise ValueError('Public native installer version differs from the release')
+    for name in NATIVE_INSTALLERS - {'install-native.sh'}:
+        required_file(directory / name, 1024 * 1024)
+        text = (directory / name).read_text(encoding='utf-8-sig')
+        pattern = r"\$version\s*=\s*'" + re.escape(version) + "'" if name.endswith('.ps1') else "version='" + re.escape(version) + "'"
+        if not re.search(pattern, text):
+            raise ValueError('Public Docker installer version differs from the release')
+
+
+def required_native_sources(directory, version, native_proof):
+    name = f'vectory-{version}-native-runtime-source.tar.gz'
+    path, prefix = directory / name, name.removesuffix('.tar.gz') + '/'
+    required_file(path, 2 * 1024 * 1024 * 1024)
+    metadata_bytes = (directory / 'native-runtime-source.json').read_bytes()
+    proof = required_json(directory / 'native-runtime-source.json')
+    if (not isinstance(proof, dict) or proof.get('schema') != 1 or proof.get('version') != version
+            or proof.get('source_commit') != native_proof['source_commit']
+            or proof.get('images') != native_proof['images']):
+        raise ValueError('Native corresponding source provenance differs from runtime images')
+    wanted = {(item['image'], item['source_package'], item['source_version']) for item in native_proof['runtime_packages']}
+    packages = proof.get('packages', [])
+    if {(item['image'], item['source_package'], item['source_version']) for item in packages} != wanted:
+        raise ValueError('Native source package versions do not cover the exact copied runtimes')
+    records = proof.get('files', [])
+    if not isinstance(records, list) or not 0 < len(records) <= 1000:
+        raise ValueError('Native sources lack a bounded inventory')
+    expected = {}
+    for item in records:
+        if not isinstance(item, dict):
+            raise ValueError('Native sources have a malformed inventory record')
+        member = item.get('path', '')
+        if (not re.fullmatch(r'[A-Za-z0-9._+~@/-]+', member) or '..' in PurePosixPath(member).parts
+                or PurePosixPath(member).is_absolute() or str(PurePosixPath(member)) != member
+                or member in expected or not re.fullmatch(r'[0-9a-f]{64}', item.get('sha256', ''))
+                or type(item.get('bytes')) is not int or not 0 < item['bytes'] <= 2 * 1024 * 1024 * 1024):
+            raise ValueError('Native sources have an unsafe or repeated inventory record')
+        expected[member] = item
+    for role in ('server', 'validator'):
+        if not {role + '/SOURCE-INDEX.txt', role + '/metadata/debian-archive-keyring.gpg'} <= expected.keys():
+            raise ValueError('Native sources omit authenticated repository provenance')
+        if not any(member.startswith(role + '/metadata/') and member.endswith('InRelease') for member in expected):
+            raise ValueError('Native sources omit signed repository release metadata')
+    for package in packages:
+        if not any(item['name'].endswith('.dsc') for item in package.get('files', [])):
+            raise ValueError('Native sources omit an exact source descriptor')
+        for item in package['files']:
+            recorded = expected.get(package['image'] + '/' + item['name'])
+            if not recorded or (recorded['bytes'], recorded['sha256']) != (item['bytes'], item['sha256']):
+                raise ValueError('Native sources differ from authenticated source-index hashes')
+    seen, total, internal = set(), 0, None
+    class NativeSourceReader(BoundedImageReader):
+        def read(self, size):
+            data = super().read(size)
+            if self.total > 2 * 1024 * 1024 * 1024 + 8 * 1024 * 1024:
+                raise ValueError('Native source archive exceeds its expanded bound')
+            return data
+    with gzip.open(path, 'rb') as source:
+        reader = NativeSourceReader(source, name)
+        with tarfile.open(fileobj=reader, mode='r|', tarinfo=BoundedTarInfo) as archive:
+            for item in archive:
+                member = item.name.removeprefix(prefix)
+                if (not item.name.startswith(prefix) or not item.isfile() or item.mode != 0o644
+                        or member in seen or member not in expected.keys() | {'SOURCE-MANIFEST.json'}
+                        or not 0 < item.size <= 2 * 1024 * 1024 * 1024):
+                    raise ValueError('Native source archive contains an unsafe or unexpected member')
+                seen.add(member)
+                total += item.size
+                if total > 2 * 1024 * 1024 * 1024:
+                    raise ValueError('Native source archive exceeds its expanded size bound')
+                stream = archive.extractfile(item)
+                count, checksum, capture = 0, hashlib.sha256(), bytearray()
+                while chunk := stream.read(1024 * 1024):
+                    count += len(chunk)
+                    checksum.update(chunk)
+                    if member == 'SOURCE-MANIFEST.json':
+                        if count > MAX_JSON_BYTES:
+                            raise ValueError('Native source manifest is oversized')
+                        capture.extend(chunk)
+                if count != item.size:
+                    raise ValueError('Native source archive is truncated')
+                if member == 'SOURCE-MANIFEST.json':
+                    internal = bytes(capture)
+                elif (count, checksum.hexdigest()) != (expected[member]['bytes'], expected[member]['sha256']):
+                    raise ValueError('Native source member differs from authenticated inventory')
+            for chunk in iter(lambda: archive.fileobj.read(1024 * 1024), b''):
+                if chunk.strip(b'\0'):
+                    raise ValueError('Native source archive has trailing nonzero data')
+        for chunk in iter(lambda: reader.read(1024 * 1024), b''):
+            if reader.total > 2 * 1024 * 1024 * 1024 + 8 * 1024 * 1024 or chunk.strip(b'\0'):
+                raise ValueError('Native source archive has oversized or nonzero trailing data')
+    if seen != expected.keys() | {'SOURCE-MANIFEST.json'} or internal != metadata_bytes:
+        raise ValueError('Native source archive inventory or external metadata differs')
+
+
 def candidate_inventory(directory, require_status=True):
     """Require all workflow parts; checksums alone cannot show completeness."""
     version, agents, catalog = agent_inventory(directory)
@@ -959,19 +1343,29 @@ def candidate_inventory(directory, require_status=True):
     preview = f'vectory-{version}-{local_label}-linux-amd64.tar.gz'
     serverkit = f'vectory-{version}-server-linux-amd64.tar.gz'
     expected = REQUIRED_CANDIDATE_FILES | agents | debs | rpms | {msi, preview, serverkit}
+    native = has_native_server(version)
+    if native:
+        expected |= NATIVE_FILES | {f'vectory-{version}-server-native-linux-amd64.tar.gz', f'vectory-{version}-native-runtime-source.tar.gz'}
     missing, extra = expected - names, names - expected
     if missing or extra:
         raise ValueError(f'candidate file inventory differs: missing {sorted(missing)}, extra {sorted(extra)}')
     non_agent_contents(directory, debs, rpms, msi, preview, serverkit, version)
+    if native:
+        proof = required_native_bundle(directory, version)
+        required_native_evidence(directory, version, proof)
+        required_native_sources(directory, version, proof)
 
     manifest = required_json(directory / 'CANDIDATE.json')
+    if native and proof['source_commit'] != manifest.get('commit'):
+        raise ValueError('Native package source differs from the candidate workflow commit')
     if require_status and manifest.get('inventory_status') != 'complete':
         raise ValueError('candidate manifest is marked incomplete or has no inventory status')
     if manifest.get('signed') is not False or manifest.get('published') is not False:
         raise ValueError('candidate manifest must identify an unsigned, unpublished build')
     jobs = manifest.get('job_results')
-    if not isinstance(jobs, dict) or set(jobs) != set(REQUIRED_JOBS) or any(
-        jobs[job] != 'success' for job in REQUIRED_JOBS
+    required_jobs = set(REQUIRED_JOBS) | ({'native_server'} if native else set())
+    if not isinstance(jobs, dict) or set(jobs) != required_jobs or any(
+        jobs[job] != 'success' for job in required_jobs
     ):
         raise ValueError('candidate contains a failed, skipped or unrecorded release job')
     parts = {
@@ -986,6 +1380,12 @@ def candidate_inventory(directory, require_status=True):
         'source': ['pagefind-1.5.2-source.json', 'pagefind-1.5.2-source.tar.gz'],
         'license_inventory': ['THIRD-PARTY-LICENSES.md'],
     }
+    if native:
+        parts.update({'native_serverkit': [f'vectory-{version}-server-native-linux-amd64.tar.gz'],
+            'native_evidence': ['native-kit-provenance.json', 'native-smoke.json'],
+            'native_sbom': ['vectory-native.spdx.json'],
+            'native_source': [f'vectory-{version}-native-runtime-source.tar.gz', 'native-runtime-source.json'],
+            'installers': sorted(NATIVE_INSTALLERS)})
     if manifest.get('parts') != parts:
         raise ValueError('candidate manifest parts do not match the verified file inventory')
 

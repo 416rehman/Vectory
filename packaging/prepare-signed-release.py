@@ -162,6 +162,8 @@ def main():
 
 Use the [guided quickstart](https://vectory.ahmadz.ai/help/quickstart/). Download `vectory-{version}-server-linux-amd64.tar.gz`, extract it, and run `./start.sh` on a Linux x86-64 Docker host. The kit verifies release signatures, pulls immutable images from GHCR, and guides first administrator setup. No source compilation is needed.
 
+The native Linux x86-64 server kit is `vectory-{version}-server-native-linux-amd64.tar.gz`. It installs the same prebuilt server, dashboard and agents with an isolated systemd validator, without Docker or a compiler. Use [the native installation guide](https://vectory.ahmadz.ai/help/install-server/) for the supported host requirements and signature-verifying one-command installer. `vectory-{version}-native-runtime-source.tar.gz` separately retains the exact corresponding Debian runtime sources; ordinary installation does not need that optional source archive. The public native installer and exact runtime/source provenance are included as signed release assets.
+
 The local evaluation kit is separate. Managed devices need an existing supported Vector installation; Add device provides the platform download and setup command.
 
 ## Verify

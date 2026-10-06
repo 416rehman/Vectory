@@ -162,6 +162,28 @@ try {
   await page.screenshot({ path: path.join(captures, 'landing-mobile.png') });
   await page.setViewportSize({ width: 1440, height: 1000 });
 
+  for (const [name, installer] of [["Linux", "install.sh"], ["macOS", "install-desktop.sh"], ["Windows", "install.ps1"]]) {
+    await page.getByRole("tab", { name, exact: true }).click();
+    const panel = page.getByRole("tabpanel", { name, exact: true });
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("code")).toContainText(installer);
+    await expect(page.locator('[data-install-download]')).toHaveAttribute('href', '/' + installer);
+    await noOverflow();
+  }
+  await page.getByRole("tab", { name: "Windows", exact: true }).press("Home");
+  await expect(page.getByRole("tab", { name: "Linux", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Linux", exact: true }).press("ArrowRight");
+  await expect(page.getByRole("tabpanel", { name: "macOS", exact: true })).toBeVisible();
+  await accessible();
+  await page.locator("#start").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(captures, "install-macos-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("tab", { name: "Windows", exact: true }).click();
+  await noOverflow();
+  await accessible();
+  await page.screenshot({ path: path.join(captures, "install-windows-mobile.png") });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
   await page.goto(origin + "/designer/");
   await expect(
     page.getByRole("button", { name: "Import", exact: true }),

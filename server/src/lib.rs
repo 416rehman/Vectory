@@ -62,6 +62,7 @@ pub mod tls_reload;
 pub mod token_requests;
 pub mod user_requests;
 pub mod validation;
+pub mod validation_socket;
 pub mod variables;
 pub mod vector_diagnostics;
 pub mod wake;

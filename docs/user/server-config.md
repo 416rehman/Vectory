@@ -18,6 +18,7 @@ The table below describes the equivalent manual Compose settings. The contributo
 | `VECTORY_SERVER_PROJECT` | `vectory` | Compose project and private volume prefix for the prebuilt server kit. Keep the same value when stopping or resuming an instance. |
 | `VECTORY_BIND_IP` | `0.0.0.0` | Host address for 443 and 8443, and 80 in automatic HTTPS mode. |
 | `VECTORY_INSTALL_DIRECTORY` | `./vectory` | Empty destination for the downloaded server kit when running the website installer. Keep the completed kit for later starts and upgrades. |
+| `VECTORY_ALLOW_AMD64_EMULATION` | `false` | Explicitly allow the amd64 Docker kit to run through Docker Desktop's emulation on an arm64 host. Setup explains that choice before installation. |
 | `VECTORY_RELEASES_DIRECTORY` | `./releases` | Host folder mounted read-only as the server's agent download mirror. |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | `16384` | Passed to the server; see below. |
 | `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Passed to the server; see below. |
@@ -56,7 +57,8 @@ The prebuilt kits verify their image downloads and write these values themselves
 | `VECTORY_AGENT_ADDR` | `0.0.0.0:8443` | TLS listener for agents. |
 | `VECTORY_TLS_CERT` | None | Certificate chain (PEM) for the agent listener. Required unless `VECTORY_DEVELOPMENT=true`. |
 | `VECTORY_TLS_KEY` | None | Private key for `VECTORY_TLS_CERT`. |
-| `VECTORY_VALIDATION_URL` | None | URL of the isolated validator, for example `http://validator:8081`. Required unless `VECTORY_DEVELOPMENT=true`. |
+| `VECTORY_VALIDATION_URL` | None | URL of the isolated validator, for example `http://validator:8081`. Production requires this or `VECTORY_VALIDATION_SOCKET`. Do not set both. |
+| `VECTORY_VALIDATION_SOCKET` | None | Linux-only absolute path of the isolated validator's Unix socket. The server checks its type, owner, group, permissions and unlinked private ancestors before every connection. It never falls back to TCP. The native server kit uses `/run/vectory-validator/validator.sock`. |
 | `VECTORY_DASHBOARD_DIR` | `../dashboard/dist` | Built dashboard and Help center to serve. |
 | `VECTORY_INSTANCE_NAME` | `Vectory` | Name shown in the dashboard. |
 | `VECTORY_COOKIE_SECURE` | `true` | Marks the session cookie `Secure`. `false` is allowed only with `VECTORY_DEVELOPMENT=true`. |
@@ -85,7 +87,7 @@ For the three HTTP listener limits (`VECTORY_HTTP_HEADER_TIMEOUT_SECONDS`, `VECT
 
 > [!IMPORTANT]
 > **A production server refuses to start without its safety settings**
-> Without `VECTORY_DEVELOPMENT=true`, the server requires `VECTORY_TLS_CERT`, `VECTORY_TLS_KEY` and `VECTORY_VALIDATION_URL`, and secure cookies. It never falls back to a weaker mode.
+> Without `VECTORY_DEVELOPMENT=true`, the server requires `VECTORY_TLS_CERT`, `VECTORY_TLS_KEY`, an isolated validator through `VECTORY_VALIDATION_URL` or `VECTORY_VALIDATION_SOCKET`, and secure cookies. It never falls back to a weaker mode.
 
 ## Validator settings
 
@@ -96,6 +98,7 @@ The validator container (`vector-validator`) reads these.
 | `VECTORY_VALIDATOR_ISOLATED` | None | Must be `true`, or the validator refuses to start. Set it only where the validator runs isolated: no production files or secrets, no network route out, limited memory and processes. |
 | `VECTORY_VECTOR_BINARY` | `/usr/local/bin/vector` | The Vector 0.58.0 binary that checks pipelines. The image uses `/usr/bin/vector`. |
 | `VECTORY_VALIDATOR_ADDR` | `0.0.0.0:8081` | Listener for requests from the server. Keep it on an internal network. |
+| `VECTORY_VALIDATOR_SOCKET` | None | Linux-only absolute Unix socket path instead of the TCP listener. Do not set `VECTORY_VALIDATOR_ADDR` with it. Its existing parent must belong to the worker, have mode `0750` and have no linked or writable-by-others ancestors. The worker creates a socket with mode `0660` and refuses any existing file or socket without removing it. Isolation remains required. |
 
 ## Local evaluation settings
 
@@ -131,3 +134,7 @@ The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `nod
 `VECTORY_REQUEST_FIXTURES` is read only by the server's own tests, which then print query plans prefixed with `VECTORY_REQUEST_PLAN`. It has no effect on a running server.
 
 Maintainer tests use `VECTORY_UNSIGNED_CANDIDATE=true` only for local CI artifacts before signing, with `VECTORY_PREVIEW_RELEASE_DIR` pointing to that workflow's artifact directory. Published installation verifies the signed release and does not use these test controls.
+
+`VECTORY_NATIVE_CI_CANDIDATE=true` permits the native launcher's explicit `--candidate-root` option only in a controlled maintainer test. Published native installation requires the signed release inventory and archive; a failed signature check never enables this test option. An installed unsigned candidate still needs that explicit consent on later starts.
+
+`VECTORY_TEST_BASH` is read only by the desktop installer's tests to select their Bash executable. It has no effect on a running server.

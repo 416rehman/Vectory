@@ -195,6 +195,7 @@ async function fixture({
   platform = "Linux",
   saved = [],
   statuses = {},
+  tokenExpiryMs,
 } = {}) {
   const context = await browser.newContext({
     viewport: { width, height: 900 },
@@ -228,6 +229,9 @@ async function fixture({
     statuses,
     lookups: [],
     cancels: [],
+    tokenReads: 0,
+    failTokens: false,
+    tokenExpiryMs,
   };
   await context.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -330,7 +334,20 @@ async function fixture({
       });
       return reply({ events: state.events, now: iso() });
     }
-    if (path === "/tokens" && method === "GET") return reply(state.tokens);
+    if (path === "/tokens" && method === "GET") {
+      state.tokenReads++;
+      return state.failTokens
+        ? reply(
+            {
+              error: {
+                code: "UNAVAILABLE",
+                message: "Synthetic token inventory unavailable",
+              },
+            },
+            503,
+          )
+        : reply(state.tokens);
+    }
     if (path.startsWith("/tokens/requests/") && method === "GET") {
       const id = path.split("/").at(-1);
       state.lookups.push(id);
@@ -391,7 +408,10 @@ async function fixture({
         id: state.posts === 1 ? tokenId : randomUUID(),
         name: state.tokenRequest.name,
         created_at: iso(),
-        expires_at: iso(3600000),
+        expires_at:
+          state.tokenExpiryMs === undefined
+            ? iso(state.tokenRequest.expires_hours * 3600000)
+            : new Date(Date.now() + state.tokenExpiryMs).toISOString(),
         uses: 0,
         max_uses: state.tokenRequest.max_uses,
         name_prefix: state.tokenRequest.name_prefix,
@@ -482,8 +502,11 @@ async function check(name, run) {
   results.push({ name, passed: true });
   console.log("PASS", name);
 }
-const commandText = (page) =>
-  page.locator(".enroll-command pre").first().innerText();
+const commandText = async (page) => {
+  const readable = page.getByRole("button", { name: "Readable", exact: true });
+  if (await readable.isVisible()) await readable.click();
+  return page.locator(".enroll-command pre").first().innerText();
+};
 
 try {
   await check(
@@ -733,12 +756,13 @@ try {
           await expect(
             f.page.locator(".enroll-command pre").first(),
           ).toBeVisible();
+          await commandText(f.page);
           const measured = await f.page
             .locator(".enroll-command")
             .first()
             .evaluate((block) => {
               const pre = block.querySelector("pre");
-              const button = block.querySelector("button");
+              const button = block.querySelector(".button");
               return {
                 scrollWidth: pre.scrollWidth,
                 clientWidth: pre.clientWidth,
@@ -1848,6 +1872,164 @@ try {
   );
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
+  await check(
+    "fleet commands stay reusable after the first enrollment and stop exposing an exhausted token",
+    async () => {
+      for (const width of [390, 1280]) {
+        const f = await fixture({ width });
+        try {
+          await f.page
+            .getByRole("radio", { name: "Many devices", exact: true })
+            .check();
+          await f.page
+            .getByRole("radio", {
+              name: "Read a protected file on each host",
+              exact: true,
+            })
+            .check();
+          await f.page
+            .getByLabel("Enrollment token file", { exact: true })
+            .fill("/private/provisioning/owner's token.txt");
+          await f.createCommand();
+          expect(f.state.tokenRequest.max_uses).toBe(100);
+          expect(f.state.tokenRequest.expires_hours).toBe(24);
+          expect(f.state.tokenRequest.device_name).toBeUndefined();
+          const compact = await f.page
+            .locator(".enroll-command pre")
+            .first()
+            .innerText();
+          expect(compact).not.toContain("\n");
+          expect(compact).toContain("--token-file");
+          expect(compact).not.toContain(secret);
+          await f.page
+            .getByRole("button", { name: "Show", exact: true })
+            .click();
+          await expect(f.page.locator(".enroll-secret code")).toHaveText(
+            secret,
+          );
+          f.state.tokens[0] = {
+            ...f.state.tokens[0],
+            uses: 1,
+            device_count: 1,
+            devices: [
+              {
+                id: deviceId,
+                name: "fleet-edge-01",
+                enrolled_at: iso(900),
+                revoked: false,
+              },
+            ],
+          };
+          await expect(f.page.locator(".enroll-fleet-progress")).toContainText(
+            "1 devices enrolled out of 100",
+            { timeout: 12000 },
+          );
+          await expect(f.page.locator(".enroll-fleet-progress")).toContainText(
+            "fleet-edge-01",
+          );
+          await expect(f.page.locator(".enroll-fleet-progress")).toContainText(
+            "Enrollment does not assign a pipeline",
+          );
+          await expect(f.page.locator(".enroll-secret code")).toHaveText(
+            secret,
+          );
+          await snapshot(f, width, "light", "fleet-reusable");
+          expect(await commandText(f.page)).toContain("owner");
+          f.state.tokens[0] = { ...f.state.tokens[0], uses: 100 };
+          await expect(f.page.locator(".enroll-fleet-progress")).toContainText(
+            "100 devices enrolled out of 100",
+            { timeout: 12000 },
+          );
+          await expect(f.page.locator(".enroll-secret code")).toHaveCount(0);
+          expect(JSON.stringify(await f.stored())).not.toContain(secret);
+        } finally {
+          await f.context.close();
+        }
+      }
+    },
+  );
+  await check(
+    "a fleet token expires locally when token reads never list it",
+    async () => {
+      const f = await fixture({ tokenExpiryMs: 5000 });
+      try {
+        await f.page
+          .getByRole("radio", { name: "Many devices", exact: true })
+          .check();
+        // Initial inventory was empty. Every read after creation fails, so
+        // expiry cannot come from a successfully listed commandToken.
+        f.state.failTokens = true;
+        await f.createCommand();
+        await f.page.getByRole("button", { name: "Show", exact: true }).click();
+        await expect(f.page.locator(".enroll-secret code")).toHaveText(secret);
+        await expect(f.page.locator(".enroll-secret code")).toHaveCount(0, {
+          timeout: 8000,
+        });
+        await expect(f.page.locator("body")).not.toContainText(secret);
+        expect(JSON.stringify(await f.stored())).not.toContain(secret);
+        expect(await f.stored()).toEqual([]);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "remote fleet revocation drops the secret and restores the normal refresh rate",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.page
+          .getByRole("radio", { name: "Many devices", exact: true })
+          .check();
+        await f.createCommand();
+        await f.page.getByRole("button", { name: "Show", exact: true }).click();
+        await expect(f.page.locator(".enroll-secret code")).toHaveText(secret);
+        f.state.tokens[0] = { ...f.state.tokens[0], revoked: true };
+        await expect(f.page.locator(".enroll-fleet-progress")).toContainText(
+          "Revoked.",
+          { timeout: 12000 },
+        );
+        await expect(f.page.locator(".enroll-secret code")).toHaveCount(0);
+        const reads = f.state.tokenReads;
+        await f.page.waitForTimeout(6000);
+        expect(f.state.tokenReads).toBe(reads);
+        expect(await f.stored()).toEqual([]);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "managed tokens refresh without an active fleet command",
+    async () => {
+      const token = {
+        id: tokenId,
+        name: "Synthetic shared token",
+        created_at: iso(),
+        expires_at: iso(86400000),
+        uses: 0,
+        max_uses: 100,
+        name_prefix: null,
+        revoked: false,
+      };
+      const f = await fixture({ tokens: [token] });
+      try {
+        await f.page.locator(".enroll-token-management > summary").click();
+        const row = f.page
+          .getByRole("table", { name: "Enrollment tokens" })
+          .locator("tbody tr")
+          .filter({ hasText: token.name });
+        await expect(row).toContainText("0 of 100");
+        const reads = f.state.tokenReads;
+        f.state.tokens[0] = { ...token, uses: 1 };
+        await expect(row).toContainText("1 of 100", { timeout: 22000 });
+        expect(f.state.tokenReads).toBeGreaterThan(reads);
+        expect(f.state.posts).toBe(0);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
 } catch (error) {
   failure = error;
 } finally {

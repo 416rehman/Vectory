@@ -1,4 +1,4 @@
-//! This process is intended ONLY for the isolated validation container, never the API process.
+//! Run only in a separately isolated validator runtime, never in the API process.
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
@@ -665,6 +665,10 @@ async fn main() -> anyhow::Result<()> {
             "Validator must run in a separately isolated worker with no production mounts/secrets and restricted network/resources; set VECTORY_VALIDATOR_ISOLATED=true only in that runtime"
         )
     }
+    let socket = std::env::var(vectory_server::validation_socket::WORKER_VARIABLE).ok();
+    let address = std::env::var("VECTORY_VALIDATOR_ADDR").ok();
+    let socket =
+        vectory_server::validation_socket::worker_path(socket.as_deref(), address.as_deref())?;
     let vector = std::path::PathBuf::from(
         std::env::var("VECTORY_VECTOR_BINARY").unwrap_or_else(|_| "/usr/local/bin/vector".into()),
     );
@@ -702,6 +706,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/transform-test", post(transform_test))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(worker);
+    if let Some(socket) = socket {
+        #[cfg(target_os = "linux")]
+        {
+            let listener = vectory_server::validation_socket::bind(&socket)?;
+            axum::serve(listener, app).await?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = socket;
+            anyhow::bail!("Validator Unix sockets require Linux");
+        }
+    }
     let listener = tokio::net::TcpListener::bind(
         std::env::var("VECTORY_VALIDATOR_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".into()),
     )

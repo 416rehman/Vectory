@@ -83,13 +83,21 @@ jobs:
             cat "$RUNNER_TEMP/release-error" >&2
             exit 1
           fi
-          python3 - "$RUNNER_TEMP/release.json" "$GITHUB_OUTPUT" <<'PY'
+          python3 - "$RUNNER_TEMP/release.json" "$GITHUB_OUTPUT" "$version" <<'PY'
           import json
           import sys
           from pathlib import Path
           release = json.loads(Path(sys.argv[1]).read_text())
           assets = {asset['name'] for asset in release['assets']}
-          ready = not release['draft'] and not release['prerelease'] and {'SHA256SUMS', 'SHA256SUMS.sigstore.json', 'IMAGE-DIGESTS.env', 'IMAGE-CONFIGS.env', 'RELEASE.json'} <= assets
+          version = sys.argv[3]
+          required = {'SHA256SUMS', 'SHA256SUMS.sigstore.json', 'IMAGE-DIGESTS.env', 'IMAGE-CONFIGS.env', 'RELEASE.json'}
+          if tuple(map(int, version.split('.'))) >= (0, 2, 1):
+              required |= {'install.sh', 'install-desktop.sh', 'install.ps1', 'install-native.sh',
+                  f'vectory-{version}-server-linux-amd64.tar.gz',
+                  f'vectory-{version}-server-native-linux-amd64.tar.gz',
+                  f'vectory-{version}-native-runtime-source.tar.gz',
+                  'native-kit-provenance.json', 'native-runtime-source.json', 'native-smoke.json'}
+          ready = release['tag_name'] == f'v{version}' and not release['draft'] and not release['prerelease'] and required <= assets
           with open(sys.argv[2], 'a') as output:
               output.write('ready=' + str(ready).lower() + '\n')
           if not ready:

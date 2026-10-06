@@ -1,0 +1,57 @@
+[Unit]
+Description=Vectory isolated Vector validator
+Before=vectory-native-server.service
+
+[Service]
+Type=exec
+User=vectory-validator
+Group=vectory-validator
+RootDirectory=@KIT_ROOT@/validator-root
+WorkingDirectory=/tmp
+RuntimeDirectory=vectory-validator
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+BindPaths=/run/vectory-validator:/run/vectory-validator
+TemporaryFileSystem=/tmp:rw,nosuid,nodev,noexec,size=128M,mode=1777
+Environment=VECTORY_VALIDATOR_ISOLATED=true
+Environment=VECTORY_VALIDATOR_SOCKET=/run/vectory-validator/validator.sock
+Environment=VECTORY_VECTOR_BINARY=/usr/bin/vector
+Environment=TOKIO_WORKER_THREADS=2
+UnsetEnvironment=VECTORY_VALIDATOR_ADDR HTTP_PROXY HTTPS_PROXY ALL_PROXY
+ExecStart=/usr/local/bin/vector-validator
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectSystem=strict
+ReadWritePaths=/run/vectory-validator /tmp
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @privileged @reboot @swap @obsolete
+UMask=0007
+MemoryMax=512M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+LimitNOFILE=256
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

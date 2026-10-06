@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Vectory control plane",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "The HTTP API behind the Vectory dashboard. Everything the dashboard does goes through it.\n\n**Authentication.** Sign in with `POST /api/v1/login`. The reply sets the `vectory_session` cookie (HttpOnly, SameSite=Strict, 12 hours) and returns a `csrf_token`. Send the cookie with every request, and the token as the `X-CSRF-Token` header with every `POST`, `PUT` and `DELETE`. Requests run with your role. There are no separate API keys.\n\n**Agent protocol.** `/agent/v1/` operations are served only on the separate agent listener and authenticate devices with mutual TLS. A device ID in a request body is never trusted for authentication."
   },
   "servers": [

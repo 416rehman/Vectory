@@ -28,7 +28,25 @@
   X-Robots-Tag: noindex
   Content-Type: text/plain; charset=utf-8
   Content-Disposition: attachment; filename="vectory-install.sh"
-  Cache-Control: public, max-age=300, must-revalidate
+  Cache-Control: no-store, max-age=0
+
+/install-desktop.sh
+  X-Robots-Tag: noindex
+  Content-Type: text/plain; charset=utf-8
+  Content-Disposition: attachment; filename="vectory-install.sh"
+  Cache-Control: no-store, max-age=0
+
+/install.ps1
+  X-Robots-Tag: noindex
+  Content-Type: text/plain; charset=utf-8
+  Content-Disposition: attachment; filename="vectory-install.ps1"
+  Cache-Control: no-store, max-age=0
+
+/install-native.sh
+  X-Robots-Tag: noindex
+  Content-Type: text/plain; charset=utf-8
+  Content-Disposition: attachment; filename="vectory-install-native.sh"
+  Cache-Control: no-store, max-age=0
 
 /designer/NOTICE.txt
   X-Robots-Tag: noindex

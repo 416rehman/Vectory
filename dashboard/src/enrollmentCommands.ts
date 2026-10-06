@@ -62,6 +62,8 @@ export type SetupChoices = {
   caFile?: string;
   /** Empty: the installer's default directory (Linux and macOS). */
   installDir?: string;
+  /** A protected token file provisioned on each host; never the token value. */
+  tokenFile?: string;
   /** Absent: no update flag, so a host keeps whatever it has. */
   updates?: UpdateConsent;
 };
@@ -266,6 +268,7 @@ export function setupArguments(choices: SetupChoices): string[] {
     add("--capability-policy", choices.capabilityPolicy.trim());
   if (choices.vectorBinary?.trim())
     add("--vector-binary", choices.vectorBinary.trim());
+  if (choices.tokenFile?.trim()) add("--token-file", choices.tokenFile.trim());
   args.push(...updateArguments(choices.updates, choices.os));
   return args;
 }
@@ -347,6 +350,7 @@ export const pinnedCAFile = "vectory-ca.pem";
 export function installerCommand(
   install: AgentInstall,
   choices: SetupChoices,
+  presentation: "readable" | "one-line" = "readable",
 ): string | null {
   return unlessUnquotable(() => {
     const [mode, ...rest] = pairs(setupArguments(choices));
@@ -359,6 +363,7 @@ export function installerCommand(
         ...(installDir ? ["--install-dir", quote(installDir, choices.os)] : []),
       ],
       rest.flat(),
+      presentation,
     );
   });
 }
@@ -373,9 +378,15 @@ export function installerRun(
   choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
   head: string[],
   tail: string[],
+  presentation: "readable" | "one-line" = "readable",
 ): string | null {
   if (choices.os === "windows")
-    return windowsInstallerRun(install, choices, [...head, ...tail]);
+    return windowsInstallerRun(
+      install,
+      choices,
+      [...head, ...tail],
+      presentation,
+    );
   const { installer, agent_url: origin } = install;
   if (!installer || !origin) return null;
   return unlessUnquotable(() => {
@@ -393,7 +404,11 @@ export function installerRun(
       // The server's own certificate, but a quote or a control character in it
       // would end the string it sits in: refuse what no PEM contains.
       if (!pemText.test(pem)) throw new CommandValueError("control");
-      steps.push(`printf '%s\\n' '${pem}' > "$dir/${pinnedCAFile}"`);
+      steps.push(
+        presentation === "one-line"
+          ? `printf '%b' '${pem.replaceAll("\n", "\\n")}\\n' > "$dir/${pinnedCAFile}"`
+          : `printf '%s\\n' '${pem}' > "$dir/${pinnedCAFile}"`,
+      );
       cacert.push(`  --cacert "$dir/${pinnedCAFile}" \\`);
     } else if (trust === "file") {
       const path = choices.caFile?.trim();
@@ -423,6 +438,19 @@ export function installerRun(
     );
     // Each step's first line is indented; a certificate's own lines stay as
     // they are, inside their quotes.
+    if (presentation === "one-line") {
+      const statements: string[] = [];
+      let continuedStep = false;
+      for (const step of steps) {
+        const flat = step.replace(/\\\n[ \t]*/g, " ").trim();
+        const continues = flat.endsWith("\\");
+        const part = continues ? flat.slice(0, -1).trimEnd() : flat;
+        if (continuedStep) statements[statements.length - 1] += ` ${part}`;
+        else statements.push(part);
+        continuedStep = continues;
+      }
+      return `( ${statements.join("; ")} )`;
+    }
     return ["(", ...steps.map((step) => `  ${step}`), ")"].join("\n");
   });
 }
@@ -434,6 +462,7 @@ export function windowsInstallerRun(
   install: AgentInstall,
   choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
   args: string[],
+  presentation: "readable" | "one-line" = "readable",
 ): string | null {
   const installer = install.windows_installer;
   const origin = install.agent_url;
@@ -461,7 +490,7 @@ export function windowsInstallerRun(
       if (!pemText.test(pem)) throw new CommandValueError("control");
       steps.push(
         "    $ca = Join-Path $dir 'vectory-ca.pem'",
-        `    [IO.File]::WriteAllText($ca, '${pem}', (New-Object Text.UTF8Encoding($false)))`,
+        `    [IO.File]::WriteAllText($ca, ${presentation === "one-line" ? `"${pem.replaceAll("\n", "`n")}"` : `'${pem}'`}, (New-Object Text.UTF8Encoding($false)))`,
       );
       curlTrust.push("--cacert $ca --ssl-revoke-best-effort");
     } else if (trust === "file") {
@@ -486,6 +515,18 @@ export function windowsInstallerRun(
       "  }",
       "}",
     );
+    if (presentation === "one-line") {
+      return steps.reduce((program, step, index) => {
+        const line = step.trim();
+        const previous = steps[index - 1]?.trim();
+        const space =
+          !index ||
+          previous.endsWith("{") ||
+          line === "}" ||
+          line === "} finally {";
+        return program + (index ? (space ? " " : "; ") : "") + line;
+      }, "");
+    }
     return steps.join("\n");
   });
 }

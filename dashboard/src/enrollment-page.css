@@ -17,6 +17,62 @@
   margin: 0 0 16px;
   font-size: 17px;
 }
+.enroll-scope {
+  margin-bottom: 14px;
+}
+.enroll-token-input {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 20px 0 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.enroll-token-input legend {
+  padding-inline: 5px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.enroll-token-input > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.enroll-command-format {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 3px;
+  padding: 5px;
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--line);
+}
+.enroll-command-format button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.enroll-command-format button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--surface);
+}
+.enroll-command-format button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.enroll-fleet-progress ul {
+  display: grid;
+  gap: 10px;
+  padding-left: 20px;
+}
+.enroll-fleet-progress li .date-cell {
+  margin-left: 10px;
+}
 .enroll-os {
   display: inline-flex;
   flex-wrap: wrap;
@@ -114,8 +170,9 @@
   margin-top: 16px;
 }
 .enroll-command {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 12px;
   /* The block scrolls inside itself; it never widens the page. */
   min-width: 0;
@@ -223,7 +280,7 @@
 @media (max-width: 639px) {
   /* A narrow command block stacks Copy under the command. */
   .enroll-command {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
     padding: 10px 12px;
   }
@@ -231,7 +288,7 @@
     font-size: 12px;
   }
   .enroll-command .button {
-    align-self: flex-start;
+    justify-self: start;
   }
 }
 .enroll-manual > p {
@@ -364,7 +421,7 @@
 }
 @media (max-width: 640px) {
   .enroll-command {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
     padding: 12px;
   }
   .enroll-secret {

@@ -48,6 +48,38 @@ for (const menu of document.querySelectorAll('.tools-menu')) {
   });
 }
 
+for (const switcher of document.querySelectorAll('[data-install-switcher]')) {
+  const choices = [...switcher.querySelectorAll('[data-install-platform]')];
+  const select = (index, focus = false) => {
+    choices.forEach((button, position) => {
+      const active = position === index;
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      document.getElementById(button.getAttribute('aria-controls')).hidden = !active;
+    });
+    const download = switcher.closest('article')?.querySelector('[data-install-download]');
+    if (download) {
+      const platform = choices[index].dataset.installPlatform;
+      download.href = { linux: '/install.sh', macos: '/install-desktop.sh', windows: '/install.ps1' }[platform];
+      download.textContent = `Download the ${choices[index].textContent} installer`;
+    }
+    if (focus) choices[index].focus();
+  };
+  choices.forEach((button, index) => {
+    button.addEventListener('click', () => select(index));
+    button.addEventListener('keydown', (event) => {
+      let next;
+      if (event.key === 'ArrowRight') next = (index + 1) % choices.length;
+      else if (event.key === 'ArrowLeft') next = (index - 1 + choices.length) % choices.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = choices.length - 1;
+      else return;
+      event.preventDefault();
+      select(next, true);
+    });
+  });
+}
+
 function selectStep(index, focus = false) {
   if (index < 0 || index >= tabs.length) return;
   const step = tabs[index].dataset.step;

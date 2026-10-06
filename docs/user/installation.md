@@ -9,7 +9,7 @@ Install the Vectory agent on a host that runs Vector 0.58 (any patch release, su
 ## Before you start
 
 - **Vector 0.58.x** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
-- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**, where you can also list the device names it may enroll and labels for the devices it enrolls. **Start over**, next to **Copy token**, revokes it when you don't need it; one you leave unused is listed with **Revoke it** when you come back. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
+- **An enrollment token.** **Add device** creates one with the install command. **One device** defaults to one enrollment and 1 hour; **Many devices** defaults to 100 enrollments and 24 hours. Change the limits under **Advanced**, where you can also list approved device names and labels. **Start over**, next to **Copy token**, revokes it when you don't need it; one you leave unused is listed with **Revoke it** when you come back. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
 - **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
 - **Administrator rights** on the host (`sudo`, or an elevated PowerShell on Windows) to install the agent and register its service.
 
@@ -59,7 +59,7 @@ Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`
 <!-- tabs:os -->
 #### Linux
 
-On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result on the host. With a private CA (the usual case) it looks like this:
+On **Add device**, choose **One device** or **Many devices**, explicitly choose **Restricted** or **Full Vector**, then **Create install command**. The default **One line** format is ready to paste. Choose **Readable** to inspect the same verified steps. With a private CA (the usual case), the readable command looks like this:
 
 ```sh
 (
@@ -85,13 +85,13 @@ Every step checks what it receives, and nothing turns certificate verification o
 
 #### macOS
 
-On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result in Terminal. It is the Linux command with `shasum -a 256 -c -` in place of `sha256sum -c -`.
+On **Add device**, choose **One device** or **Many devices**, explicitly choose **Restricted** or **Full Vector**, then **Create install command**, and run the result in Terminal. It is the Linux command with `shasum -a 256 -c -` in place of `sha256sum -c -`.
 
 The installer finds Vector through your `PATH` and Homebrew, and adopts the real binary behind Homebrew's link.
 
 #### Windows
 
-On **Add device**, choose **Windows** and copy the install command. Run it in **PowerShell as Administrator**. It creates a private temporary directory, downloads the installer with verified TLS, checks its exact SHA-256, then downloads and checks the agent. Native setup prompts privately for the token, installs the Windows service and waits for its first check-in. There is no separate binary save step.
+On **Add device**, choose **Windows**, **One device** or **Many devices**, and explicitly choose **Restricted** or **Full Vector**, then copy the install command. Run it in **PowerShell as Administrator**. It creates a private temporary directory, downloads the installer with verified TLS, checks its exact SHA-256, then downloads and checks the agent. Native setup reads the token by your chosen method, installs the Windows service and waits for its first check-in. There is no separate binary save step.
 
 The command supports PowerShell 5.1 and 7. Its built-in curl path needs Windows 11 or Windows Server 2022 or later for [Schannel TLS 1.3](https://learn.microsoft.com/en-us/windows/win32/secauthn/protocols-in-tls-ssl--schannel-ssp-), and curl 7.70 or later for private-CA revocation-list handling. The tested host is Windows Server 2025. On older systems or for configuration management, download the prebuilt agent and use the [manual steps](#install-manually); do not weaken TLS to make an old HTTP client work.
 
@@ -107,7 +107,7 @@ The installer and `vectory setup` then:
 4. Ask for the enrollment token (typing stays hidden) and enroll, checking the server the way you chose on **Add device** (the pinned CA unless you changed it). See [Trust the server certificate](#trust-the-server-certificate).
 5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one. A host without a service manager, such as most containers, WSL and Alpine with OpenRC, has nothing to register: setup checks in once, prints `[!!] Service` with the exact command that starts the agent, and exits with code 3, because the agent isn't running yet. See [Keep the agent running](#keep-the-agent-running).
 
-The token is never part of the URL, the command or the installer script. The command and the installer contain only public values: your server's address, its CA certificate and fingerprint, and the checksums.
+The token is never part of the URL, the command or the installer script. The command and the installer contain only public values: your server's address, its CA certificate and fingerprint, checksums, and a token file path when you choose one. **One line** and **Readable** perform the same certificate, installer and agent checks in private temporary directories.
 
 While [agent updates](agent-updates.md) are on, **Add device** has an **Agent updates** step before the command. Choose **Automatic (recommended)**, **Ask on the host** or **Off**. Nothing is chosen for you, and the command carries your choice, and the fingerprint of the release key the host will pin, to `vectory setup`. With updates off the step isn't there, and the command is the one shown above. See [What a host agrees to](agent-updates.md#what-a-host-agrees-to).
 
@@ -124,6 +124,25 @@ Once the command is created, its host settings stay fixed so the displayed comma
 | `--token-file PATH` | Configuration management. The file must be a regular, local file owned by you or root, with mode `0600` (on Windows, an access list limited to you, SYSTEM and Administrators). |
 
 Avoid `--token VALUE`: other users can read it from the process list and your shell keeps it in history. A leaked token can enroll new devices until it expires, is used up or is revoked in **Add device**. It can never sign in to the dashboard.
+
+### Install many devices
+
+Use one reusable token for a fleet with the same enrollment limits. On **Add device**, choose **Many devices**, the operating system, and explicitly choose **Restricted** or **Full Vector**. Each host uses its own hostname. The token defaults to 100 enrollments and 24 hours. Under **Advanced**, change **Devices it can enroll** to the number of hosts, or leave it empty for no use limit, and choose an expiry long enough to finish the rollout. You can restrict the names it accepts and give the enrolled devices labels.
+
+Create the install command, keep the token in your secret store, and reuse the verified command on each host with the same operating system. The installer detects the CPU architecture. Prepare a command for each operating system in a mixed fleet. Each host needs a unique name that satisfies the token's name limits; pass `--name` when its hostname does not.
+
+For an unattended install, choose **Read a protected file on each host** and set **Enrollment token file** before creating the command. Provision the token at that private path on every host. The command passes `--token-file` through the installer to `vectory setup`; the secret stays out of the download URL, command arguments and installer. For a saved and verified Linux or macOS installer, that final invocation is:
+
+```sh
+sudo sh "$dir/vectory-install.sh" --mode restricted --create-user \
+  --token-file /run/secrets/vectory-enrollment
+```
+
+On Windows, pass `--token-file 'C:\ProgramData\VectoryEnrollment\token.txt'` to the verified PowerShell installer. Protect the file with the access controls in [Keep tokens out of shell history](#keep-tokens-out-of-shell-history). The secret file and a CA certificate file have different jobs: the token authorizes enrollment; the certificate establishes server trust.
+
+**Paste at the hidden prompt** remains the interactive default. A fleet token stays available on the page while it still permits enrollment; leaving the page discards its secret, so keep it in your secret store first. For a secret manager that supplies standard input, save and verify the installer first, then use `--token-stdin`. Do not send both the installer source and the token through the same pipe. An environment variable is not an agent option; scripts can send a secret manager's value to standard input without putting its value in the command text.
+
+Token reuse does not add devices to a group or assign a pipeline. Repeating setup on an enrolled host preserves its identity and needs no token. It also keeps the host's existing mode; switching between restricted and full mode requires stopping the agent and using the explicit local [install flag](cli.md#install). Revoke the fleet token when enrollment is finished; already enrolled devices keep their own credentials.
 
 ## Install manually
 

@@ -60,7 +60,21 @@ Install, enroll, register the service and wait for the first check-in, in one re
 sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>
 ```
 
-Copy the whole command from **Add device** rather than typing it: it carries your server's fingerprint.
+Copy the whole command from **Add device** rather than typing it: it carries your server's fingerprint. **One line** and **Readable** run the same verified steps. Choose **Many devices** for a reusable token and hostname-based enrollment, or **One device** for its default single-use token.
+
+For configuration management, choose **Read a protected file on each host** and set **Enrollment token file** on **Add device**. Keep the token in your secret store and provision the private file on every host before running the generated command. For an already downloaded and verified agent, the equivalent setup uses the same server trust choices:
+
+```sh
+sudo vectory setup --server https://vectory.example.com:8443 \
+  --ca-file /etc/vectory-trust/agent-ca.pem --mode restricted --create-user \
+  --token-file /run/secrets/vectory-enrollment
+```
+
+The CA file must already be reviewed and present on the host. The token file must be a regular local file owned by the operator or root and private to that identity. On Windows, use a file whose access list permits only the operator, SYSTEM and Administrators. Neither the token nor its value belongs in the server URL.
+
+`--token-stdin` is the alternative when a secret manager supplies standard input. For a saved and verified installer, pass that flag to its final invocation; it reaches setup without changing the download or checksum checks. A piped installer uses standard input for its source, so supply the token through a protected file or the hidden terminal prompt instead. See [Install many devices](installation.md#install-many-devices).
+
+Setup is resumable: an enrolled host keeps its identity and asks for no token on a repeat run. Omitted settings remain as saved. An explicit `--mode` on an enrolled host does not change its mode; use the local stopped-agent mode change instead. A reusable token still enforces its expiry, use limit and approved names for each new host.
 
 | Flag | Meaning |
 | --- | --- |

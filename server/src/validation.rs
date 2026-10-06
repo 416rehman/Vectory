@@ -1980,11 +1980,33 @@ fn check_result(
     result
 }
 
-fn worker_client() -> crate::error::Result<reqwest::Client> {
-    reqwest::Client::builder()
+fn worker_client(endpoint: &str) -> crate::error::Result<(reqwest::Client, String)> {
+    let builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(8));
+    let (builder, url) = if let Some(socket) = crate::validation_socket::endpoint_path(endpoint)
+        .map_err(|_| crate::error::ApiError::invalid("Invalid validator socket path"))?
+    {
+        crate::validation_socket::check_socket(&socket).map_err(|_| {
+            crate::error::ApiError::invalid("Validator socket is unavailable or unsafe")
+        })?;
+        #[cfg(target_os = "linux")]
+        {
+            (
+                builder.no_proxy().unix_socket(socket),
+                "http://validator".to_owned(),
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err(crate::error::ApiError::invalid(
+            "Validator Unix sockets require Linux",
+        ));
+    } else {
+        (builder, endpoint.to_owned())
+    };
+    builder
         .build()
+        .map(|client| (client, url))
         .map_err(|_| crate::error::ApiError::invalid("Validator client unavailable"))
 }
 
@@ -2023,7 +2045,7 @@ fn request_fault(error: &reqwest::Error) -> &'static str {
 
 /// POST to the isolated worker and read a bounded JSON reply.
 async fn worker_call(url: &str, path: &str, body: &Value, limit: usize) -> Option<Value> {
-    let Ok(client) = worker_client() else {
+    let Ok((client, url)) = worker_client(url) else {
         worker_fault(path, "the server's HTTP client could not be built");
         return None;
     };
@@ -3764,6 +3786,35 @@ pub fn validate(config: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn worker_calls_use_the_protected_socket_and_refuse_unsafe_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::Builder::new()
+            .prefix(".worker-socket-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
+        let socket = directory.path().join("worker");
+        let listener = crate::validation_socket::bind(&socket).unwrap();
+        let router = axum::Router::new().route("/validate", axum::routing::post(|axum::Json(value): axum::Json<serde_json::Value>| async move {
+            axum::Json(serde_json::json!({"worker_protocol":super::WORKER_PROTOCOL,"vector_version":super::VECTOR_VERSION,"received":value}))
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let endpoint = crate::validation_socket::endpoint(socket.to_str().unwrap()).unwrap();
+        let body = serde_json::json!({"config":{"sources":{}}});
+        let reply = super::worker_call(&endpoint, "validate", &body, 1024)
+            .await
+            .unwrap();
+        assert_eq!(reply["received"], body);
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(
+            super::worker_call(&endpoint, "validate", &body, 1024)
+                .await
+                .is_none()
+        );
+        server.abort();
+    }
     #[test]
     fn shared_credential_fixtures_match_server_detector() {
         let fixture: Value = serde_json::from_str(include_str!(

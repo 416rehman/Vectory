@@ -66,9 +66,10 @@ def main():
         # A prerelease version may itself contain "preview". Classify agents
         # from the exact catalog inventory, never by a broad filename regex
         # that could mistake the separate starter bundle for an agent archive.
-        agent_names = verifier['agent_inventory'](args.folder)[1]
+        agent_version, agent_names, _ = verifier['agent_inventory'](args.folder)
     except (ValueError, KeyError, TypeError, FileNotFoundError, json.JSONDecodeError):
         agent_names = set()
+        agent_version = '0.0.0'
     server, repository, run = env.get('GITHUB_SERVER_URL', ''), env.get('GITHUB_REPOSITORY', ''), env.get('GITHUB_RUN_ID', '')
     manifest = {
         'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -85,6 +86,15 @@ def main():
         'image_agents_match_release_agents': reproducibility(args.folder),
         'note': 'Unsigned development candidate. Signing, notarization, package repositories and publication are separate maintainer steps.',
     }
+    if verifier['has_native_server'](agent_version):
+        manifest['parts'].update({
+            'native_serverkit': [name for name in names if name == f'vectory-{agent_version}-server-native-linux-amd64.tar.gz'],
+            'native_evidence': [name for name in names if name in {'native-kit-provenance.json', 'native-smoke.json'}],
+            'native_sbom': [name for name in names if name == 'vectory-native.spdx.json'],
+            'native_source': [name for name in names if name in {f'vectory-{agent_version}-native-runtime-source.tar.gz', 'native-runtime-source.json'}],
+            'installers': [name for name in names if name in {'install.sh', 'install-desktop.sh', 'install.ps1', 'install-native.sh'}],
+        })
+        manifest['job_results']['native_server'] = env.get('NATIVE_SERVER_RESULT')
     path = args.folder / 'CANDIDATE.json'
     path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     # Assembly deliberately saves an incomplete candidate when another job
