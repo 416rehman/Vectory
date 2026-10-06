@@ -347,6 +347,7 @@ jobs:
       - name: Check native archive and corresponding-source negative fixtures
         run: |
           python3 packaging/test_native_kit.py
+          python3 packaging/test_native_evidence.py
           python3 packaging/test_native_license_extraction.py
           python3 packaging/test_native_runtime_source.py
           python3 packaging/test_native_smoke_diagnostics.py

@@ -681,6 +681,7 @@ jobs:
         with: { python-version: "3.13" }
       - run: python -m unittest discover -s tests/security -p 'test_*.py' -v
       - run: python packaging/test_verify_release.py
+      - run: python packaging/test_native_evidence.py
       - run: python packaging/test_signed_release.py
       - name: Refuse inherited overrides of authenticated server-kit settings
         run: python deploy/test-compose-environment.py

@@ -1229,8 +1229,8 @@ def required_native_evidence(directory, version, proof):
             or set(evidence.get('verified', [])) != NATIVE_CHECKS):
         raise ValueError('Native candidate lacks complete successful runtime isolation and readiness proof')
     required_sbom(directory / 'vectory-native.spdx.json')
-    required_text(directory / 'install-native.sh', 'Authenticate prebuilt release bytes')
-    if f"version='{version}'" not in (directory / 'install-native.sh').read_text():
+    required_text(directory / 'install-native.sh', '#!/usr/bin/env bash')
+    if f"version='{version}'" not in (directory / 'install-native.sh').read_text(encoding='utf-8'):
         raise ValueError('Public native installer version differs from the release')
     for name in NATIVE_INSTALLERS - {'install-native.sh'}:
         required_file(directory / name, 1024 * 1024)
@@ -1384,7 +1384,7 @@ def candidate_inventory(directory, require_status=True):
         parts.update({'native_serverkit': [f'vectory-{version}-server-native-linux-amd64.tar.gz'],
             'native_evidence': ['native-kit-provenance.json', 'native-smoke.json'],
             'native_sbom': ['vectory-native.spdx.json'],
-            'native_source': [f'vectory-{version}-native-runtime-source.tar.gz', 'native-runtime-source.json'],
+            'native_source': ['native-runtime-source.json', f'vectory-{version}-native-runtime-source.tar.gz'],
             'installers': sorted(NATIVE_INSTALLERS)})
     if manifest.get('parts') != parts:
         raise ValueError('candidate manifest parts do not match the verified file inventory')
