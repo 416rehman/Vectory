@@ -115,7 +115,18 @@ services:
     security_opt: [no-new-privileges:true]
     environment:
       VECTORY_HOSTNAME: ${VECTORY_HOSTNAME:?Set the DNS name in deploy/.env}
-    volumes: [./Caddyfile.auto:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
+    volumes:
+      - ./Caddyfile.auto:/etc/caddy/Caddyfile:ro
+      # The starter initializes these with the service UID and private marker.
+      # Never copy root-owned image directories over that retained ownership.
+      - type: volume
+        source: caddy_data
+        target: /data
+        volume: { nocopy: true }
+      - type: volume
+        source: caddy_config
+        target: /config
+        volume: { nocopy: true }
 
     extra_hosts: ["${VECTORY_HOSTNAME:?Set your DNS name}:127.0.0.1"]
     ports:

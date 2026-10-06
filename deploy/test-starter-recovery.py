@@ -215,6 +215,16 @@ if operation == 'compose':
             sys.exit(0)
     refuse('unknown compose operation')
 if operation == 'run':
+    # Proxy storage is independent of the server's certificate/bootstrap
+    # volume. Model that boundary so initializing a proxy directory can never
+    # silently modify the retained-secret snapshot this fixture protects.
+    for argument in args:
+        if argument.startswith('type=volume,'):
+            fields = dict(part.split('=', 1) for part in argument.split(',') if '=' in part)
+            for suffix in ('caddy_data', 'caddy_config'):
+                if fields.get('src', '').endswith('_' + suffix):
+                    volume = Path(os.environ['STUB_VOLUME']).parent / 'proxy-volumes' / suffix
+                    volume.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         index = args.index('--entrypoint')
         entry = args[index + 1]
@@ -403,6 +413,27 @@ class StarterRecoveryTests(unittest.TestCase):
         self.assertEqual(mirror.stat().st_mode & 0o777, 0o700)
         self.assertEqual(private.stat().st_mode & 0o777, 0o600)
         self.assertEqual(private.read_text(), 'retain these private operator bytes\n')
+
+    def test_automatic_proxy_initialization_preserves_secrets_and_refuses_marker_links(self):
+        fixture = self.fixture('server')
+        fixture.env.pop('VECTORY_TLS_CERT_FILE')
+        fixture.env.pop('VECTORY_TLS_KEY_FILE')
+        self.assert_success(fixture.run())
+        before = fixture.retained_files()
+        markers = [fixture.root / 'proxy-volumes' / part / '.vectory-initialized'
+                   for part in ('caddy_data', 'caddy_config')]
+        marker_bytes = [marker.read_bytes() for marker in markers]
+        self.assertTrue(all(marker.stat().st_mode & 0o777 == 0o600 for marker in markers))
+        self.assert_success(fixture.run())
+        self.assertEqual(before, fixture.retained_files())
+        self.assertEqual(marker_bytes, [marker.read_bytes() for marker in markers])
+        markers[0].unlink()
+        markers[0].symlink_to(fixture.volume / 'server_key')
+        fixture.clear_log()
+        self.assertNotEqual(fixture.run().returncode, 0)
+        self.assertEqual(before, fixture.retained_files())
+        self.assert_no_start_or_load(fixture)
+        self.assert_no_network(fixture)
 
     def test_preview_retry_restores_chain_after_pki_generation(self):
         fixture = self.fixture('preview')

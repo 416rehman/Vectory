@@ -755,37 +755,61 @@ jobs:
           log="$RUNNER_TEMP/automatic-kit-private.log"
           umask 077
           compose=(docker compose --project-name "$VECTORY_SERVER_PROJECT" --env-file "$kit/.env" -f "$kit/compose.auto.yaml")
+          phase='automatic HTTPS startup'
           cleanup() {
             result=$?
             trap - EXIT
+            if [ "$result" -eq 0 ]; then phase='remove fixture containers'; fi
             if [ -f "$kit/.env" ]; then "${compose[@]}" down -v >> "$log" 2>&1 || result=1; fi
+            if [ "$result" -eq 0 ]; then phase='remove fixture volumes'; fi
             for part in secrets caddy_data caddy_config; do
               if docker volume inspect "${VECTORY_SERVER_PROJECT}_$part" >/dev/null 2>&1; then docker volume rm "${VECTORY_SERVER_PROJECT}_$part" >> "$log" 2>&1 || result=1; fi
             done
-            rm -f "$log"
+            if [ "$result" -eq 0 ]; then phase='remove private fixture log'; fi
+            rm -f "$log" || result=1
+            if [ "$result" -ne 0 ]; then
+              printf '::error::Automatic HTTPS fixture failed during %s (exit %s). Private startup output was not published.\n' "$phase" "$result"
+            fi
             exit "$result"
           }
           trap cleanup EXIT
           "$kit/start.sh" > "$log" 2>&1 || { echo '::error::Automatic HTTPS fixture failed to start. Private bootstrap log is not published.'; exit 1; }
+          phase='locate fixture services'
           proxy=$("${compose[@]}" ps -q proxy)
           server=$("${compose[@]}" ps -q server)
+          phase='export public browser CA'
           docker cp "$proxy:/data/caddy/pki/authorities/local/root.crt" "$extract/browser-ca.pem"
+          phase='export public agent CA'
           docker cp "$server:/run/secrets/issuer/agent-ca.pem" "$extract/agent-ca.pem"
+          phase='verify trusted browser TLS'
           curl --http2 --noproxy '*' --fail --silent --show-error --cacert "$extract/browser-ca.pem" --resolve vectory.example.test:443:127.0.0.1 --output "$extract/status.json" --write-out '%{http_version}' https://vectory.example.test/api/v1/status > "$extract/http-version.txt"
+          phase='require HTTP2 negotiation'
           grep -qx '2' "$extract/http-version.txt"
+          phase='request HTTP redirect'
           redirect=$(curl --noproxy '*' --silent --show-error --resolve vectory.example.test:80:127.0.0.1 --output /dev/null --write-out '%{redirect_url}' 'http://vectory.example.test/settings?example=1')
+          phase='require public HTTPS redirect destination'
           test "$redirect" = 'https://vectory.example.test/settings?example=1'
+          phase='reject unrelated TLS hostname'
           wrong_name_result=0
           curl --noproxy '*' --silent --show-error --cacert "$extract/browser-ca.pem" --resolve wrong.example.test:443:127.0.0.1 https://wrong.example.test/api/v1/status --output /dev/null 2> "$extract/wrong-name-error.txt" || wrong_name_result=$?
           case "$wrong_name_result" in 35|60) ;; *) echo '::error::Automatic HTTPS accepted an unrelated TLS hostname.'; exit 1 ;; esac
+          phase='verify trusted agent installer download'
           curl --noproxy '*' --fail --silent --show-error --cacert "$extract/agent-ca.pem" --resolve vectory.example.test:8443:127.0.0.1 https://vectory.example.test:8443/agent/v1/install.sh > "$extract/installer.sh"
+          phase='require nonempty agent installer'
           test -s "$extract/installer.sh"
+          phase='retain public agent CA fixture'
           cp "$extract/agent-ca.pem" "$extract/original-agent-ca.pem"
+          phase='stop automatic HTTPS fixture'
           "$kit/start.sh" stop >> "$log" 2>&1
+          phase='restart automatic HTTPS fixture'
           "$kit/start.sh" >> "$log" 2>&1
+          phase='locate restarted server'
           server=$("${compose[@]}" ps -q server)
+          phase='export retained public agent CA'
           docker cp "$server:/run/secrets/issuer/agent-ca.pem" "$extract/agent-ca.pem"
+          phase='require retained agent CA'
           cmp "$extract/original-agent-ca.pem" "$extract/agent-ca.pem"
+          phase='verify trusted browser TLS after restart'
           curl --noproxy '*' --fail --silent --show-error --cacert "$extract/browser-ca.pem" --resolve vectory.example.test:443:127.0.0.1 https://vectory.example.test/api/v1/status > /dev/null
           echo 'Automatic HTTPS fixture passed both verified TLS issuers and retained-trust restart. Public ACME issuance and host activation were not attempted.'
       - name: Qualify published manager state and trust across the version transition

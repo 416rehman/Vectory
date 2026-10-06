@@ -34,11 +34,21 @@ start_auto() {
   docker run "${common[@]}" --entrypoint /app/operations/vectory-server-pki "$server_image" --out /var/lib/vectory --hostname "$hostname"
   for volume in caddy_data caddy_config; do
     docker volume create --label io.vectory.server=true "${project}_$volume" >/dev/null
-    # Docker initializes each empty volume from this image's owned directory,
-    # so the unprivileged Caddy process can retain certificates and renewals.
+    # Seed an owned, nonempty volume before Caddy mounts it. Otherwise Docker
+    # can copy the proxy image's root-owned storage into a still-empty volume,
+    # replacing this ownership and breaking the next unprivileged restart.
     docker run --rm --network none --user 10001:10001 --read-only --cap-drop ALL \
       --security-opt no-new-privileges:true --mount "type=volume,src=${project}_$volume,dst=/var/lib/vectory" \
-      --entrypoint /bin/sh "$server_image" -c 'test -w /var/lib/vectory' || fail 'The retained Caddy volume is not writable by its service identity.'
+      --entrypoint /bin/sh "$server_image" -c '
+        set -eu
+        umask 077
+        test -w /var/lib/vectory
+        marker=/var/lib/vectory/.vectory-initialized
+        test ! -L "$marker"
+        if test ! -e "$marker"; then
+          (set -C; printf "Vectory managed proxy storage\n" > "$marker")
+        fi
+        test -f "$marker"' || fail 'The retained Caddy volume is not writable by its service identity.'
   done
   persist_env automatic
   compose_file="$bundle/compose.auto.yaml"
