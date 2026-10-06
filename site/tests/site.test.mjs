@@ -52,7 +52,10 @@ test("public landing's local destinations exist", async () => {
 });
 
 test("the public installer ships the exact release-owned source as a download", async () => {
-  assert.deepEqual(await fs.readFile(path.join(output, 'install.sh')), await fs.readFile(path.join(root, 'deploy/install.sh')));
+  assert(
+    (await fs.readFile(path.join(output, 'install.sh'))).equals(await fs.readFile(path.join(root, 'deploy/install.sh'))),
+    'The public installer differs from its release-owned source',
+  );
   const headers = await fs.readFile(path.join(output, '_headers'), 'utf8');
   assert.match(headers.replaceAll('\r\n', '\n'), /\/install\.sh\n  X-Robots-Tag: noindex\n  Content-Type: text\/plain; charset=utf-8\n  Content-Disposition: attachment; filename="vectory-install\.sh"/);
 });
@@ -72,9 +75,8 @@ test("browser distributions expose the release notices and required upstream ter
     "site/dist/NOTICE.txt",
     "site/dist/designer/NOTICE.txt",
   ]) {
-    assert.deepEqual(
-      await fs.readFile(path.join(root, file)),
-      canonical,
+    assert(
+      (await fs.readFile(path.join(root, file))).equals(canonical),
       `${file} differs from the release notice`,
     );
   }
