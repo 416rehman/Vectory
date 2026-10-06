@@ -825,10 +825,11 @@ export function windowsHost({ programData = process.env.ProgramData || "C:\\Prog
     /**
      * Runs body with the volume that holds the step's directory and the install
      * directory almost full: a file of nothing but allocated space takes all but
-     * 2.2 builds. The agent downloads one build before the step looks, so what is
-     * left then is 1.2 builds, which is not room for two copies. (A volume can't be
-     * mounted over the step's directory: the path check refuses a mount point, as it
-     * refuses every other kind of link.) The file is removed when body ends.
+     * 1.5 builds. That leaves room to download one build but is already below the
+     * step's two-copy threshold, even if the download uses a different volume or
+     * a cached copy. A volume can't be mounted over the step's directory: the path
+     * check refuses a mount point, as it refuses every other kind of link. The file
+     * is removed when body ends.
      */
     async withLittleRoom(buildBytes, body) {
       const drive = path.parse(paths.stepDir).root;
@@ -837,7 +838,7 @@ export function windowsHost({ programData = process.env.ProgramData || "C:\\Prog
           `The step's directory (${paths.stepDir}) and the install directory (${paths.installDir}) are not on one volume.`,
         );
       const filler = path.join(drive, "vectory-room-filler.bin");
-      const target = Math.floor(2.2 * buildBytes);
+      const target = Math.floor(1.5 * buildBytes);
       const free = host.stepFreeBytes();
       const size = free - target;
       if (size <= 0)
@@ -846,8 +847,13 @@ export function windowsHost({ programData = process.env.ProgramData || "C:\\Prog
         );
       try {
         run("fsutil.exe", ["file", "createnew", filler, String(size)]);
+        const remaining = host.stepFreeBytes();
+        if (remaining < buildBytes || remaining >= 2 * buildBytes)
+          throw new Error(
+            `The volume ${drive} has ${remaining} bytes free after filling; the check needs at least one build (${buildBytes}) but less than two (${2 * buildBytes}).`,
+          );
         return await body({
-          description: `${drive} has ${host.stepFreeBytes()} bytes free after a ${size} byte file of allocated space was made on it`,
+          description: `${drive} has ${remaining} bytes free after a ${size} byte file of allocated space was made on it`,
         });
       } finally {
         for (let attempt = 1; attempt <= 10; attempt += 1) {

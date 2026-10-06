@@ -2025,15 +2025,11 @@ async function diskFull(evidence) {
         host.withSmallStepFilesystem(sizeMiB, () =>
           body({ description: `on a ${sizeMiB} MiB file system` }),
         );
-  // Where the room is taken from the volume the agent also stores on, the agent
-  // stores the build it downloaded before the step looks: what is left then is what the
-  // step has. Where the step's directory has a file system of its own, it is what is left.
-  const stored = host.withLittleRoom ? release.build.size : 0;
   await withLittleRoom(async (room) => {
     await evidence.step(
-      `The step's directory has less room than two copies of the build once the agent has stored its copy (${room.description})`,
+      `The step's directory has less room than two copies of the build before the rollout (${room.description})`,
       () => {
-        const free = host.stepFreeBytes() - stored;
+        const free = host.stepFreeBytes();
         evidence.observe("room", {
           free_bytes: free,
           build_bytes: release.build.size,
