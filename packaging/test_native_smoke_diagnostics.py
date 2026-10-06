@@ -2,6 +2,7 @@
 import importlib.util
 from contextlib import contextmanager, nullcontext
 import errno
+import hashlib
 import os
 from pathlib import Path
 import platform
@@ -1077,6 +1078,129 @@ class NativeSmokeStoppedTests(unittest.TestCase):
                 self.assertFalse(smoke.native_services_stopped())
         with mock.patch.object(smoke, 'run', side_effect=[states[0]] * 3 + [malformed[0]]):
             self.assertFalse(smoke.native_services_stopped())
+
+
+@unittest.skipUnless(platform.system() == 'Linux' and all(shutil.which(command) for command in
+                     ('bash', 'install', 'find', 'sha256sum', 'realpath')),
+                     'Actual initializer/inventory fixtures use only private Linux directories; no services start')
+class NativeValidatorBaseDirectoryTests(unittest.TestCase):
+    def fixture(self, root, all_usr_targets=False):
+        kit = root / 'kit'
+        kit.mkdir()
+        payload = kit / 'validator-root'
+        executable = payload / 'usr/bin/vector'
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b'unchanged synthetic Vector payload')
+        library = payload / 'lib/synthetic-library'
+        library.parent.mkdir()
+        library.write_bytes(b'unchanged synthetic runtime library')
+        loader = payload / 'lib64/synthetic-loader'
+        loader.parent.mkdir()
+        loader.write_bytes(b'unchanged synthetic loader')
+        if all_usr_targets:
+            for relative in ('usr/lib', 'usr/sbin'):
+                (payload / relative).mkdir()
+        for number in range(17):
+            (kit / f'synthetic-payload-{number:02}').write_bytes(b'bounded unchanged payload fixture\n')
+        files = sorted(path for path in kit.rglob('*') if path.is_file())
+        inventory = ''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.relative_to(kit).as_posix() + '\n' for path in files)
+        (kit / 'SHA256SUMS').write_text(inventory)
+        return kit, payload, {path.relative_to(kit).as_posix(): path.read_bytes() for path in files}, inventory.encode()
+
+    def production_script(self, kit):
+        source = (Path(__file__).resolve().parents[1] / 'deploy/native/start.sh').read_text()
+        regular = source[source.index('regular() {'):source.index('verify_service_units() {')]
+        inventory = source[source.index('verify_inventory() {'):source.index('\nif [[ -n "$candidate_root"')]
+        statements = [line for line in source.splitlines() if line.startswith('install -d -m 0755 "$kit/validator-root/tmp"')]
+        self.assertEqual(len(statements), 1)
+        return ('set -euo pipefail\numask 077\nfail() { exit 1; }\n' + regular + inventory +
+                '\nkit=' + shlex.quote(str(kit)) + '\nverify_inventory "$kit"\n' + statements[0] +
+                '\nverify_inventory "$kit"\n')
+
+    def execute(self, kit):
+        return subprocess.run(['bash', '-c', self.production_script(kit)], capture_output=True, timeout=30)
+
+    def assert_unchanged_payload(self, kit, files, inventory):
+        self.assertEqual((kit / 'SHA256SUMS').read_bytes(), inventory)
+        self.assertEqual({path.relative_to(kit).as_posix() for path in kit.rglob('*') if path.is_file()},
+                         set(files) | {'SHA256SUMS'})
+        for relative, content in files.items():
+            self.assertEqual((kit / relative).read_bytes(), content)
+
+    def test_actual_initializer_preserves_usr_bin_layout_and_the_exact_regular_inventory(self):
+        for all_targets in (False, True):
+            with self.subTest(all_usr_targets=all_targets), tempfile.TemporaryDirectory() as directory:
+                kit, payload, files, inventory = self.fixture(Path(directory).resolve(), all_targets)
+                self.assertFalse((payload / 'bin').exists())
+                self.assertEqual(self.execute(kit).returncode, 0, 'The extracted initializer must preserve actual strict inventory checks')
+                for relative in ('bin', 'lib', 'sbin', 'tmp', 'run', 'run/vectory-validator'):
+                    entry = payload / relative
+                    metadata = entry.lstat()
+                    self.assertTrue(stat.S_ISDIR(metadata.st_mode))
+                    self.assertFalse(entry.is_symlink())
+                    self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o755)
+                    self.assertEqual(metadata.st_uid, os.geteuid())
+                self.assert_unchanged_payload(kit, files, inventory)
+
+    def test_repeated_initializer_keeps_real_alias_destinations_and_inventory_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            kit, payload, files, inventory = self.fixture(Path(directory).resolve(), all_usr_targets=True)
+            self.assertEqual(self.execute(kit).returncode, 0)
+            identities = {name: (entry.stat().st_dev, entry.stat().st_ino) for name in ('bin', 'lib', 'sbin')
+                          for entry in (payload / name,)}
+            self.assertEqual(self.execute(kit).returncode, 0, 'The same strict inventory must pass before and after repeat initialization')
+            for name, identity in identities.items():
+                metadata = (payload / name).lstat()
+                self.assertTrue(stat.S_ISDIR(metadata.st_mode))
+                self.assertEqual((metadata.st_dev, metadata.st_ino), identity)
+                self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o755)
+            self.assert_unchanged_payload(kit, files, inventory)
+
+    def test_existing_aliases_are_refused_before_initializer_without_following_or_mutating(self):
+        for name in ('bin', 'lib', 'sbin'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                kit, payload, files, inventory = self.fixture(Path(directory).resolve(), all_usr_targets=True)
+                entry, target = payload / name, payload / 'usr' / name
+                if entry.exists():
+                    entry.rename(payload / ('retained-' + name))
+                    files = {path.relative_to(kit).as_posix(): path.read_bytes() for path in kit.rglob('*')
+                             if path.is_file() and path.name != 'SHA256SUMS'}
+                    inventory = ''.join(hashlib.sha256((kit / relative).read_bytes()).hexdigest() + '  ' + relative + '\n' for relative in sorted(files)).encode()
+                    (kit / 'SHA256SUMS').write_bytes(inventory)
+                target.chmod(0o711)
+                entry.symlink_to('usr/' + name, target_is_directory=True)
+                identity = (target.stat().st_dev, target.stat().st_ino)
+                self.assertNotEqual(self.execute(kit).returncode, 0)
+                self.assertTrue(entry.is_symlink())
+                self.assertEqual(os.readlink(entry), 'usr/' + name)
+                self.assertEqual((target.stat().st_dev, target.stat().st_ino), identity)
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o711)
+                self.assertFalse((payload / 'tmp').exists())
+                self.assertFalse((payload / 'run').exists())
+                self.assert_unchanged_payload(kit, files, inventory)
+
+    def test_special_entry_is_refused_before_any_directory_preparation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            kit, payload, files, inventory = self.fixture(Path(directory).resolve())
+            os.mkfifo(payload / 'bin', 0o600)
+            self.assertNotEqual(self.execute(kit).returncode, 0)
+            self.assertTrue(stat.S_ISFIFO((payload / 'bin').lstat().st_mode))
+            self.assertFalse((payload / 'tmp').exists())
+            self.assertFalse((payload / 'run').exists())
+            self.assert_unchanged_payload(kit, files, inventory)
+
+    def test_unlisted_and_changed_files_remain_refused_before_initializer(self):
+        for attack in ('unlisted', 'checksum'):
+            with self.subTest(attack=attack), tempfile.TemporaryDirectory() as directory:
+                kit, payload, files, inventory = self.fixture(Path(directory).resolve())
+                target = kit / ('unlisted-fixture' if attack == 'unlisted' else 'synthetic-payload-00')
+                target.write_bytes(b'synthetic rejected changed bytes')
+                self.assertNotEqual(self.execute(kit).returncode, 0)
+                self.assertFalse((payload / 'bin').exists())
+                self.assertFalse((payload / 'tmp').exists())
+                self.assertFalse((payload / 'run').exists())
+                self.assertEqual(target.read_bytes(), b'synthetic rejected changed bytes')
+                self.assertEqual((kit / 'SHA256SUMS').read_bytes(), inventory)
 
 
 @unittest.skipUnless(platform.system() == 'Linux' and shutil.which('bash') and shutil.which('systemd-analyze'),

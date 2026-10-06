@@ -284,7 +284,8 @@ else
   find "$target" -type f ! -perm /111 -exec chmod 0644 '{}' +
 fi
 kit="$target"
-install -d -m 0755 "$kit/validator-root/tmp" "$kit/validator-root/run" "$kit/validator-root/run/vectory-validator"
+# Existing base directories prevent systemd from adding links to the verified payload.
+install -d -m 0755 "$kit/validator-root/tmp" "$kit/validator-root/run" "$kit/validator-root/run/vectory-validator" "$kit/validator-root/bin" "$kit/validator-root/lib" "$kit/validator-root/sbin"
 native_failure_phase=service_identity
 for account in vectory-server vectory-validator vectory-proxy; do
   if ! getent group "$account" >/dev/null; then groupadd --system "$account"; fi
