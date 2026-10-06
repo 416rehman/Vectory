@@ -7,363 +7,368 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/vectory/vectory/agent/internal/agent"
-	"golang.org/x/term"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/vectory/vectory/agent/internal/agent"
+	"golang.org/x/term"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		if len(os.Args) != 5 || (os.Args[4] != "restricted" && os.Args[4] != "full") {
-			os.Exit(2)
-		}
-		os.Exit(agent.VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
+		os.Exit(agent.VectorHostMain(os.Args[2:]))
 	}
 	os.Exit(run(os.Args[1:]))
 }
-func defaultState() string {
-	if runtime.GOOS == "windows" {
-		p := os.Getenv("ProgramData")
-		if p == "" {
-			p = `C:\ProgramData`
-		}
-		return filepath.Join(p, "Vectory")
-	}
-	if runtime.GOOS == "darwin" {
-		return "/Library/Application Support/Vectory"
-	}
-	return "/var/lib/vectory"
-}
-func output(v any) { enc := json.NewEncoder(os.Stdout); enc.SetIndent("", "  "); _ = enc.Encode(v) }
-func run(args []string) int {
+
+// Exit codes: 0 success, 1 the operation or a preflight check failed, 2 the
+// command line was invalid, 3 setup finished but nothing keeps the agent
+// running (no service manager, and --service none wasn't passed), 78 the
+// agent isn't installed or enrolled (so a service manager doesn't
+// restart-loop it), 130 setup was interrupted.
+const (
+	exitOK          = 0
+	exitFailed      = 1
+	exitUsage       = 2
+	exitAttention   = 3
+	exitNotReady    = 78
+	exitInterrupted = 130
+)
+
+func run(args []string) int { return runWith(args, os.Stdout, os.Stderr) }
+
+func runWith(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		usage()
-		return 2
+		printGeneralHelp(stderr)
+		return exitUsage
 	}
-	command := args[0]
-	args = args[1:]
-	if strings.HasPrefix(command, "-") {
-		args = append([]string{command}, args...)
-		command = "enroll"
+	switch args[0] {
+	case "help", "-h", "-help", "--help":
+		if args[0] == "help" && len(args) > 1 {
+			switch args[1] {
+			case "help":
+				fmt.Fprint(stdout, "Usage:  vectory help [command]\n\nShow the list of commands, or the flags and examples of one command.\n")
+				return exitOK
+			case "version":
+				fmt.Fprint(stdout, versionUsage)
+				return exitOK
+			}
+			cmd := findCommand(args[1])
+			if cmd == nil || cmd.hidden {
+				return unknownCommand(stderr, args[1])
+			}
+			if len(cmd.verbs) > 0 {
+				return helpForGroup(cmd, args[2:], stdout, stderr)
+			}
+			c := newCLI(cmd, stdout, stderr)
+			cmd.define(c)
+			printCommandHelp(stdout, cmd, c.specs, flagDefaults(c.fs))
+			return exitOK
+		}
+		printGeneralHelp(stdout)
+		return exitOK
+	case "version", "-v", "-version", "--version":
+		return versionCommand(args[1:], stdout, stderr)
 	}
-	if command == "version" {
-		fmt.Println(agent.Version)
-		return 0
+	name, rest := args[0], args[1:]
+	if strings.HasPrefix(name, "-") {
+		if corrected := misplacedCommand(args); corrected != "" {
+			fmt.Fprintf(stderr, "vectory: put the command first: %s\n", corrected)
+			return exitUsage
+		}
+		// Compatibility form: vectory -ip <server> -id <name> -token <token>.
+		name, rest = "enroll", args
 	}
-	if command == "help" || command == "--help" {
-		usage()
-		return 0
+	cmd := findCommand(name)
+	if cmd == nil {
+		return unknownCommand(stderr, name)
 	}
-	fs := flag.NewFlagSet(command, flag.ContinueOnError)
-	dir := fs.String("state-dir", defaultState(), "absolute protected state directory")
-	jsonOut := fs.Bool("json", false, "JSON output")
-	var err error
-	ctx, stop := signal.NotifyContext(context.Background(), terminationSignals()...)
-	defer stop()
-	switch command {
-	case "service-install":
-		account := fs.String("service-user", "", "existing unprivileged Unix account; Windows uses NT SERVICE\\Vectory")
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		err = agent.ServiceInstall(*dir, *account)
-	case "service-start", "service-stop", "service-uninstall":
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		if flagSupplied(fs, "state-dir") {
-			fmt.Fprintln(os.Stderr, "vectory: service control targets the fixed Vectory service; --state-dir cannot select another service")
-			return 2
-		}
-		err = agent.ServiceControl(strings.TrimPrefix(command, "service-"))
-	case "install":
-		binary := fs.String("vector-binary", "", "absolute already installed Vector binary")
-		config := fs.String("managed-config", "", "absolute sole managed .json path")
-		adopt := fs.Bool("adopt", false, "explicitly adopt after stopping existing Vector and inventorying include/config-dir arguments")
-		policyPath := fs.String("capability-policy", "", "operator-owned local capability policy JSON")
-		full := fs.Bool("allow-full-vector-config", false, "local grant: trust pipeline publishers with all Vector capabilities, native providers, exec, environment and host resources")
-		metrics := fs.String("metrics-url", "", "optional explicitly provisioned http://loopback-IP:port/metrics")
-		clearMetrics := fs.Bool("clear-metrics-url", false, "explicitly remove the local metrics collector setting; pipeline exporter is unchanged")
-		secretFiles := fs.String("secret-files", "", "local JSON map of approved secret names to absolute private file paths")
-		if fs.Parse(args) != nil {
-			return 2
-		}
-		if fs.NArg() != 0 {
-			fmt.Fprintln(os.Stderr, "vectory: install accepts flags only; unexpected positional arguments")
-			return 2
-		}
-		if err = metricsOptionUsage(fs, *clearMetrics, false); err != nil {
-			fmt.Fprintln(os.Stderr, "vectory:", err)
-			return 2
-		}
-		opts := agent.InstallOptions{Adopt: *adopt, ClearMetricsURL: *clearMetrics}
-		fs.Visit(func(f *flag.Flag) {
-			switch f.Name {
-			case "vector-binary":
-				opts.VectorBinary = binary
-			case "managed-config":
-				opts.ManagedConfig = config
-			case "allow-full-vector-config":
-				opts.FullVectorConfig = full
-			case "metrics-url":
-				opts.MetricsURL = metrics
-			case "capability-policy":
-				if err == nil {
-					opts.CapabilityPolicy, err = agent.ReadInstallPolicy(*policyPath)
-				}
-			case "secret-files":
-				if err == nil {
-					opts.SecretFiles, err = agent.ReadSecretBindings(*secretFiles)
-				}
-			}
-		})
-		if err == nil {
-			err = agent.InstallWithOptions(ctx, *dir, opts)
-		}
-		if err == nil && (opts.MetricsURL != nil || opts.ClearMetricsURL) {
-			reportMetricsConfiguration(command, opts.ClearMetricsURL, *jsonOut)
-			return 0
-		}
-	case "re-adopt":
-		binary := fs.String("vector-binary", "", "optional replacement absolute local Vector path; defaults to the currently adopted path")
-		expected := fs.String("expected-sha256", "", "required independently approved SHA256 of the replacement binary")
-		if fs.Parse(args) != nil || fs.NArg() != 0 {
-			return 2
-		}
-		var result agent.ReAdoptionReport
-		result, err = agent.ReAdopt(ctx, *dir, *binary, *expected)
-		if err == nil {
-			if *jsonOut {
-				output(result)
-			} else {
-				fmt.Printf("Approved Vector %s at %s\nSHA256: %s\n%s\n", result.VectorVersion, result.VectorBinary, result.SHA256, result.NextAction)
-			}
-			return 0
-		}
-	case "configure-metrics":
-		metrics := fs.String("metrics-url", "", "explicitly provisioned http://loopback-IP:port/metrics")
-		clearMetrics := fs.Bool("clear-metrics-url", false, "explicitly remove the local metrics collector setting; pipeline exporter is unchanged")
-		if fs.Parse(args) != nil {
-			return 2
-		}
-		if fs.NArg() != 0 {
-			fmt.Fprintln(os.Stderr, "vectory: configure-metrics accepts flags only; unexpected positional arguments")
-			return 2
-		}
-		if err = metricsOptionUsage(fs, *clearMetrics, true); err != nil {
-			fmt.Fprintln(os.Stderr, "vectory:", err)
-			return 2
-		}
-		if *clearMetrics {
-			err = agent.ClearMetrics(*dir)
-		} else {
-			err = agent.ConfigureMetrics(*dir, *metrics)
-		}
-		if err == nil {
-			reportMetricsConfiguration(command, *clearMetrics, *jsonOut)
-			return 0
-		}
-	case "configure-secrets":
-		secretFiles := fs.String("secret-files", "", "local JSON map of approved names to absolute private file paths; empty map removes bindings")
-		if fs.Parse(args) != nil {
-			return 2
-		}
-		if fs.NArg() != 0 {
-			fmt.Fprintln(os.Stderr, "vectory: configure-secrets accepts flags only; unexpected positional arguments")
-			return 2
-		}
-		if *secretFiles == "" {
-			fmt.Fprintln(os.Stderr, "vectory: configure-secrets requires --secret-files with a nonempty absolute JSON file path; use {} to remove all bindings")
-			return 2
-		}
-		var bindings *map[string]string
-		bindings, err = agent.ReadSecretBindings(*secretFiles)
-		if err == nil {
-			err = agent.ConfigureSecretFiles(*dir, *bindings)
-		}
-	case "enroll", "recover-enrollment":
-		server := fs.String("server", "", "verified HTTPS origin")
-		compatServer := fs.String("ip", "", "compatibility server/IP, still verified HTTPS")
-		name := fs.String("id", "", "unique machine name")
-		ca := fs.String("ca-file", "", "trusted public CA PEM path; omission retains saved trust, --ca-file= selects system trust")
-		stdin := fs.Bool("token-stdin", false, "read token from standard input")
-		tokenFile := fs.String("token-file", "", "read token from protected local file")
-		token := fs.String("token", "", "compatibility token argument (visible in process listings)")
-		if fs.Parse(args) != nil {
-			return 2
-		}
-		if fs.NArg() != 0 {
-			fmt.Fprintln(os.Stderr, "vectory: enrollment accepts flags only; unexpected positional arguments")
-			return 2
-		}
-		if *server == "" {
-			*server = *compatServer
-		}
-		var caOption *string
-		fs.Visit(func(f *flag.Flag) {
-			if f.Name == "ca-file" {
-				caOption = ca
-			}
-		})
-		var value string
-		count := 0
-		if *stdin {
-			count++
-		}
-		if *tokenFile != "" {
-			count++
-		}
-		if *token != "" {
-			count++
-		}
-		if count > 1 {
-			err = errors.New("choose only one token input")
-		} else if *stdin {
-			value, err = readToken(os.Stdin)
-		} else if *tokenFile != "" {
-			var f *os.File
-			f, err = agent.OpenEnrollmentTokenFile(*tokenFile)
-			if err == nil {
-				value, err = readToken(f)
-				_ = f.Close()
-			}
-		} else if *token != "" {
-			fmt.Fprintln(os.Stderr, "Warning: command-line tokens may appear in shell history and process listings; prefer --token-stdin.")
-			value = *token
-		} else if term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Fprint(os.Stderr, "Enrollment token: ")
-			var b []byte
-			b, err = term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stderr)
-			value = string(b)
-		} else {
-			err = errors.New("use --token-stdin, --token-file, or an interactive terminal")
-		}
-		if err == nil {
-			err = agent.EnrollWithOptions(ctx, *dir, agent.EnrollmentOptions{Server: *server, Name: *name, CAFile: caOption, Token: value, Recover: command == "recover-enrollment"})
-		}
-	case "run", "service":
-		once := fs.Bool("once", false, "one reconciliation then stop owned Vector; test only")
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		report := func(message string) {
-			if *jsonOut {
-				output(map[string]string{"message": message})
-			} else {
-				fmt.Fprintln(os.Stderr, message)
-			}
-		}
-		if command == "service" {
-			err = service(ctx, *dir, report)
-		} else {
-			err = agent.Run(ctx, *dir, *once, report)
-		}
-	case "status":
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		var s map[string]any
-		s, err = agent.StateSummary(*dir)
-		if err == nil {
-			output(s)
-		}
-	case "doctor":
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		var s map[string]any
-		s, err = agent.Doctor(ctx, *dir)
-		if *jsonOut && err != nil {
-			if s == nil {
-				s = map[string]any{}
-			}
-			s["error"] = err.Error()
-			output(s)
-			return 1
-		}
-		output(s)
-	case "pause", "resume":
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		err = agent.SetPause(*dir, command == "pause")
-		if err == nil && command == "resume" {
-			fmt.Fprintln(os.Stderr, "Local pause removed. Managed manual edits will be replaced when the latest authorized state is reconciled; remote pause still applies.")
-		}
-	case "retry":
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		err = agent.Retry(*dir)
-	case "unenroll":
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		err = agent.Unenroll(*dir)
-		if err == nil {
-			fmt.Fprintln(os.Stderr, "Local credentials removed. Revoke the old device in the dashboard; prior server authorization cannot be revoked offline.")
-		}
-	case "uninstall":
-		purge := fs.Bool("purge", false, "delete this exact state directory after service removal")
-		if !parseFlagsOnly(fs, args, command) {
-			return 2
-		}
-		if *purge {
-			if !flagSupplied(fs, "state-dir") {
-				fmt.Fprintln(os.Stderr, "vectory: uninstall --purge requires an explicit --state-dir")
-				return 2
-			}
-			err = agent.PurgeState(*dir)
-		} else {
-			var unlock func()
-			unlock, err = agent.Lock(*dir)
-			if err == nil {
-				unlock()
-				fmt.Fprintln(os.Stderr, "State and identity preserved. Remove the service registration and installed binary through your package manager.")
-			}
-		}
-	default:
-		usage()
-		return 2
+	if len(cmd.verbs) > 0 {
+		return executeGroup(cmd, rest, stdout, stderr)
 	}
-	if err != nil {
-		if *jsonOut {
-			output(map[string]string{"error": err.Error()})
-		} else {
-			fmt.Fprintln(os.Stderr, "vectory:", err)
-		}
-		return 1
-	}
-	if command != "status" && command != "doctor" && command != "run" && command != "service" {
-		if *jsonOut {
-			output(map[string]string{"status": "ok", "command": command})
-		} else {
-			fmt.Println(command + ": complete")
-		}
-	}
-	return 0
+	return execute(cmd, rest, stdout, stderr)
 }
-func parseFlagsOnly(fs *flag.FlagSet, args []string, command string) bool {
-	if fs.Parse(args) != nil {
-		return false
+
+// executeGroup runs `vectory <group> <verb> [flags]`. A group with no verb
+// prints its verbs and exits 2, as vectory with no command does; the help flags
+// print them and exit 0.
+func executeGroup(group *command, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printCommandHelp(stderr, group, nil, nil)
+		return exitUsage
+	}
+	switch args[0] {
+	case "-h", "-help", "--help":
+		printCommandHelp(stdout, group, nil, nil)
+		return exitOK
+	case "help":
+		return helpForGroup(group, args[1:], stdout, stderr)
+	}
+	if strings.HasPrefix(args[0], "-") {
+		fmt.Fprintf(stderr, "vectory %s: put the verb first, as in vectory %s <verb> [flags].\nRun 'vectory help %s' for the list of verbs.\n", group.name, group.name, group.name)
+		return exitUsage
+	}
+	verb := group.verb(args[0])
+	if verb == nil {
+		return unknownVerb(stderr, group, args[0])
+	}
+	return execute(verb, args[1:], stdout, stderr)
+}
+
+// helpForGroup answers `vectory help <group> [verb]`.
+func helpForGroup(group *command, rest []string, stdout, stderr io.Writer) int {
+	if len(rest) == 0 {
+		printCommandHelp(stdout, group, nil, nil)
+		return exitOK
+	}
+	verb := group.verb(rest[0])
+	if verb == nil || verb.hidden {
+		return unknownVerb(stderr, group, rest[0])
+	}
+	printVerbHelp(stdout, verb)
+	return exitOK
+}
+
+func unknownVerb(stderr io.Writer, group *command, name string) int {
+	message := fmt.Sprintf("vectory %s: unknown verb %q.", group.name, name)
+	if suggestion := suggestAmong(group.verbs, name); suggestion != "" {
+		message += fmt.Sprintf(" Did you mean %q?", suggestion)
+	}
+	fmt.Fprintln(stderr, message)
+	fmt.Fprintf(stderr, "Run 'vectory help %s' for the list of verbs.\n", group.name)
+	return exitUsage
+}
+
+const versionUsage = "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n"
+
+// versionCommand prints the version. Like every command it takes flags and no
+// other arguments; --state-dir is accepted and has no effect.
+func versionCommand(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	asJSON := fs.Bool("json", false, "")
+	fs.String("state-dir", "", "")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, versionUsage)
+			return exitOK
+		}
+		fmt.Fprintf(stderr, "vectory version: %s\nRun 'vectory help version' for usage.\n", flagError(err))
+		return exitUsage
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintf(os.Stderr, "vectory: %s accepts flags only; unexpected positional arguments\n", command)
-		return false
+		fmt.Fprintln(stderr, "vectory: version accepts flags only; unexpected positional arguments")
+		return exitUsage
 	}
-	return true
+	if *asJSON {
+		writeJSON(stdout, map[string]string{"version": agent.Version, "vector_version": agent.VectorVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
+	} else {
+		fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorSeries, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	}
+	return exitOK
 }
+
+// misplacedCommand answers `vectory --json status`: flags came before the
+// command, so the compatibility form would take them for an enrollment. It
+// returns the command line with the command first, or "" when the arguments
+// are not that mistake.
+func misplacedCommand(args []string) string {
+	enroll := findCommand("enroll")
+	probe := newCLI(enroll, io.Discard, io.Discard)
+	enroll.define(probe)
+	if probe.fs.Parse(args) != nil || probe.fs.NArg() == 0 {
+		return ""
+	}
+	command := findCommand(probe.fs.Arg(0))
+	if command == nil || command.hidden {
+		return ""
+	}
+	words := []string{"vectory", command.name}
+	after := probe.fs.Args()[1:]
+	// A group's verb belongs next to the group's name, ahead of the flags.
+	if len(command.verbs) > 0 && len(after) > 0 {
+		if verb := command.verb(after[0]); verb != nil {
+			words = append(words, verb.name)
+			after = after[1:]
+		}
+	}
+	for _, word := range append(append([]string{}, args[:len(args)-probe.fs.NArg()]...), after...) {
+		words = append(words, agent.ShellQuote(word))
+	}
+	return strings.Join(words, " ")
+}
+
+func unknownCommand(stderr io.Writer, name string) int {
+	message := fmt.Sprintf("vectory: unknown command %q.", name)
+	if suggestion := suggest(name); suggestion != "" {
+		message += fmt.Sprintf(" Did you mean %q?", suggestion)
+	}
+	fmt.Fprintln(stderr, message)
+	fmt.Fprintln(stderr, "Run 'vectory help' for the list of commands.")
+	return exitUsage
+}
+
+func newCLI(cmd *command, stdout, stderr io.Writer) *cli {
+	fs := flag.NewFlagSet(cmd.words(), flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return &cli{cmd: cmd, fs: fs, stdout: stdout, stderr: stderr, ask: askOnTerminal}
+}
+
+func flagDefaults(fs *flag.FlagSet) map[string]string {
+	defaults := map[string]string{}
+	fs.VisitAll(func(f *flag.Flag) { defaults[f.Name] = f.DefValue })
+	return defaults
+}
+
+func execute(cmd *command, args []string, stdout, stderr io.Writer) int {
+	return executeWith(newCLI(cmd, stdout, stderr), cmd, args)
+}
+
+// executeWith runs a command with the cli it was given, so a test can replace
+// the terminal a command asks on.
+func executeWith(c *cli, cmd *command, args []string) int {
+	stdout, stderr := c.stdout, c.stderr
+	action := cmd.define(c)
+	if err := c.fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printCommandHelp(stdout, cmd, c.specs, flagDefaults(c.fs))
+			return exitOK
+		}
+		fmt.Fprintf(stderr, "vectory %s: %s\nRun 'vectory help %s' for usage.\n", cmd.words(), flagError(err), cmd.words())
+		return exitUsage
+	}
+	if code, ok := c.takeOperands(); !ok {
+		return code
+	}
+	if c.state != nil {
+		if flagSupplied(c.fs, "state-dir") {
+			switch {
+			case strings.TrimSpace(*c.state) == "":
+				fmt.Fprintf(stderr, "vectory %s: --state-dir needs a path. Give the agent's state directory in full, or leave the flag out to use %s.\n", cmd.words(), agent.DefaultPaths().StateDir)
+				return exitUsage
+			case !filepath.IsAbs(*c.state):
+				fmt.Fprintf(stderr, "vectory %s: --state-dir must be an absolute path, and %s isn't. Write the whole path, such as %s.\n", cmd.words(), agent.ShellQuote(*c.state), agent.DefaultPaths().StateDir)
+				return exitUsage
+			}
+		}
+		resolved, ok := c.resolvePath("state-dir", *c.state)
+		if !ok {
+			return exitUsage
+		}
+		*c.state = resolved
+	}
+	return action()
+}
+
+// resolvePath makes a path flag absolute and canonical, noting any symbolic
+// link it followed. It reports false after printing a usage error.
+func (c *cli) resolvePath(flagName, value string) (string, bool) {
+	resolved, err := agent.ResolveOperatorPath(value)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "vectory %s: --%s %s: %s\n", c.cmd.words(), flagName, value, err)
+		return "", false
+	}
+	if resolved.Resolved {
+		fmt.Fprintf(c.stderr, "Using %s for --%s (%s is a symbolic link).\n", resolved.Path, flagName, value)
+	}
+	return resolved.Path, true
+}
+
+// resolveFilePath makes the path of a file this command reads as private or
+// creates: absolute, with the links in its directory resolved and its own name
+// kept, so a link in the file's place is never followed.
+func (c *cli) resolveFilePath(flagName, value string) (string, bool) {
+	if strings.TrimSpace(value) == "" {
+		fmt.Fprintf(c.stderr, "vectory %s: --%s needs a file name.\n", c.cmd.words(), flagName)
+		return "", false
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "vectory %s: --%s %s: %s\n", c.cmd.words(), flagName, value, err)
+		return "", false
+	}
+	directory, ok := c.resolvePath(flagName, filepath.Dir(absolute))
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(directory, filepath.Base(absolute)), true
+}
+
+// takeOperands checks the arguments after the flags against the operands the
+// command declares: a command with none takes flags only. It reports false,
+// with the exit code, after printing a usage error.
+func (c *cli) takeOperands() (int, bool) {
+	args := c.fs.Args()
+	want := c.cmd.operands
+	if len(want) == 0 {
+		if len(args) != 0 {
+			fmt.Fprintf(c.stderr, "vectory: %s accepts flags only; unexpected positional arguments\n", c.cmd.words())
+			return exitUsage, false
+		}
+		return exitOK, true
+	}
+	switch {
+	case len(args) < len(want):
+		fmt.Fprintf(c.stderr, "vectory %s: missing %s.\nRun 'vectory help %s' for usage.\n", c.cmd.words(), want[len(args)], c.cmd.words())
+		return exitUsage, false
+	case len(args) > len(want) && strings.HasPrefix(args[len(want)], "-") && args[len(want)] != "-":
+		fmt.Fprintf(c.stderr, "vectory %s: put the flags before %s: %q came after it.\nRun 'vectory help %s' for usage.\n", c.cmd.words(), want[len(want)-1], args[len(want)], c.cmd.words())
+		return exitUsage, false
+	case len(args) > len(want):
+		fmt.Fprintf(c.stderr, "vectory %s: unexpected argument %q.\nRun 'vectory help %s' for usage.\n", c.cmd.words(), args[len(want)], c.cmd.words())
+		return exitUsage, false
+	}
+	c.operands = args
+	return exitOK, true
+}
+
+// askOnTerminal asks a question on standard error and reads the answer from
+// standard input, when both are terminals. Without a terminal nobody can be
+// asked, and a command that needs a yes has to be told with a flag.
+func askOnTerminal(question string) (string, bool) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
+		return "", false
+	}
+	fmt.Fprint(os.Stderr, question)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.TrimSpace(line), true
+}
+
+// wholeNumbers says what a flag that takes a count accepts.
+var wholeNumbers = map[string]string{
+	"lines":                     "from 1 to 100000",
+	"graceful-shutdown-seconds": "of seconds from 5 to 300",
+}
+
+// invalidNumber is the flag package's refusal of a value that isn't a number:
+// invalid value "abc" for flag -lines: parse error.
+var invalidNumber = regexp.MustCompile(`^invalid value (".*") for flag -([a-z-]+): parse error$`)
+
+func flagError(err error) string {
+	message := err.Error()
+	switch {
+	case strings.HasPrefix(message, "flag provided but not defined: "):
+		return "unknown flag -" + strings.TrimPrefix(message, "flag provided but not defined: ")
+	case strings.HasPrefix(message, "flag needs an argument: "):
+		return "-" + strings.TrimPrefix(message, "flag needs an argument: ") + " needs a value"
+	}
+	if match := invalidNumber.FindStringSubmatch(message); match != nil {
+		return "--" + match[2] + " needs a whole number " + strings.TrimSpace(wholeNumbers[match[2]]) + ", and " + match[1] + " isn't one"
+	}
+	return message
+}
+
 func flagSupplied(fs *flag.FlagSet, name string) bool {
 	found := false
 	fs.Visit(func(option *flag.Flag) { found = found || option.Name == name })
 	return found
 }
+
 func readToken(r io.Reader) (string, error) {
 	line, err := bufio.NewReader(io.LimitReader(r, 4097)).ReadString('\n')
 	if err != nil && err != io.EOF {
@@ -375,47 +380,47 @@ func readToken(r io.Reader) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-func metricsOptionUsage(fs *flag.FlagSet, clear, required bool) error {
-	urlSupplied, clearSupplied := false, false
-	fs.Visit(func(f *flag.Flag) {
-		urlSupplied = urlSupplied || f.Name == "metrics-url"
-		clearSupplied = clearSupplied || f.Name == "clear-metrics-url"
-	})
-	if clearSupplied && (!clear || urlSupplied) || required && !urlSupplied && !clearSupplied {
-		return errors.New("choose exactly one of --metrics-url URL or --clear-metrics-url; omit --clear-metrics-url instead of setting it false")
-	}
-	return nil
+func writeJSON(w io.Writer, v any) {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
 }
 
-func reportMetricsConfiguration(command string, cleared, jsonOut bool) {
-	next := "Start or restart the agent through its intended supervisor to use this setting. The pipeline and exporter are unchanged."
-	if jsonOut {
-		output(map[string]any{"command": command, "status": "ok", "metrics_collection_configured": !cleared, "next_action": next})
+func (c *cli) output(v any) {
+	if c.oneLine {
+		_ = json.NewEncoder(c.stdout).Encode(v)
 		return
 	}
-	if cleared {
-		fmt.Println("Metrics collection setting cleared.", next)
-	} else {
-		fmt.Println("Metrics endpoint setting saved.", next)
-	}
+	writeJSON(c.stdout, v)
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, `Vectory agent - explicitly adopted Vector 0.58.0
-Commands: install re-adopt configure-secrets configure-metrics enroll recover-enrollment run service status doctor pause resume retry unenroll uninstall version
-Native service commands: service-install [--service-user <account>], service-start, service-stop, service-uninstall
-Common: --state-dir <absolute path> --json
-Service start/stop/uninstall target the fixed service; --state-dir does not select one. Commands accept flags only.
-State purge: uninstall --purge --state-dir <exact installed state directory> (agent stopped).
-Install: --vector-binary <absolute path> --managed-config <absolute .json> --adopt
-Re-adopt while stopped: --expected-sha256 <trusted candidate SHA256> [--vector-binary <absolute replacement path>]
-Optional local trust grant: install --allow-full-vector-config (existing agent must be stopped)
-Return to restricted mode locally: install --allow-full-vector-config=false
-Metrics while stopped: configure-metrics --metrics-url http://127.0.0.1:9598/metrics | --clear-metrics-url
-Install also accepts --metrics-url or --clear-metrics-url; omission preserves the setting.
-Enroll: --server https://host:8443 --id edge-01 --token-stdin [--ca-file <trusted PEM>]
-CA trust: omission retains saved trust; --ca-file= explicitly selects system trust.
-Compatibility: vectory -ip <server> -id <name> -token <token> [--state-dir <path>]
-TLS verification is mandatory. No Vector installation, upgrade, or arbitrary remote command feature.
-Exit codes: 0 success; 1 operation/preflight failed; 2 invalid command or options.`)
+// fail prints err for people (stderr) or scripts (a JSON document on stdout).
+func (c *cli) fail(err error) int {
+	var full *agent.DiskFullError
+	isFull := errors.As(err, &full)
+	if c.json != nil && *c.json {
+		document := map[string]any{"error": err.Error()}
+		if ce, ok := agent.AsConnectionError(err); ok {
+			document["code"], document["message"], document["fix"] = ce.Code, ce.Message, ce.Fix
+		}
+		if isFull {
+			document["code"], document["fix"] = "DISK_FULL", full.Fix("run the command again")
+		}
+		c.output(document)
+	} else {
+		message := err.Error()
+		if isFull {
+			message += ". " + full.Fix("run the command again")
+		}
+		fmt.Fprintln(c.stderr, "vectory:", agent.IndentLines(message, len("vectory: ")))
+	}
+	// A value that can't work on any host is a usage error, like an unknown flag.
+	if agent.IsInputError(err) {
+		return exitUsage
+	}
+	return exitFailed
+}
+
+func interruptible() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), terminationSignals()...)
 }

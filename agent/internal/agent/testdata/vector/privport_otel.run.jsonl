@@ -1,0 +1,16 @@
+{"timestamp":"2026-09-29T15:48:34.839591Z","level":"INFO","message":"Log level is enabled.","level":"\"info\"","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.840509Z","level":"INFO","message":"Loading configs.","paths":"[\"otel.json\"]","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.841268Z","level":"WARN","message":"Source \"otel.metrics\" has no consumers","target":"vector::config::loading"}
+{"timestamp":"2026-09-29T15:48:34.841279Z","level":"WARN","message":"Internal log [Source \"otel.metrics\" has no consumers] is being suppressed to avoid flooding.","target":"vector::config::loading"}
+{"timestamp":"2026-09-29T15:48:34.842758Z","level":"INFO","message":"Running healthchecks.","target":"vector::topology::running"}
+{"timestamp":"2026-09-29T15:48:34.842850Z","level":"INFO","message":"Vector has started.","debug":"false","version":"0.58.0","arch":"x86_64","revision":"2bcad9b 2026-08-26 13:37:07.557544670","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.842861Z","level":"INFO","message":"API is disabled, enable by setting `api.enabled` to `true` and use commands like `vector top`.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.843020Z","level":"INFO","message":"Healthcheck passed.","target":"vector::topology::builder"}
+{"timestamp":"2026-09-29T15:48:34.843230Z","level":"ERROR","message":"OpenTelemetry source gRPC server failed.","error":"TCP bind failed: Permission denied (os error 13)","target":"vector::sources::opentelemetry::config","span":{"component_id":"otel","component_kind":"source","component_type":"opentelemetry","name":"source"},"spans":[{"component_id":"otel","component_kind":"source","component_type":"opentelemetry","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.843422Z","level":"INFO","message":"All sources have finished.","target":"vector_common::shutdown"}
+{"timestamp":"2026-09-29T15:48:34.843430Z","level":"ERROR","message":"OpenTelemetry source HTTP server failed.","error":"TCP bind failed: Permission denied (os error 13)","target":"vector::sources::opentelemetry::config","span":{"component_id":"otel","component_kind":"source","component_type":"opentelemetry","name":"source"},"spans":[{"component_id":"otel","component_kind":"source","component_type":"opentelemetry","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.843438Z","level":"INFO","message":"Internal log [All sources have finished.] is being suppressed to avoid flooding.","target":"vector_common::shutdown"}
+{"timestamp":"2026-09-29T15:48:34.843448Z","level":"INFO","message":"All sources have finished.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.843454Z","level":"INFO","message":"Vector is stopping.","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.843514Z","level":"INFO","message":"Vector has stopped.","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.843518Z","level":"INFO","message":"All components shut down gracefully.","target":"vector::app"}

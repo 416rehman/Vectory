@@ -6,8 +6,16 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { configuredChannels } from "./notification-fixtures.mjs";
+import { slimOverview } from "./fleet-replies.mjs";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -20,7 +28,7 @@ const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   cacheDir: resolve(output, "vite-cache"),
-  server: { host: "127.0.0.1", port: 5196, strictPort: true, proxy: {} },
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {} },
   plugins: [
     {
       name: "pipeline-library-session-fixture",
@@ -53,8 +61,23 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 page.setDefaultTimeout(10000);
+await context.addInitScript(() => {
+  window.__pendingFileReads = [];
+  const originalRead = File.prototype.arrayBuffer;
+  File.prototype.arrayBuffer = function () {
+    if (this.name.startsWith("delayed-"))
+      return new Promise((resolve) =>
+        window.__pendingFileReads.push({
+          name: this.name,
+          resolve: () => originalRead.call(this).then(resolve),
+        }),
+      );
+    return originalRead.call(this);
+  };
+});
 const errors = [],
   requests = [],
+  creationPosts = [],
   unexpected = [],
   results = [];
 page.on("pageerror", (error) => errors.push(error.message));
@@ -72,7 +95,45 @@ const user = (id) => ({
 });
 let signedIn = user("first"),
   nextLogin = user("second"),
-  empty = false;
+  empty = false,
+  failing = false,
+  published = false,
+  running = 2;
+const failedRollout = {
+  id: "00000000-0000-4000-8000-0000000000f4",
+  name: null,
+  configuration_id: "active-0",
+  configuration_name: "Synthetic blue 00",
+  version_id: "00000000-0000-4000-8000-0000000000e4",
+  version_number: 4,
+  policy: null,
+  status: "failed",
+  created_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+  failed_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+  target_count: 3,
+  verified_count: 0,
+  state_counts: { rolled_back: 1, pending: 2 },
+};
+const historyReads = [];
+/** The first row, published as v4 while its devices run `running`. */
+const publishedRow = (item) => ({
+  ...item,
+  assigned_devices: 3,
+  running_versions: [
+    {
+      id: `00000000-0000-4000-8000-0000000000e${running}`,
+      number: running,
+      devices: 3,
+    },
+  ],
+  latest_version: {
+    id: failedRollout.version_id,
+    number: 4,
+    created_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+    author: "Synthetic",
+    draft_changed: false,
+  },
+});
 const records = [false, true].flatMap((archived) =>
   Array.from({ length: 13 }, (_, index) => ({
     id: `${archived ? "archived" : "active"}-${index}`,
@@ -117,20 +178,37 @@ await context.route("**/api/v1/**", async (route) => {
   if (path === "/settings")
     return reply({ instance_name: "Synthetic isolated library check" });
   if (path === "/overview")
-    return reply({
-      devices_total: 0,
-      devices_online: 0,
-      configurations_total: 26,
-      deployments_active: 0,
-      issues_open: 0,
-      devices: [],
-      recent_activity: [],
-    });
+    return reply(slimOverview([], { configurations_total: 26 }));
+  // The Overview's first-run checklist asks whether agent downloads exist.
+  if (path === "/releases") return reply([]);
+  if (path.startsWith("/configurations/requests/") && method === "GET")
+    return reply({ request_id: path.split("/").at(-1), found: false });
+  if (path === "/configurations" && method === "POST") {
+    creationPosts.push(JSON.parse(route.request().postData()));
+    return reply(
+      {
+        error: {
+          code: "VALIDATION_FAILED",
+          message: "Synthetic create request captured without saving",
+        },
+      },
+      400,
+    );
+  }
+  // An administrator's Overview asks whether a notification channel exists.
+  if (path === "/notifications/channels") return reply(configuredChannels);
   if (path === "/configurations/library" && method === "GET") {
     const query = Object.fromEntries(url.searchParams);
     requests.push(query);
     if (query.page_size !== "12")
       throw Error("Library request is not bounded to 12");
+    if (failing)
+      return reply(
+        {
+          error: { code: "UNAVAILABLE", message: "Synthetic library outage" },
+        },
+        503,
+      );
     let rows = empty
       ? []
       : records.filter(
@@ -145,10 +223,27 @@ await context.route("**/api/v1/**", async (route) => {
     );
     const number = Number(query.page);
     return reply({
-      items: rows.slice((number - 1) * 12, number * 12),
+      items: rows
+        .slice((number - 1) * 12, number * 12)
+        .map((item, index) =>
+          published && index === 0 && !item.archived
+            ? publishedRow(item)
+            : item,
+        ),
       total: rows.length,
       page: number,
       page_size: 12,
+    });
+  }
+  // Only a row whose latest version runs nowhere reads rollout history.
+  if (path === "/deployments/history" && method === "GET") {
+    const query = Object.fromEntries(url.searchParams);
+    historyReads.push(query);
+    return reply({
+      items: query.status === "failed" ? [failedRollout] : [],
+      total: query.status === "failed" ? 1 : 0,
+      page: 1,
+      page_size: Number(query.page_size),
     });
   }
   unexpected.push(`${method} ${path}`);
@@ -168,14 +263,9 @@ async function check(name, run) {
 }
 async function signOutAndIn() {
   await page.getByRole("button", { name: "Your account", exact: true }).click();
+  // Signing out no longer asks for confirmation.
   await page.getByRole("menuitem", { name: "Sign out", exact: true }).click();
-  await page
-    .getByRole("alertdialog", { name: "Sign out of Vectory?" })
-    .getByRole("button", { name: "Sign out", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Sign in", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Sign in/ })).toBeVisible();
   await page.getByLabel("Email address", { exact: true }).fill(nextLogin.email);
   await page
     .getByLabel("Password", { exact: true })
@@ -186,7 +276,7 @@ async function signOutAndIn() {
   ).toBeVisible();
 }
 try {
-  await page.goto("http://127.0.0.1:5196/__library-fixture#/configurations");
+  await page.goto(`http://127.0.0.1:${port}/__library-fixture#/configurations`);
   await expect(page.locator(".pipeline-library-table tbody tr")).toHaveCount(
     12,
   );
@@ -225,6 +315,277 @@ try {
     },
   );
   await check(
+    "under StrictMode the create dialog keeps focus through its development remount and returns it on close",
+    async () => {
+      const create = page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true });
+      await create.focus();
+      await page.evaluate(() => {
+        window.__focusTrail = [];
+        document.addEventListener(
+          "focusin",
+          (event) =>
+            window.__focusTrail.push(
+              event.target.closest('[role="dialog"]')
+                ? "dialog"
+                : event.target.textContent.trim().slice(0, 40),
+            ),
+          true,
+        );
+      });
+      await page.keyboard.press("Enter");
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      await expect(dialog.getByLabel("Pipeline name")).toBeFocused();
+      // Radix hands focus back after a timeout; give a remount the chance.
+      await delay(300);
+      await expect(dialog.getByLabel("Pipeline name")).toBeFocused();
+      const trail = await page.evaluate(() => window.__focusTrail);
+      expect(trail, "focus never leaves the open dialog").toEqual(
+        trail.map(() => "dialog"),
+      );
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(create).toBeFocused();
+      // A dialog mounted already open (a row's Duplicate) runs its own
+      // effects twice as well; focus still stays inside it.
+      await page
+        .getByRole("button", { name: /^Actions for / })
+        .first()
+        .click();
+      await page.evaluate(() => (window.__focusTrail = []));
+      await page
+        .getByRole("menuitem", { name: "Duplicate pipeline", exact: true })
+        .click();
+      const duplicate = page.getByRole("dialog", {
+        name: "Duplicate pipeline",
+        exact: true,
+      });
+      await expect(duplicate).toBeVisible();
+      await delay(300);
+      const after = await page.evaluate(() => window.__focusTrail);
+      const entered = after.indexOf("dialog");
+      expect(entered, "focus enters the duplicate dialog").toBeGreaterThan(-1);
+      expect(
+        after.slice(entered),
+        "focus never leaves the duplicate dialog",
+      ).toEqual(after.slice(entered).map(() => "dialog"));
+      await duplicate
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await expect(duplicate).toHaveCount(0);
+      expect(unexpected).toEqual([]);
+    },
+  );
+  await check(
+    "the create dialog drops an error about the start once that start is fixed",
+    async () => {
+      await page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      const complaint = "Choose a Vector configuration file to import.";
+      const submit = dialog.getByRole("button", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      await dialog.getByLabel("Pipeline name").fill("From a file");
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await submit.click();
+      await expect(dialog).toContainText(complaint);
+      // Choosing another start answers it.
+      await dialog.getByText("Build a pipeline", { exact: true }).click();
+      await expect(dialog).not.toContainText(complaint);
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await submit.click();
+      await expect(dialog).toContainText(complaint);
+      // So does pasting a configuration.
+      await dialog
+        .getByRole("button", { name: "Paste instead", exact: true })
+        .click();
+      await dialog
+        .getByLabel("Vector configuration", { exact: true })
+        .fill(
+          '{"sources":{"a":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["a"]}}}',
+        );
+      await dialog
+        .getByRole("button", { name: "Use this configuration", exact: true })
+        .click();
+      await expect(
+        dialog.locator(".pipeline-start-import-result[role=status]"),
+      ).toContainText("Pasted JSON");
+      await expect(dialog).not.toContainText(complaint);
+      await dialog.locator('input[type="file"]').setInputFiles([
+        {
+          name: "source.yaml",
+          mimeType: "text/yaml",
+          buffer: Buffer.from(
+            "sources:\n  a:\n    type: demo_logs\n    format: json\n",
+          ),
+        },
+        {
+          name: "sink.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(
+            '{"sinks":{"out":{"type":"blackhole","inputs":["a"]}}}',
+          ),
+        },
+      ]);
+      await expect(
+        dialog.locator(".pipeline-start-import-result[role=status]"),
+      ).toContainText("2 configuration files");
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue(
+        "From a file",
+      );
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      expect(unexpected).toEqual([]);
+    },
+  );
+  await check(
+    "replacing a valid import blocks Create until the newest read finishes and submits only the new configuration",
+    async () => {
+      await page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      const submit = dialog.getByRole("button", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      const files = dialog.locator('input[type="file"]');
+      const config = (source) =>
+        JSON.stringify({
+          sources: { [source]: { type: "demo_logs", format: "json" } },
+          sinks: { output: { type: "blackhole", inputs: [source] } },
+        });
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await files.setInputFiles({
+        name: "previous.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(config("previous")),
+      });
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).toContainText("previous.json");
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue("previous");
+      const before = creationPosts.length;
+      await files.setInputFiles({
+        name: "delayed-newer.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(config("newer")),
+      });
+      await expect
+        .poll(() => page.evaluate(() => window.__pendingFileReads.length))
+        .toBe(1);
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).toContainText("delayed-newer.json");
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).not.toContainText("previous.json");
+      await expect(submit).toBeDisabled();
+      expect(creationPosts.length).toBe(before);
+      await page.evaluate(() => window.__pendingFileReads.shift().resolve());
+      await expect(
+        dialog.locator(".pipeline-start-import-result"),
+      ).toContainText("checked locally");
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue(
+        "delayed-newer",
+      );
+      await expect(submit).toBeEnabled();
+      await submit.click();
+      await expect.poll(() => creationPosts.length).toBe(before + 1);
+      expect(creationPosts.at(-1).config.sources).toHaveProperty("newer");
+      expect(creationPosts.at(-1).config.sources).not.toHaveProperty(
+        "previous",
+      );
+      await expect(dialog).toContainText(
+        "Synthetic create request captured without saving",
+      );
+      // A generic 400 does not prove another tab's identical request was not
+      // saved. Review and dismiss the exact browser reminder before creating
+      // a different pipeline in the next scenario.
+      await expect(dialog).toContainText("Creation result needs confirmation");
+      await dialog
+        .getByRole("button", { name: "Close and review request", exact: true })
+        .click();
+      await expect(dialog).toHaveCount(0);
+      const saved = page.getByRole("dialog", {
+        name: "Saved pipeline requests",
+        exact: true,
+      });
+      await expect(saved).toContainText("delayed-newer");
+      await saved.getByRole("button", { name: /delayed-newer/ }).click();
+      const review = page.getByRole("dialog", {
+        name: "Review pipeline request",
+        exact: true,
+      });
+      await expect(review).toContainText("No completed request was found yet");
+      await review
+        .getByRole("button", { name: "Dismiss reminder", exact: true })
+        .click();
+      await page
+        .getByRole("dialog", {
+          name: "Dismiss this pipeline reminder?",
+          exact: true,
+        })
+        .getByRole("button", { name: "Dismiss reminder", exact: true })
+        .click();
+      await expect(review).toHaveCount(0);
+    },
+  );
+  await check(
+    "switching start choice invalidates a pending file read and cannot restore it later",
+    async () => {
+      await page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await dialog.locator('input[type="file"]').setInputFiles({
+        name: "delayed-late.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(
+          '{"sources":{"late":{"type":"demo_logs","format":"json"}},"sinks":{"output":{"type":"blackhole","inputs":["late"]}}}',
+        ),
+      });
+      await expect
+        .poll(() => page.evaluate(() => window.__pendingFileReads.length))
+        .toBe(1);
+      await dialog
+        .getByText("Try a synthetic example", { exact: true })
+        .click();
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue(
+        "Synthetic demo",
+      );
+      await page.evaluate(() => window.__pendingFileReads.shift().resolve());
+      await delay(100);
+      await dialog.getByText("Import a Vector config", { exact: true }).click();
+      await expect(dialog.locator(".pipeline-start-import-result")).toHaveCount(
+        0,
+      );
+      await expect(dialog.getByLabel("Pipeline name")).toHaveValue("");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+    },
+  );
+  await check(
     "real App preserves search, archive filter, sort and page across library remount",
     async () => {
       await page.getByLabel("Search pipelines").fill("blue");
@@ -244,13 +605,11 @@ try {
       await expect(
         page.locator(".pipeline-library-table tbody tr"),
       ).toHaveCount(1);
-      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.getByRole("link", { name: "Overview", exact: true }).click();
       await expect(
         page.getByRole("heading", { name: "Overview", exact: true }),
       ).toBeVisible();
-      await page
-        .getByRole("button", { name: "Pipelines", exact: true })
-        .click();
+      await page.getByRole("link", { name: "Pipelines", exact: true }).click();
       await expect(page.getByLabel("Search pipelines")).toHaveValue("blue");
       await expect(
         page.getByRole("button", {
@@ -314,11 +673,155 @@ try {
     },
   );
   await check(
+    "a failed refresh keeps the pipelines dimmed under one message with Retry, the header says so, and phones get cards",
+    async () => {
+      const rows = page.locator(".pipeline-library-table tbody tr");
+      await expect(rows).toHaveCount(12);
+      failing = true;
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      const alert = page.getByRole("alert").filter({
+        hasText: "Couldn't refresh pipelines.",
+      });
+      await expect(alert).toContainText("Showing data from");
+      await expect(rows).toHaveCount(12);
+      await expect(page.locator(".pipeline-library-table")).toHaveAttribute(
+        "data-stale",
+        "",
+      );
+      await expect(page.locator(".live-status")).toContainText(
+        "Stale · last update",
+      );
+      await page.screenshot({
+        path: resolve(output, "stale-desktop.png"),
+        animations: "disabled",
+      });
+      failing = false;
+      await alert.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(alert).toHaveCount(0);
+      await expect(page.locator(".live-status")).toContainText("Updated");
+      // Phones read the list as cards: name, published state and where it runs.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const cards = page
+        .getByRole("list", { name: "Pipeline library", exact: true })
+        .locator("li.data-list-item");
+      await expect(cards).toHaveCount(12);
+      await expect(cards.first()).toContainText("Not published");
+      await expect(cards.first().getByRole("link")).toHaveAttribute(
+        "href",
+        /^#\/configurations\//,
+      );
+      const appearance = await page.evaluate(
+        () => document.documentElement.dataset.theme ?? null,
+      );
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (theme) => (document.documentElement.dataset.theme = theme),
+          theme,
+        );
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        await page.screenshot({
+          path: resolve(output, `mobile-${theme}.png`),
+          animations: "disabled",
+        });
+      }
+      await page.evaluate((theme) => {
+        if (theme === null) delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = theme;
+      }, appearance);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await expect(rows).toHaveCount(12);
+    },
+  );
+  await check(
+    "a row whose latest version no device runs says how its newest rollout ended, linked to it, on desktop and phone",
+    async () => {
+      // Rows that publish nothing read no rollout history.
+      expect(historyReads).toEqual([]);
+      published = true;
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      const first = page.locator(".pipeline-library-table tbody tr").first();
+      await expect(first).toContainText(
+        "Running v2 on 3 of 3 · v4 not running",
+      );
+      const outcome = first.getByRole("link", {
+        name: "v4 failed on 1 device",
+      });
+      await expect(outcome).toHaveAttribute(
+        "href",
+        `#/deployments/${failedRollout.id}`,
+      );
+      await expect(first.locator(".pipeline-status-outcome")).toContainText(
+        /v4 failed on 1 device · 1[12]m ago/,
+      );
+      // Bounded: the newest 20 of each ending, and nothing else.
+      await expect
+        .poll(() =>
+          historyReads
+            .map(({ status, page: n, page_size }) => [status, n, page_size])
+            .sort(),
+        )
+        .toEqual([
+          ["failed", "1", "20"],
+          ["rolled_back", "1", "20"],
+        ]);
+      // Other rows stay as they were.
+      await expect(
+        page.locator(".pipeline-library-table tbody tr").nth(1),
+      ).not.toContainText("failed on");
+      // Phones read the same line in the card.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const card = page
+        .getByRole("list", { name: "Pipeline library", exact: true })
+        .locator("li.data-list-item")
+        .first();
+      await expect(
+        card.getByRole("link", { name: "v4 failed on 1 device" }),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(output, "outcome-mobile.png"),
+        animations: "disabled",
+      });
+      // Once the devices run that version, the row says nothing about the failure.
+      running = 4;
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      await expect(
+        page.locator(".pipeline-library-table tbody tr").first(),
+      ).toContainText("Running v4 on 3 of 3");
+      await expect(page.locator(".pipeline-status-outcome")).toHaveCount(0);
+      published = false;
+      running = 2;
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      await expect(
+        page.locator(".pipeline-library-table tbody tr").first(),
+      ).toContainText("Not published");
+    },
+  );
+  await check(
     "whitespace-only search uses the unfiltered empty-library guidance",
     async () => {
       empty = true;
       await page.getByLabel("Search pipelines").fill("   ");
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(
         page.getByRole("heading", {
           name: "Create your first pipeline",

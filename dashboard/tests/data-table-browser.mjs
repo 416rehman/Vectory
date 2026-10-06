@@ -1,7 +1,7 @@
 // Shared table interactions against isolated synthetic rows, never a real API.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,26 @@ try {
   results.push(
     "Keyboard option selection, outside dismissal, and persistent headers during loading",
   );
+  // The field reset must not remove the keyboard focus ring from checkboxes
+  // and radios (they draw an outline, not a field ring).
+  await page
+    .getByRole("button", { name: "Toggle loading", exact: true })
+    .focus();
+  for (const [role, name] of [
+    ["checkbox", "Synthetic checkbox"],
+    ["radio", "Synthetic radio"],
+  ]) {
+    await page.keyboard.press("Tab");
+    const control = page.getByRole(role, { name, exact: true });
+    await expect(control).toBeFocused();
+    const ring = await control.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { style: style.outlineStyle, width: style.outlineWidth };
+    });
+    expect(ring.style, `${name} focus outline`).not.toBe("none");
+    expect(ring.width, `${name} focus outline width`).not.toBe("0px");
+  }
+  results.push("Checkboxes and radios show a keyboard focus ring");
   for (const theme of ["light", "dark"])
     for (const width of [899, 375]) {
       await page.setViewportSize({ width, height: 884 });
@@ -128,6 +148,16 @@ try {
       }));
       expect(bounds.page).toBeLessThanOrEqual(bounds.viewport + 1);
       measurements.push({ width, theme, ...bounds });
+      // Only a region that scrolls sideways is a keyboard stop.
+      const region = page.getByRole("region", {
+        name: "Synthetic devices table",
+        exact: true,
+      });
+      if (
+        await region.evaluate((node) => node.scrollWidth > node.clientWidth + 1)
+      )
+        await expect(region).toHaveAttribute("tabindex", "0");
+      else await expect(region).not.toHaveAttribute("tabindex");
       const scan = await new AxeBuilder({ page }).analyze();
       expect(scan.violations).toEqual([]);
       accessibility.push({ width, theme, violations: scan.violations.length });

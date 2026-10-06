@@ -1,6 +1,11 @@
 {
   admin off
   auto_https off
+  # The 0.1 release serves the dashboard through HTTP/1.1. Enable h2 only
+  # after the patched proxy passes a separate HTTP/2 integration check.
+  servers {
+    protocols h1
+  }
 }
 https://{$VECTORY_HOSTNAME}:8443 {
   tls /run/secrets/server_cert /run/secrets/server_key {
@@ -16,6 +21,9 @@ https://{$VECTORY_HOSTNAME}:8443 {
   @agent path /agent/*
   respond @agent 404
   reverse_proxy server:8080 {
+    # The server trusts the last X-Forwarded-For hop (VECTORY_TRUST_PROXY_HEADERS);
+    # replace any client-supplied value with the address Caddy sees.
+    header_up X-Forwarded-For {remote_host}
     header_up -X-Client-Cert
     header_up -X-SSL-Client-Cert
     header_up -X-Forwarded-Client-Cert

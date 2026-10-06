@@ -48,7 +48,7 @@ func TestInstallOptionsRejectAllInputsBeforeExistingMutation(t *testing.T) {
 
 func TestInstallOptionsComposeOnceWithExplicitPresence(t *testing.T) {
 	f := maintenanceFixture(t)
-	secret := filepath.Join(t.TempDir(), "synthetic-secret")
+	secret := filepath.Join(privateTempDir(t), "synthetic-secret")
 	if err := AtomicWrite(secret, []byte("synthetic-placeholder")); err != nil {
 		t.Fatal(err)
 	}

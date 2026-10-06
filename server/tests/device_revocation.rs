@@ -51,6 +51,7 @@ async fn fixture() -> (
         releases_dir: temp.path().join("releases"),
         instance_name: "Saved settings request tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -553,4 +554,81 @@ async fn renewal_and_revocation_serialize_and_no_current_credential_survives() {
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(audits(&s, "device.revoke").await, 1);
+}
+#[tokio::test]
+async fn revocation_resolves_the_devices_open_issues_and_overview_stops_counting_them() {
+    let (_temp, s, app, ids, c, t) = fixture().await;
+    let issue = |device: &str, code: &str, stage: &str, acknowledged: bool| json!({"id":db::hash(format!("{device}:{code}")),"device_id":device,"code":code,"stage":stage,"count":1,"reports":1,"first_seen":db::now(),"last_seen":db::now(),"resolved":false,"acknowledged":acknowledged,"revision":1});
+    let revoked = &ids[0];
+    let mut conn = s.pool.acquire().await.unwrap();
+    for record in [
+        issue(revoked, "VALIDATION_FAILED", "validate", false),
+        issue(revoked, "DATA_PLANE_SINK_ERRORS", "delivery", false),
+        issue(revoked, "APPLY_FAILED", "apply", true),
+        issue(&ids[1], "VALIDATION_FAILED", "validate", false),
+    ] {
+        db::insert(&mut conn, "issue", &record).await.unwrap();
+    }
+    sqlx::query("INSERT INTO data_plane_state(device_id,data) VALUES(?,'{}')")
+        .bind(revoked)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.data_plane',json('{\"version_id\":\"v\",\"evaluations\":3,\"issues\":[]}')) WHERE id=?")
+        .bind(revoked)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let (code, before) = call(&app, "GET", "/api/v1/overview", Value::Null, &c, &t).await;
+    assert_eq!(code, StatusCode::OK, "{before}");
+    assert_eq!(before["issues_open"], 3, "acknowledged issues never count");
+
+    assert_eq!(revoke(&app, revoked, &c, &t).await.0, StatusCode::OK);
+    let (_, after) = call(&app, "GET", "/api/v1/overview", Value::Null, &c, &t).await;
+    assert_eq!(
+        after["issues_open"], 1,
+        "only the live device's issue is open"
+    );
+    let (code, resolved) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/issues/history?state=resolved&device_id={revoked}"),
+        Value::Null,
+        &c,
+        &t,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{resolved}");
+    assert_eq!(resolved["total"], 3, "{resolved}");
+    for item in resolved["items"].as_array().unwrap() {
+        assert_eq!(item["resolved_reason"], "revoked", "{item}");
+        assert_eq!(item["revision"], 2, "{item}");
+        assert_eq!(item["device_revoked"], true, "{item}");
+    }
+    let (_, open) = call(
+        &app,
+        "GET",
+        "/api/v1/issues/history?state=open",
+        Value::Null,
+        &c,
+        &t,
+    )
+    .await;
+    assert_eq!(open["total"], 1, "{open}");
+    assert_eq!(open["items"][0]["device_id"], ids[1].as_str());
+    // Nothing is left to evaluate for an identity that can't check in.
+    let state: i64 = sqlx::query_scalar("SELECT count(*) FROM data_plane_state WHERE device_id=?")
+        .bind(revoked)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(state, 0);
+    let summary: Option<String> =
+        sqlx::query_scalar("SELECT json_extract(data,'$.data_plane') FROM devices WHERE id=?")
+            .bind(revoked)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(summary, None);
 }

@@ -110,7 +110,7 @@ try:
         'email':'admin@example.invalid','password':password})
     csrf=boot['csrf_token'];root_id=boot['user']['id']
     target=api('/users',{'name':'Synthetic colleague','email':'colleague@example.invalid',
-        'password':password,'role':'viewer'})['id']
+        'password':password,'role':'viewer','current_password':password})['id']
     path=f'/users/{target}'
     first_key=str(uuid.uuid4());first_path=exact(target,first_key)
     assert api(first_path)=={'request_id':first_key,'user_id':target,'status':'not_found'}
@@ -130,7 +130,7 @@ try:
     assert audits('user.update')==1
 
     admin2=api('/users',{'name':'Second administrator','email':'admin2@example.invalid',
-        'password':password,'role':'admin'})
+        'password':password,'role':'admin','current_password':password})
     other_jar=http.cookiejar.CookieJar()
     other_client=urllib.request.build_opener(urllib.request.ProxyHandler({}),
         urllib.request.HTTPCookieProcessor(other_jar))

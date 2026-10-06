@@ -5,6 +5,7 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       RUSTUP_TOOLCHAIN: 1.94.0
     steps:
@@ -30,6 +31,7 @@ jobs:
           VECTORY_SECURITY_SERVER: ${{ github.workspace }}/server/target/debug/vectory-server
   dashboard:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: dashboard
@@ -46,160 +48,407 @@ jobs:
       - run: npm ci
         working-directory: help-center
       - run: npm test
+      - name: Check dashboard formatting
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: npx prettier --check src tests e2e
       - name: Check typed variable wire schemas
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
         run: node ../tests/variable-contract.mjs
-      - name: Check canonical Markdown and help link validation
-        run: node --test help-center/scripts/markdown.test.mjs help-center/scripts/check-links.test.mjs
+      # tests/contracts.mjs needs a live instance with data, so it runs in the
+      # end-to-end job after the workflow.
+      - name: Check the generated OpenAPI and protocol schemas are current
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
         working-directory: .
-      - run: npm run build
+        run: |
+          node contracts/generate.mjs
+          if [ -n "$(git status --porcelain -- contracts)" ]; then
+            git status --short -- contracts
+            git --no-pager diff --stat -- contracts
+            echo "::error::contracts/ is not what contracts/generate.mjs produces. Run node contracts/generate.mjs and commit the result."
+            exit 1
+          fi
+      - name: Check the agent update vectors, report bounds and examples are current
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        working-directory: .
+        run: node contracts/fixtures/agent-release/generate.mjs --check
+      - name: Check generated Vector catalog, VRL reference and device-secret tables are current
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/generate-vector-catalog.mjs --check
+          node scripts/generate-vrl-functions.mjs --check
+          node scripts/generate-secret-fields.mjs --check
+        working-directory: .
+      # The capability table's copies are current; every component has a tier
+      # and every resource-like field of a reviewed one a rule, against the
+      # pinned schema; the golden fixtures follow from the table. The agent
+      # job validates the fixtures' configurations with the pinned Vector.
+      - name: Check the capability table, its completeness and its golden fixtures
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/generate-capability-table.test.mjs scripts/check-capability-fixtures.test.mjs
+          node scripts/generate-capability-table.mjs --check
+          node scripts/check-capability-fixtures.mjs
+        working-directory: .
+      - name: Check help Markdown, links, writing rules and reference drift
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: node --test help-center/scripts/*.test.mjs
+        working-directory: .
+      - name: Check that repository records link only to committed files
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-doc-links.test.mjs
+          node scripts/check-doc-links.mjs
+        working-directory: .
+      - name: Check the requirements checklist against the specification and the repository
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-requirements.test.mjs
+          node scripts/check-requirements.mjs
+        working-directory: .
+      - name: Check no two tracked files collide on a case-insensitive disk
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-file-names.test.mjs
+          node scripts/check-file-names.mjs
+        working-directory: .
+      - name: Check every bash step of the workflows parses
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-workflow-scripts.test.mjs
+          node scripts/check-workflow-scripts.mjs
+        working-directory: .
+      - name: Check synthetic screenshot telemetry readiness
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: node --test scripts/capture-screenshots.test.mjs
+        working-directory: .
+      - name: Check every part of the product says the same version
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-versions.test.mjs
+          node scripts/check-versions.mjs
+        working-directory: .
+      - id: build
+        if: ${{ !cancelled() }}
+        run: npm run build
       - run: npx playwright install --with-deps chromium
-      - run: node ../tests/security/resource-race.mjs
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      - name: Check the shared resource hook against stale, slow and interleaved replies
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/resource-race.mjs
+        working-directory: .
+        env:
+          VECTORY_RESOURCE_RACE_EVIDENCE: artifacts/resource-race.json
       - name: Check shared column sorting, filtering and keyboard access
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/data-table-browser.mjs
       - name: Check fleet, group, policy and target tables
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/fleet-tables-browser.mjs
         env:
           VECTORY_FLEET_TABLES_OUTPUT: artifacts/fleet-tables
+      - name: Check one page header, the first Tab stop and dialog focus return
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/page-chrome-browser.mjs
+        env:
+          VECTORY_PAGE_CHROME_OUTPUT: artifacts/page-chrome
       - name: Check library session boundaries and navigation state
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-library-browser.mjs
         env:
           VECTORY_LIBRARY_COMPONENT_OUTPUT: artifacts/pipeline-library-component
       - name: Check pipeline creation recovery and missing-name feedback
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-create-recovery-browser.mjs
         env:
           VECTORY_PIPELINE_CREATION_OUTPUT: artifacts/pipeline-creation-recovery
       - name: Check enrollment identity and pending-token boundaries
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/enrollment-browser.mjs
         env:
           VECTORY_ENROLLMENT_COMPONENT_OUTPUT: artifacts/enrollment-component
       - name: Check bounded deployment navigation and actions
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/deployments-browser.mjs
         env:
           VECTORY_DEPLOYMENTS_COMPONENT_OUTPUT: artifacts/deployments-component
       - name: Check issue disposition, review races and accessibility
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/issues-browser.mjs
         env:
           VECTORY_ISSUES_COMPONENT_OUTPUT: artifacts/issues-component
+      - name: Check notification channels, delivery log, detection thresholds and the setup tip
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/notifications-browser.mjs
+        env:
+          VECTORY_NOTIFICATIONS_OUTPUT: artifacts/notifications-component
       - name: Check audit browsing, reviewed exports and accessible navigation
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/audit-browser.mjs
         env:
           VECTORY_AUDIT_COMPONENT_OUTPUT: artifacts/audit-component
       - name: Check people and telemetry column sorting, filtering and accessibility
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/account-metrics-tables-browser.mjs
         env:
           VECTORY_ACCOUNT_METRICS_TABLES_OUTPUT: artifacts/account-metrics-tables
       - name: Check deployment permalinks and navigation boundaries
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/deployment-routing-browser.mjs
         env:
           VECTORY_DEPLOYMENT_ROUTING_OUTPUT: artifacts/deployment-routing
       - name: Check staged sign-in and partial-authentication UI boundaries
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/staged-login-browser.mjs
         env:
           VECTORY_STAGED_LOGIN_OUTPUT: artifacts/staged-login
-      - name: Check local authenticator QR, recovery handoff and accessibility
+      - name: Check local authenticator QR, recovery codes and accessibility
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/authenticator-setup-browser.mjs
         env:
           VECTORY_AUTHENTICATOR_SETUP_OUTPUT: artifacts/authenticator-setup
       - name: Check mobile authenticator action layout
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/authenticator-setup-browser.mjs
         env:
           VECTORY_AUTHENTICATOR_SETUP_FOCUS: mobile-footer
           VECTORY_AUTHENTICATOR_SETUP_OUTPUT: artifacts/authenticator-mobile-footer
       - name: Check contextual page help and unfinished editor fields
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/page-help-browser.mjs
         env:
           VECTORY_PAGE_HELP_OUTPUT: artifacts/page-help
       - name: Check collapsible sidebar, mobile focus and editor resizing
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/sidebar-browser.mjs
         env:
           VECTORY_SIDEBAR_OUTPUT: artifacts/sidebar-navigation
+      - name: Check uncertain account sign-outs and acting-session ownership
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/account-actions-browser.mjs
+      - name: Check the command palette, shortcuts and search results
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/command-palette-browser.mjs
       - name: Check Overview actions and typed activity destinations
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/overview-browser.mjs
         env:
           VECTORY_OVERVIEW_OUTPUT: artifacts/overview-navigation
       - name: Check canvas creation, named connections and pending-edit guards
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas
+      - name: Check dragging then Undo restores the saved draft
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/editor-canvas-browser.mjs
+        env:
+          VECTORY_EDITOR_CANVAS_FOCUS: drag-undo
+          VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-drag-undo
       - name: Check rich code editing and reviewed file import boundaries
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-code-import-browser.mjs
         env:
           VECTORY_EDITOR_CODE_IMPORT_OUTPUT: artifacts/editor-code-import
       - name: Check pipeline candidate, schema and discarded Code results
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-check-schema-browser.mjs
       - name: Check component inspector fields, raw JSON and accessibility
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/inspector-browser.mjs
         env:
           VECTORY_INSPECTOR_OUTPUT: artifacts/inspector-component
       - name: Check compact component search results at desktop and mobile widths
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_FOCUS: menu-layout
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-menu-layout
       - name: Check pipeline validation results stay inside narrow viewports
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_FOCUS: check-results
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-check-results
       - name: Check pipeline validation states and operator preflight
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_FOCUS: check-state
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-check-state
       - name: Check enrollment connection and service setup guidance
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/enrollment-connection-browser.mjs
         env:
           VECTORY_ENROLLMENT_CONNECTION_OUTPUT: artifacts/enrollment-connection
       - run: rustup toolchain install 1.94.0 --profile minimal
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
       - name: Build the isolated help test server
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bin vectory-server
         working-directory: .
       - name: Exercise bundled help and account workflows on a fresh instance
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node help-center/tests/ci.mjs
         working-directory: .
         env:
           VECTORY_HELP_ACCOUNT_TESTS: "true"
           VECTORY_HELP_CI_OUTPUT: artifacts/help-account-ci
       - name: Verify staged MFA, account authorization and reset races on isolated instances
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/account-review.mjs
         working-directory: .
         env:
           VECTORY_ACCOUNT_EVIDENCE: artifacts/account-review.json
       - name: Verify pipeline lifecycle authorization and immutable history
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/pipeline-review.mjs
         working-directory: .
         env:
           VECTORY_PIPELINE_EVIDENCE: artifacts/pipeline-review.json
       - name: Verify bounded library metadata and query isolation
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/library-review.mjs
         working-directory: .
         env:
           VECTORY_LIBRARY_EVIDENCE: artifacts/library-review.json
       - name: Verify rollback priority and transaction boundaries
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/rollback-review.mjs
         working-directory: .
         env:
           VECTORY_ROLLBACK_EVIDENCE: artifacts/rollback-review.json
       - name: Verify bounded deployment history and target isolation
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/deployment-history-review.mjs
         working-directory: .
         env:
           VECTORY_DEPLOYMENT_HISTORY_EVIDENCE: artifacts/deployment-history-review.json
       - name: Verify durable audit chronology and migration boundaries
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/audit-order-review.mjs
         working-directory: .
         env:
           VECTORY_AUDIT_ORDER_EVIDENCE: artifacts/audit-order-review.json
       - name: Verify issue acknowledgement authorization and transactions
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/issue-review.mjs
         working-directory: .
         env:
           VECTORY_ISSUE_EVIDENCE: artifacts/issue-review.json
       - name: Verify bounded audit queries and private snapshot export lifecycle
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/audit-review.mjs
         working-directory: .
         env:
           VECTORY_AUDIT_EVIDENCE: artifacts/audit-review.json
+      - name: Check the resource hook's polling, deadlines and cancellation with controlled timers
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/resource-polling.mjs
+        working-directory: .
+        env:
+          VECTORY_RESOURCE_REPORT: artifacts/resource-polling.json
+      - name: Check pinned Vector schema fixtures round-trip losslessly
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/schema-fixtures.mjs
+        working-directory: .
+        env:
+          VECTORY_SCHEMA_FIXTURES_EVIDENCE: artifacts/schema-fixtures.json
+      - name: Check schema controls keep values through rename, reorder and null
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/schema-review.mjs
+        working-directory: .
+        env:
+          VECTORY_SCHEMA_REVIEW_EVIDENCE: artifacts/schema-review.json
+      - name: Check failed page loads recover inside the production build
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/lazy-page-recovery-review.mjs
+        working-directory: .
+        env:
+          VECTORY_LAZY_PAGE_OUTPUT: artifacts/lazy-page-recovery
+      - name: Check the device page never shows or acts on another record's reply
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-identity-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_IDENTITY_OUTPUT: artifacts/device-identity
+      - name: Check retried application keeps its reviewed preconditions
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-retry-context-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_RETRY_CONTEXT_OUTPUT: artifacts/device-retry-context
+      - name: Check revoking a device confirms from its exact status
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-revocation-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_REVOCATION_OUTPUT: artifacts/device-revocation
+      - name: Check authorizing device recovery shows its token once and never resends
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-recovery-request-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT: artifacts/device-recovery-request
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -238,31 +487,174 @@ jobs:
             artifacts/audit-order-review.json
             artifacts/issue-review.json
             artifacts/audit-review.json
+            artifacts/resource-race.json
+            artifacts/resource-polling.json
+            artifacts/schema-fixtures.json
+            artifacts/schema-review.json
+            artifacts/lazy-page-recovery
+            artifacts/device-identity
+            artifacts/device-retry-context
+            artifacts/device-revocation
+            artifacts/device-recovery-request
+            artifacts/page-chrome
           if-no-files-found: warn
   agent:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        # The official Vector 0.58.0 release archive for each runner, pinned by
+        # the SHA-256 that vector-0.58.0-SHA256SUMS lists for it.
+        include:
+          - os: ubuntu-24.04
+            vector-archive: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+            vector-sha256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+            vector-binary: vector-x86_64-unknown-linux-gnu/bin/vector
+          - os: windows-2025
+            vector-archive: vector-0.58.0-x86_64-pc-windows-msvc.zip
+            vector-sha256: 72bbedf4772302f7f67e7db2120fe5b42e39ae65873c895876fc2038050c10c5
+            vector-binary: bin/vector.exe
+          - os: macos-15
+            vector-archive: vector-0.58.0-arm64-apple-darwin.tar.gz
+            vector-sha256: 9182491597f1bdedb08d84a051616c62deea770a9d905b697712cc6526919449
+            vector-binary: vector-arm64-apple-darwin/bin/vector
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
-      - run: go test ./...
+      # Native agent tests (drain, reload and rollback, telemetry, secret
+      # rotation, full mode) run only when VECTOR_TEST_BINARY is set. A checksum
+      # mismatch fails the job; it never falls back to skipping them.
+      - name: Provide pinned Vector for native agent tests
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VECTOR_ARCHIVE: ${{ matrix.vector-archive }}
+          VECTOR_SHA256: ${{ matrix.vector-sha256 }}
+          VECTOR_BINARY: ${{ matrix.vector-binary }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | shasum -a 256 -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/$VECTOR_BINARY"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTOR_TEST_BINARY=$binary" >> "$GITHUB_ENV"
+      - name: Provide pinned Vector for native agent tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VECTOR_ARCHIVE: ${{ matrix.vector-archive }}
+          VECTOR_SHA256: ${{ matrix.vector-sha256 }}
+          VECTOR_BINARY: ${{ matrix.vector-binary }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP $env:VECTOR_ARCHIVE
+          Invoke-WebRequest -Uri "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$env:VECTOR_ARCHIVE" -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:VECTOR_SHA256) { throw "Checksum mismatch for $($env:VECTOR_ARCHIVE): expected $($env:VECTOR_SHA256), got $actual" }
+          $destination = Join-Path $env:RUNNER_TEMP 'vector'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binary = (Get-Item -LiteralPath (Join-Path $destination $env:VECTOR_BINARY)).FullName
+          $version = & $binary --version
+          Write-Output $version
+          if ($LASTEXITCODE -ne 0 -or -not "$version".StartsWith('vector 0.58.0 ')) { throw "Unexpected Vector build at ${binary}: $version" }
+          "VECTOR_TEST_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append
+      # The JSON stream is the evidence that the native tests ran: the check
+      # after it fails when one skipped although VECTOR_TEST_BINARY is set, and
+      # prints the output of every failure, which the stream keeps out of this log.
+      - name: Run the agent tests (go test -json)
+        if: runner.os != 'Windows'
+        timeout-minutes: 10
+        shell: bash
         working-directory: agent
+        run: |
+          mkdir -p ../artifacts
+          go test -json ./... > ../artifacts/agent-go-test.json
+      - name: Run the agent tests (go test -json)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        working-directory: agent
+        run: |
+          New-Item -ItemType Directory -Force -Path ../artifacts | Out-Null
+          go test -json ./... > ../artifacts/agent-go-test.json
+          exit $LASTEXITCODE
+      # The path check that guards the update policy and the install directory
+      # is judged on a tree root really owns; the normal run is unprivileged, so
+      # its real-root tests skip there. Root gets its own build cache so nothing
+      # root-owned is left in the runner's.
+      - name: Run the root-owned path check as root
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        timeout-minutes: 10
+        working-directory: agent
+        run: sudo -E env "PATH=$PATH" GOCACHE=/tmp/vectory-go-cache-root go test -count=1 -run 'RootOwnedChecksOnReal|PosixAccessList' ./internal/agent
+      # The update step's tests that need root (a hard link to a root-owned file,
+      # another account's health record, the probe's switch of account, root as
+      # the service account) skip when unprivileged, so they run once as root.
+      - name: Run the update step's tests as root
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        timeout-minutes: 15
+        working-directory: agent
+        run: |
+          tests="$(grep -h -o '^func Test[A-Za-z0-9_]*' internal/agent/update_*_test.go | grep -v '^func TestNative' | sed 's/func //' | paste -sd '|' -)"
+          sudo -E env "PATH=$PATH" GOCACHE=/tmp/vectory-go-cache-root go test -count=1 -run "^($tests)\$" ./internal/agent
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+      - name: Unit-test the native test check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: node --test scripts/check-native-tests.test.mjs
+      - name: Prove the native tests ran with the pinned Vector
+        if: ${{ !cancelled() && hashFiles('artifacts/agent-go-test.json') != '' }}
+        timeout-minutes: 10
+        run: node scripts/check-native-tests.mjs artifacts/agent-go-test.json --require-native
+      - name: Validate the capability fixtures with the pinned Vector
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        timeout-minutes: 10
+        run: node scripts/check-capability-fixtures.mjs --require-vector
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() && hashFiles('artifacts/agent-go-test.json') != '' }}
+        timeout-minutes: 10
+        with:
+          name: agent-go-test-${{ matrix.os }}
+          path: artifacts/agent-go-test.json
+          if-no-files-found: error
       - run: go vet ./...
         working-directory: agent
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
         working-directory: agent
   operational:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: "3.13" }
       - run: python -m unittest discover -s tests/security -p 'test_*.py' -v
       - run: python packaging/test_verify_release.py
+      - name: Unit-test the npm advisory gate
+        timeout-minutes: 10
+        run: python packaging/test_audit_npm.py
+      - name: Check that the packaged systemd unit keeps its sandbox
+        timeout-minutes: 10
+        run: python packaging/test_systemd_unit.py
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Check the writing rules (no process vocabulary, personal paths or session links)
+        timeout-minutes: 10
+        run: |
+          node --test scripts/check-writing-rules.test.mjs
+          node scripts/check-writing-rules.mjs
       - run: docker compose -f deploy/compose.yaml config --quiet
         env:
           VECTORY_HOSTNAME: localhost
@@ -271,3 +663,682 @@ jobs:
           VECTORY_BOOTSTRAP_SECRET_FILE: /tmp/bootstrap
       - run: docker build -f deploy/Dockerfile -t vectory-ci .
       - run: docker build -f deploy/Dockerfile --target validator -t vectory-validator-ci .
+  # Specification section 15, first acceptance test, on a fresh instance: the
+  # first administrator, the agent downloaded from the release listing and
+  # checked by SHA-256, then install, enroll, publish, assign, heartbeat,
+  # fetch, validate, activate and observe with the pinned Vector. The Add
+  # device installer, the live API schemas and the starter pipelines follow.
+  end-to-end:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
+      VECTORY_NATIVE_WORKFLOW_OUTPUT: artifacts/end-to-end
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - name: Install the dashboard packages the checks load
+        timeout-minutes: 10
+        working-directory: dashboard
+        run: npm ci
+      - name: Build the dashboard the instance serves
+        id: dashboard
+        timeout-minutes: 10
+        run: |
+          (cd help-center && npm ci)
+          (cd dashboard && npm run build)
+      - name: Build the server, the validator and vectory-admin
+        timeout-minutes: 10
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+      - name: Provide the pinned Vector 0.58.0
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+          VECTOR_SHA256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | sha256sum -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/vector-x86_64-unknown-linux-gnu/bin/vector"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTORY_PREVIEW_VECTOR=$binary" >> "$GITHUB_ENV"
+          echo "VECTORY_VECTOR_BIN=$binary" >> "$GITHUB_ENV"
+      - name: Start a fresh instance with the real validator and agents for every platform
+        id: instance
+        timeout-minutes: 10
+        run: scripts/preview.sh start
+      - name: Run the clean-install workflow with the downloaded agent
+        id: workflow
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/native-workflow.mjs
+      - name: Install and enroll a second device with the Add device installer
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          VECTORY_URL: http://127.0.0.1:8080
+          VECTORY_CA_FILE: ${{ github.workspace }}/.local/pki/ca.pem
+          VECTORY_CREDENTIALS: ${{ github.workspace }}/.local/preview/credentials.json
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ github.workspace }}/.local/preview/bootstrap.secret
+        run: node scripts/check-installer.mjs --output artifacts/end-to-end
+      - name: Check live API responses against the shared schemas
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          mkdir -p docs/evidence artifacts/end-to-end
+          node tests/contracts.mjs
+          cp docs/evidence/contract-tests.json artifacts/end-to-end/
+      - name: Run a real agent against the compiled server's agent-update offers
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: agent
+        env:
+          VECTORY_TEST_SERVER: ${{ github.workspace }}/server/target/debug/vectory-server
+        run: go test -count=1 -v -run TestAnAgentTakesAnOfferFromTheServer ./internal/agent
+      # Installed only here, so a failed browser download never hides the
+      # results above.
+      - name: Install Chromium for the dashboard specs
+        id: chromium
+        if: ${{ !cancelled() && steps.dashboard.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: dashboard
+        run: npx playwright install --with-deps chromium
+      # The dashboard specs that pass against a real instance with this data;
+      # the others and why are in docs/internal/CI.md.
+      - name: Run the dashboard specs against the instance, including a 201-component pipeline
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: dashboard
+        env:
+          VECTORY_UI_URL: http://127.0.0.1:8080
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/artifacts/end-to-end/dashboard-specs.json
+        run: |
+          mkdir -p ../docs/evidence
+          npx playwright test e2e/concurrency.spec.ts e2e/issues-history.spec.ts e2e/performance.spec.ts e2e/pipeline-create-entry.spec.ts e2e/stale-draft-recovery.spec.ts --reporter=list,json
+          cp ../docs/evidence/browser-performance.json ../artifacts/end-to-end/
+      - name: Validate every starter pipeline with the pinned Vector
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: node tests/templates.mjs
+      - name: Stop the agent and the instance, and collect their logs
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set +e
+          mkdir -p artifacts/end-to-end/logs
+          run="$VECTORY_PREVIEW_DIR/native-run.json"
+          if [ -f "$run" ]; then
+            pid=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).pid' "$run")
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -TERM "$pid"
+              for _ in $(seq 1 90); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+              kill -0 "$pid" 2>/dev/null && kill -KILL "$pid"
+            fi
+          fi
+          scripts/preview.sh stop
+          cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log artifacts/end-to-end/logs/
+          # Logs only: the agent's state folder also holds its private key.
+          for dir in "$GITHUB_WORKSPACE"/.local/native\ workflow\ */; do
+            cp "$dir"agent.log "$dir"agent-error.log "$dir"state/vector.log* artifacts/end-to-end/logs/
+          done
+          exit 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: end-to-end
+          path: |
+            artifacts/end-to-end
+            dashboard/test-results
+          if-no-files-found: warn
+  # The source-build contributor Compose path: a private CA, protected secret
+  # files, deploy/.env, build, start, first
+  # administrator, a device enrolled through the published agent port with the
+  # agent bundled in the image, and the validator's isolation, probed from inside.
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: deploy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+      - name: Create a private CA, the certificate chain and the bootstrap secret
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          go run ../packaging/dev-pki/main.go --out "$RUNNER_TEMP/pki" --hosts localhost,127.0.0.1
+          (umask 077 && openssl rand -hex 32 > "$RUNNER_TEMP/bootstrap")
+          # Readable by the containers' group (10001) only, as the install guide says.
+          sudo install -d -m 0750 -g 10001 /etc/vectory
+          cat "$RUNNER_TEMP/pki/server.pem" "$RUNNER_TEMP/pki/ca.pem" | sudo install -m 0440 -g 10001 /dev/stdin /etc/vectory/server.pem
+          sudo install -m 0440 -g 10001 "$RUNNER_TEMP/pki/server-key.pem" /etc/vectory/server-key.pem
+          sudo install -m 0440 -g 10001 "$RUNNER_TEMP/bootstrap" /etc/vectory/bootstrap
+          cp .env.example .env
+          sed -i -e 's#^VECTORY_HOSTNAME=.*#VECTORY_HOSTNAME=localhost#' \
+            -e 's#^VECTORY_BIND_IP=.*#VECTORY_BIND_IP=127.0.0.1#' \
+            -e 's#^VECTORY_TLS_CERT_FILE=.*#VECTORY_TLS_CERT_FILE=/etc/vectory/server.pem#' \
+            -e 's#^VECTORY_TLS_KEY_FILE=.*#VECTORY_TLS_KEY_FILE=/etc/vectory/server-key.pem#' \
+            -e 's#^VECTORY_BOOTSTRAP_SECRET_FILE=.*#VECTORY_BOOTSTRAP_SECRET_FILE=/etc/vectory/bootstrap#' .env
+      - name: Check the resolved configuration isolates the validator
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          docker compose config --quiet
+          docker compose config --format json > "$RUNNER_TEMP/compose.json"
+          jq -e '
+            .networks.validation.internal == true
+            and (.services.validator.networks | keys) == ["validation"]
+            and ((.services.validator.ports // []) | length) == 0
+            and ((.services.validator.secrets // []) | length) == 0
+            and ((.services.validator.volumes // []) | length) == 0
+            and .services.validator.read_only == true
+            and .services.validator.cap_drop == ["ALL"]
+            and .services.validator.user == "10002:10002"
+            and (.services.validator.mem_limit | tostring) == "536870912"
+            and (.services.validator.cpus | tonumber) == 1
+            and (.services.validator.pids_limit | tonumber) == 64
+            and .services.server.depends_on.validator.condition == "service_healthy"
+            and .services.server.environment.VECTORY_HTTP_ALLOWED_PEERS == "proxy"
+          ' "$RUNNER_TEMP/compose.json"
+      # 30 minutes, not 10: a cold release build (thin LTO, one codegen unit,
+      # SQLite at -O3) of the server, plus the agents, on a small runner.
+      - name: Build the server and validator images
+        timeout-minutes: 30
+        run: docker compose build
+      - name: Start the stack and wait until every service is healthy
+        id: stack
+        timeout-minutes: 10
+        run: |
+          docker compose up -d --wait --wait-timeout 300
+          docker compose ps
+      - name: The instance answers through the TLS proxy and is not set up yet
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          # A started container is not yet a listening proxy: retry a refused connection.
+          curl -fsS --retry 30 --retry-delay 2 --retry-connrefused --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | tee "$RUNNER_TEMP/status-before.json"
+          echo
+          jq -e '.initialized == false' "$RUNNER_TEMP/status-before.json"
+          # Caddy is patched, but proxy HTTP/2 is not qualified for 0.1. Keep
+          # the release's explicit HTTP/1.1 policy until separate h2 checks pass.
+          version=$(curl --http2 -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" -o /dev/null -w '%{http_version}' https://localhost/api/v1/status)
+          echo "Proxy negotiated HTTP/$version"
+          test "$version" = 1.1
+      - name: Provide the pinned Vector 0.58.0 for the enrolled device
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+          VECTOR_SHA256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | sha256sum -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/vector-x86_64-unknown-linux-gnu/bin/vector"
+          [[ "$("$binary" --version)" == "vector 0.58.0 "* ]]
+          echo "VECTORY_VECTOR_BIN=$binary" >> "$GITHUB_ENV"
+      - name: Create the first administrator and enroll a device with the Add device installer
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: .
+        env:
+          VECTORY_URL: https://localhost
+          VECTORY_CA_FILE: ${{ runner.temp }}/pki/ca.pem
+          VECTORY_CREDENTIALS: ${{ runner.temp }}/credentials.json
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ runner.temp }}/bootstrap
+        run: |
+          node scripts/check-installer.mjs --output artifacts/compose
+          curl -fsS --cacert "$VECTORY_CA_FILE" https://localhost/api/v1/status | jq -e '.initialized == true'
+      - name: The validator cannot reach the internet
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          # A failed probe proves nothing unless the probe itself runs.
+          docker compose exec -T validator bash -c 'echo probe ready'
+          if docker compose exec -T server timeout 10 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'; then
+            echo "Control: the server container, on the proxy network, reaches 1.1.1.1:443."
+          else
+            echo "::warning::The server container cannot reach 1.1.1.1:443 either, so only the internal network in the resolved configuration backs the result below."
+          fi
+          if docker compose exec -T validator timeout 10 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'; then
+            echo "::error::The validator opened a connection to 1.1.1.1:443."
+            exit 1
+          fi
+          if docker compose exec -T validator timeout 10 getent hosts github.com; then
+            echo "::error::The validator resolved a public name (github.com)."
+            exit 1
+          fi
+          echo "PASS: the validator can neither connect to 1.1.1.1:443 nor resolve github.com."
+      # The validator shares a network with the server and runs untrusted
+      # pipeline code. The server's HTTP listener closes a connection from
+      # anything but the proxy, so from the validator it answers nothing.
+      - name: The validator gets no answer from the dashboard listener, and the proxy still does
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          # What a TCP client gets from the listener: the first line of an answer, or
+          # nothing. $1 is the host and $2 the port. Bash alone (no HTTP client).
+          probe='
+            if ! exec 3<>"/dev/tcp/$1/$2"; then printf "(could not connect)"; exit 0; fi
+            printf "GET /api/v1/status HTTP/1.0\r\nHost: probe\r\n\r\n" >&3 || true
+            IFS= read -r -t 5 -n 120 first <&3 || true
+            printf "%s" "$first"
+          '
+          # Controls first: a probe that cannot see an answer proves nothing.
+          # Loopback in the server's own container and the proxy are allowed peers.
+          saw=$(docker compose exec -T server timeout 20 bash -c "$probe" probe 127.0.0.1 8080)
+          echo "From the server's own container, 127.0.0.1:8080 returned: ${saw:-nothing}"
+          if ! grep -q '^HTTP/1' <<<"$saw"; then
+            echo "::error::The probe saw no answer from the listener on loopback, so it proves nothing."
+            exit 1
+          fi
+          saw=$(docker compose exec -T proxy wget -q -T 5 -O - http://server:8080/api/v1/status)
+          echo "From the proxy container, server:8080 returned: $saw"
+          jq -e '.initialized == true' <<<"$saw" > /dev/null
+          # The check itself.
+          saw=$(docker compose exec -T validator timeout 20 bash -c "$probe" probe server 8080 || true)
+          echo "From the validator, server:8080 returned: ${saw:-nothing}"
+          if grep -q 'HTTP/' <<<"$saw"; then
+            echo "::error::The validator got an HTTP answer from server:8080."
+            exit 1
+          fi
+          # The path people and the installer use still answers.
+          curl -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | jq -e '.initialized == true'
+          echo "PASS: the validator got no answer from server:8080; loopback, the proxy and the proxy path still do."
+      # The uploaded artifact holds the full logs; this puts the state and the
+      # recent lines of each service where the failed run is read.
+      - name: Show the services' state and recent logs after a failure
+        if: ${{ failure() }}
+        timeout-minutes: 10
+        run: |
+          set +e
+          docker compose ps -a
+          for service in proxy server validator; do
+            echo "::group::$service (last 80 lines)"
+            docker compose logs --no-color --tail 80 "$service"
+            echo "::endgroup::"
+          done
+      - name: Collect the logs and remove the stack and its volumes
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set +e
+          mkdir -p ../artifacts/compose
+          docker compose ps -a > ../artifacts/compose/ps.txt 2>&1
+          docker compose logs --no-color --timestamps > ../artifacts/compose/compose.log 2>&1
+          docker compose down -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: compose
+          path: artifacts/compose
+          if-no-files-found: warn
+  # Browser harnesses that ran twice without failure on the reviewed tree; the
+  # dashboard job's own list is unchanged. docs/internal/CI.md lists the ones
+  # that are not here and why.
+  dashboard-browsers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - run: npm ci
+        timeout-minutes: 10
+      - run: npm ci
+        timeout-minutes: 10
+        working-directory: help-center
+      - id: build
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: npm run build
+      - id: chromium
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: npx playwright install --with-deps chromium
+      - name: Check agent settings creation and recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-settings-recovery-browser.mjs
+        env:
+          VECTORY_AGENT_SETTINGS_RECOVERY_OUTPUT: artifacts/browsers/agent-settings-recovery
+      - name: Check the agent update screens
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-updates-browser.mjs
+        env:
+          VECTORY_AGENT_UPDATES_OUTPUT: artifacts/browsers/agent-updates
+      - name: Check agent upgrade guidance on the device page
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-upgrade-browser.mjs
+        env:
+          VECTORY_AGENT_UPGRADE_OUTPUT: artifacts/browsers/agent-upgrade
+      - name: Check the canary gate on deployments and devices
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canary-gate-browser.mjs
+        env:
+          VECTORY_CANARY_GATE_OUTPUT: artifacts/browsers/canary-gate
+      - name: Check resuming a paused canary
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canary-resume-browser.mjs
+        env:
+          VECTORY_CANARY_RESUME_OUTPUT: artifacts/browsers/canary-resume
+      - name: Check the canvas action menu
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canvas-action-menu-browser.mjs
+        env:
+          VECTORY_CANVAS_ACTION_MENU_OUTPUT: artifacts/browsers/canvas-action-menu
+      - name: Check the canvas tools
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canvas-tools-browser.mjs
+        env:
+          VECTORY_CANVAS_TOOLS_OUTPUT: artifacts/browsers/canvas-tools
+      - name: Check dangling branches in the editor
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/dangling-branch-browser.mjs
+        env:
+          VECTORY_DANGLING_BRANCH_OUTPUT: artifacts/browsers/dangling-branch
+      - name: Check unreadable deployment reminders fail closed
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/deployment-corrupt-reminders-browser.mjs
+        env:
+          VECTORY_CORRUPT_REMINDERS_OUTPUT: artifacts/browsers/deployment-corrupt-reminders
+      - name: Check deployment request discovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/deployment-discovery-browser.mjs
+        env:
+          VECTORY_DEPLOYMENT_DISCOVERY_OUTPUT: artifacts/browsers/deployment-discovery
+      - name: Check assignments from the device page
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/device-assignment-browser.mjs
+        env:
+          VECTORY_DEVICE_ASSIGNMENT_OUTPUT: artifacts/browsers/device-assignment
+      - name: Check device retry recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/device-retry-browser.mjs
+        env:
+          VECTORY_DEVICE_RETRY_OUTPUT: artifacts/browsers/device-retry
+      - name: Check connection highlighting on the canvas
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/edge-spotlight-browser.mjs
+        env:
+          VECTORY_EDGE_SPOTLIGHT_OUTPUT: artifacts/browsers/edge-spotlight
+      - name: Check discarding editor changes
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/editor-discard-browser.mjs
+        env:
+          VECTORY_EDITOR_DISCARD_OUTPUT: artifacts/browsers/editor-discard
+      - name: Check editor hover hints
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/editor-hover-hints-browser.mjs
+        env:
+          VECTORY_EDITOR_HINT_OUTPUT: artifacts/browsers/editor-hover-hints
+      - name: Check editor latency on a 144-component pipeline
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/editor-performance-browser.mjs
+        env:
+          VECTORY_EDITOR_PERFORMANCE_OUTPUT: artifacts/browsers/editor-performance
+      - name: Check group admission conflicts and audit revisions
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-admission-audit-browser.mjs
+        env:
+          VECTORY_GROUP_ADMISSION_AUDIT_OUTPUT: artifacts/browsers/group-admission-audit
+      - name: Check concurrent group edits
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-concurrency-browser.mjs
+        env:
+          VECTORY_GROUP_CONCURRENCY_OUTPUT: artifacts/browsers/group-concurrency
+      - name: Check group creation recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-create-recovery-browser.mjs
+        env:
+          VECTORY_GROUP_CREATE_RECOVERY_OUTPUT: artifacts/browsers/group-create-recovery
+      - name: Check a lost group create answer never makes a second group
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-create-uncertainty-browser.mjs
+        env:
+          VECTORY_GROUP_CREATE_UNCERTAINTY_OUTPUT: artifacts/browsers/group-create-uncertainty
+      - name: Check a lost agent settings create reply never makes a second record
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-settings-create-uncertainty-browser.mjs
+        env:
+          VECTORY_AGENT_SETTINGS_CREATE_UNCERTAINTY_OUTPUT: artifacts/browsers/agent-settings-create-uncertainty
+      - name: Check a stale group edit is refused and overwrites nothing
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-stale-review-browser.mjs
+      - name: Check closing the inspector keeps the canvas
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/inspector-close-viewport-browser.mjs
+        env:
+          VECTORY_INSPECTOR_CLOSE_OUTPUT: artifacts/browsers/inspector-close-viewport
+      - name: Check condition controls in the inspector
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/inspector-conditions-browser.mjs
+        env:
+          VECTORY_INSPECTOR_CONDITIONS_OUTPUT: artifacts/browsers/inspector-conditions
+      - name: Check the inspector panel
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/inspector-panel-browser.mjs
+        env:
+          VECTORY_INSPECTOR_PANEL_OUTPUT: artifacts/browsers/inspector-panel
+      - name: Check two-factor recovery on People & security
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/mfa-recovery-browser.mjs
+      - name: Check pipeline history
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/pipeline-history-browser.mjs
+        env:
+          VECTORY_HISTORY_OUTPUT: artifacts/browsers/pipeline-history
+      - name: Check local pipeline checks
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/pipeline-local-check-browser.mjs
+        env:
+          VECTORY_PIPELINE_LOCAL_CHECK_OUTPUT: artifacts/browsers/pipeline-local-check
+      - name: Check pipeline nodes on the canvas
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/pipeline-node-browser.mjs
+        env:
+          VECTORY_PIPELINE_NODE_OUTPUT: artifacts/browsers/pipeline-node
+      - name: Check publish recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/publish-recovery-browser.mjs
+        env:
+          VECTORY_PUBLISH_RECOVERY_OUTPUT: artifacts/browsers/publish-recovery
+      - name: Check retired deployment targets
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/retired-targets-browser.mjs
+        env:
+          VECTORY_RETIRED_TARGETS_OUTPUT: artifacts/browsers/retired-targets
+      - name: Check reviewed rollback and its recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/reviewed-rollback-browser.mjs
+        env:
+          VECTORY_REVIEWED_ROLLBACK_OUTPUT: artifacts/browsers/reviewed-rollback
+      - name: Check reviewed assignment removal
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/reviewed-unassignment-browser.mjs
+        env:
+          VECTORY_UNASSIGNMENT_OUTPUT: artifacts/browsers/reviewed-unassignment
+      - name: Check the role picker
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/role-picker-browser.mjs
+        env:
+          VECTORY_ROLE_PICKER_OUTPUT: artifacts/browsers/role-picker
+      - name: Check rollback recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/rollback-recovery-browser.mjs
+        env:
+          VECTORY_ROLLBACK_RECOVERY_OUTPUT: artifacts/browsers/rollback-recovery
+      - name: Check refresh-and-review of scheduled deployments
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/scheduled-refresh-browser.mjs
+        env:
+          VECTORY_SCHEDULED_REFRESH_OUTPUT: artifacts/browsers/scheduled-refresh
+      - name: Check schema-driven field controls
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/schema-control-browser.mjs
+      - name: Check the device secret picker
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/secret-picker-browser.mjs
+        env:
+          VECTORY_SECRET_PICKER_OUTPUT: artifacts/browsers/secret-picker
+      - name: Check the deploy target review and receipts
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/target-handoff-browser.mjs
+        env:
+          VECTORY_TARGET_HANDOFF_OUTPUT: artifacts/browsers/target-handoff
+      - name: Check target recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/target-recovery-browser.mjs
+        env:
+          VECTORY_TARGET_RECOVERY_OUTPUT: artifacts/browsers/target-recovery
+      - name: Check the publish review runs the tests and says how they went
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/publish-tests-browser.mjs
+        env:
+          VECTORY_PUBLISH_TESTS_OUTPUT: artifacts/browsers/publish-tests
+      - name: Check the canary lane, its delivery table and the canary choice
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canary-lane-browser.mjs
+        env:
+          VECTORY_CANARY_LANE_OUTPUT: artifacts/browsers/canary-lane
+      - name: Check that a device held on its previous version reads the same everywhere
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/health-held-browser.mjs
+        env:
+          VECTORY_HEALTH_HELD_OUTPUT: artifacts/browsers/health-held
+      - name: Check the effective configuration of a device, its changes and its drift line
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/effective-configuration-browser.mjs
+        env:
+          VECTORY_EFFECTIVE_CONFIGURATION_OUTPUT: artifacts/browsers/effective-configuration
+      - name: Check the live graph reads at 1440 px, in light and dark, and its numbers are in a table
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/live-graph-browser.mjs
+        env:
+          VECTORY_LIVE_GRAPH_OUTPUT: artifacts/browsers/live-graph
+      - name: Check that deploying a pipeline that runs starts from the devices that run it
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/deploy-preselection-browser.mjs
+        env:
+          VECTORY_DEPLOY_PRESELECTION_OUTPUT: artifacts/browsers/deploy-preselection
+      - name: Check that toasts stack above the status bar and any dialog's buttons
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/toast-placement-browser.mjs
+        env:
+          VECTORY_TOAST_PLACEMENT_OUTPUT: artifacts/browsers/toast-placement
+      - name: Check that the deploy review checks devices, in every state, without blocking Deploy
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/device-check-browser.mjs
+        env:
+          VECTORY_DEVICE_CHECK_OUTPUT: artifacts/browsers/device-check
+      # Last and independent, so a stale table never hides a harness result.
+      - name: Check docs/internal/CI.md lists every job of every workflow
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        working-directory: .
+        run: node scripts/check-ci-table.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: dashboard-browsers
+          path: |
+            artifacts/browsers
+            .local/mfa-recovery-browser
+            docs/evidence/schema-controls-browser*.json
+            !**/vite-cache/**
+          if-no-files-found: warn

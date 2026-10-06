@@ -1,6 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Monitor, Smartphone, SquareTerminal } from "lucide-react";
 import { z } from "zod";
 import {
+  APIError,
   api,
   getCSRFToken,
   getCSRFVersion,
@@ -9,28 +17,49 @@ import {
   SessionSchema,
   setCSRF,
   withRequestDeadline,
+  type SessionSummary,
   type User,
 } from "./api";
-import { isDefinitiveAuthRejection } from "./authRequests";
+import {
+  isUncertainOutcome,
+  rememberSignInEmail,
+  retryDelay,
+} from "./authRequests";
 import {
   canUseAccountActionContext,
   matchesPasswordChangeReceipt,
   sameAccountActionContext,
   type AccountActionContext,
 } from "./accountActionSession";
-import { CurrentPassword, NewPassword } from "./AccountPasswordFields";
-import { Button, ErrorBox, Modal } from "./ui";
+import { PasswordField, Unconfirmed, formatExpiry } from "./authControls";
+import { passwordIssue } from "./passwordStrength";
+import { describeAgent } from "./userAgent";
+import { Button, Modal, Spinner, useResource } from "./ui";
+import { relativeTime } from "./time";
+import "./account.css";
+import type { Notify } from "./toast";
 
 type Action = "password" | "sessions";
+type Fields = Partial<Record<"current" | "next" | "confirm" | "form", string>>;
 type Review = {
   context: AccountActionContext;
   phase: "form" | "sending" | "unknown" | "changed";
+  /** The last request's outcome was never confirmed. */
   uncertain: boolean;
+  /** A new sign-out request after an unconfirmed one. */
   repeat: boolean;
-  error: string;
+  fields: Fields;
 };
 type Wait = { action: Action; review: Review; controller: AbortController };
+type RowWait = {
+  context: AccountActionContext;
+  controller: AbortController;
+};
 
+/**
+ * Password and browser sessions for the signed-in account. Rows render through
+ * `children` so the page can place two-factor authentication between them.
+ */
 export function AccountActions({
   user,
   notify,
@@ -38,13 +67,18 @@ export function AccountActions({
   onChanged,
   onSignIn,
   onReload,
+  refresh = 0,
+  children,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   onUserChanged: (user: User | null) => void;
   onChanged: () => void;
   onSignIn: () => void;
   onReload: () => void;
+  /** Changes when something else ended sessions, such as a two-factor change. */
+  refresh?: number;
+  children: (rows: { password: ReactNode; sessions: ReactNode }) => ReactNode;
 }) {
   const [action, setAction] = useState<Action | null>(null);
   const [reviews, setReviews] = useState<Record<Action, Review | null>>({
@@ -58,8 +92,21 @@ export function AccountActions({
   const opener = useRef<HTMLButtonElement | null>(null);
   const recoveryAction = useRef<HTMLButtonElement>(null);
   const [current, setCurrent] = useState("");
-  const [password, setPassword] = useState("");
+  const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [revealed, setRevealed] = useState(false);
+  const sessions = useResource<{ sessions: SessionSummary[] }>(
+    "/account/sessions",
+    { sessions: [] },
+    refresh,
+  );
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const rowRequest = useRef<RowWait | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [uncertainRows, setUncertainRows] = useState<Record<string, string>>(
+    {},
+  );
+  const [allSessions, setAllSessions] = useState(false);
   const review = action ? reviews[action] : null;
   const busy = review?.phase === "sending";
 
@@ -73,13 +120,13 @@ export function AccountActions({
       valid: isSessionValid(),
     };
   }
-  function remember(kind: Action, next: Review | null) {
-    retained.current = { ...retained.current, [kind]: next };
+  function remember(kind: Action, value: Review | null) {
+    retained.current = { ...retained.current, [kind]: value };
     setReviews(retained.current);
   }
   function clearSecrets() {
     setCurrent("");
-    setPassword("");
+    setNext("");
     setConfirm("");
   }
   function retire() {
@@ -90,17 +137,22 @@ export function AccountActions({
       ...request.review,
       phase: "unknown",
       uncertain: true,
-      error: "",
+      fields: {},
     });
     request.controller.abort();
     clearSecrets();
   }
   function changed(kind: Action, previous: Review) {
-    remember(kind, { ...previous, phase: "changed", error: "" });
+    remember(kind, { ...previous, phase: "changed", fields: {} });
     clearSecrets();
   }
   useLayoutEffect(() => {
+    const previousUserId = currentUser.current.id;
     currentUser.current = user;
+    if (previousUserId !== user.id) {
+      setUncertainRows({});
+      setRowErrors({});
+    }
     const request = active.current;
     if (
       request &&
@@ -113,6 +165,12 @@ export function AccountActions({
       if (previous && !canUseAccountActionContext(previous.context, context()))
         changed(visible.current, previous);
     }
+    const row = rowRequest.current;
+    if (row && !canUseAccountActionContext(row.context, context())) {
+      rowRequest.current = null;
+      row.controller.abort();
+      setRevoking(null);
+    }
   }, [user]);
   useLayoutEffect(
     () => () => {
@@ -120,12 +178,17 @@ export function AccountActions({
       const request = active.current;
       active.current = null;
       request?.controller.abort();
+      rowRequest.current?.controller.abort();
+      rowRequest.current = null;
     },
     [],
   );
   useEffect(() => {
     const ended = () => {
       retire();
+      rowRequest.current?.controller.abort();
+      rowRequest.current = null;
+      setRevoking(null);
       const kind = visible.current;
       if (kind && retained.current[kind])
         changed(kind, retained.current[kind]!);
@@ -139,22 +202,23 @@ export function AccountActions({
   }, [action, review?.phase]);
 
   function open(kind: Action, button: HTMLButtonElement) {
-    if (active.current) return;
+    if (active.current || (kind === "sessions" && rowRequest.current)) return;
     opener.current = button;
     clearSecrets();
+    setRevealed(false);
     const previous = retained.current[kind];
-    const next: Review = previous || {
+    const nextReview: Review = previous || {
       context: context(),
       phase: "form",
       uncertain: false,
       repeat: false,
-      error: "",
+      fields: {},
     };
     remember(
       kind,
-      canUseAccountActionContext(next.context, context())
-        ? next
-        : { ...next, phase: "changed", error: "" },
+      canUseAccountActionContext(nextReview.context, context())
+        ? nextReview
+        : { ...nextReview, phase: "changed", fields: {} },
     );
     visible.current = kind;
     setAction(kind);
@@ -165,11 +229,12 @@ export function AccountActions({
     retire();
     if (kind) {
       const previous = retained.current[kind];
+      // A closed form is forgotten unless its last request is unconfirmed.
       if (previous?.phase === "form")
         remember(
           kind,
           previous.uncertain
-            ? { ...previous, phase: "unknown", error: "" }
+            ? { ...previous, phase: "unknown", fields: {} }
             : null,
         );
     }
@@ -183,6 +248,18 @@ export function AccountActions({
       !request.controller.signal.aborted
     );
   }
+  function validate(kind: Action): Fields {
+    if (!current) return { current: "Enter your current password." };
+    if (kind === "sessions") return {};
+    const weak = passwordIssue(next, [user.email, user.name]);
+    if (weak) return { next: weak };
+    if (next === current)
+      return {
+        next: "Choose a password that's different from your current one.",
+      };
+    if (next !== confirm) return { confirm: "The passwords don't match." };
+    return {};
+  }
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const kind = visible.current;
@@ -193,8 +270,9 @@ export function AccountActions({
       changed(kind, original);
       return;
     }
-    if (kind === "password" && password !== confirm) {
-      remember(kind, { ...original, error: "The new passwords don’t match." });
+    const problems = validate(kind);
+    if (Object.keys(problems).length) {
+      remember(kind, { ...original, fields: problems });
       return;
     }
     const request: Wait = {
@@ -205,10 +283,11 @@ export function AccountActions({
     active.current = request;
     const body = JSON.stringify({
       current_password: current,
-      ...(kind === "password" ? { new_password: password } : {}),
+      ...(kind === "password" ? { new_password: next } : {}),
     });
+    // Submitted passwords are never kept for a replay.
     clearSecrets();
-    remember(kind, { ...original, phase: "sending", error: "" });
+    remember(kind, { ...original, phase: "sending", fields: {} });
     try {
       const options = (signal: AbortSignal) => ({
         method: "POST",
@@ -244,7 +323,7 @@ export function AccountActions({
           ...original,
           phase: "unknown",
           uncertain: true,
-          error: "The response did not confirm a new session for your account.",
+          fields: {},
         });
         return;
       }
@@ -252,15 +331,20 @@ export function AccountActions({
       visible.current = null;
       remember(kind, null);
       setAction(null);
+      // This confirmed action ends every other session, so older row-specific
+      // uncertainty no longer needs to follow the person around.
+      setUncertainRows({});
       if (session) {
         setCSRF(session.csrf_token);
         onUserChanged(session.user);
       }
       notify(
         session
-          ? "Password changed. Your other browser sessions were signed out."
-          : "Your other browser sessions were signed out. This browser is still signed in.",
+          ? "Password changed. Other browsers were signed out."
+          : "Signed out of every other browser. This one stays signed in.",
+        { tone: "success" },
       );
+      void sessions.reload();
       onChanged();
     } catch (failure) {
       if (!owns(request)) return;
@@ -268,12 +352,38 @@ export function AccountActions({
         changed(kind, { ...original, uncertain: true });
         return;
       }
-      remember(
-        kind,
-        isDefinitiveAuthRejection(failure)
-          ? { ...original, phase: "form", error: (failure as Error).message }
-          : { ...original, phase: "unknown", uncertain: true, error: "" },
-      );
+      if (isUncertainOutcome(failure)) {
+        if (kind === "sessions") {
+          // A later list cannot identify which request ended a session.
+          void sessions.reload();
+        }
+        remember(kind, {
+          ...original,
+          phase: "unknown",
+          uncertain: true,
+          fields: {},
+        });
+        return;
+      }
+      const code = failure instanceof APIError ? failure.code : "";
+      const wait = retryDelay(failure);
+      remember(kind, {
+        ...original,
+        phase: "form",
+        fields:
+          code === "WRONG_PASSWORD"
+            ? {
+                current:
+                  "Your current password didn't match. For your security, enter your passwords again.",
+              }
+            : code === "PASSWORD_TOO_WEAK" || code === "PASSWORD_UNCHANGED"
+              ? { next: (failure as Error).message }
+              : {
+                  form: wait
+                    ? `Too many attempts. Try again in ${Math.ceil(wait / 60)} min.`
+                    : (failure as Error).message,
+                },
+      });
     } finally {
       if (active.current === request) active.current = null;
     }
@@ -296,7 +406,7 @@ export function AccountActions({
       ...previous,
       phase: "form",
       repeat: true,
-      error: "",
+      fields: {},
     });
   }
   function leave(mode: "signin" | "reload") {
@@ -323,154 +433,326 @@ export function AccountActions({
     }
     visible.current = null;
     clearSecrets();
-    if (mode === "signin") onSignIn();
-    else onReload();
+    // Signing in to check a password change uses this same account.
+    if (mode === "signin") {
+      rememberSignInEmail(user.email);
+      onSignIn();
+    } else onReload();
   }
+  async function revokeOne(session: SessionSummary) {
+    if (rowRequest.current) return;
+    const label = describeAgent(session.user_agent).label;
+    const request: RowWait = {
+      context: context(),
+      controller: new AbortController(),
+    };
+    rowRequest.current = request;
+    const ownsRow = () =>
+      rowRequest.current === request &&
+      !request.controller.signal.aborted &&
+      canUseAccountActionContext(request.context, context());
+    setRevoking(session.id);
+    setRowErrors((errors) => ({ ...errors, [session.id]: "" }));
+    try {
+      await withRequestDeadline(
+        (signal) =>
+          api(
+            `/account/sessions/${session.id}/revoke`,
+            { method: "POST", body: "{}", signal },
+            z.object({ ok: z.literal(true) }),
+          ),
+        30000,
+        request.controller.signal,
+      );
+      if (!ownsRow()) return;
+      setUncertainRows((rows) => {
+        const next = { ...rows };
+        delete next[session.id];
+        return next;
+      });
+      notify(`Signed out ${label}.`, { tone: "success" });
+    } catch (failure) {
+      if (!ownsRow()) return;
+      if (failure instanceof APIError && failure.code === "SESSION_NOT_FOUND") {
+        setUncertainRows((rows) => {
+          const next = { ...rows };
+          delete next[session.id];
+          return next;
+        });
+        notify(`${label} was already signed out.`, { tone: "info" });
+      } else if (isUncertainOutcome(failure)) {
+        setUncertainRows((rows) => ({ ...rows, [session.id]: label }));
+      } else
+        setRowErrors((errors) => ({
+          ...errors,
+          [session.id]: (failure as Error).message,
+        }));
+    } finally {
+      if (rowRequest.current === request) {
+        rowRequest.current = null;
+        setRevoking(null);
+        void sessions.reload();
+      }
+    }
+  }
+
+  const list = sessions.data.sessions;
+  const others = list.filter((session) => !session.current).length;
+  const shown = allSessions ? list : list.slice(0, 5);
   const title =
     review?.phase === "changed"
       ? "Your sign-in changed"
       : review?.phase === "unknown"
         ? action === "password"
-          ? "Password change not confirmed"
-          : "Session sign-out not confirmed"
+          ? "We couldn't confirm your password change"
+          : "We couldn't confirm the sign-out"
         : action === "password"
           ? "Change your password"
           : "Sign out other sessions";
-  return (
-    <section
-      className="control-card account-security-list"
-      aria-label="Password and sessions"
-    >
-      <div className="account-security-row">
-        <div>
-          <h2>Password</h2>
-          <p>Update the password for {user.email}.</p>
-          {reviews.password?.uncertain && (
-            <p role="status">Password change not confirmed.</p>
-          )}
-        </div>
+  const password = (
+    <div className="account-row">
+      <div className="account-row-copy">
+        <h3>Password</h3>
+        <p>Changing it signs out your other browsers.</p>
+        {reviews.password?.uncertain && (
+          <p className="account-row-warning" role="status">
+            We couldn't confirm your last password change.
+          </p>
+        )}
+      </div>
+      <div className="account-row-actions">
         <Button
           variant="secondary"
           onClick={(event) => open("password", event.currentTarget)}
         >
-          {reviews.password?.uncertain
-            ? "Review password change"
-            : "Change password"}
+          {reviews.password?.uncertain ? "Review" : "Change password"}
         </Button>
       </div>
-      <div className="account-security-row">
+    </div>
+  );
+  const sessionRows = (
+    <div className="account-sessions">
+      <div className="account-sessions-head">
         <div>
-          <h2>Other browser sessions</h2>
-          <p>Sign out other browsers and devices using your account.</p>
+          <h3>Sessions</h3>
+          <p>Where you're signed in. Each sign-in lasts 12 hours.</p>
           {reviews.sessions?.uncertain && (
-            <p role="status">Session sign-out not confirmed.</p>
+            <p className="account-row-warning" role="status">
+              We couldn't confirm your last sign-out of other sessions.
+            </p>
           )}
+          {Object.entries(uncertainRows).map(([id, label]) => (
+            <p className="account-row-warning" role="status" key={id}>
+              We couldn't confirm signing out {label}. The current session list
+              does not prove whether that request succeeded.
+            </p>
+          ))}
         </div>
-        <Button
-          variant="secondary"
-          onClick={(event) => open("sessions", event.currentTarget)}
-        >
-          {reviews.sessions?.uncertain
-            ? "Review session sign-out"
-            : "Sign out other sessions"}
-        </Button>
+        {(others > 0 || reviews.sessions) && (
+          <Button
+            variant="secondary"
+            disabled={!!revoking}
+            onClick={(event) => open("sessions", event.currentTarget)}
+          >
+            {reviews.sessions?.uncertain ? "Review" : "Sign out other sessions"}
+          </Button>
+        )}
       </div>
+      <ul className="session-list" aria-label="Your sessions">
+        {sessions.loading && !list.length ? (
+          <li className="quiet-state">
+            <Spinner /> Loading sessions…
+          </li>
+        ) : sessions.error && !list.length ? (
+          <li className="quiet-state">{sessions.error}</li>
+        ) : (
+          shown.map((session) => {
+            const agent = describeAgent(session.user_agent);
+            const Icon =
+              agent.kind === "mobile"
+                ? Smartphone
+                : agent.kind === "tool"
+                  ? SquareTerminal
+                  : Monitor;
+            return (
+              <li key={session.id}>
+                <span className="session-icon" aria-hidden="true">
+                  <Icon size={17} />
+                </span>
+                <span className="session-copy">
+                  <strong>
+                    {agent.label}
+                    {session.current && (
+                      <span className="this-browser">This browser</span>
+                    )}
+                  </strong>
+                  <span>
+                    {[
+                      session.current
+                        ? `Signed in until ${formatExpiry(session.expires_at)}`
+                        : session.last_seen_at
+                          ? `Active ${relativeTime(session.last_seen_at)}`
+                          : null,
+                      session.client_address &&
+                      session.client_address !== "unknown"
+                        ? session.client_address
+                        : null,
+                      !session.current && session.created_at
+                        ? `signed in ${relativeTime(session.created_at)}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                  {rowErrors[session.id] && (
+                    <span className="account-row-warning" role="status">
+                      {rowErrors[session.id]}
+                    </span>
+                  )}
+                </span>
+                {!session.current && (
+                  <Button
+                    variant="ghost compact"
+                    busy={revoking === session.id}
+                    disabled={!!revoking}
+                    aria-label={`Sign out ${agent.label}${session.last_seen_at ? `, active ${relativeTime(session.last_seen_at)}` : ""}`}
+                    onClick={() => void revokeOne(session)}
+                  >
+                    Sign out
+                  </Button>
+                )}
+              </li>
+            );
+          })
+        )}
+      </ul>
+      {list.length > shown.length && (
+        <button
+          type="button"
+          className="text-link session-more"
+          onClick={() => setAllSessions(true)}
+        >
+          Show {list.length - shown.length} more
+        </button>
+      )}
+    </div>
+  );
+  const form = review?.phase === "form";
+  return (
+    <>
+      {children({ password, sessions: sessionRows })}
       <Modal
         open={!!action}
         title={title}
         description={
-          review?.phase === "form" || busy
-            ? "A successful request keeps this browser signed in and ends your other browser sessions."
-            : `Review this request for ${user.email} before continuing.`
+          review?.phase === "form"
+            ? action === "password"
+              ? "You'll stay signed in here. Other browsers are signed out."
+              : "Every other browser signed in to your account is signed out. This one stays signed in."
+            : undefined
         }
         onClose={close}
         returnFocusRef={opener}
         className="account-actions-dialog"
       >
-        <form onSubmit={submit}>
+        <form onSubmit={submit} noValidate>
           <div className="modal-body">
-            {review?.error && <ErrorBox message={review.error} />}
             {busy ? (
-              <p role="status">
+              <p className="signin-loading" role="status">
+                <Spinner />
                 {action === "password"
                   ? "Changing your password…"
-                  : "Signing out other sessions…"}{" "}
-                You can stop waiting. The server may still complete the request.
+                  : "Signing out other sessions…"}
               </p>
             ) : review?.phase === "changed" ? (
               <p>
-                Your sign-in state changed. Reload the workspace to use the
-                current account and session.
-                {review.uncertain &&
-                  " The earlier request may already have completed; reloading does not confirm its outcome."}
+                This browser's sign-in changed. Reload to continue with the
+                current account.
               </p>
             ) : review?.phase === "unknown" ? (
               action === "password" ? (
-                <>
+                <Unconfirmed title="Your new password may already be active">
                   <p>
-                    The response did not confirm the change. Your new password
-                    may already be in use, or the earlier request may still
-                    finish.
+                    Sign in with your new password to be sure. If it doesn't
+                    work, use your previous password.
                   </p>
-                  <p>
-                    Go to sign in and try the new password you chose, then
-                    complete two-factor verification if enabled. If it does not
-                    work, try your previous password or ask an administrator for
-                    a reset code.
-                  </p>
-                </>
+                </Unconfirmed>
               ) : (
-                <>
+                <Unconfirmed title="Some sessions may still be signed in">
                   <p>
-                    The response did not confirm whether your other sessions
-                    ended. Checking this browser’s session cannot confirm that
-                    result.
+                    Try again with your current password. It also signs out
+                    sessions started since your last try.
                   </p>
-                  <p>
-                    You can review a new sign-out with your current password. It
-                    will also end any other sessions created since the earlier
-                    request.
-                  </p>
-                </>
+                </Unconfirmed>
               )
             ) : (
               <>
-                {review?.repeat && (
-                  <p className="control-note">
-                    This is a new request. It also signs out other sessions
-                    created since your earlier attempt. Enter your current
-                    password again to continue.
+                {review?.fields.form && (
+                  <p className="signin-alert" role="alert">
+                    {review.fields.form}
                   </p>
                 )}
-                <CurrentPassword
+                {review?.repeat && (
+                  <p className="signin-notice">
+                    This new request also signs out sessions started since your
+                    last try.
+                  </p>
+                )}
+                <input
+                  type="text"
+                  name="username"
+                  autoComplete="username"
+                  value={user.email}
+                  readOnly
+                  hidden
+                />
+                <PasswordField
+                  label="Current password"
+                  name="current-password"
+                  autoComplete="current-password"
                   value={current}
                   onChange={setCurrent}
+                  error={review?.fields.current}
                   autoFocus
                 />
                 {action === "password" && (
-                  <NewPassword
-                    password={password}
-                    confirm={confirm}
-                    setPassword={setPassword}
-                    setConfirm={setConfirm}
-                  />
+                  <>
+                    <PasswordField
+                      label="New password"
+                      name="new-password"
+                      autoComplete="new-password"
+                      value={next}
+                      onChange={setNext}
+                      error={review?.fields.next}
+                      showStrength
+                      identity={[user.email, user.name]}
+                      revealed={revealed}
+                      onReveal={setRevealed}
+                    />
+                    <PasswordField
+                      label="Confirm new password"
+                      name="confirm-password"
+                      autoComplete="new-password"
+                      value={confirm}
+                      onChange={setConfirm}
+                      error={review?.fields.confirm}
+                      revealed={revealed}
+                      onReveal={setRevealed}
+                    />
+                  </>
                 )}
               </>
             )}
           </div>
           <div className="modal-footer">
             <Button variant="secondary" onClick={close}>
-              {busy
-                ? "Stop waiting"
-                : review?.phase === "form"
-                  ? "Cancel"
-                  : "Back to account"}
+              {busy ? "Stop waiting" : form ? "Cancel" : "Close"}
             </Button>
-            {review?.phase === "form" && (
+            {form && (
               <Button type="submit">
                 {action === "password"
                   ? "Change password"
-                  : review.repeat
+                  : review?.repeat
                     ? "Sign out other sessions again"
                     : "Sign out other sessions"}
               </Button>
@@ -482,19 +764,17 @@ export function AccountActions({
                   action === "password" ? leave("signin") : reviewAnother()
                 }
               >
-                {action === "password"
-                  ? "Go to sign in"
-                  : "Review another sign-out"}
+                {action === "password" ? "Sign in again" : "Try again"}
               </Button>
             )}
             {review?.phase === "changed" && (
               <Button ref={recoveryAction} onClick={() => leave("reload")}>
-                Reload workspace
+                Reload
               </Button>
             )}
           </div>
         </form>
       </Modal>
-    </section>
+    </>
   );
 }

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -126,6 +127,94 @@ func TestTLSWrongCAAndRedirectRejected(t *testing.T) {
 	}
 	if trusted.HTTP.Transport.(*http.Transport).TLSClientConfig.MinVersion != tls.VersionTLS13 {
 		t.Fatal("TLS downgraded")
+	}
+}
+func TestExplicitCAFileExcludesOtherwiseTrustedSystemCA(t *testing.T) {
+	chosenCA := makeCA(t)
+	otherCA := makeCA(t)
+	var hits atomic.Int32
+	server := trustedServer(t, otherCA, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	caFile := filepath.Join(t.TempDir(), "server-ca.pem")
+	if err := AtomicWrite(caFile, []byte(chosenCA.pem)); err != nil {
+		t.Fatal(err)
+	}
+	rootLookups := 0
+	systemRoots := func() (*x509.CertPool, error) {
+		rootLookups++
+		roots := x509.NewCertPool()
+		roots.AddCert(otherCA.cert)
+		return roots, nil
+	}
+
+	// --ca-file and a saved --ca-sha256 pin both reach NewClient as CAFile.
+	// Even if the host trusts another issuer for the same name, the selected
+	// CA must be the only issuer that can receive an enrollment token.
+	pinned, err := newClientWithSystemRoots(Settings{Server: server.URL, CAFile: caFile}, nil, nil, systemRoots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	if _, err := pinned.request(context.Background(), http.MethodPost, "/agent/v1/enroll", map[string]string{"token": "must-not-leak"}); err == nil {
+		t.Fatal("server signed by an otherwise trusted system CA accepted with explicit CA file")
+	}
+	if rootLookups != 0 || hits.Load() != 0 {
+		t.Fatalf("explicit CA choice consulted system roots or sent a token: root lookups %d, requests %d", rootLookups, hits.Load())
+	}
+
+	// Choosing --ca-file= explicitly uses the host's roots instead.
+	system, err := newClientWithSystemRoots(Settings{Server: server.URL}, nil, nil, systemRoots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer system.Close()
+	if _, err := system.request(context.Background(), http.MethodGet, "/agent/v1/status", nil); err != nil {
+		t.Fatal("system-trust choice refused its trusted CA:", err)
+	}
+	if rootLookups != 1 || hits.Load() != 1 {
+		t.Fatalf("system-trust choice did not use host roots: root lookups %d, requests %d", rootLookups, hits.Load())
+	}
+}
+func TestReleaseKeyFetchRootsExcludeOtherwiseTrustedSystemCA(t *testing.T) {
+	chosen := makeCA(t)
+	other := makeCA(t)
+	file := filepath.Join(t.TempDir(), "release-ca.pem")
+	if err := AtomicWrite(file, []byte(chosen.pem)); err != nil {
+		t.Fatal(err)
+	}
+	lookups := 0
+	systemRoots := func() (*x509.CertPool, error) {
+		lookups++
+		pool := x509.NewCertPool()
+		pool.AddCert(other.cert)
+		return pool, nil
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(other.issue(t, &key.PublicKey, "localhost", true, time.Now().Add(time.Hour))))
+	foreignLeaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptsForeign := func(pool *x509.CertPool) bool {
+		_, err := foreignLeaf.Verify(x509.VerifyOptions{DNSName: "localhost", Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+		return err == nil
+	}
+	selected, err := releaseKeyRoots(releaseKeyTrust{caFile: file}, systemRoots)
+	if err != nil || acceptsForeign(selected) || lookups != 0 {
+		t.Fatalf("release-key fetch diluted explicit CA trust: error %v, system root lookups %d", err, lookups)
+	}
+	pinned, err := releaseKeyRoots(releaseKeyTrust{pinned: chosen.cert}, systemRoots)
+	if err != nil || acceptsForeign(pinned) || lookups != 0 {
+		t.Fatalf("release-key fetch diluted fingerprint pin: error %v, system root lookups %d", err, lookups)
+	}
+	fromSystem, err := releaseKeyRoots(releaseKeyTrust{}, systemRoots)
+	if err != nil || !acceptsForeign(fromSystem) || lookups != 1 {
+		t.Fatalf("system-trust choice failed: error %v, system root lookups %d", err, lookups)
 	}
 }
 func TestEnrollmentLostResponseIdempotentAndMTLS(t *testing.T) {

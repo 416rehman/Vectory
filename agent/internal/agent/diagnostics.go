@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/hex"
 	"path/filepath"
+	"strings"
 )
 
 // LocalDiagnostics is a read-only snapshot, not a new manifest authorization,
@@ -20,7 +21,7 @@ type ConfigurationDiagnostic struct {
 }
 
 func localDiagnostics(dir string, settings Settings, state State) LocalDiagnostics {
-	d := LocalDiagnostics{NextAction: applyNextAction(state), RetryStatus: "not_suppressed", DesiredConfiguration: ConfigurationDiagnostic{Check: "unmanaged"}}
+	d := LocalDiagnostics{NextAction: applyNextAction(dir, state), RetryStatus: "not_suppressed", DesiredConfiguration: ConfigurationDiagnostic{Check: "unmanaged"}}
 	if LocalPaused(dir) {
 		d.NextAction = "Local pause is active. Review any manual changes before running resume; remote pause still applies."
 	} else if state.Policy.SyncPaused {
@@ -66,6 +67,19 @@ func localDiagnostics(dir string, settings Settings, state State) LocalDiagnosti
 	return d
 }
 
+// diagnostic returns the issue's diagnostic with the code, or nil.
+func diagnostic(issue *Issue, code string) *Diagnostic {
+	if issue == nil {
+		return nil
+	}
+	for i := range issue.Diagnostics {
+		if issue.Diagnostics[i].Code == code {
+			return &issue.Diagnostics[i]
+		}
+	}
+	return nil
+}
+
 func unavailableTemplate() ConfigurationDiagnostic {
 	return ConfigurationDiagnostic{Check: "unavailable", Reason: "VERIFIED_TEMPLATE_UNAVAILABLE", NextAction: "The accepted desired template is not cached with its expected size and digest. Check the agent connection log and next authorized download; the managed file may still contain the last working configuration."}
 }
@@ -90,30 +104,82 @@ func capabilityDiagnostic(reason string) ConfigurationDiagnostic {
 	case "capability denied: substitution and dynamic resource templates are unsupported", "capability denied: external VRL capability":
 		d.Reason = "DYNAMIC_CAPABILITY_DENIED"
 		d.NextAction = "Restricted mode denies dynamic resource templates, environment substitutions and external VRL lookups. Use fixed approved settings or review the explicit local full-configuration trust grant."
+	case "capability denied: Vector's local API has no authentication":
+		d.Reason = "LOCAL_API_DENIED"
+		d.NextAction = "Remove the api block from the pipeline, or deploy it to a device in full mode, which only the host operator can choose. No allowance on a restricted host can permit it."
+	case "capability denied: an AWS credentials file can run a program":
+		d.Reason = "CREDENTIALS_FILE_DENIED"
+		d.NextAction = "Remove the credentials file from the pipeline and give the sink its access keys as device secrets, or deploy it to a device in full mode, which only the host operator can choose. No allowance on a restricted host can permit it."
+	case "capability denied: ambient AWS credentials":
+		d.Reason = "AMBIENT_CREDENTIALS_DENIED"
+		d.NextAction = "Give the sink explicit access keys as device secrets, or deploy it to a device in full mode, which only the host operator can choose. A restricted host never signs with its own AWS identity, and no allowance can permit it."
+	case "component ID must be a plain name":
+		d.Reason = "INVALID_COMPONENT_ID"
+		d.NextAction = "Rename the component and the inputs that name it: an ID can't contain a slash, a backslash or a control character, or start with a drive letter and a colon (like C:), because Vector uses it as a directory name in its data directory. This applies in every mode."
 	case "TLS verification cannot be disabled":
 		d.Reason = "TLS_VERIFICATION_REQUIRED"
 		d.NextAction = "Enable certificate and hostname verification and provision the correct trusted CA for the destination."
 	case "capability denied: console requires explicit stderr target to isolate JSON startup logs":
 		d.Reason = "CONSOLE_TARGET_DENIED"
 		d.NextAction = "Set the restricted-mode console sink target to stderr so event output cannot impersonate Vector startup logs."
+	default:
+		// The category names the function and its argument, both from the table.
+		if strings.HasPrefix(reason, fileArgumentCategory+" (") {
+			d.Reason = "DYNAMIC_CAPABILITY_DENIED"
+			d.NextAction = "Restricted mode denies VRL that passes a file to a function, because Vector reads any file the service account can read. Remove the file argument, or review the explicit local full-configuration trust grant, which only the host operator can choose. No allowance on a restricted host can permit it."
+		}
 	}
 	return d
 }
 
-func applyNextAction(state State) string {
+// firstVersionFailed is the next step when a device's first version failed
+// to start: nothing ran before it, so nothing needs recovering.
+const firstVersionFailed = "Vector isn't running: this was the device's first version, so there is nothing earlier to go back to. Fix the problem above, then deploy a corrected version or choose Retry."
+
+// applyNextAction is the next step after the last apply, for the agent
+// installed at dir (empty when not known). Commands in it name the state
+// directory when it isn't the default.
+func applyNextAction(dir string, state State) string {
 	if state.Error == nil {
 		return "Compare the cached apply state and last heartbeat with the dashboard. This local report does not prove current process liveness or server connectivity."
 	}
+	if diagnostic(state.Error, "DISK_FULL") != nil {
+		return "Free some space on the disk the problem names. The agent applies the version at its next check-in by itself; keep the private recovery files intact."
+	}
+	if diagnostic(state.Error, "VECTOR_BINARY_UNAVAILABLE") != nil {
+		return "Restore the Vector binary, or stop the agent and approve the new one with " + CommandFor(dir, "vectory re-adopt --expected-sha256 SHA256") + ". Then choose Retry in the dashboard or run " + CommandFor(dir, "vectory retry") + "; Vector never ran this version."
+	}
+	// Only a device that verified a configuration has one that keeps running.
+	keeps := " Vector keeps running the last working configuration."
+	if state.LastGoodSHA256 == "" {
+		keeps = " Vector isn't running yet: it starts with the first version that applies."
+	}
 	switch state.Error.Code {
 	case "CAPABILITY_DENIED":
-		return "Review desired_configuration below for current local capability checks. The managed file may still be the last working configuration."
+		// Refusals no host allowance can lift: say so instead of sending the
+		// operator to look for one.
+		if diagnostic(state.Error, "INVALID_COMPONENT_ID") != nil {
+			return "Rename the component and the inputs that name it, then deploy again. No setting on this host can allow an ID that is a path." + keeps
+		}
+		if diagnostic(state.Error, "LOCAL_API_DENIED") != nil {
+			return "Remove the api block and deploy again, or run this host in full mode, which only its operator can choose. No allowance can permit it." + keeps
+		}
+		if diagnostic(state.Error, "CREDENTIALS_FILE_DENIED") != nil {
+			return "Remove the credentials file, give the sink its access keys as device secrets and deploy again, or run this host in full mode, which only its operator can choose. No allowance can permit it." + keeps
+		}
+		if diagnostic(state.Error, "AMBIENT_CREDENTIALS_DENIED") != nil {
+			return "Give the sink explicit access keys as device secrets and deploy again, or run this host in full mode, which only its operator can choose. No allowance can permit it." + keeps
+		}
+		return "Allow what the problem names on this host, or change the pipeline and deploy again." + keeps
 	case "VALIDATION_FAILED":
-		return "Review the desired published version, Vector environment and top-level configuration tests under the service account. The managed file may still be last-good. Raw Vector diagnostics are suppressed because they can contain secrets. After correcting the cause, request Retry in the dashboard or stop the agent, run retry, and restart it."
+		return "Fix what the problem names, then deploy again or choose Retry in the dashboard. `" + CommandFor(dir, "vectory logs") + "` shows Vector's full output." + keeps
 	case "SECRET_RESOLUTION_FAILED":
-		return "Review desired_configuration below and the host-owned secret bindings. Check private-file permissions under the service account; never share the rendered managed configuration."
+		return "Check the host's secret bindings and the files' permissions for the service account. Never share the rendered managed configuration."
 	case "APPLY_ROLLED_BACK":
 		return "The attempted version did not become the active version; the last verified configuration was restored. Check host resources and destination health before requesting Retry or deploying a corrected version."
-	case "ROLLBACK_FAILED", "ROLLBACK_UNAVAILABLE", "RECOVERY_INVALID":
+	case "ROLLBACK_UNAVAILABLE":
+		return firstVersionFailed
+	case "ROLLBACK_FAILED", "RECOVERY_INVALID":
 		return "Recovery needs host-operator intervention. Preserve the private state directory and journal; inspect the original failure and last-good availability before restarting. Do not delete identity or generation counters."
 	case "WRITE_FAILED", "PATH_UNSAFE":
 		return "Check managed/state directory ownership, free space, permissions and links under the service account. Keep the private recovery files intact."

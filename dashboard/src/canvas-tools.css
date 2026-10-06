@@ -1,0 +1,160 @@
+@import "./editor-tokens.css";
+
+/* Multi-select toolbar and Find on the pipeline canvas. */
+.editor-selection-toolbar,
+.editor-find-panel {
+  margin-top: 18px;
+}
+.editor-selection-toolbar > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px #0000001a;
+  font-size: 12px;
+}
+.editor-selection-toolbar strong {
+  margin-right: 6px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.editor-selection-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+.editor-selection-toolbar button:hover {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+.editor-selection-toolbar button[data-danger] {
+  color: var(--ed-danger);
+}
+.editor-selection-toolbar button[data-danger]:hover {
+  border-color: var(--ed-danger-line);
+  background: var(--ed-danger-bg);
+}
+.editor-selection-toolbar button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.canvas-find {
+  width: min(400px, calc(100vw - 48px));
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px #00000024;
+  overflow: hidden;
+}
+.canvas-find-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.canvas-find-field input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-size: 13px;
+}
+.canvas-find-field input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.canvas-find-field button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.canvas-find-field button:hover {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+.canvas-find-field button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.canvas-find ul {
+  max-height: 288px;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  list-style: none;
+}
+.canvas-find li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.canvas-find li[aria-selected="true"] {
+  background: var(--surface-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.canvas-find li code {
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--ed-mono);
+  font-weight: 600;
+}
+.canvas-find li span {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Always mounted so screen readers hear it change; empty takes no room. */
+.canvas-find-status {
+  margin: 0;
+  padding: 8px 13px 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.canvas-find ul + .canvas-find-status {
+  border-top: 1px solid var(--border);
+}
+.canvas-find-status:empty {
+  padding: 0;
+  border: 0;
+}
+@media (max-width: 600px) {
+  .editor-selection-toolbar,
+  .editor-find-panel {
+    margin-top: 10px;
+  }
+}

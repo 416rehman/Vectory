@@ -180,6 +180,7 @@ try {
         email: `${role}@example.test`,
         password,
         role,
+        current_password: password,
       },
       admin,
     );
@@ -304,6 +305,7 @@ try {
     "target_exists",
     "target_name",
     "device_id",
+    "device_name",
     "outcome",
     "created_at",
     "request_id",

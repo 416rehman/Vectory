@@ -1,0 +1,42 @@
+{
+  "description": "A Google sink without a key would ask the metadata server; Google components aren't reviewed yet, so it needs full mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "gcp_pubsub",
+        "inputs": [
+          "in"
+        ],
+        "project": "p",
+        "topic": "t",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sinks/out"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

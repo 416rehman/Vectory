@@ -25,6 +25,38 @@ type InstallOptions struct {
 	MetricsURL                  *string
 	ClearMetricsURL             bool
 	SecretFiles                 *map[string]string
+	// Host runtime settings; an empty data directory restores the automatic choice.
+	VectorDataDir           *string
+	GracefulShutdownSeconds *int
+	// NoWake turns wake-ups off (true) or back on (false); nil keeps them.
+	NoWake *bool
+	// AddAllowances adds entries to the current allowance lists and never
+	// removes one (vectory allow); CapabilityPolicy replaces them instead.
+	AddAllowances *CapabilityPolicy
+}
+
+// fileRoots lists the file roots this call adds or replaces: roots it leaves
+// alone are not judged again, so an installation that allowed one earlier can
+// still change anything else.
+func (options InstallOptions) fileRoots() []string {
+	switch {
+	case options.CapabilityPolicy != nil:
+		return options.CapabilityPolicy.AllowedFileRoots
+	case options.AddAllowances != nil:
+		return options.AddAllowances.AllowedFileRoots
+	}
+	return nil
+}
+
+// mergeAllowances adds each entry that isn't there yet, in order.
+func mergeAllowances(current, add []string) []string {
+	out := slices.Clone(current)
+	for _, value := range add {
+		if !slices.Contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func ReadInstallPolicy(path string) (*CapabilityPolicy, error) {
@@ -76,13 +108,22 @@ func validateInstallPolicy(policy CapabilityPolicy) error {
 		}
 	}
 	for _, root := range policy.AllowedFileRoots {
-		if !filepath.IsAbs(root) || strings.ContainsAny(root, "*?[") {
-			return errors.New("capability file roots must be absolute paths without wildcard patterns")
+		if !filepath.IsAbs(root) {
+			return inputError(fmt.Sprintf("file root %s isn't an absolute path: name the whole directory, such as %s", safeText(root, 120), exampleFileRoot()))
+		}
+		if strings.ContainsAny(root, "*?[") {
+			return inputError(fmt.Sprintf("file root %s has a wildcard: name the directory itself, such as %s, which covers everything under it", safeText(root, 120), exampleFileRoot()))
+		}
+		// A filesystem or volume root covers every file. What a root may not
+		// overlap (the agent's own directories, a bound secret file) needs the
+		// installation: checkFileRoots judges that where it is known.
+		if problem := fileRootProblem(hostPathStyle(), root, nil); problem != "" {
+			return errors.New(problem)
 		}
 	}
 	for _, value := range append(slices.Clone(policy.AllowedNetworkHosts), policy.AllowedListenAddresses...) {
 		if !validInstallAddress(value) {
-			return errors.New("capability destinations and listeners require an exact host:port with port 1..65535")
+			return inputError(fmt.Sprintf("%s isn't an exact host:port: a destination or listener names a host and a port from 1 to 65535, such as logs.example.net:443", safeText(value, 120)))
 		}
 	}
 	return nil
@@ -102,6 +143,17 @@ func (options InstallOptions) validate() error {
 			return err
 		}
 	}
+	if options.AddAllowances != nil {
+		if options.CapabilityPolicy != nil {
+			return errors.New("choose either a complete capability policy or allowances to add, not both")
+		}
+		if options.AddAllowances.FullVectorConfig {
+			return errors.New("allowances never grant full mode")
+		}
+		if err := validateInstallPolicy(*options.AddAllowances); err != nil {
+			return err
+		}
+	}
 	if err := validateMetricsChange(options.MetricsURL, options.ClearMetricsURL); err != nil {
 		return err
 	}
@@ -109,6 +161,14 @@ func (options InstallOptions) validate() error {
 		if err := validateSecretFiles(*options.SecretFiles); err != nil {
 			return err
 		}
+	}
+	if options.VectorDataDir != nil && *options.VectorDataDir != "" {
+		if err := validateVectorDataDir(*options.VectorDataDir); err != nil {
+			return err
+		}
+	}
+	if n := options.GracefulShutdownSeconds; n != nil && (*n < minGracefulShutdownSeconds || *n > maxGracefulShutdownSeconds) {
+		return inputError(fmt.Sprintf("--graceful-shutdown-seconds %d is out of range: Vector may drain for a whole number of seconds from %d to %d", *n, minGracefulShutdownSeconds, maxGracefulShutdownSeconds))
 	}
 	return nil
 }
@@ -118,6 +178,11 @@ func (options InstallOptions) compose(current Settings) Settings {
 		current.CapabilityPolicy.AllowedFileRoots = slices.Clone(options.CapabilityPolicy.AllowedFileRoots)
 		current.CapabilityPolicy.AllowedNetworkHosts = slices.Clone(options.CapabilityPolicy.AllowedNetworkHosts)
 		current.CapabilityPolicy.AllowedListenAddresses = slices.Clone(options.CapabilityPolicy.AllowedListenAddresses)
+	}
+	if add := options.AddAllowances; add != nil {
+		current.CapabilityPolicy.AllowedFileRoots = mergeAllowances(current.CapabilityPolicy.AllowedFileRoots, add.AllowedFileRoots)
+		current.CapabilityPolicy.AllowedNetworkHosts = mergeAllowances(current.CapabilityPolicy.AllowedNetworkHosts, add.AllowedNetworkHosts)
+		current.CapabilityPolicy.AllowedListenAddresses = mergeAllowances(current.CapabilityPolicy.AllowedListenAddresses, add.AllowedListenAddresses)
 	}
 	if options.FullVectorConfig != nil {
 		current.CapabilityPolicy.FullVectorConfig = *options.FullVectorConfig
@@ -133,6 +198,18 @@ func (options InstallOptions) compose(current Settings) Settings {
 			current.SecretFiles[name] = path
 		}
 	}
+	if options.VectorDataDir != nil {
+		current.VectorDataDir = filepath.Clean(*options.VectorDataDir)
+		if *options.VectorDataDir == "" {
+			current.VectorDataDir = ""
+		}
+	}
+	if options.GracefulShutdownSeconds != nil {
+		current.GracefulShutdownSeconds = *options.GracefulShutdownSeconds
+	}
+	if options.NoWake != nil {
+		current.NoWake = *options.NoWake
+	}
 	return current
 }
 
@@ -141,6 +218,15 @@ func capabilityChanged(before, after CapabilityPolicy) bool {
 		!slices.Equal(before.AllowedFileRoots, after.AllowedFileRoots) ||
 		!slices.Equal(before.AllowedNetworkHosts, after.AllowedNetworkHosts) ||
 		!slices.Equal(before.AllowedListenAddresses, after.AllowedListenAddresses)
+}
+
+// vectorMissing explains a missing Vector binary and points at one it found.
+func vectorMissing(ctx context.Context, binary string) error {
+	message := "Vector isn't at " + binary + "."
+	if found, _ := FindVector(ctx); found != nil {
+		return fmt.Errorf("%s Found Vector %s at %s: use --vector-binary %s", message, found.Version, found.Path, ShellQuote(found.Path))
+	}
+	return errors.New(message + " Install Vector " + VectorSeries + " (https://vector.dev/download/) or pass the right --vector-binary")
 }
 
 func InstallWithOptions(ctx context.Context, dir string, options InstallOptions) error {
@@ -163,14 +249,17 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 	}
 	var fresh *Settings
 	if _, err := os.Lstat(filepath.Join(dir, "settings.json")); os.IsNotExist(err) {
-		if !options.Adopt {
-			return errors.New("explicit --adopt is required; stop the previous Vector service and inventory all existing config/include paths first")
-		}
 		if options.VectorBinary == nil || options.ManagedConfig == nil {
-			return errors.New("provide absolute Vector binary and sole managed .json configuration paths")
+			return errors.New("a new installation needs --vector-binary PATH and --managed-config PATH (absolute paths), plus --adopt; vectory setup finds them for you")
 		}
 		binary, config := *options.VectorBinary, *options.ManagedConfig
+		if !options.Adopt {
+			return fmt.Errorf("add --adopt to confirm that the agent takes over Vector at %s and manages %s; stop any other Vector that uses this configuration first", binary, config)
+		}
 		if err = regularPath(binary); err != nil {
+			if os.IsNotExist(err) {
+				return vectorMissing(ctx, binary)
+			}
 			return err
 		}
 		if err = SafePath(config); err != nil {
@@ -190,7 +279,17 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 			return err
 		}
 		s := options.compose(Settings{VectorBinary: binary, ManagedConfig: config, Adopted: true, ValidationSeconds: 30, StartupSeconds: 20})
-		if _, err = probe(ctx, s); err != nil {
+		if err = checkFileRoots(options.fileRoots(), dir, s.ManagedConfig, s.SecretFiles); err != nil {
+			return err
+		}
+		if s.VectorVersion, err = probe(ctx, s); err != nil {
+			if found := InspectVector(ctx, binary); found.Version != "" && !SupportedVectorVersion(found.Version) {
+				reason := "this agent requires " + VectorSeries
+				if vectorPrerelease(found.Version) {
+					reason = "pre-releases aren't supported, so install a " + VectorSeries + " release"
+				}
+				return fmt.Errorf("found Vector %s at %s; %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, reason)
+			}
 			return err
 		}
 		if s.VectorBinarySHA256, err = FileDigest(binary); err != nil {
@@ -226,6 +325,15 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 		next := options.compose(doc.value)
 		if err = ctx.Err(); err != nil {
 			return err
+		}
+		if err = checkFileRoots(options.fileRoots(), dir, next.ManagedConfig, next.SecretFiles); err != nil {
+			return err
+		}
+		policy := next.CapabilityPolicy
+		for _, list := range [][]string{policy.AllowedFileRoots, policy.AllowedNetworkHosts, policy.AllowedListenAddresses} {
+			if len(list) > 1024 {
+				return errors.New("capability allowance list exceeds 1024 entries")
+			}
 		}
 		if capabilityChanged(doc.value.CapabilityPolicy, next.CapabilityPolicy) {
 			return commitSettingsWithRetryReset(dir, doc, next)

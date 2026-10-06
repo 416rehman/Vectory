@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -52,21 +54,31 @@ func NormalizeServer(s string) (string, error) {
 	return strings.TrimSuffix(u.String(), "/"), nil
 }
 func NewClient(s Settings, c *Credentials, key []byte) (*Client, error) {
+	return newClientWithSystemRoots(s, c, key, x509.SystemCertPool)
+}
+
+// newClientWithSystemRoots keeps the host's roots out of an explicit CA
+// choice. A CA saved after --ca-sha256 must remain the only trust anchor for
+// enrollment and every later connection, not just for the initial probe.
+func newClientWithSystemRoots(s Settings, c *Credentials, key []byte, systemRoots func() (*x509.CertPool, error)) (*Client, error) {
 	base, e := NormalizeServer(s.Server)
 	if e != nil {
 		return nil, e
 	}
-	roots, e := x509.SystemCertPool()
-	if e != nil {
-		roots = x509.NewCertPool()
-	}
+	var roots *x509.CertPool
 	if s.CAFile != "" {
+		roots = x509.NewCertPool()
 		b, e := os.ReadFile(s.CAFile)
 		if e != nil {
 			return nil, errors.New("cannot read trusted CA file; check the saved path and the agent account's read access")
 		}
 		if !roots.AppendCertsFromPEM(b) {
 			return nil, errors.New("trusted CA file has no certificates; use public CA certificates in PEM format")
+		}
+	} else {
+		roots, e = systemRoots()
+		if e != nil {
+			roots = x509.NewCertPool()
 		}
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots}
@@ -101,31 +113,66 @@ func (c *Client) request(ctx context.Context, method, path string, body any) ([]
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Vectory/"+Version)
+	// A request that never reached WroteHeaders/WroteRequest provably left no
+	// byte on the connection; enrollment uses that to tell unsent from maybe-sent.
+	var wrote atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: func() { wrote.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { wrote.Store(true) },
+	}))
 	res, e := c.HTTP.Do(req)
 	if e != nil {
-		return nil, errors.New("verified HTTPS request failed; check trust, reachability, proxy, credentials and clock")
+		target, _ := url.Parse(c.Base)
+		proxy, _ := http.ProxyFromEnvironment(req)
+		return nil, classifyTransport(target, proxy, wrote.Load(), e)
 	}
 	defer res.Body.Close()
-	c.RetryAfter = 0
+	c.RetryAfter = retryAfter(res)
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
-		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusServiceUnavailable {
-			value := res.Header.Get("Retry-After")
-			if seconds, err := strconv.Atoi(value); err == nil {
-				c.RetryAfter = time.Duration(min(max(seconds, 0), 3600)) * time.Second
-			} else if at, err := http.ParseTime(value); err == nil {
-				c.RetryAfter = min(max(time.Until(at), 0), time.Hour)
-			}
-		}
-		return nil, fmt.Errorf("server rejected request (HTTP %d)", res.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		target, _ := url.Parse(c.Base)
+		return nil, classifyStatus(target, path, res.StatusCode, c.RetryAfter, body)
 	}
 	b, e := io.ReadAll(io.LimitReader(res.Body, MaxArtifact+1))
 	if e != nil {
-		return nil, errors.New("response interrupted")
+		return nil, &bodyInterrupted{cause: e}
 	}
 	if len(b) > MaxArtifact {
-		return nil, errors.New("response exceeds limit")
+		return nil, errResponseTooLarge
 	}
 	return b, nil
+}
+
+// bodyInterrupted is a response the server began and did not finish: it
+// closed the connection, reset it or stopped sending before the client's time
+// limit.
+type bodyInterrupted struct{ cause error }
+
+func (e *bodyInterrupted) Error() string { return "response interrupted" }
+func (e *bodyInterrupted) Unwrap() error { return e.cause }
+
+// timedOut reports a body that stopped arriving rather than one cut short.
+func (e *bodyInterrupted) timedOut() bool {
+	var timeout interface{ Timeout() bool }
+	return errors.Is(e.cause, context.DeadlineExceeded) || errors.As(e.cause, &timeout) && timeout.Timeout()
+}
+
+var errResponseTooLarge = errors.New("response exceeds limit")
+
+// retryAfter is the server's Retry-After on a 429 or 503 answer, in seconds
+// or as a date, at most an hour; zero for any other answer.
+func retryAfter(res *http.Response) time.Duration {
+	if res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusServiceUnavailable {
+		return 0
+	}
+	value := res.Header.Get("Retry-After")
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(min(max(seconds, 0), 3600)) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return min(max(time.Until(at), 0), time.Hour)
+	}
+	return 0
 }
 func EnsureKey(dir string) ([]byte, string, error) {
 	return ensureKeyFile(filepath.Join(dir, "private-key.pem"))
@@ -237,6 +284,12 @@ func Enroll(ctx context.Context, dir string, s Settings, token string) error {
 }
 
 func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c *Client) error {
+	return enrollPreparedAs(ctx, dir, s, token, c, "")
+}
+
+// enrollPreparedAs enrolls and names the service manager setup registered
+// (empty: not known, omitted). Servers that predate the field ignore it.
+func enrollPreparedAs(ctx context.Context, dir string, s Settings, token string, c *Client, serviceManager string) error {
 	if e := ctx.Err(); e != nil {
 		return e
 	}
@@ -247,21 +300,50 @@ func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c
 	var pending enrollmentPending
 	pendingPath := filepath.Join(dir, "enrollment.json")
 	e = ReadJSON(pendingPath, &pending)
-	if os.IsNotExist(e) {
-		pending.RequestID = RandomID()
-		pending.Name = s.Name
-		pending.Server = s.Server
+	// previous is what the server can have seen before this attempt.
+	previous := "maybe"
+	switch {
+	case os.IsNotExist(e), e == nil && pending.rebindable() && (pending.Delivery == "refused" || pending.Name != s.Name || pending.Server != s.Server):
+		// Nothing under the old request can exist on the server: start afresh.
+		pending, previous = enrollmentPending{RequestID: RandomID(), Name: s.Name, Server: s.Server}, "no"
+	case e != nil:
+		return e
+	case pending.Name != s.Name || pending.Server != s.Server:
+		return pendingBindingError(pending)
+	case pending.Delivery == "no":
+		previous = "no"
+	}
+	// Persist before sending: a crash mid-request must leave the conservative
+	// "maybe" record, never one that permits rebinding.
+	if pending.Delivery != "maybe" {
+		pending.Delivery = "maybe"
 		if e = WriteJSON(pendingPath, pending); e != nil {
 			return e
 		}
-	} else if e != nil {
-		return e
 	}
-	if pending.Name != s.Name || pending.Server != s.Server {
-		return errors.New("pending enrollment belongs to a different server or name; preserve identity and retry the original request")
-	}
-	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: s.CapabilityPolicy.ConfigurationMode()})
+	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: s.adoptedVectorVersion(), ConfigurationMode: s.CapabilityPolicy.ConfigurationMode(), ServiceManager: serviceManager})
 	if e != nil {
+		if ce, ok := AsConnectionError(e); ok {
+			outcome := pending
+			switch {
+			case ce.Delivery == NotSent:
+				outcome.Delivery = previous
+			case ce.Code == "ENROLLMENT_REFUSED":
+				// A refusal means no device exists for this request, with two
+				// exceptions: a token the server doesn't know, and a request
+				// presented with a different token than the one that enrolled
+				// it, are refused before the server can answer it. A reply lost
+				// before one of those leaves a device this record forgets; the
+				// next attempt is refused as NAME_TAKEN until that device is
+				// recovered or the host uses another name.
+				outcome.Delivery = "refused"
+			}
+			outcome.LastFailure = ce.Code
+			if outcome != pending {
+				// Best effort: if this write fails, the "maybe" record stays.
+				_ = WriteJSON(pendingPath, outcome)
+			}
+		}
 		return e
 	}
 	var cred Credentials
@@ -383,5 +465,15 @@ func VerifyEnvelope(env Envelope, pub, device, nonce string, now time.Time, st S
 	}
 	return m, nil
 }
-func Identity(v any) string       { b, _ := json.Marshal(v); return Digest(b) }
+
+// Identity is a digest of what makes a desired version or a policy the same
+// across manifests. A desired version counts by its original five fields only
+// (see desiredIdentity), never by the display fields the server added.
+func Identity(v any) string {
+	if d, ok := v.(*Desired); ok && d != nil {
+		v = d.identity()
+	}
+	b, _ := json.Marshal(v)
+	return Digest(b)
+}
 func SamePublicKey(a, b any) bool { return reflect.DeepEqual(a, b) }

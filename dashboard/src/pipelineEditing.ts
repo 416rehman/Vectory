@@ -9,8 +9,10 @@ import {
 } from "./catalog";
 
 import {
+  nodeOutputPorts,
   pipelineNodeHeight,
   PIPELINE_NODE_COLUMN_GAP,
+  PIPELINE_NODE_WIDTH,
 } from "./pipelineNodeModel";
 
 const kinds: Kind[] = ["sources", "transforms", "sinks"];
@@ -277,98 +279,173 @@ export function retargetReferences(
   return next;
 }
 
-/** Stable left-to-right layers. All destinations share a column; sweeps reduce crossings. */
-export function arrangeGraph(graph: Graph): Graph {
-  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
-  const parents = new Map<string, string[]>(),
-    children = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    if (!byId.has(edge.source) || !byId.has(edge.target)) continue;
-    parents.set(edge.target, [
-      ...(parents.get(edge.target) || []),
-      edge.source,
-    ]);
-    children.set(edge.source, [
-      ...(children.get(edge.source) || []),
-      edge.target,
-    ]);
-  }
-  const depths = new Map<string, number>(),
-    active = new Set<string>();
-  function depth(id: string): number {
-    if (depths.has(id)) return depths.get(id)!;
-    if (active.has(id)) return 0;
-    active.add(id);
-    const incoming = parents.get(id) || [];
-    const result = incoming.length
-      ? Math.max(...incoming.map(depth)) + 1
-      : byId.get(id)?.data.kind === "sources"
-        ? 0
-        : 1;
-    active.delete(id);
-    depths.set(id, result);
-    return result;
-  }
-  graph.nodes.forEach((node) => depth(node.id));
-  const last = Math.max(
-    1,
-    ...graph.nodes
-      .filter((node) => node.data.kind !== "sinks")
-      .map((node) => depths.get(node.id)! + 1),
+/** Automatic layout lives in `canvasLayout.ts`; every caller imports it from here. */
+export { arrangeGraph } from "./canvasLayout";
+
+type PlacedNode = {
+  id: string;
+  position: { x: number; y: number };
+  data: { kind?: Kind; component?: Config };
+};
+const ROW_GAP = 40;
+
+/** Cards overlapping (or within half a row gap of) the card at `x`,`y`. */
+function overlapping(
+  nodes: readonly PlacedNode[],
+  x: number,
+  y: number,
+  height: number,
+) {
+  return nodes.filter(
+    (node) =>
+      x < node.position.x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+      node.position.x < x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+      y < node.position.y + pipelineNodeHeight(node.data) + ROW_GAP / 2 &&
+      node.position.y < y + height + ROW_GAP / 2,
   );
-  const layers = new Map<number, any[]>();
-  for (const node of graph.nodes) {
-    const rank = node.data.kind === "sinks" ? last : depths.get(node.id)!;
-    depths.set(node.id, rank);
-    layers.set(rank, [...(layers.get(rank) || []), node]);
+}
+const bottom = (node: PlacedNode) =>
+  node.position.y + pipelineNodeHeight(node.data);
+
+/**
+ * The first free spot at or below `preferred` where a new card overlaps no
+ * existing card, so new steps never stack on top of each other.
+ */
+export function freePosition(
+  nodes: readonly PlacedNode[],
+  preferred: { x: number; y: number },
+  height = pipelineNodeHeight({}),
+) {
+  let y = preferred.y;
+  for (let tries = 0; tries < 200; tries++) {
+    const blockers = overlapping(nodes, preferred.x, y, height);
+    if (!blockers.length) break;
+    y = Math.max(...blockers.map(bottom)) + ROW_GAP;
   }
-  const ranks = [...layers.keys()].sort((a, b) => a - b);
-  const height = (node: any) => pipelineNodeHeight(node.data);
-  const centers = () => {
-    const values = new Map<string, number>();
-    for (const nodes of layers.values()) {
-      const total = nodes.reduce((sum, node) => sum + height(node) + 66, -66);
-      let y = -total / 2;
-      for (const node of nodes) {
-        values.set(node.id, y + height(node) / 2);
-        y += height(node) + 66;
-      }
+  return { x: preferred.x, y };
+}
+
+export type BlockStep = {
+  id: string;
+  kind: Kind;
+  component: Config;
+  /** Where the step sat in the pipeline it came from, when known. */
+  position?: { x: number; y: number };
+};
+
+/**
+ * A layout for steps that have no positions: columns by distance from the
+ * block's sources (following inputs between them), stacked in each column.
+ * Positions are relative to the block's top-left corner.
+ */
+export function layoutBlock(steps: readonly BlockStep[]) {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const depth = new Map<string, number>();
+  const visit = (step: BlockStep, seen: Set<string>): number => {
+    const known = depth.get(step.id);
+    if (known !== undefined) return known;
+    if (seen.has(step.id)) return 0;
+    seen.add(step.id);
+    let deepest = -1;
+    for (const input of Array.isArray(step.component.inputs)
+      ? step.component.inputs
+      : []) {
+      const upstream = byId.get(String(input).split(".")[0]);
+      if (upstream && upstream !== step)
+        deepest = Math.max(deepest, visit(upstream, seen));
     }
-    return values;
+    seen.delete(step.id);
+    depth.set(step.id, deepest + 1);
+    return deepest + 1;
   };
-  for (let pass = 0; pass < 4; pass++) {
-    const forward = pass % 2 === 0;
-    for (const rank of forward ? ranks : [...ranks].reverse()) {
-      const positions = centers(),
-        nodes = layers.get(rank)!;
-      const original = new Map(nodes.map((node, index) => [node.id, index]));
-      const average = (id: string) => {
-        const related = (forward ? parents : children).get(id) || [];
-        return related.length
-          ? related.reduce((sum, n) => sum + (positions.get(n) || 0), 0) /
-              related.length
-          : positions.get(id) || 0;
-      };
-      nodes.sort(
-        (a, b) =>
-          average(a.id) - average(b.id) ||
-          original.get(a.id)! - original.get(b.id)!,
+  const rows = new Map<number, number>();
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const step of steps) {
+    const column = visit(step, new Set());
+    const y = rows.get(column) ?? 0;
+    positions.set(step.id, { x: column * PIPELINE_NODE_COLUMN_GAP, y });
+    rows.set(
+      column,
+      y +
+        pipelineNodeHeight({ kind: step.kind, component: step.component }) +
+        ROW_GAP,
+    );
+  }
+  return positions;
+}
+
+/**
+ * Where a block of steps goes. The block keeps its own arrangement (steps
+ * with known positions keep their spacing; the rest are laid out by flow)
+ * and lands at `anchor`, moved down until it overlaps no existing card.
+ */
+export function placeBlock(
+  existing: readonly PlacedNode[],
+  steps: readonly BlockStep[],
+  anchor: { x: number; y: number },
+) {
+  const relative = new Map<string, { x: number; y: number }>();
+  if (steps.length && steps.every((step) => step.position)) {
+    const left = Math.min(...steps.map((step) => step.position!.x)),
+      top = Math.min(...steps.map((step) => step.position!.y));
+    for (const step of steps)
+      relative.set(step.id, {
+        x: step.position!.x - left,
+        y: step.position!.y - top,
+      });
+  } else for (const [id, at] of layoutBlock(steps)) relative.set(id, at);
+  const cards = steps.map((step) => ({
+    id: step.id,
+    data: { kind: step.kind, component: step.component },
+    position: relative.get(step.id)!,
+  }));
+  let dy = 0;
+  for (let tries = 0; tries < 200; tries++) {
+    let push = 0;
+    for (const card of cards) {
+      const blockers = overlapping(
+        existing,
+        anchor.x + card.position.x,
+        anchor.y + dy + card.position.y,
+        pipelineNodeHeight(card.data),
       );
+      if (blockers.length)
+        push = Math.max(
+          push,
+          Math.max(...blockers.map(bottom)) +
+            ROW_GAP -
+            (anchor.y + dy + card.position.y),
+        );
     }
+    if (!push) break;
+    dy += push;
   }
-  const positions = centers();
-  const top = Math.min(
-    0,
-    ...graph.nodes.map((node) => positions.get(node.id)! - height(node) / 2),
+  return new Map(
+    cards.map((card) => [
+      card.id,
+      { x: anchor.x + card.position.x, y: anchor.y + dy + card.position.y },
+    ]),
   );
-  return {
-    ...graph,
-    nodes: graph.nodes.map((node) => ({
-      ...node,
-      position: {
-        x: 70 + depths.get(node.id)! * PIPELINE_NODE_COLUMN_GAP,
-        y: positions.get(node.id)! - height(node) / 2 - top + 70,
-      },
-    })),
-  };
+}
+
+/**
+ * The reference a new step reads when it is added next to `node`: its
+ * default output, or its first named output (a route's first route).
+ * Empty for destinations, which have no outputs.
+ */
+export function primaryOutput(node: PlacedNode) {
+  const kind = node.data.kind || "transforms";
+  const ports = nodeOutputPorts(node.data.component || {}, kind);
+  if (!ports.length) return "";
+  if (ports.includes("output")) return node.id;
+  const named = ports.find((port) => port !== "_unmatched") || ports[0];
+  return `${node.id}.${named}`;
+}
+
+/** Where a step added next to `node` goes: the next column, first free row. */
+export function besidePosition(nodes: readonly PlacedNode[], node: PlacedNode) {
+  return freePosition(nodes, {
+    x: node.position.x + PIPELINE_NODE_COLUMN_GAP,
+    y: node.position.y,
+  });
 }

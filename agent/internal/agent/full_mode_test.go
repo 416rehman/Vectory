@@ -94,7 +94,7 @@ func TestFullVectorEnvironmentAndFixedArguments(t *testing.T) {
 			}
 		}
 		for _, command := range []string{"", "validate", "test"} {
-			args := vectorConfigArgs(command, "a file; never a shell.json", full)
+			args := vectorConfigArgs(command, []string{"a file; never a shell.json"}, full)
 			if strings.Contains(strings.Join(args, "|"), "--dangerously-allow-env-var-interpolation") != full {
 				t.Fatal("native interpolation flag differs from local grant")
 			}
@@ -106,7 +106,7 @@ func TestFullVectorEnvironmentAndFixedArguments(t *testing.T) {
 }
 
 func TestFullVectorLocalCredentialRemainsLiteral(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "local-credential")
+	path := filepath.Join(privateTempDir(t), "local-credential")
 	for _, value := range []string{"${HOST_SECRET}", "$HOST_SECRET", "price$$change", "SECRET[native.value]"} {
 		if err := AtomicWrite(path, []byte(value)); err != nil {
 			t.Fatal(err)

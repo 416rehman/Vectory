@@ -45,6 +45,7 @@ async fn fixture(url: Option<String>) -> (tempfile::TempDir, State, Router, Iden
         releases_dir: temp.path().join("releases"),
         instance_name: "Publication recovery fixture".into(),
         validation_url: url,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -540,7 +541,7 @@ async fn validator() -> (
             async move {
                 e.add_permits(1);
                 r.acquire().await.unwrap().forget();
-                axum::Json(json!({"valid":true,"vector_validated":true,"vector_version":"0.58.0"}))
+                axum::Json(json!({"worker_protocol":2,"valid":true,"static_checked":true,"stubbed":[],"placeholders":[],"diagnostics":[],"vector_version":"0.58.0"}))
             }
         }),
     );

@@ -1,0 +1,35 @@
+{
+  "description": "A Unix socket a component connects to is a destination named by its path, never a file root.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "docker_logs",
+        "docker_host": "unix:///run/podman/podman.sock"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "docker_logs"
+    ],
+    "capabilities": [],
+    "network": [
+      "unix:/run/podman/podman.sock"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

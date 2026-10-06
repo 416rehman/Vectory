@@ -7,20 +7,61 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestMain(m *testing.M) {
+	runAsChildProgram()
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		if len(os.Args) != 5 {
-			os.Exit(2)
-		}
-		os.Exit(VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
+		os.Exit(VectorHostMain(os.Args[2:]))
 	}
-	os.Exit(m.Run())
+	if fakeVectorInvoked() {
+		os.Exit(fakeVectorMain(os.Args[1:], os.Stdout))
+	}
+	if raw := os.Getenv(proxyClientEnv); raw != "" {
+		os.Exit(proxyClientMain(raw))
+	}
+	if raw := os.Getenv(killHelperEnv); raw != "" {
+		os.Exit(killHelperMain(raw))
+	}
+	if dir := os.Getenv(drainAgentEnv); dir != "" {
+		os.Exit(drainAgentMain(dir))
+	}
+	hermeticTestEnvironment()
+	code := m.Run()
+	stopFakeVector()
+	os.Exit(code)
 }
+
+// hermeticTestEnvironment makes t.TempDir() return canonical paths and keeps
+// proxy settings of the machine running the tests out of network
+// classification tests. Strict private-file and path checks rightly refuse
+// aliases: on macOS the temporary directory lives under the /var ->
+// /private/var symlink, and Windows CI runners use an 8.3 short TEMP
+// (C:\Users\RUNNER~1\...), which EvalSymlinks expands to the long name.
+func hermeticTestEnvironment() {
+	canonicalTempDir()
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		_ = os.Unsetenv(name)
+	}
+}
+
+func canonicalTempDir() {
+	dir, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = os.Setenv("TMP", dir)
+		_ = os.Setenv("TEMP", dir)
+		return
+	}
+	_ = os.Setenv("TMPDIR", dir)
+}
+
 func signed(t *testing.T, m Manifest, key ed25519.PrivateKey) Envelope {
 	t.Helper()
 	b, e := json.Marshal(m)
@@ -175,17 +216,19 @@ func TestScrubbedEnvironment(t *testing.T) {
 	}
 }
 func TestStartupAckCannotBeForgedByOtherTargets(t *testing.T) {
-	w := &startupWriter{ack: make(chan struct{})}
-	_, _ = w.Write([]byte(`{"target":"vector::vrl","message":"Vector has started.","version":"0.58.0"}` + "\n"))
-	select {
-	case <-w.ack:
-		t.Fatal("wrong target accepted")
-	default:
+	w := newVectorLog("")
+	for _, forged := range []string{
+		`{"level":"INFO","target":"vector::vrl","message":"Vector has started.","version":"0.58.0"}`,
+		`{"level":"INFO","target":"vector","message":"Vector has started.","version":"0.57.0"}`,
+		`{"host":"x","message":"Vector has started.","target":"vector","version":"0.58.0"}`,
+	} {
+		_, _ = w.Write([]byte(forged + "\n"))
 	}
-	_, _ = w.Write([]byte(`{"target":"vector","message":"Vector has started.","version":"0.58.0"}` + "\n"))
-	select {
-	case <-w.ack:
-	default:
+	if w.signals.started != 0 {
+		t.Fatal("forged or incomplete ack accepted")
+	}
+	_, _ = w.Write([]byte(`{"level":"INFO","target":"vector","message":"Vector has started.","version":"0.58.0"}` + "\n"))
+	if w.signals.started != 1 {
 		t.Fatal("real ack not accepted")
 	}
 }
@@ -208,5 +251,53 @@ func TestAdoptionAndServiceRejectSharedDirectories(t *testing.T) {
 	dedicated := t.TempDir()
 	if err = CheckManagedDirectory(filepath.Join(dedicated, "managed.json"), filepath.Join(root, "state")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A crash in the middle of an atomic write leaves its temporary file behind.
+// That must never block every later setup or install: the checks accept it,
+// and a stale one is cleaned up.
+func TestAtomicWriteLeftoversDontBlockSetup(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "managed.json")
+	if err := AtomicWrite(config, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	stale, fresh := filepath.Join(dir, atomicTempPrefix+"123456"), filepath.Join(dir, atomicTempPrefix+"654321")
+	for _, leftover := range []string{stale, fresh} {
+		if err := os.WriteFile(leftover, []byte(`{"partial`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * atomicTempStale)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckManagedDirectory(config, filepath.Join(t.TempDir(), "state")); err != nil {
+		t.Fatalf("a leftover temporary file blocked setup: %v", err)
+	}
+	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
+		t.Fatal("a stale temporary file was kept")
+	}
+	// One that may belong to a write in progress is left alone, and a dry run
+	// changes nothing.
+	if _, err := os.Lstat(fresh); err != nil {
+		t.Fatal("a recent temporary file was removed")
+	}
+	if err := os.Chtimes(fresh, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkManagedDirectory(config, filepath.Join(t.TempDir(), "state"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(fresh); err != nil {
+		t.Fatal("a check without cleanup removed a file")
+	}
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, atomicTempPrefix+"777"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckFreshStateDirectory(state); err != nil {
+		t.Fatalf("a leftover temporary file blocked a fresh state directory: %v", err)
 	}
 }

@@ -1,7 +1,9 @@
 // Actual App/device page. Every API response is synthetic; no real device or mutation.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
+import { nothingOffered } from "./fleet-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -210,6 +212,8 @@ async function load({
         });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic device context" });
+      // Agent updates are off here, so the page is what it was without them.
+      if (path === "/agent-updates") return reply(updatesOff());
       if (path === `/devices/${id(1)}`) {
         current.reads++;
         const snapshot = structuredClone(current.device);
@@ -231,7 +235,7 @@ async function load({
         }
         return reply(snapshot);
       }
-      if (path === "/releases") {
+      if (path === "/agent-install") {
         if (current.holdReleases)
           await new Promise((done) => current.releaseWaiters.push(done));
         if (current.releaseError)
@@ -244,7 +248,7 @@ async function load({
             },
             503,
           );
-        return reply(current.releases);
+        return reply(installFor(current.releases));
       }
       if (path.startsWith("/releases/"))
         return route.fulfill({
@@ -294,6 +298,18 @@ async function load({
           state_counts: { verified_applied: 1 },
         });
       }
+      // The device page also shows telemetry, open issues and recent activity.
+      if (path === `/devices/${id(1)}/telemetry`)
+        return reply({ device_id: id(1), samples: [] });
+      if (path === `/devices/${id(1)}/configuration`)
+        return reply(nothingOffered(id(1)));
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
     }
     unexpected.push(`${method} ${path}`);
     return reply(
@@ -334,6 +350,71 @@ const release = {
   url: "/api/v1/releases/vectory-0.1.0-dev-windows-amd64.exe",
   signed: false,
 };
+const linuxRelease = {
+  name: "vectory-0.2.0-linux-amd64",
+  os: "linux",
+  arch: "amd64",
+  version: "0.2.0",
+  sha256: "975c1a33" + "5".repeat(50) + "0e9d19",
+  size: 7000000,
+  url: "/api/v1/releases/vectory-0.2.0-linux-amd64",
+  signed: false,
+  source: "bundled",
+};
+// A synthetic certificate: only its PEM shape matters here.
+const caPem = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIBszCCAVmgAwIBAgIUU3ludGhldGljIGFnZW50IENBIGZvciB0ZXN0cy4wCgYI",
+  "-----END CERTIFICATE-----",
+  "",
+].join("\n");
+const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
+// What Add device and Upgrade agent read: the installer, the server's CA and
+// the builds, as the server reports them.
+const installFor = (releases) => ({
+  agent_url: "https://vectory.example.test:8443",
+  agent_url_configured: false,
+  listener_enabled: true,
+  dashboard_url: "https://vectory.example.test",
+  certificate: {
+    available: true,
+    publicly_trusted: false,
+    ca_sha256: "1f3c" + "0".repeat(56) + "9ab0",
+    ca_pem: caPem,
+    problem: null,
+  },
+  downloads_enabled: true,
+  installer: {
+    url: "https://vectory.example.test:8443/agent/v1/install.sh",
+    sha256: installerSha,
+    platforms: ["linux/amd64"],
+  },
+  default_install_dir: "/usr/local/bin",
+  releases,
+  catalog_problems: [],
+});
+const linuxDevice = (extra = {}) => ({
+  ...baseDevice(),
+  agent_version: "0.1.0",
+  state_dir: "/var/lib/vectory-agent",
+  service_manager: "systemd",
+  ...extra,
+});
+const upgradeCommandText = [
+  "(",
+  "  set -e",
+  "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+  `  trap 'rm -rf "$dir"' EXIT`,
+  `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
+  `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,
+  `    --cacert "$dir/vectory-ca.pem" \\`,
+  `    -o "$dir/vectory-install.sh" \\`,
+  "    https://vectory.example.test:8443/agent/v1/install.sh",
+  `  echo '${installerSha}  vectory-install.sh' \\`,
+  `    | (cd "$dir" && sha256sum -c -)`,
+  `  sudo sh "$dir/vectory-install.sh"`,
+  ")",
+].join("\n");
 const dialog = () =>
   page.getByRole("dialog", { name: "Upgrade agent", exact: true });
 const download = () =>
@@ -380,6 +461,173 @@ try {
           page.getByRole("button", { name: "Upgrade agent", exact: true }),
         ).toBeFocused();
       }
+    },
+  );
+  const commandBlock = () =>
+    dialog().getByLabel("Upgrade command", { exact: true });
+  const commandText = () => commandBlock().evaluate((el) => el.textContent);
+  await check(
+    "A Linux device gets the one installer command, with no token, and the manual steps behind By hand",
+    async () => {
+      await load({
+        device: linuxDevice(),
+        releases: [release, linuxRelease],
+        role: "admin",
+      });
+      await openGuide();
+      await expect(
+        dialog().getByRole("region", {
+          name: "Run this on Synthetic edge",
+          exact: true,
+        }),
+      ).toBeVisible();
+      expect(await commandText()).toBe(upgradeCommandText);
+      expect(await commandText()).not.toMatch(
+        /(^|\s)-[A-Za-z]*k[A-Za-z]*(\s|$)|--insecure|--no-check-certificate|token/,
+      );
+      await expect(dialog()).toContainText(
+        "Synthetic edge's agent doesn't report which build it runs",
+      );
+      await expect(dialog()).toContainText("The agent goes to /usr/local/bin.");
+      // The manual procedure is there, folded away.
+      await expect(download()).toBeHidden();
+      await dialog().getByText("By hand", { exact: true }).click();
+      await expect(download()).toBeVisible();
+      await expect(download()).toHaveAttribute("href", linuxRelease.url);
+      await expect(download()).toHaveAttribute("download", "vectory");
+      await expect(dialog()).toContainText("Do not re-enroll or purge state");
+      await page.evaluate(() =>
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: {
+            writeText: async (value) => {
+              window.syntheticCopied = value;
+            },
+          },
+        }),
+      );
+      await dialog()
+        .getByRole("button", { name: "Copy upgrade command", exact: true })
+        .click();
+      expect(await page.evaluate(() => window.syntheticCopied)).toBe(
+        upgradeCommandText,
+      );
+    },
+  );
+  await check(
+    "A device that reports this build is told so and gets no command",
+    async () => {
+      await load({
+        device: linuxDevice({ agent_sha256: linuxRelease.sha256 }),
+        releases: [linuxRelease],
+      });
+      await openGuide();
+      await expect(
+        dialog().getByText(
+          "Synthetic edge already runs this build (SHA-256 975c1a33…0e9d19).",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(commandBlock()).toHaveCount(0);
+      await expect(download()).toHaveCount(0);
+    },
+  );
+  await check(
+    "A host without a service stays that way, with its own state directory",
+    async () => {
+      await load({
+        device: linuxDevice({
+          state_dir: "/srv/vectory state",
+          service_manager: "none",
+          agent_sha256: "b".repeat(64),
+        }),
+        releases: [linuxRelease],
+      });
+      await openGuide();
+      expect(await commandText()).toBe(
+        upgradeCommandText.replace(
+          `  sudo sh "$dir/vectory-install.sh"`,
+          `  sudo sh "$dir/vectory-install.sh" \\\n    --state-dir '/srv/vectory state' \\\n    --service none`,
+        ),
+      );
+      await expect(dialog()).toContainText(
+        "Synthetic edge runs another build (SHA-256 bbbbbbbb…bbbbbb); this server offers 0.2.0 (SHA-256 975c1a33…0e9d19).",
+      );
+      // Commands and flags are code that never breaks at a hyphen.
+      const note = dialog().getByText(/^Nothing restarts/);
+      await expect(note).toHaveText(
+        "Nothing restarts vectory run for you: setup says when to stop it and start it again on the new build.",
+      );
+      await expect(note.locator("code")).toHaveText("vectory run");
+      await expect(
+        dialog().locator(".agent-upgrade-notes code", {
+          hasText: "--install-dir",
+        }),
+      ).toHaveCSS("white-space", "nowrap");
+    },
+  );
+  await check(
+    "The upgrade command fits phones and both themes without widening the page",
+    async () => {
+      for (const width of [320, 390, 430])
+        for (const theme of ["light", "dark"]) {
+          await load({
+            device: linuxDevice(),
+            releases: [linuxRelease],
+            width,
+            theme,
+          });
+          await deviceVisible();
+          // The device page underneath is measured first: the dialog must
+          // not widen the page beyond it.
+          const under = await page.evaluate(
+            () => document.documentElement.scrollWidth,
+          );
+          await openGuide();
+          await expect(commandBlock()).toBeVisible();
+          const metrics = await dialog().evaluate((el) => ({
+            width: el.getBoundingClientRect().width,
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+            page: document.documentElement.scrollWidth,
+            viewport: innerWidth,
+            // The command scrolls inside its own block.
+            command: (() => {
+              const pre = el.querySelector(".agent-upgrade-command pre");
+              return {
+                right: pre.getBoundingClientRect().right,
+                scrolls: pre.scrollWidth > pre.clientWidth,
+              };
+            })(),
+          }));
+          expect(metrics.width).toBeLessThanOrEqual(width);
+          expect(metrics.scrollWidth).toBeLessThanOrEqual(
+            metrics.clientWidth + 1,
+          );
+          expect(metrics.command.right).toBeLessThanOrEqual(width);
+          expect(metrics.page).toBeLessThanOrEqual(under);
+          geometry.push({ command: true, width, theme, under, ...metrics });
+          const audit = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          accessibility.push({
+            command: true,
+            width,
+            theme,
+            violations: audit.violations.map(({ id, impact }) => ({
+              id,
+              impact,
+            })),
+          });
+          expect(audit.violations).toEqual([]);
+          const file = `agent-upgrade-command-${width}-${theme}.png`;
+          await page.screenshot({
+            path: resolve(output, file),
+            fullPage: true,
+            animations: "disabled",
+          });
+          screenshots.push(relative(repository, resolve(output, file)));
+        }
     },
   );
   await check(
@@ -444,6 +692,9 @@ try {
     "A stalled catalog has a deadline and does not request a download",
     async () => {
       await load({ holdReleases: true });
+      // Pages load on demand behind a 30 s guard of their own; let this one
+      // finish before every 30 s timer is shortened.
+      await deviceVisible();
       await page.evaluate(() => {
         const original = window.setTimeout.bind(window);
         window.setTimeout = (fn, delay, ...args) =>

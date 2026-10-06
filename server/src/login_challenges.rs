@@ -18,8 +18,31 @@ fn expired() -> ApiError {
     ApiError::new(
         StatusCode::UNAUTHORIZED,
         "MFA_CHALLENGE_EXPIRED",
-        "Sign in again to request a new verification challenge",
+        "This verification expired. Sign in with your password again.",
     )
+}
+
+fn too_many_attempts() -> ApiError {
+    ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "MFA_TOO_MANY_ATTEMPTS",
+        "Too many incorrect codes. For your security, sign in with your password again.",
+    )
+}
+
+/// One attempt at an account's second factor, from either sign-in form:
+/// ten in five minutes, whoever makes them. Both forms charge this one
+/// budget, so neither gives an address, or a way of asking, a second one.
+pub(crate) fn charge_factor_attempt(s: &State, user: &str) -> Result<()> {
+    s.limit(
+        format!("login-mfa:{user}"),
+        10,
+        std::time::Duration::from_secs(300),
+    )
+    .map_err(|error| match error.retry_after {
+        Some(wait) => auth::signin_throttled(wait),
+        None => error,
+    })
 }
 
 pub(crate) async fn clear(conn: &mut SqliteConnection, user: &str) -> Result<()> {
@@ -69,14 +92,20 @@ fn non_null_factor<'de, D: serde::Deserializer<'de>>(
 pub async fn complete(
     AppState(s): AppState<State>,
     h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
     body: std::result::Result<Json<Completion>, JsonRejection>,
 ) -> Result<(HeaderMap, Json<Value>)> {
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
         return Err(ApiError::forbidden());
     }
+    // The client's own budget first, then the shared one for what it lets
+    // through (see `auth::login`). A request that is not even shaped like a
+    // completion costs the client's budget only.
+    let client = s.client_key(&h, peer);
+    let group = crate::throttle_group(&client);
     s.limit(
-        "login-mfa-global".into(),
-        60,
+        format!("login-mfa-client:{group}"),
+        auth::CLIENT_ATTEMPTS,
         std::time::Duration::from_secs(60),
     )?;
     let Json(v) = body.map_err(|_| {
@@ -97,9 +126,9 @@ pub async fn complete(
     {
         return Err(expired());
     }
+    auth::charge_shared_attempt(&s, "login-mfa-global", &group)?;
     let verifier = db::hash(&v.challenge_token);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let challenge = sqlx::query("SELECT * FROM login_challenges WHERE verifier=?")
         .bind(&verifier)
         .fetch_optional(&mut *tx)
@@ -130,11 +159,7 @@ pub async fn complete(
         tx.commit().await?;
         return Err(expired());
     }
-    s.limit(
-        format!("login-mfa:{id}"),
-        10,
-        std::time::Duration::from_secs(300),
-    )?;
+    charge_factor_attempt(&s, &id)?;
     if let Err(error) = crate::mfa::verify_login(
         &s,
         &mut tx,
@@ -162,16 +187,20 @@ pub async fn complete(
         db::audit(&mut tx, &id, "login.mfa", "", "denied").await?;
         tx.commit().await?;
         return Err(if attempts >= 5 {
-            expired()
+            too_many_attempts()
         } else {
             ApiError::new(
                 StatusCode::UNAUTHORIZED,
                 "INVALID_MFA_CODE",
-                "Authenticator or recovery code is invalid or already used",
+                "That code didn't work. Enter the current code from your authenticator app.",
             )
         });
     }
-    let response = auth::finish_login(&s, &mut tx, &h, auth::public_user(&user.unwrap())).await?;
+    // The factor verified: only now is this a completed sign-in, and the
+    // client a client of the account.
+    let user = user.unwrap();
+    let response = auth::finish_login(&s, &mut tx, &h, &client, auth::public_user(&user)).await?;
     tx.commit().await?;
+    auth::signed_in(&s, &user.get::<String, _>("email"), &client);
     Ok(response)
 }

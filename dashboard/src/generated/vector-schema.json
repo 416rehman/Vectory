@@ -4755,7 +4755,10 @@
           "type": "null"
         },
         {
-          "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString"
+          "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
+          "_metadata": {
+            "sensitive": true
+          }
         }
       ],
       "unevaluatedProperties": false
@@ -5058,7 +5061,8 @@
               "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
               "_metadata": {
                 "docs::examples": "AKIAIOSFODNN7EXAMPLE",
-                "docs::human_name": "Access Key ID"
+                "docs::human_name": "Access Key ID",
+                "sensitive": true
               },
               "description": "The AWS access key ID."
             },
@@ -5105,7 +5109,8 @@
               "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
               "_metadata": {
                 "docs::examples": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-                "docs::human_name": "Secret Access Key"
+                "docs::human_name": "Secret Access Key",
+                "sensitive": true
               },
               "description": "The AWS secret access key."
             },
@@ -5126,7 +5131,8 @@
               "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
               "_metadata": {
                 "docs::examples": "AQoDYXdz...AQoDYXdz...",
-                "docs::human_name": "Session Token"
+                "docs::human_name": "Session Token",
+                "sensitive": true
               },
               "description": "The AWS session token.\nSee [AWS temporary credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html)"
             }
@@ -5419,7 +5425,8 @@
                   "${PASSWORD}",
                   "password"
                 ],
-                "docs::human_name": "Password"
+                "docs::human_name": "Password",
+                "sensitive": true
               },
               "description": "The basic authentication password."
             },
@@ -5437,7 +5444,8 @@
                   "${USERNAME}",
                   "username"
                 ],
-                "docs::human_name": "Username"
+                "docs::human_name": "Username",
+                "sensitive": true
               },
               "description": "The basic authentication username.",
               "type": "string"
@@ -5535,7 +5543,8 @@
         "password": {
           "_metadata": {
             "docs::human_name": "Password",
-            "docs::optional": true
+            "docs::optional": true,
+            "sensitive": true
           },
           "default": null,
           "description": "MQTT password.",
@@ -7012,7 +7021,8 @@
         "api_key": {
           "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
           "_metadata": {
-            "docs::human_name": "API Key"
+            "docs::human_name": "API Key",
+            "sensitive": true
           },
           "description": "Either an API key or a path to a service account credentials JSON file can be specified.\n\nIf both are unset, the `GOOGLE_APPLICATION_CREDENTIALS` environment variable is checked for a filename. If no\nfilename is named, an attempt is made to fetch an instance service account for the compute instance the program is\nrunning on. If this is not on a GCE instance, then you must define it with an API key or service account\ncredentials JSON file.\n\n[gcp_api_key]: https://cloud.google.com/docs/authentication/api-keys",
           "title": "An [API key][gcp_api_key]."
@@ -7063,7 +7073,8 @@
                   "${PASSWORD}",
                   "password"
                 ],
-                "docs::human_name": "Password"
+                "docs::human_name": "Password",
+                "sensitive": true
               },
               "description": "The basic authentication password."
             },
@@ -7081,7 +7092,8 @@
                   "${USERNAME}",
                   "username"
                 ],
-                "docs::human_name": "User"
+                "docs::human_name": "User",
+                "sensitive": true
               },
               "description": "The basic authentication username.",
               "type": "string"
@@ -7113,7 +7125,8 @@
             "token": {
               "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
               "_metadata": {
-                "docs::human_name": "Token"
+                "docs::human_name": "Token",
+                "sensitive": true
               },
               "description": "The bearer authentication token."
             }
@@ -7400,7 +7413,8 @@
           "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
           "_metadata": {
             "docs::examples": "password",
-            "docs::human_name": "Password"
+            "docs::human_name": "Password",
+            "sensitive": true
           },
           "description": "The SASL password."
         },
@@ -7637,7 +7651,8 @@
         "value": {
           "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
           "_metadata": {
-            "docs::human_name": "Value"
+            "docs::human_name": "Value",
+            "sensitive": true
           },
           "description": "Token."
         }
@@ -7654,7 +7669,8 @@
         "password": {
           "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
           "_metadata": {
-            "docs::human_name": "Password"
+            "docs::human_name": "Password",
+            "sensitive": true
           },
           "description": "Password."
         },
@@ -10058,7 +10074,8 @@
               "00000000-0000-0000-0000-000000000000",
               "${APPSIGNAL_PUSH_API_KEY}"
             ],
-            "docs::human_name": "Push API Key"
+            "docs::human_name": "Push API Key",
+            "sensitive": true
           },
           "description": "A valid app-level AppSignal Push API key."
         },
@@ -12157,7 +12174,8 @@
                   "${AXIOM_TOKEN}",
                   "123abc"
                 ],
-                "docs::human_name": "Token"
+                "docs::human_name": "Token",
+                "sensitive": true
               },
               "description": "The Axiom API token."
             }
@@ -12379,7 +12397,8 @@
                   "blob_endpoint"
                 ],
                 "docs::required_one_of_group": "azure_blob_credentials",
-                "docs::warnings": "Access keys and SAS tokens can be used to gain unauthorized access to Azure Blob Storage resources. Numerous security breaches have occurred due to leaked connection strings. It is important to keep connection strings secure and not expose them in logs, error messages, or version control systems."
+                "docs::warnings": "Access keys and SAS tokens can be used to gain unauthorized access to Azure Blob Storage resources. Numerous security breaches have occurred due to leaked connection strings. It is important to keep connection strings secure and not expose them in logs, error messages, or version control systems.",
+                "sensitive": true
               },
               "description": "Authentication with an access key or shared access signature (SAS)\nare supported authentication methods. If using a non-account SAS,\nhealthchecks will fail and will need to be disabled by setting\n`healthcheck.enabled` to `false` for this sink\n\nWhen generating an account SAS, the following are the minimum required option\nsettings for Vector to access blob storage and pass a health check.\n| Option                 | Value              |\n| ---------------------- | ------------------ |\n| Allowed services       | Blob               |\n| Allowed resource types | Container & Object |\n| Allowed permissions    | Read & Create      |\n\nIf you also configure the `tags` option, the SAS must include the\n`Tags` permission. Azure applies the *Set Blob Tags* authorization requirement to\nthe `Put Blob` request that carries the `x-ms-tags` header, so without it tagged\nuploads fail with an authorization error even when the health check still passes.",
               "title": "The Azure Blob Storage Account connection string."
@@ -12748,7 +12767,8 @@
               "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
               "_metadata": {
                 "docs::examples": "${AZURE_CLIENT_CERTIFICATE_PASSWORD}",
-                "docs::human_name": "Certificate Password"
+                "docs::human_name": "Certificate Password",
+                "sensitive": true
               },
               "description": "The password for the client certificate, if applicable."
             },
@@ -12798,7 +12818,8 @@
                   "00-00~000000-0000000~0000000000000000000",
                   "${AZURE_CLIENT_SECRET:?err}"
                 ],
-                "docs::human_name": "Azure Client Secret"
+                "docs::human_name": "Azure Client Secret",
+                "sensitive": true
               },
               "description": "[azure_client_secret]: https://learn.microsoft.com/entra/identity-platform/howto-create-service-principal-portal",
               "title": "The [Azure Client Secret][azure_client_secret]."
@@ -14023,7 +14044,8 @@
                       "${DATABRICKS_CLIENT_ID}",
                       "abc123..."
                     ],
-                    "docs::human_name": "Client ID"
+                    "docs::human_name": "Client ID",
+                    "sensitive": true
                   },
                   "description": "OAuth 2.0 client ID."
                 },
@@ -14034,7 +14056,8 @@
                       "${DATABRICKS_CLIENT_SECRET}",
                       "secret123..."
                     ],
-                    "docs::human_name": "Client Secret"
+                    "docs::human_name": "Client Secret",
+                    "sensitive": true
                   },
                   "description": "OAuth 2.0 client secret."
                 },
@@ -14247,7 +14270,8 @@
               "${DATADOG_API_KEY_ENV_VAR}",
               "ef8d5de700e7989468166c40fc8a0ccd"
             ],
-            "docs::human_name": "Default API Key"
+            "docs::human_name": "Default API Key",
+            "sensitive": true
           },
           "description": "If an event has a Datadog [API key][api_key] set explicitly in its metadata, it takes\nprecedence over this setting.\n\nThis value can also be set by specifying the `DD_API_KEY` environment variable.\nThe value specified here takes precedence over the environment variable.\n\n[api_key]: https://docs.datadoghq.com/api/?lang=bash#authentication\n[global_options]: /docs/reference/configuration/global-options/#datadog",
           "title": "The default Datadog [API key][api_key] to use in authentication of HTTP requests."
@@ -15010,7 +15034,8 @@
                               "${ELASTICSEARCH_PASSWORD}",
                               "password"
                             ],
-                            "docs::human_name": "Password"
+                            "docs::human_name": "Password",
+                            "sensitive": true
                           },
                           "description": "Basic authentication password."
                         },
@@ -15027,7 +15052,8 @@
                               "${ELASTICSEARCH_USERNAME}",
                               "username"
                             ],
-                            "docs::human_name": "User"
+                            "docs::human_name": "User",
+                            "sensitive": true
                           },
                           "description": "Basic authentication username.",
                           "type": "string"
@@ -15062,7 +15088,8 @@
                                   "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
                                   "_metadata": {
                                     "docs::examples": "AKIAIOSFODNN7EXAMPLE",
-                                    "docs::human_name": "Access Key ID"
+                                    "docs::human_name": "Access Key ID",
+                                    "sensitive": true
                                   },
                                   "description": "The AWS access key ID."
                                 },
@@ -15109,7 +15136,8 @@
                                   "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
                                   "_metadata": {
                                     "docs::examples": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-                                    "docs::human_name": "Secret Access Key"
+                                    "docs::human_name": "Secret Access Key",
+                                    "sensitive": true
                                   },
                                   "description": "The AWS secret access key."
                                 },
@@ -15130,7 +15158,8 @@
                                   "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
                                   "_metadata": {
                                     "docs::examples": "AQoDYXdz...AQoDYXdz...",
-                                    "docs::human_name": "Session Token"
+                                    "docs::human_name": "Session Token",
+                                    "sensitive": true
                                   },
                                   "description": "The AWS session token.\nSee [AWS temporary credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html)"
                                 }
@@ -18094,7 +18123,8 @@
               "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
               "_metadata": {
                 "docs::examples": "password",
-                "docs::human_name": "Password"
+                "docs::human_name": "Password",
+                "sensitive": true
               },
               "default": null,
               "description": "This is required if your instance has authentication enabled.",
@@ -18267,7 +18297,8 @@
           "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
           "_metadata": {
             "docs::examples": "password",
-            "docs::human_name": "Password"
+            "docs::human_name": "Password",
+            "sensitive": true
           },
           "default": null,
           "description": "This is required if your instance has authentication enabled.",
@@ -18348,7 +18379,8 @@
               "${HONEYCOMB_API_KEY}",
               "some-api-key"
             ],
-            "docs::human_name": "API Key"
+            "docs::human_name": "API Key",
+            "sensitive": true
           },
           "description": "The API key that is used to authenticate against Honeycomb."
         },
@@ -18884,7 +18916,8 @@
                   "${HUMIO_TOKEN}",
                   "A94A8FE5CCB19BA61C4C08"
                 ],
-                "docs::human_name": "Token"
+                "docs::human_name": "Token",
+                "sensitive": true
               },
               "description": "The Humio ingestion token."
             }
@@ -19048,7 +19081,8 @@
                   "${HUMIO_TOKEN}",
                   "A94A8FE5CCB19BA61C4C08"
                 ],
-                "docs::human_name": "Token"
+                "docs::human_name": "Token",
+                "sensitive": true
               },
               "description": "The Humio ingestion token."
             }
@@ -19290,7 +19324,8 @@
           "_metadata": {
             "docs::examples": "${INFLUXDB_PASSWORD}",
             "docs::human_name": "Password",
-            "docs::relevant_when": "version = \"1\""
+            "docs::relevant_when": "version = \"1\"",
+            "sensitive": true
           },
           "description": "Only relevant when using InfluxDB v0.x/v1.x.",
           "title": "The password to authenticate with."
@@ -19371,7 +19406,8 @@
             "docs::human_name": "Token",
             "docs::minimal": true,
             "docs::relevant_when": "version = \"2\"",
-            "docs::required_when": "version = \"2\""
+            "docs::required_when": "version = \"2\"",
+            "sensitive": true
           },
           "description": "Only relevant when using InfluxDB v2.x and above.\n\n[token_docs]: https://v2.docs.influxdata.com/v2.0/security/tokens/",
           "title": "The [token][token_docs] to authenticate with."
@@ -19579,7 +19615,8 @@
           "_metadata": {
             "docs::examples": "${INFLUXDB_PASSWORD}",
             "docs::human_name": "Password",
-            "docs::relevant_when": "version = \"1\""
+            "docs::relevant_when": "version = \"1\"",
+            "sensitive": true
           },
           "description": "Only relevant when using InfluxDB v0.x/v1.x.",
           "title": "The password to authenticate with."
@@ -19676,7 +19713,8 @@
             "docs::human_name": "Token",
             "docs::minimal": true,
             "docs::relevant_when": "version = \"2\"",
-            "docs::required_when": "version = \"2\""
+            "docs::required_when": "version = \"2\"",
+            "sensitive": true
           },
           "description": "Only relevant when using InfluxDB v2.x and above.\n\n[token_docs]: https://v2.docs.influxdata.com/v2.0/security/tokens/",
           "title": "The [token][token_docs] to authenticate with."
@@ -20021,7 +20059,8 @@
               "${KEEP_API_KEY}",
               "keepappkey"
             ],
-            "docs::human_name": "API Key"
+            "docs::human_name": "API Key",
+            "sensitive": true
           },
           "description": "The API key that is used to authenticate against Keep."
         },
@@ -20449,7 +20488,8 @@
               "${LOGDNA_API_KEY}",
               "ef8d5de700e7989468166c40fc8a0ccd"
             ],
-            "docs::human_name": "API Key"
+            "docs::human_name": "API Key",
+            "sensitive": true
           },
           "description": "The Ingestion API key."
         },
@@ -20986,7 +21026,8 @@
               "xxxx",
               "${NEW_RELIC_ACCOUNT_KEY}"
             ],
-            "docs::human_name": "Account ID"
+            "docs::human_name": "Account ID",
+            "sensitive": true
           },
           "description": "The New Relic account ID."
         },
@@ -21123,7 +21164,8 @@
               "xxxx",
               "${NEW_RELIC_LICENSE_KEY}"
             ],
-            "docs::human_name": "License Key"
+            "docs::human_name": "License Key",
+            "sensitive": true
           },
           "description": "A valid New Relic license key."
         },
@@ -21596,7 +21638,8 @@
                       "properties": {
                         "password": {
                           "_metadata": {
-                            "docs::human_name": "Password"
+                            "docs::human_name": "Password",
+                            "sensitive": true
                           },
                           "description": "Basic authentication password.",
                           "type": "string"
@@ -21610,7 +21653,8 @@
                         },
                         "user": {
                           "_metadata": {
-                            "docs::human_name": "User"
+                            "docs::human_name": "User",
+                            "sensitive": true
                           },
                           "description": "Basic authentication username.",
                           "type": "string"
@@ -21641,7 +21685,8 @@
                         "token": {
                           "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
                           "_metadata": {
-                            "docs::human_name": "Token"
+                            "docs::human_name": "Token",
+                            "sensitive": true
                           },
                           "description": "The bearer token to send."
                         }
@@ -21675,7 +21720,8 @@
                                   "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
                                   "_metadata": {
                                     "docs::examples": "AKIAIOSFODNN7EXAMPLE",
-                                    "docs::human_name": "Access Key ID"
+                                    "docs::human_name": "Access Key ID",
+                                    "sensitive": true
                                   },
                                   "description": "The AWS access key ID."
                                 },
@@ -21722,7 +21768,8 @@
                                   "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
                                   "_metadata": {
                                     "docs::examples": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-                                    "docs::human_name": "Secret Access Key"
+                                    "docs::human_name": "Secret Access Key",
+                                    "sensitive": true
                                   },
                                   "description": "The AWS secret access key."
                                 },
@@ -21743,7 +21790,8 @@
                                   "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
                                   "_metadata": {
                                     "docs::examples": "AQoDYXdz...AQoDYXdz...",
-                                    "docs::human_name": "Session Token"
+                                    "docs::human_name": "Session Token",
+                                    "sensitive": true
                                   },
                                   "description": "The AWS session token.\nSee [AWS temporary credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html)"
                                 }
@@ -22490,7 +22538,8 @@
                           "${PULSAR_TOKEN}",
                           "123456789"
                         ],
-                        "docs::human_name": "Token"
+                        "docs::human_name": "Token",
+                        "sensitive": true
                       },
                       "description": "This can be used either for basic authentication (username/password) or JWT authentication.\nWhen used for JWT, the value should be the signed JWT, in the compact representation.",
                       "title": "Basic authentication password/token."
@@ -23194,7 +23243,8 @@
                             "password": {
                               "_metadata": {
                                 "docs::human_name": "Password",
-                                "docs::optional": true
+                                "docs::optional": true,
+                                "sensitive": true
                               },
                               "description": "Optionally, the password to connection with.",
                               "type": [
@@ -23495,7 +23545,8 @@
               "${SEMATEXT_TOKEN}",
               "some-sematext-token"
             ],
-            "docs::human_name": "Token"
+            "docs::human_name": "Token",
+            "sensitive": true
           },
           "description": "The token that is used to write to Sematext."
         }
@@ -23651,7 +23702,8 @@
               "${SEMATEXT_TOKEN}",
               "some-sematext-token"
             ],
-            "docs::human_name": "Token"
+            "docs::human_name": "Token",
+            "sensitive": true
           },
           "description": "The token that is used to write to Sematext."
         }
@@ -24086,7 +24138,8 @@
             "default_token": {
               "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
               "_metadata": {
-                "docs::human_name": "Default Token"
+                "docs::human_name": "Default Token",
+                "sensitive": true
               },
               "description": "If an event has a token set in its secrets (`splunk_hec_token`), it prevails over the one set here.",
               "title": "Default Splunk HEC token."
@@ -24322,7 +24375,8 @@
                   "${SPLUNK_HEC_TOKEN}",
                   "A94A8FE5CCB19BA61C4C08"
                 ],
-                "docs::human_name": "Default Token"
+                "docs::human_name": "Default Token",
+                "sensitive": true
               },
               "description": "If an event has a token set in its metadata, it prevails over the one set here.",
               "title": "Default Splunk HEC token."
@@ -28171,7 +28225,8 @@
           "_metadata": {
             "deprecated_message": "This option has been deprecated, use `access_keys` instead.",
             "docs::examples": "A94A8FE5CCB19BA61C4C08",
-            "docs::human_name": "Access Key"
+            "docs::human_name": "Access Key",
+            "sensitive": true
           },
           "deprecated": true,
           "description": "AWS Kinesis Firehose can be configured to pass along a user-configurable access key with each request. If\nconfigured, `access_key` should be set to the same value. Otherwise, all requests are allowed.",
@@ -28189,7 +28244,10 @@
           },
           "description": "AWS Kinesis Firehose can be configured to pass along a user-configurable access key with each request. If\nconfigured, `access_keys` should be set to the same value. Otherwise, all requests are allowed.",
           "items": {
-            "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString"
+            "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
+            "_metadata": {
+              "sensitive": true
+            }
           },
           "title": "A list of access keys to authenticate requests against.",
           "type": [
@@ -33266,7 +33324,8 @@
         "token": {
           "_metadata": {
             "docs::examples": "00xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-            "docs::human_name": "Token"
+            "docs::human_name": "Token",
+            "sensitive": true
           },
           "description": "API token for authentication",
           "type": "string"
@@ -33921,7 +33980,8 @@
                           "${PULSAR_TOKEN}",
                           "123456789"
                         ],
-                        "docs::human_name": "Token"
+                        "docs::human_name": "Token",
+                        "sensitive": true
                       },
                       "description": "This can be used either for basic authentication (username/password) or JWT authentication.\nWhen used for JWT, the value should be the signed JWT, in the compact representation.",
                       "title": "Basic authentication password/token."
@@ -35098,7 +35158,8 @@
           "$ref": "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>",
           "_metadata": {
             "deprecated_message": "This option has been deprecated, use `valid_tokens` instead.",
-            "docs::human_name": "Token"
+            "docs::human_name": "Token",
+            "sensitive": true
           },
           "deprecated": true,
           "description": "If supplied, incoming requests must supply this token in the `Authorization` header, just as a client would if\nit was communicating with the Splunk HEC endpoint directly.\n\nIf _not_ supplied, the `Authorization` header is ignored and requests are not authenticated.",
@@ -35113,7 +35174,10 @@
           },
           "description": "If supplied, incoming requests must supply one of these tokens in the `Authorization` header, just as a client\nwould if it was communicating with the Splunk HEC endpoint directly.\n\nIf _not_ supplied, the `Authorization` header is ignored and requests are not authenticated.",
           "items": {
-            "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString"
+            "$ref": "#/definitions/vector_common::sensitive_string::SensitiveString",
+            "_metadata": {
+              "sensitive": true
+            }
           },
           "title": "A list of valid authorization tokens.",
           "type": [
@@ -40951,7 +41015,8 @@
               "PassWord1"
             ],
             "docs::human_name": "Key File Password",
-            "docs::optional": true
+            "docs::optional": true,
+            "sensitive": true
           },
           "description": "This has no effect unless `key_file` is set.",
           "title": "Passphrase used to unlock the encrypted key file.",

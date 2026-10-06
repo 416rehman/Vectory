@@ -1,146 +1,377 @@
-.deployment-toolbar {
-  align-items: end;
-  justify-content: flex-start;
-  gap: 12px;
-}
-.deployment-toolbar .search-field {
-  margin-bottom: 1px;
-  flex: 1 1 240px;
-}
-.deployment-toolbar > .button {
-  margin-left: auto;
+/* Tables become cards on a phone and lose their column filters; this select
+   takes over there. */
+.deployment-mobile-filter {
+  display: none;
 }
 .deployment-table td:first-child {
-  min-width: 160px;
-}
-.deployment-inspector .activity-detail-actions {
-  border-top: 0;
-  padding-top: 0;
-}
-.deployment-inspector .control-inline-actions:empty {
-  display: none;
+  min-width: 180px;
 }
 .deployment-page .control-empty .button {
   display: inline-flex;
   margin: 12px 0 0 12px;
 }
-.deployment-inspector .activity-detail-head p {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+.deployment-status-cell {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
 }
-.deployment-device-results {
-  margin: 24px 0;
+.deployment-status-cell small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
-.deployment-device-results h3 {
-  font-size: 15px;
-  margin: 0 0 14px;
+.deployment-devices-cell {
+  display: grid;
+  gap: 7px;
+  min-width: 150px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
-.deployment-targets {
-  width: 100%;
-  border-collapse: collapse;
+/* A note after the count stays whole when the line wraps: "· 1 failed". */
+.rollout-count-note {
+  white-space: nowrap;
+}
+.deployment-failed-count {
+  color: var(--rollout-danger-ink);
+  font-weight: 600;
+}
+.deployment-lineage {
+  color: var(--muted);
+}
+a.control-row-title {
+  text-decoration: none;
+}
+
+/* Rollout page */
+.rollout-page {
+  min-width: 0;
+}
+/* The shared page header keeps its own spacing; the body sections stack. */
+.rollout-page > :where(:not(.page-context, .page-heading, .page-tabs)) + * {
+  margin-top: 22px;
+}
+.rollout-page .page-meta {
+  display: grid;
+  gap: var(--space-2);
+}
+.rollout-skeleton {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+.rollout-skeleton-card {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.rollout-version {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.rollout-status-note {
+  color: var(--muted);
   font-size: 13px;
 }
-.deployment-targets th {
-  text-align: left;
-  font-size: 12px;
+.rollout-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.rollout-meta li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  /* A long name (the person who created it) wraps instead of widening the page. */
+  overflow-wrap: anywhere;
+}
+.rollout-meta li.rollout-meta-status {
+  gap: 8px;
+  white-space: normal;
+}
+.rollout-meta svg {
+  flex: none;
+  color: var(--muted);
+}
+.rollout-meta a {
+  color: var(--accent-ink);
+  text-underline-offset: 3px;
+}
+.rollout-lineage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rollout-lineage a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
   font-weight: 500;
+  text-decoration: none;
+}
+.rollout-lineage a:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+.rollout-lineage-icon {
+  color: var(--muted);
+}
+.rollout-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.button.is-unavailable {
+  opacity: 0.55;
+  cursor: help;
+}
+a.rollout-fix-link {
+  text-decoration: none;
+}
+.rollout-menu-trigger > svg:last-child {
+  margin-left: 2px;
+  color: var(--muted);
+}
+/* Stop rollout: each way to stop or undo it, with what it does. */
+.rollout-menu {
+  z-index: 2200;
+  width: max-content;
+  min-width: 260px;
+  max-width: min(340px, calc(100vw - 24px));
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.rollout-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 5px;
+  outline: none;
+  cursor: pointer;
+}
+.rollout-menu-item[data-highlighted] {
+  background: var(--surface-soft);
+}
+.rollout-menu-item > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.rollout-menu-item > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.rollout-menu-item strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.rollout-menu-item small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.rollout-menu-item[data-unavailable] strong {
+  color: var(--muted);
+}
+.rollout-card {
+  padding: 18px 20px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.rollout-summary {
+  display: grid;
+  gap: 14px;
+}
+.rollout-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 16px;
+}
+.rollout-summary-head p {
+  margin: 0;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.rollout-summary-head strong {
+  font-size: 22px;
+  letter-spacing: -0.4px;
+}
+.rollout-summary-head .control-muted {
+  font-size: 13px;
+}
+.rollout-section {
+  display: grid;
+  gap: 12px;
+}
+.rollout-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.rollout-section-head h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -0.2px;
+}
+.rollout-section-head .control-muted {
+  font-size: 13px;
+}
+.rollout-section-head .search-field {
+  flex: 0 1 300px;
+  min-width: 0;
+}
+.rollout-unavailable {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.rollout-unavailable h1,
+.rollout-unavailable p {
+  margin: 0;
+}
+.rollout-note {
+  margin: -8px 0 0;
+  font-size: 13px;
+}
+.rollout-rolled-back-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  line-height: 1.5;
+}
+.rollout-rolled-back-note > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--muted);
+}
+.deployment-membership-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Device results */
+.deployment-device-results {
+  display: grid;
+  gap: 12px;
 }
 .deployment-targets td {
-  padding: 13px 12px;
-  border-bottom: 1px solid var(--line);
   vertical-align: top;
   overflow-wrap: anywhere;
 }
 .deployment-targets td:first-child {
-  min-width: 130px;
+  min-width: 150px;
 }
 .deployment-targets td:nth-child(2) {
-  min-width: 140px;
+  min-width: 380px;
 }
-.deployment-targets td:last-child {
-  width: 45%;
+/* Failure reasons wrap inside the column; table cells default to one line.
+   Nested under .control-table so the wrapping wins whichever stylesheet the
+   build loads last. */
+.control-table .deployment-targets td:last-child {
+  width: 34%;
+  white-space: normal;
 }
 .deployment-targets a {
   color: var(--accent-ink);
   text-underline-offset: 3px;
 }
-.deployment-inspector .control-summary-list dd {
-  overflow-wrap: anywhere;
-}
-.deployment-removed-count {
+.deployment-targets small {
   display: block;
-  margin-top: 5px;
+  margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
-.deployment-membership-note {
-  margin: 12px 0 20px;
-  font-size: 13px;
-  line-height: 1.6;
+.deployment-targets .rollout-device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 7px;
+}
+.deployment-targets .rollout-device-meta > span + span {
+  white-space: nowrap;
+}
+.rollout-stage-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.rollout-progress-cell {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+.rollout-diagnostic {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.rollout-diagnostic > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rollout-diagnostic small,
+.rollout-diagnostic .rollout-code {
+  color: var(--muted);
+  font-size: 11.5px;
 }
 .deployment-target-history {
   display: block;
   margin-top: 5px;
 }
-.deployment-permalink {
-  margin: 12px 0 20px;
-}
-.deployment-permalink-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 12px;
-}
-.deployment-permalink a {
-  color: var(--accent-ink);
-  text-underline-offset: 3px;
-}
-.deployment-link-fallback {
-  margin-top: 12px;
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-.deployment-link-fallback input {
-  width: 100%;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-}
-.deployment-link-fallback p {
-  margin: 0;
-}
-.deployment-unavailable {
-  display: grid;
-  justify-items: start;
-  gap: 12px;
-}
-a.control-row-title {
-  text-decoration: none;
-}
-@media (max-width: 720px) {
-  .deployment-toolbar .search-field {
-    flex-basis: 100%;
-    min-width: 0;
-  }
-  .deployment-page .activity-progress {
-    min-width: 0;
-  }
-  .deployment-device-results .pagination {
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-}
+
+/* Action dialog notes */
 .deployment-blocked-help {
   display: grid;
   gap: 6px;
@@ -159,7 +390,6 @@ a.control-row-title {
 }
 .deployment-status-review {
   padding: 14px;
-  margin-bottom: 18px;
   background: var(--surface-hover);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -168,4 +398,184 @@ a.control-row-title {
 .deployment-status-review p {
   margin: 0 0 12px;
   line-height: 1.6;
+}
+
+/* Retry dialog */
+.deployment-retry {
+  display: grid;
+  gap: 14px;
+}
+.deployment-retry-reason {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-hover);
+  font-size: 13px;
+}
+.deployment-retry-reason code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.deployment-retry-list {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.deployment-retry-all {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.deployment-retry-list ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.deployment-retry-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 12px;
+}
+.deployment-retry-list li + li {
+  border-top: 1px solid var(--line);
+}
+.deployment-retry-list li[data-blocked] {
+  background: var(--surface-hover);
+}
+.deployment-retry-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.deployment-retry-list input {
+  margin-top: 3px;
+}
+.deployment-retry-device {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.deployment-retry-device small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.deployment-retry-outcome {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  max-width: 260px;
+  text-align: right;
+}
+.deployment-retry-outcome small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Where the page heading stacks, its actions have the full width, and a label
+   that names a pipeline and version ("Open rollback (Edge syslog processing
+   v2)") wraps inside it instead of widening the page. Wider, a button keeps
+   its one line: wrapping would let the heading squeeze it. */
+@media (max-width: 760px) {
+  .rollout-action-row > .button {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 720px) {
+  .deployment-device-results .pagination {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .rollout-action-row {
+    justify-content: flex-start;
+  }
+  .rollout-card {
+    padding: 16px;
+  }
+  .rollout-section-head .search-field {
+    flex-basis: 100%;
+  }
+  .deployment-retry-outcome {
+    justify-items: start;
+    text-align: left;
+  }
+}
+@media (max-width: 639px) {
+  .deployment-mobile-filter {
+    display: block;
+    flex: 1 1 100%;
+  }
+  .deployment-mobile-filter select {
+    width: 100%;
+    min-height: 36px;
+  }
+  .deployment-device-results .data-list-meta > span:has(> .rollout-timeline),
+  .deployment-device-results
+    .data-list-meta
+    > span:has(> .rollout-mobile-details) {
+    flex-basis: 100%;
+  }
+  /* A device's card: its name and state share the title row, and nothing in
+     the card is wider than the card, whatever the name or the reason says. */
+  .deployment-device-results .data-list-title {
+    display: block;
+    overflow: visible;
+  }
+  .rollout-card-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 4px var(--space-2);
+  }
+  /* A short name keeps the state beside it; a name too long for that takes
+     the row and the state drops under it, never off the card. */
+  .rollout-card-title > a,
+  .rollout-card-title > .retired-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .rollout-card-title > .status-badge {
+    flex: none;
+    max-width: 100%;
+  }
+  .deployment-device-results .data-list-meta {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .deployment-device-results .data-list-meta > span {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .rollout-mobile-details {
+    display: block;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .rollout-action-row {
+    flex-wrap: wrap;
+  }
 }

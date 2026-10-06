@@ -1,0 +1,584 @@
+/** Pure Overview logic: health buckets, telemetry coverage, what runs where. */
+import { nameList } from "./activityModel";
+import { countLabel } from "./countLabel";
+import { deviceStatuses } from "./status";
+import type {
+  OverviewBusyDevice,
+  OverviewCounts,
+  OverviewRunning,
+} from "./api";
+
+export type HealthBucket =
+  | "applied"
+  | "degraded"
+  | "held"
+  | "updating"
+  | "check"
+  | "failed"
+  | "offline"
+  | "paused"
+  | "unmanaged";
+export const healthOrder: HealthBucket[] = [
+  "applied",
+  "degraded",
+  "held",
+  "updating",
+  "check",
+  "failed",
+  "offline",
+  "paused",
+  "unmanaged",
+];
+export const healthLabels: Record<HealthBucket, string> = {
+  applied: deviceStatuses.verified.label,
+  degraded: deviceStatuses.degraded.label,
+  held: deviceStatuses.held.label,
+  updating: deviceStatuses.applying.label,
+  check: deviceStatuses.verification_unknown.label,
+  failed: deviceStatuses.failed.label,
+  offline: deviceStatuses.offline.label,
+  paused: deviceStatuses.paused.label,
+  unmanaged: deviceStatuses.unmanaged.label,
+};
+/** The device states each bucket stands for (for filters and links). */
+export const healthStates: Record<HealthBucket, string[]> = {
+  applied: ["verified"],
+  // Applied, but an open data-plane issue says it isn't delivering.
+  degraded: ["degraded"],
+  // The newest version failed; the device still runs an earlier one and delivers.
+  held: ["held"],
+  updating: ["applying"],
+  check: ["verification_unknown"],
+  failed: ["failed", "rolled_back", "conflict"],
+  // Never connected is still not connected: it is not an update in progress.
+  offline: ["offline", "awaiting_first_check_in"],
+  paused: ["paused", "pause_requested"],
+  unmanaged: ["unmanaged"],
+};
+
+export const TELEMETRY_FRESH_MS = 3 * 60 * 1000;
+export type FleetTelemetry = {
+  /** Live devices that could report (not revoked). */
+  eligible: number;
+  /** Devices with a sample in the last three minutes. */
+  reporting: number;
+  /** Devices whose last sample is older than that. */
+  stale: number;
+  /** Sum of fresh events/s, or null when no fresh device reports a rate. */
+  eventsPerSecond: number | null;
+  /** Devices contributing to the events/s sum. */
+  rateDevices: number;
+  /** Sum of fresh sink delivery rates, when agents report them. */
+  eventsOutPerSecond: number | null;
+  outDevices: number;
+  /** Sum of cumulative component errors since each Vector started. */
+  errors: number | null;
+  /** Sum of fresh error rates, when agents report them. */
+  errorsPerMinute: number | null;
+  /** Devices without a fresh sample whose agent settings turn metrics off. */
+  disabled: number;
+  top: FleetDeviceRate[];
+  freshest: string | null;
+};
+export type FleetDeviceRate = {
+  id: string;
+  name: string;
+  eventsPerSecond: number;
+  /** Sink delivery rate when the agent reports it, else null. */
+  eventsOutPerSecond: number | null;
+};
+export const present = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+/**
+ * Fleet throughput as the server summed it from each device's latest sample.
+ * Missing data stays missing: a fleet no fresh device reported on has a null
+ * total, never a zero.
+ */
+export function telemetryFromCounts(
+  telemetry: OverviewCounts["telemetry"],
+  busiest: OverviewBusyDevice[],
+): FleetTelemetry {
+  return {
+    eligible: telemetry.eligible,
+    reporting: telemetry.reporting,
+    stale: telemetry.stale,
+    eventsPerSecond: telemetry.events_in_per_second,
+    rateDevices: telemetry.events_in_devices,
+    eventsOutPerSecond: telemetry.events_out_per_second,
+    outDevices: telemetry.events_out_devices,
+    errors: telemetry.errors,
+    errorsPerMinute: telemetry.errors_per_minute,
+    disabled: telemetry.disabled,
+    top: busiest.map((device) => ({
+      id: device.id,
+      name: device.name,
+      eventsPerSecond: device.events_in_per_second,
+      eventsOutPerSecond: device.events_out_per_second,
+    })),
+    freshest: telemetry.newest_sample_at,
+  };
+}
+
+/** Whether the agent sent a metrics sample in the last three minutes. */
+export function reportsMetrics(
+  device: { telemetry?: { sampled_at: string } | null },
+  now = Date.now(),
+) {
+  const sampled = Date.parse(device.telemetry?.sampled_at || "");
+  return Number.isFinite(sampled) && now - sampled <= TELEMETRY_FRESH_MS;
+}
+/** "Nothing is failing" only where Vectory measures delivery everywhere. */
+export function quietSummary(unmeasured: number) {
+  return unmeasured
+    ? "Nothing is failing that Vectory can measure"
+    : "Nothing is failing";
+}
+/** A device that sent no metrics sample lately, as the Devices read lists it. */
+export type SilentDevice = {
+  id: string;
+  name: string;
+  effective_policy?: { telemetry_enabled: boolean } | null;
+  policy_assignment?: {
+    policy_name?: string | null;
+    name?: string | null;
+  } | null;
+  /** The version it last verified; null or absent when it runs no pipeline. */
+  running_version?: {
+    id: string;
+    number: number | null;
+    configuration_id: string | null;
+    configuration_name: string | null;
+  } | null;
+};
+/** Why devices have no metrics, and what to do about each reason. */
+export type MetricsAdvice = {
+  /** Devices whose agent settings turn metrics off, with the settings each runs. */
+  settingsOff: { id: string; name: string; settings: string | null }[];
+  /** Devices that run no pipeline: nothing to read until the first deployment. */
+  noPipeline: number;
+  /** Devices whose running version has no metrics exporter. */
+  noExporter: number;
+  /** The pipeline most of those run, where "Add monitoring" belongs. */
+  monitoring: { id: string; name: string; devices: number } | null;
+  /**
+   * Exporters the versions silent devices run already have. An agent reads
+   * only one on a literal loopback address.
+   */
+  exporters: { pipeline: string; address: string; loopback: boolean }[];
+};
+/** Whether an exporter address is a literal loopback IP and port, the only kind an agent reads. */
+export const loopbackAddress = (address: string) =>
+  /^(127(\.\d{1,3}){3}|\[::1\]):\d{1,5}$/.test(address);
+/**
+ * What keeps each silent device from reporting metrics, one reason per
+ * device. `exporterOf` answers for a version it has read: the address of the
+ * exporter it has, null when it has none, undefined while unknown. A device
+ * that runs no pipeline has no exporter to lack, and a version not read yet
+ * is never called exporter-less.
+ */
+export function metricsAdvice(
+  devices: readonly SilentDevice[],
+  exporterOf: (versionId: string) => string | null | undefined,
+): MetricsAdvice {
+  const advice: MetricsAdvice = {
+    settingsOff: [],
+    noPipeline: 0,
+    noExporter: 0,
+    monitoring: null,
+    exporters: [],
+  };
+  const tally = new Map<
+    string,
+    { id: string; name: string; devices: number }
+  >();
+  const seen = new Set<string>();
+  for (const device of devices) {
+    if (device.effective_policy?.telemetry_enabled === false)
+      advice.settingsOff.push({
+        id: device.id,
+        name: device.name,
+        settings:
+          device.policy_assignment?.policy_name ||
+          device.policy_assignment?.name ||
+          null,
+      });
+    const running = device.running_version;
+    if (!running) {
+      advice.noPipeline += 1;
+      continue;
+    }
+    const address = exporterOf(running.id);
+    if (address === undefined) continue;
+    const pipeline = `${running.configuration_name || "A pipeline"}${running.number ? ` v${running.number}` : ""}`;
+    if (address) {
+      if (!seen.has(`${pipeline} ${address}`)) {
+        seen.add(`${pipeline} ${address}`);
+        advice.exporters.push({
+          pipeline,
+          address,
+          loopback: loopbackAddress(address),
+        });
+      }
+      continue;
+    }
+    advice.noExporter += 1;
+    if (!running.configuration_id || !running.configuration_name) continue;
+    const entry = tally.get(running.configuration_id) || {
+      id: running.configuration_id,
+      name: running.configuration_name,
+      devices: 0,
+    };
+    entry.devices += 1;
+    tally.set(entry.id, entry);
+  }
+  advice.monitoring =
+    [...tally.values()].sort(
+      (a, b) => b.devices - a.devices || a.name.localeCompare(b.name),
+    )[0] || null;
+  return advice;
+}
+/**
+ * The versions silent devices run, most devices first, at most `limit`: the
+ * ones whose exporter is worth reading. A version never changes, so each is
+ * read once.
+ */
+export function versionsToRead(devices: readonly SilentDevice[], limit = 6) {
+  const count = new Map<string, number>();
+  for (const device of devices) {
+    const id = device.running_version?.id;
+    if (id) count.set(id, (count.get(id) ?? 0) + 1);
+  }
+  return [...count]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([id]) => id);
+}
+/**
+ * The words for "Turn on Collect operational metrics for edge-01 in its agent
+ * settings (“No metrics”)": the devices (`total` of them when more than are
+ * listed), whose settings they are, and the saved settings the devices run
+ * when those have names.
+ */
+export function settingsOffPhrase(
+  devices: MetricsAdvice["settingsOff"],
+  total = devices.length,
+) {
+  const named = [
+    ...new Set(devices.map((device) => device.settings).filter(Boolean)),
+  ] as string[];
+  const quoted = named.slice(0, 2).map((name) => `“${name}”`);
+  const rest = named.length > 2 ? ` and ${named.length - 2} more` : "";
+  return {
+    names: nameList(
+      devices.map((device) => device.name),
+      total,
+    ),
+    owner: total > 1 ? "their" : "its",
+    settings: named.length ? ` (${quoted.join(" and ")}${rest})` : "",
+  };
+}
+/**
+ * What runs on devices without a pipeline: a local configuration adopted at
+ * setup keeps running until a deployment replaces it; anywhere else Vector
+ * starts only with the first deployment.
+ */
+export function unmanagedDetail(count: number, adopted: number) {
+  const one = count === 1;
+  if (!adopted)
+    return `Vector starts on ${one ? "it" : "them"} when you deploy a pipeline.`;
+  if (adopted >= count)
+    return one
+      ? "A local configuration adopted at setup keeps running until you deploy one."
+      : "Local configurations adopted at setup keep running until you deploy one.";
+  return `${adopted.toLocaleString()} ${adopted === 1 ? "runs" : "run"} a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.`;
+}
+
+/**
+ * The groups a version's devices are in, busiest first. Each leads to the
+ * devices of that group that run this version; `count` is how many.
+ */
+export function runningGroups(
+  row: Pick<OverviewRunning, "version_id" | "groups" | "more_groups">,
+) {
+  return {
+    chips: row.groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      count: group.device_count,
+      href: `#/devices?running=${encodeURIComponent(row.version_id)}&group=${encodeURIComponent(group.id)}`,
+    })),
+    /** Groups beyond the ones listed. */
+    more: row.more_groups,
+  };
+}
+/**
+ * Events in and out per second across a version's devices: "14.0 → 4.5/s".
+ * Null before any device reported; an unknown rate is never shown as 0.
+ */
+export function runningRate(
+  row: Pick<OverviewRunning, "events_in_per_second" | "events_out_per_second">,
+) {
+  const input = row.events_in_per_second;
+  const output = row.events_out_per_second;
+  if (input === null && output === null) return null;
+  if (input !== null && output !== null)
+    return `${formatRate(input)} → ${formatRate(output)}/s`;
+  return input !== null
+    ? `${formatRate(input)}/s in`
+    : `${formatRate(output ?? 0)}/s out`;
+}
+const canaryPhases: Record<
+  NonNullable<OverviewRunning["canary"]>["phase"],
+  string
+> = {
+  measuring: "measuring delivery",
+  observing: "observing for problems",
+  waiting: "waiting to start observing",
+};
+/**
+ * What a running version says besides "running": devices not delivering, and
+ * a canary rollout of it with what it is doing. Each note links to the page
+ * that explains it.
+ */
+export function runningNotes(row: OverviewRunning) {
+  const notes: { text: string; tone: "danger" | "info"; href: string }[] = [];
+  if (row.not_delivering > 0)
+    notes.push({
+      text: `${row.not_delivering.toLocaleString()} not delivering`,
+      tone: "danger",
+      href: `#/devices?running=${encodeURIComponent(row.version_id)}&status=degraded`,
+    });
+  const canary = row.canary;
+  if (canary) {
+    const names = canary.device_names;
+    const where =
+      names.length <= 2 && canary.device_count === names.length
+        ? names.join(" and ")
+        : countLabel(canary.device_count, "device");
+    notes.push({
+      text: `canary on ${where} · ${canaryPhases[canary.phase]}`,
+      tone: "info",
+      href: `#/deployments/${encodeURIComponent(canary.deployment_id)}`,
+    });
+  }
+  return notes;
+}
+
+export type ChecklistState = {
+  releases: number | null;
+  devices: number;
+  checkedIn: number;
+  pipelines: number;
+  versions: number;
+  /** Devices verified on their assigned version right now. */
+  applied: number;
+  /**
+   * Versions a device last verified, online or not: the fact that something
+   * was verified outlives the device being reachable.
+   */
+  verified?: number;
+};
+export type ChecklistStep = {
+  id: "downloads" | "device" | "pipeline" | "publish" | "deploy";
+  done: boolean;
+};
+/**
+ * First-run steps from real state; downloads count as done once a device
+ * exists. A step done once stays done (`remembered`): a device going offline,
+ * or applying its next version, never reopens the checklist.
+ */
+export function checklist(
+  state: ChecklistState,
+  remembered: ReadonlySet<string> = new Set(),
+): ChecklistStep[] {
+  return [
+    {
+      id: "downloads" as const,
+      done: (state.releases ?? 0) > 0 || state.devices > 0,
+    },
+    { id: "device" as const, done: state.checkedIn > 0 },
+    { id: "pipeline" as const, done: state.pipelines > 0 },
+    { id: "publish" as const, done: state.versions > 0 },
+    {
+      id: "deploy" as const,
+      done: state.applied > 0 || (state.verified ?? 0) > 0,
+    },
+  ].map((step) => ({ ...step, done: step.done || remembered.has(step.id) }));
+}
+// The steps this account has seen done, in this browser only: the checklist
+// never goes back to a step that was complete.
+const stepsStore = (userId: string) =>
+  `vectory-setup-steps-done:${JSON.stringify(userId)}`;
+const stepIds: ChecklistStep["id"][] = [
+  "downloads",
+  "device",
+  "pipeline",
+  "publish",
+  "deploy",
+];
+export function readDoneSteps(userId: string): Set<ChecklistStep["id"]> {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(stepsStore(userId)) || "[]",
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? stepIds.filter((id) => (parsed as unknown[]).includes(id))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+/** Remembers steps seen done; without storage they hold until the page reloads. */
+export function rememberDoneSteps(
+  userId: string,
+  done: readonly ChecklistStep["id"][],
+  current: ReadonlySet<ChecklistStep["id"]> = new Set(),
+): Set<ChecklistStep["id"]> {
+  const next = new Set([...readDoneSteps(userId), ...current, ...done]);
+  try {
+    localStorage.setItem(stepsStore(userId), JSON.stringify([...next]));
+  } catch {
+    // Storage is unavailable: they hold for this view only.
+  }
+  return next;
+}
+
+/**
+ * What the "On desired version" tile says beside its count. Devices held on
+ * their previous version and devices out of reach are named for what they
+ * are: an offline device that last verified its assigned version is offline,
+ * never "not yet verified". Only the rest are not yet verified.
+ */
+export function desiredNote({
+  managed,
+  onDesired,
+  held,
+  offlineVerified,
+  lastVerified,
+}: {
+  managed: number;
+  onDesired: number;
+  held: number;
+  /** Offline devices whose last verified version is their assigned one. */
+  offlineVerified: number;
+  /** The number of the one version they last verified, when it is one. */
+  lastVerified: number | null;
+}) {
+  const unsettled = Math.max(0, managed - onDesired - held);
+  const offline = Math.min(Math.max(0, offlineVerified), unsettled);
+  return [
+    held > 0 && `${held.toLocaleString()} held on previous version`,
+    offline > 0 &&
+      `${offline.toLocaleString()} offline, last verified ${lastVerified ? `v${lastVerified}` : "their assigned version"}`,
+    unsettled - offline > 0 &&
+      `${(unsettled - offline).toLocaleString()} not yet verified`,
+  ].filter(Boolean) as string[];
+}
+
+/** "1 device", "3 devices". */
+export { countLabel } from "./countLabel";
+
+/** One Needs-you row: a device group, possibly with the rollout it stopped. */
+export type NeedsYouRow<G, R> =
+  | { kind: "group"; group: G; rollout: R | null }
+  | { kind: "rollout"; rollout: R };
+/**
+ * Needs you, one row per problem, most urgent first: devices losing data
+ * (not delivering), then failed applies, then rollouts that stopped, then
+ * everything else in the server's order. A device group and the stopped
+ * rollout its devices share read as one row, including devices held on their
+ * previous version, which sit among the rollouts when one stopped for them.
+ * Dismissed rollouts are left out; device problems can't be dismissed while
+ * they last.
+ */
+export function needsYouRows<
+  G extends { cause: string; deployment_id?: string | null },
+  R extends { key: string; deployment: { id: string } },
+>(groups: G[], rollouts: R[], dismissed: ReadonlySet<string>) {
+  const open = rollouts.filter((rollout) => !dismissed.has(rollout.key));
+  const merged = new Set<R>();
+  const withRollout = (group: G): NeedsYouRow<G, R> => {
+    const id = group.deployment_id?.toLowerCase();
+    const rollout =
+      open.find(
+        (candidate) =>
+          !merged.has(candidate) &&
+          candidate.deployment.id.toLowerCase() === id,
+      ) || null;
+    if (rollout) merged.add(rollout);
+    return { kind: "group", group, rollout };
+  };
+  const urgent = [
+    ...groups.filter((group) => group.cause === "degraded"),
+    ...groups.filter((group) => group.cause === "failed"),
+  ].map(withRollout);
+  const held = new Map(
+    groups
+      .filter((group) => group.cause === "held")
+      .map((group) => [group, withRollout(group)] as const)
+      .filter(([, row]) => row.rollout),
+  );
+  return [
+    ...urgent,
+    ...held.values(),
+    ...open
+      .filter((rollout) => !merged.has(rollout))
+      .map((rollout): NeedsYouRow<G, R> => ({ kind: "rollout", rollout })),
+    ...groups
+      .filter(
+        (group) =>
+          group.cause !== "degraded" &&
+          group.cause !== "failed" &&
+          !held.has(group),
+      )
+      .map((group): NeedsYouRow<G, R> => ({
+        kind: "group",
+        group,
+        rollout: null,
+      })),
+  ];
+}
+
+/** A rate for display: "0", "0.42", "4.9", "1,284", "12.3K". */
+export function formatRate(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value < 1) return value.toFixed(2);
+  if (value < 100) return value.toFixed(1);
+  if (value < 10000) return Math.round(value).toLocaleString();
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+/** One point of a fleet series: the bucket's start and how many devices it holds. */
+export type SeriesBucket = { at: string; devices: number | null };
+/**
+ * The series without its newest bucket while that bucket is still collecting.
+ * A minute that has heard from one of four devices sums to a quarter of the
+ * fleet and reads as an outage; the line ends at the last complete bucket.
+ * A bucket that ended under a minute ago with fewer devices than the one
+ * before is treated as still collecting too (late check-ins, clock skew).
+ */
+export function completeSeries<T extends SeriesBucket>(
+  series: T[],
+  now = Date.now(),
+  /** The server's bucket width; a gap in the data must not stretch it. */
+  stepMs = 60_000,
+): T[] {
+  if (series.length < 2) return series;
+  const last = series[series.length - 1];
+  const previous = series[series.length - 2];
+  const start = Date.parse(last.at);
+  if (!Number.isFinite(start) || !(stepMs > 0)) return series;
+  const end = start + stepMs;
+  const thin =
+    last.devices !== null &&
+    previous.devices !== null &&
+    last.devices < previous.devices;
+  const collecting = end > now || (thin && end + 60_000 > now);
+  return collecting ? series.slice(0, -1) : series;
+}

@@ -1,7 +1,9 @@
 // Actual App/Deployments/device identity navigation; isolated synthetic API only.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
+import { nothingOffered } from "./fleet-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -195,6 +197,17 @@ async function start(
       return respond({ user: user(role), csrf_token: "synthetic-csrf" });
     if (path === "/deployments/history")
       return respond({ items: [f.summary], total: 1, page: 1, page_size: 12 });
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${f.summary.id}/summary`)
       return respond(f.summary);
     if (path === `/deployments/${f.summary.id}/targets`) {
@@ -233,8 +246,28 @@ async function start(
     if (path.startsWith("/devices/")) {
       const record = f.devices.find((d) => path === "/devices/" + d.id);
       if (record) return respond(record);
+      // The device page also shows its telemetry.
+      const telemetry = f.devices.find(
+        (d) => path === "/devices/" + d.id + "/telemetry",
+      );
+      if (telemetry) return respond({ device_id: telemetry.id, samples: [] });
+      const configuration = f.devices.find(
+        (d) => path === "/devices/" + d.id + "/configuration",
+      );
+      if (configuration) return respond(nothingOffered(configuration.id));
     }
+    // ...and group names, open issues and recent activity.
+    if (path === "/groups") return respond([]);
+    if (path === "/issues/history" || path === "/audit/history")
+      return respond({
+        items: [],
+        total: 0,
+        page: 1,
+        page_size: Number(query.page_size || 12),
+      });
     if (path === "/agent/releases") return respond([]);
+    // Agent updates are off, so the device page asks once and shows nothing.
+    if (path === "/agent-updates") return respond(updatesOff());
     f.errors.push("Unexpected GET " + path);
     return route.fulfill({
       status: 404,
@@ -256,11 +289,11 @@ async function open(page) {
     .getByRole("link", { name: "Synthetic retired rollout", exact: true })
     .click();
   await expect(
-    page.getByRole("dialog", { name: "Deployment details" }),
+    page.getByRole("region", { name: "Deployment details", exact: true }),
   ).toBeVisible();
 }
 const dialog = (page) =>
-  page.getByRole("dialog", { name: "Deployment details" });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const table = (page) =>
   dialog(page).getByRole("table", { name: "Device results" });
 async function noWrites(f) {
@@ -296,19 +329,12 @@ try {
             exact: true,
           }),
         });
-        await expect(row).toContainText("0 of 1 verified");
-        await expect(row).toContainText("1 no longer targeted");
+        await expect(row).toContainText("No devices follow this now");
         await expect(row).toContainText("Complete");
         await open(page);
+        await expect(dialog(page)).toContainText("No devices follow this now");
         await expect(dialog(page)).toContainText(
-          "Review rollout status and verified device results.",
-        );
-        await expect(dialog(page)).toContainText("0 of 1 devices verified");
-        await expect(dialog(page)).toContainText(
-          "The rollout has finished for its current members.",
-        );
-        await expect(dialog(page)).toContainText(
-          "excluded from the current verified count",
+          "Its devices stay in history.",
         );
         await expect(table(page)).toContainText("No longer targeted");
         await expect(table(page)).toContainText(
@@ -316,7 +342,9 @@ try {
         );
         await expect(table(page)).not.toContainText("No reported error");
         await expect(table(page)).not.toContainText("Waiting for agent");
-        await expect(table(page)).not.toContainText("Applied and verified");
+        await expect(
+          table(page).locator(".status-badge", { hasText: "Applied" }),
+        ).toHaveCount(0);
         await noWrites(f);
       } finally {
         await app.close();
@@ -401,7 +429,10 @@ try {
       try {
         const { page } = app;
         await open(page);
-        await expect(dialog(page)).toContainText("1 of 2 devices verified");
+        await expect(dialog(page)).toContainText("1 of 1 device applied");
+        await expect(dialog(page)).toContainText(
+          "1 earlier device is no longer targeted and stays in history.",
+        );
         const removed = table(page)
           .getByRole("row")
           .filter({
@@ -415,7 +446,9 @@ try {
         );
         await expect(removed).toContainText("Last reported error:");
         await expect(removed).toContainText("VALIDATION_FAILED (validation)");
-        await expect(removed).not.toContainText("Applied and verified");
+        await expect(
+          removed.locator(".status-badge", { hasText: "Applied" }),
+        ).toHaveCount(0);
         await expect(
           table(page)
             .getByRole("row")
@@ -425,16 +458,22 @@ try {
                 exact: true,
               }),
             }),
-        ).toContainText("Applied and verified");
+        ).toContainText("Applied");
+        // Roll back lives in the header's Roll back or remove menu.
         await dialog(page)
-          .getByRole("button", { name: "Roll back", exact: true })
+          .getByRole("button", { name: /^(Stop rollout|Roll back or remove)$/ })
           .click();
+        await page
+          .getByRole("menuitem", { name: "Roll back", exact: true })
+          .click();
+        // This fixture's server does not offer reviewed rollback, so the
+        // review says so and never sends anything.
         const confirmation = page.getByRole("dialog", {
-          name: "Roll back",
+          name: "Review rollback",
           exact: true,
         });
         await expect(confirmation).toContainText(
-          "Restore the previously managed version on released devices that are still targeted. Each agent must validate and verify the replacement.",
+          "This server cannot provide a reviewed rollback.",
         );
         await expect(confirmation.locator(".modal-body")).not.toContainText(
           "2 devices",
@@ -471,7 +510,7 @@ try {
         await expect(
           dialog(page).locator(".deployment-membership-note"),
         ).toHaveCount(0);
-        await expect(dialog(page)).toContainText("0 of 1 devices verified");
+        await expect(dialog(page)).toContainText("0 of 1 device applied");
         await noWrites(f);
       } finally {
         await app.close();
@@ -539,16 +578,20 @@ try {
         await expect(dialog(page)).toContainText(
           "No devices match these filters.",
         );
-        await expect(dialog(page)).toContainText("1 of 14 devices verified");
+        await expect(dialog(page)).toContainText("1 of 1 device applied");
+        await expect(dialog(page)).toContainText(
+          "13 earlier devices are no longer targeted",
+        );
         f.failTargets = true;
         await search.fill("retired");
         await expect(dialog(page).getByRole("alert")).toContainText(
           "Synthetic target history unavailable",
         );
-        await expect(table(page)).not.toContainText("Synthetic retired 00");
+        // A failed read shows one message, not the previous rows.
+        await expect(dialog(page)).not.toContainText("Synthetic retired 00");
         f.failTargets = false;
         await dialog(page)
-          .getByRole("button", { name: "Try again", exact: true })
+          .getByRole("button", { name: "Retry", exact: true })
           .click();
         await expect(table(page).locator("tbody tr")).toHaveCount(12);
         expect(
@@ -577,11 +620,18 @@ try {
           try {
             const { page } = app;
             await open(page);
-            await expect(table(page)).toContainText("No longer targeted");
+            // Phones list device results as cards, not a table.
+            await expect(
+              width < 640
+                ? dialog(page).getByRole("list", {
+                    name: "Device results",
+                    exact: true,
+                  })
+                : table(page),
+            ).toContainText("No longer targeted");
             await expect(
               dialog(page).getByRole("button", {
-                name: "Roll back",
-                exact: true,
+                name: /^(Roll back|Stop rollout|Roll back or remove)$/,
               }),
             ).toHaveCount(0);
             expect(
@@ -613,6 +663,137 @@ try {
         }
     },
   );
+  await check(
+    "A rolled-back rollout's first action wraps on a phone and never widens the page",
+    async () => {
+      for (const theme of ["light", "dark"]) {
+        const f = fixture({
+          summary: deployment(100, {
+            status: "cancelled",
+            configuration_name: "QA broken listener",
+            status_before_rollback: "completed",
+            rolled_back_by: id(101),
+            rolled_back_to_version: 2,
+            rolled_back_to_configuration_name:
+              "Edge syslog processing (synthetic demo)",
+            state_counts: { rolled_back: 1 },
+          }),
+        });
+        const app = await start(f, { width: 390, theme, role: "operator" });
+        try {
+          const { page } = app;
+          await open(page);
+          const action = dialog(page).getByRole("button", {
+            name: "Open rollback (Edge syslog processing (synthetic demo) v2)",
+            exact: true,
+          });
+          await expect(action).toBeVisible();
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const box = await action.boundingBox();
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(390);
+          const axe = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            width: 390,
+            theme,
+            view: "rolled back",
+            violations: axe.violations.map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              nodes: v.nodes.map((n) => n.target),
+            })),
+          });
+          expect(axe.violations).toEqual([]);
+          const file = `rolled-back-action-390-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          await noWrites(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
+  await check(
+    "A retired identity shows the device's own name with a badge in rollout rows and on its page",
+    async () => {
+      // What a recovery stores: the old record keeps its name with its own id
+      // appended, so the new identity can take the name.
+      const stored = `Synthetic retired edge#retired-${id(1)}`;
+      for (const [width, theme] of [
+        [899, "light"],
+        [899, "dark"],
+        [390, "light"],
+        [390, "dark"],
+      ]) {
+        const f = fixture({
+          targets: [target(1, { device_name: stored })],
+          devices: [
+            device(1, { name: stored }),
+            device(2, { status: "online" }),
+          ],
+        });
+        const app = await start(f, { width, theme });
+        try {
+          const { page } = app;
+          await open(page);
+          const rows =
+            width < 640
+              ? dialog(page).getByRole("list", {
+                  name: "Device results",
+                  exact: true,
+                })
+              : table(page);
+          const link = rows.getByRole("link", {
+            name: "Synthetic retired edge",
+            exact: true,
+          });
+          await expect(link).toBeVisible();
+          await expect(rows).toContainText("Retired identity");
+          await expect(rows).not.toContainText("#retired-");
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          let file = `retired-identity-rollout-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          await link.click();
+          await expect(
+            page.getByRole("heading", {
+              name: "Synthetic retired edge",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(page.getByText("Retired identity")).toHaveCount(1);
+          await expect(page.locator("body")).not.toContainText("#retired-");
+          const axe = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            width,
+            theme,
+            view: "retired identity",
+            violations: axe.violations.map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              nodes: v.nodes.map((n) => n.target),
+            })),
+          });
+          expect(axe.violations).toEqual([]);
+          file = `retired-identity-device-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          await noWrites(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -622,9 +803,9 @@ try {
     scope:
       "Actual App deployment history/detail and exact retired-device navigation, intercepted synthetic HTTP only. No live mutation, no backend target transition, no recovery or rollout action executed.",
     passed:
-      results.length === 6 &&
+      results.length === 8 &&
       results.every((r) => r.passed) &&
-      accessibility.length === 4 &&
+      accessibility.length === 10 &&
       accessibility.every((s) => !s.violations.length),
     results,
     accessibility,

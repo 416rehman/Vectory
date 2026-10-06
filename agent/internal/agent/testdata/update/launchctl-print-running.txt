@@ -1,0 +1,55 @@
+system/io.vectory.agent = {
+	active count = 1
+	path = /Library/LaunchDaemons/io.vectory.agent.plist
+	type = LaunchDaemon
+	state = running
+
+	program = /usr/local/bin/vectory
+	arguments = {
+		/usr/local/bin/vectory
+		run
+		--state-dir
+		/Library/Application Support/Vectory/agent
+	}
+
+	stdout path = /dev/null
+	stderr path = /dev/null
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		XPC_SERVICE_NAME => io.vectory.agent
+	}
+
+	domain = system
+	username = _vectory
+
+	umask = 77
+	minimum runtime = 10
+	exit timeout = 330
+	runs = 1
+	pid = 34373
+	immediate reason = speculative
+	forks = 2
+	execs = 1
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	last exit code = (never exited)
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	probabilistic guard malloc policy = {
+		activation rate = 1/1000
+		sample rate = 1/0
+	}
+
+	properties = keepalive | runatload | inferred program | system service | tle system
+}

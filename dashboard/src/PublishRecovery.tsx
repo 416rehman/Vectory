@@ -658,6 +658,12 @@ function RecoveryCenter({
                         <dt>Message</dt>
                         <dd>{request.message || "No publication message"}</dd>
                       </div>
+                      {request.acknowledge_test_failures && (
+                        <div>
+                          <dt>Tests</dt>
+                          <dd>Publish anyway, with failing tests</dd>
+                        </div>
+                      )}
                     </dl>
                   </section>
                 )}

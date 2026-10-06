@@ -1,12 +1,19 @@
 // Actual App, isolated synthetic transport. No preview accounts or mutations.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import net from "node:net";
+import { configuredChannels } from "./notification-fixtures.mjs";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  nothingOffered,
+  slimOverview,
+} from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -107,6 +114,7 @@ const pipeline = {
   },
   graph: { nodes: [], edges: [] },
 };
+const fleet = fleetReplies({ devices: [device], groups: [] });
 const results = [],
   requests = [],
   unexpected = [],
@@ -150,29 +158,47 @@ await context.route("**/*", async (route) => {
   if (path === "/settings")
     return reply({ instance_name: "Synthetic help workspace" });
   if (path === "/mfa") return reply({ enabled: false });
+  if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/users") return reply([user]);
-  if (path === "/overview")
-    return reply({
-      devices_total: 1,
-      devices_online: 0,
-      configurations_total: 1,
-      deployments_active: 0,
-      issues_open: 0,
-      devices: [device],
-      recent_activity: [],
+  // An administrator's Overview and Issues ask whether a notification channel exists.
+  if (path === "/notifications/channels") return reply(configuredChannels);
+  // A server without the fleet summary answers 404; the Overview falls back.
+  if (path === "/telemetry/summary")
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "NOT_FOUND", message: "Not found" } },
     });
+  if (path === "/overview")
+    return reply(slimOverview([device], { configurations_total: 1 }));
+  // Pages of devices, one device, and the groups without their members.
+  if (await fulfillFleetRead(fleet, route)) return;
   if (path === "/devices") return reply([device]);
-  if (path === `/devices/${deviceId}`) return reply(device);
   if (path === `/devices/${deviceId}/telemetry`)
     return reply({ device_id: deviceId, samples: [] });
+  if (path === `/devices/${deviceId}/configuration`)
+    return reply(nothingOffered(deviceId));
   if (["/groups", "/policies", "/tokens", "/releases"].includes(path))
     return reply([]);
+  if (path === "/agent-install")
+    return reply({
+      agent_url: null,
+      agent_url_configured: false,
+      listener_enabled: false,
+      dashboard_url: null,
+      certificate: null,
+      downloads_enabled: true,
+      installer: null,
+      default_install_dir: "/usr/local/bin",
+      releases: [],
+      catalog_problems: [],
+    });
   if (
     [
       "/configurations/library",
       "/deployments/history",
       "/audit/history",
       "/issues/history",
+      "/issues/groups",
       `/configurations/${pipelineId}/history`,
     ].includes(path)
   )
@@ -183,6 +209,9 @@ await context.route("**/*", async (route) => {
       page_size: Number(url.searchParams.get("page_size") || 12),
     });
   if (path === `/configurations/${pipelineId}`) return reply(pipeline);
+  // Add device lists the last day's enrollment attempts.
+  if (path === "/agent-install/activity")
+    return reply({ events: [], now: new Date().toISOString() });
   unexpected.push(`${method} ${path}`);
   return route.fulfill({
     status: 500,

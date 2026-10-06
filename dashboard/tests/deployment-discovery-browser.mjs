@@ -1,12 +1,13 @@
 // Actual fleet/settings/review components; all HTTP is intercepted synthetic data.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -76,7 +77,7 @@ const config = {
 };
 const pipeline = {
   id: id(10),
-  name: "Synthetic deployment handoff",
+  name: "Synthetic deployment",
   description: "Never sent to a real device",
   revision: 1,
   archived: false,
@@ -196,6 +197,15 @@ async function load({
     outcomeOverride: null,
   };
   const current = state;
+  const groups = () => [
+    {
+      id: id(20),
+      name: "Synthetic group",
+      description: "Fixture only",
+      device_ids: current.devices.map((d) => d.id),
+    },
+  ];
+  const replies = fleetReplies({ devices: () => current.devices, groups });
   context = await browser.newContext({
     viewport: { width, height: 920 },
     reducedMotion: "reduce",
@@ -316,21 +326,12 @@ async function load({
           csrf_token: "synthetic",
         });
       if (path === "/settings")
-        return reply({ instance_name: "Synthetic handoff" });
+        return reply({ instance_name: "Synthetic instance" });
+      if (path === `/devices/${id(1)}`) current.detailReads++;
+      // A page of devices, one device, and the groups without their members.
+      if (await fulfillFleetRead(replies, route)) return;
       if (path === "/devices") return reply(current.devices);
-      if (path === `/devices/${id(1)}`) {
-        current.detailReads++;
-        return reply(current.devices[0]);
-      }
-      if (path === "/groups")
-        return reply([
-          {
-            id: id(20),
-            name: "Synthetic group",
-            description: "Fixture only",
-            device_ids: current.devices.map((d) => d.id),
-          },
-        ]);
+      if (path === "/groups") return reply(groups());
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/policies")
         return reply([
@@ -364,6 +365,17 @@ async function load({
           total: 0,
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
+        });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
         });
       if (/^\/deployments\/[^/]+\/summary$/.test(path))
         return reply({
@@ -559,6 +571,15 @@ async function load({
         return reply({ id: "not-a-uuid" });
       return reply(result);
     }
+    // The editor checks the draft as it opens; this fixture accepts it.
+    if (method === "POST" && path === `/configurations/${pipeline.id}/validate`)
+      return reply({
+        valid: true,
+        errors: [],
+        warnings: [],
+        vector_validated: false,
+        deferred: true,
+      });
     unexpected.push(`${method} ${path}`);
     return reply(
       {
@@ -592,7 +613,8 @@ async function load({
       }),
     { app, kind, policy, version, extra },
   );
-  if (!app)
+  // With browser storage refused the dialog opens on its recovery view instead.
+  if (!app && !storageBlocked)
     await expect(
       page.getByRole("checkbox", {
         name: "Select Synthetic alpha",
@@ -614,10 +636,8 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
-    await page
-      .getByLabel("Schedule (optional)", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
@@ -650,6 +670,7 @@ async function lost({
   app = false,
   mode = "lost",
   scheduled = false,
+  both = true,
   ...options
 } = {}) {
   await load({ kind, app, ...options });
@@ -657,7 +678,7 @@ async function lost({
     await page
       .getByRole("button", { name: "Choose devices", exact: true })
       .click();
-  await preview({ scheduled });
+  await preview({ scheduled, both });
   state.createMode = mode;
   state.lookupMode = "failed";
   await send(
@@ -773,6 +794,21 @@ async function remountApp() {
 }
 
 try {
+  await check(
+    "The confirmation of a lost reply counts two devices in the plural",
+    async () => {
+      await lost({ app: true, kind: "version" });
+      await expect(recovery()).toContainText("2 devices · Priority");
+    },
+  );
+  await check(
+    "The confirmation of a lost reply counts one device in the singular",
+    async () => {
+      await lost({ app: true, kind: "version", both: false });
+      await expect(recovery()).toContainText("1 device · Priority");
+      await expect(recovery()).not.toContainText("1 devices");
+    },
+  );
   await check(
     "Closing the original tab preserves the frozen request and exact recovered result",
     async () => {
@@ -924,8 +960,7 @@ try {
       ).toEqual([]);
       expect(state.creates).toHaveLength(0);
       await load({ storageBlocked: true });
-      await preview();
-      await send();
+      // Refused before any selection or send, so nothing can be lost.
       await expect(
         page
           .getByText(
@@ -933,6 +968,12 @@ try {
           )
           .first(),
       ).toBeVisible();
+      await expect(
+        page.getByRole("checkbox", {
+          name: "Select Synthetic alpha",
+          exact: true,
+        }),
+      ).toHaveCount(0);
       expect(state.creates).toHaveLength(0);
       expect(state.rollbacks).toHaveLength(0);
       await lost({ app: true, kind: "version" });
@@ -1074,7 +1115,7 @@ try {
         new RegExp(`#/deployments/${id(2002)}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
       expect(state.creates).toHaveLength(0);
       expect(state.rollbacks).toHaveLength(0);

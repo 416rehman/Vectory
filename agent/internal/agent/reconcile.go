@@ -3,14 +3,21 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -25,7 +32,24 @@ type Engine struct {
 	BootID      string
 	Now         func() time.Time
 	Fault       func(string) error
-	supervisor  *workloadSupervisor
+	// Log receives Vector's JSON log; nil in tests without a native driver.
+	Log *vectorLog
+	// ServiceManager is what keeps this agent process running (systemd,
+	// launchd, windows or none), reported to servers that accept it.
+	ServiceManager string
+	supervisor     *workloadSupervisor
+	// validation is what the engine keeps about checks on request.
+	validation validationState
+	// Notice receives what the agent says about a check-in while it runs: the
+	// run loop's report. Nil where nothing reads it.
+	Notice func(string)
+	// saidLeftOut holds the kinds of report the log has already said a refused
+	// check-in went through without (sayLeftOut): each is said once in a run.
+	saidLeftOut map[string]bool
+	// update is what the engine keeps about agent updates between check-ins: what
+	// it decided about the offer in front of it, the transfer in progress, and
+	// whether the server accepts the report (update_offer.go).
+	update updateRun
 }
 
 func (e *Engine) now() time.Time {
@@ -43,8 +67,11 @@ func (e *Engine) boundary(stage string) error {
 }
 func (e *Engine) paused() bool { return LocalPaused(e.Dir) || e.State.Policy.SyncPaused }
 func (e *Engine) fail(code, stage, message string) error {
+	return e.failWith(code, stage, message, nil)
+}
+func (e *Engine) failWith(code, stage, message string, diagnostics []Diagnostic) error {
 	e.State.ApplyState = "failed"
-	e.State.Error = &Issue{code, stage, message}
+	e.State.Error = &Issue{Code: code, Stage: stage, Message: message, Diagnostics: diagnostics}
 	e.observeVerifiedAttempt("verification_unknown", e.State.Error)
 	_ = e.save()
 	return errors.New(message)
@@ -63,6 +90,7 @@ func (e *Engine) actual() string {
 // Recover is called under the process lock before any heartbeat. A transaction
 // without durable verified state restores the last verified artifact, never drift.
 func (e *Engine) Recover(ctx context.Context) error {
+	e.removeStaleLeftovers()
 	var j Journal
 	err := ReadJSON(filepath.Join(e.Dir, "journal.json"), &j)
 	if os.IsNotExist(err) {
@@ -83,6 +111,42 @@ func (e *Engine) Recover(ctx context.Context) error {
 	}
 	return e.rollback(ctx, j.Generation, "An interrupted apply was recovered", attempt)
 }
+
+// removeStaleLeftovers deletes what an earlier run of this agent left behind
+// when it was killed in the middle of a write or a validation: temporary
+// files, staged candidates and the validation copy of Vector's runtime
+// settings, once they are older than any of those could last. What a check on
+// request left in its own staging directory goes at once: nothing can be using
+// it. It runs at startup under the agent lock, and a failure to delete one is
+// not an error.
+func (e *Engine) removeStaleLeftovers() {
+	e.clearValidationStaging()
+	dirs := []string{e.Dir}
+	if e.Settings.ManagedConfig != "" {
+		if managed := filepath.Dir(e.Settings.ManagedConfig); filepath.Clean(managed) != filepath.Clean(e.Dir) {
+			dirs = append(dirs, managed)
+		}
+	}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			stale := agentLeftover(name) || dir == e.Dir && strings.HasPrefix(name, "host-runtime-stage-") && strings.HasSuffix(name, ".json")
+			if !stale {
+				continue
+			}
+			if info, err := entry.Info(); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) > atomicTempStale {
+				if path := filepath.Join(dir, name); SafePath(path) == nil {
+					_ = os.Remove(path)
+				}
+			}
+		}
+	}
+}
+
 func (e *Engine) StartExisting(ctx context.Context) error {
 	return e.startExisting(ctx, false)
 }
@@ -105,13 +169,13 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 			return e.fail("RECOVERY_INVALID", "startup", "Last verified recovery artifact is missing or corrupted")
 		}
 		if err = e.Settings.CapabilityPolicy.Check(good); err != nil {
-			return e.fail("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy")
+			return e.failWith("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy", e.policyDiagnostics(err, good))
 		}
 		if honorPause && e.paused() {
 			return errWorkloadPaused
 		}
 		if err = AtomicWrite(e.Settings.ManagedConfig, good); err != nil {
-			return e.fail("WRITE_FAILED", "startup", "Cannot restore the established local workload")
+			return e.failWith("WRITE_FAILED", "startup", storageMessage("Cannot restore the established local workload", err), e.storageDiagnostic(err))
 		}
 	}
 	data, err := readArtifact(e.Settings.ManagedConfig)
@@ -122,16 +186,16 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 		return err
 	}
 	if err = e.Settings.CapabilityPolicy.Check(data); err != nil {
-		return e.fail("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy")
+		return e.failWith("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy", e.policyDiagnostics(err, data))
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.fail("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration")
+		return e.failWith("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration", e.diagnoseFailure(err, data))
 	}
 	if honorPause && e.paused() {
 		return errWorkloadPaused
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.fail("ACTIVATION_FAILED", "startup", "Existing Vector startup could not be verified")
+		return e.failWith("ACTIVATION_FAILED", "startup", "Existing Vector startup could not be verified", e.diagnoseFailure(err, data))
 	}
 	h := Digest(data)
 	if e.actual() != h {
@@ -162,7 +226,53 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 	}
 	return e.save()
 }
+
+// Poll is one check-in: it reports, learns the desired version and reconciles.
+// A disk that is full while it runs is recorded as a failure the operator can
+// read, with its fix, and the same check-in is tried again at the next one.
 func (e *Engine) Poll(ctx context.Context) error {
+	return e.noteStorageFailure(e.poll(ctx))
+}
+
+// noteStorageFailure makes a full disk visible. A save that fails for lack of
+// space comes back from the middle of an apply as a bare error; this turns it
+// into the issue the next heartbeat reports and `vectory status` shows: the
+// disk named by what it holds, and the fix. The version is not held back: the
+// next check-in applies it.
+func (e *Engine) noteStorageFailure(err error) error {
+	full, ok := diskFullFrom(err)
+	if !ok || e.State.ApplyState == "verified_applied" {
+		// A completed apply stays what it is when only recording it failed:
+		// Vector runs the verified version, and the next check-in saves that.
+		return err
+	}
+	if e.State.Error == nil || diagnostic(e.State.Error, "DISK_FULL") == nil {
+		message := "The disk that holds " + storageLabelFor(e.Settings, full.Dir) + " is full, so the agent can't save its progress"
+		issue := &Issue{Code: "WRITE_FAILED", Stage: progressStage(e.State.ApplyState), Message: message, Diagnostics: e.storageDiagnostic(err)}
+		e.State.ApplyState, e.State.Error = "failed", issue
+		e.attemptOutcome(e.currentAttempt(), "failed", issue)
+		// Best effort: with the disk still full this fails again, and the
+		// in-memory record reaches the server with the next heartbeat.
+		_ = e.save()
+	}
+	return err
+}
+
+// progressStage names the step an apply was in when it stopped, from its
+// last recorded progress.
+func progressStage(state string) string {
+	switch state {
+	case "desired":
+		return "download"
+	case "downloaded":
+		return "staging"
+	case "validated", "written", "reload_requested":
+		return "commit"
+	}
+	return "storage"
+}
+
+func (e *Engine) poll(ctx context.Context) error {
 	// Never silently round/clamp counters from an old or manually edited state.
 	// Such a state needs local recovery; it cannot emit an invalid heartbeat.
 	if e.State.ReportedGeneration > MaxJSONCounter || e.State.HighestGeneration > MaxJSONCounter || e.State.HighestPolicyGeneration > MaxJSONCounter || e.State.SecretRevision > MaxJSONCounter {
@@ -174,17 +284,18 @@ func (e *Engine) Poll(ctx context.Context) error {
 	}
 	nonce := base64.StdEncoding.EncodeToString(raw[:])
 	e.State.ActualSHA256 = e.actual()
-	e.State.Telemetry = nil
-	if e.State.Policy.TelemetryEnabled && e.Metrics != nil {
-		e.State.Telemetry = e.Metrics.Collect(ctx, e.now())
-	}
+	running, _ := readArtifact(e.Settings.ManagedConfig)
+	telemetry, metricsSource, metricsAddress := e.collectTelemetry(ctx, running)
+	e.State.Telemetry = telemetry
 	if e.paused() {
 		e.pauseAttempt()
 	}
 	if err := e.observeProcessExit(); err != nil {
 		return err
 	}
-	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: e.State.Error, Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())})
+	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: e.Settings.adoptedVectorVersion(), ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
+	e.addHeartbeatFeatures(&heartbeat, running, metricsSource, metricsAddress)
+	b, nonce, err := e.exchange(ctx, heartbeat)
 	if err != nil {
 		return err
 	}
@@ -214,6 +325,7 @@ func (e *Engine) Poll(ctx context.Context) error {
 	e.State.PolicyIdentity = Identity(m.Policy)
 	e.State.Desired = m.Desired
 	e.State.Policy = m.Policy
+	e.State.ServerFeatures = m.Features
 	e.selectAttempt(m)
 	now := e.now()
 	e.State.LastHeartbeat = &now
@@ -223,8 +335,193 @@ func (e *Engine) Poll(ctx context.Context) error {
 	if err = e.boundary("accepted"); err != nil {
 		return err
 	}
-	return e.Reconcile(ctx, m)
+	// The server answered with a manifest this agent verified: that is a
+	// successful check-in, whatever the apply below finds. What the manifest
+	// offers is noted at once, so the record the privileged step watches says it.
+	e.noteUpdateOffer(m)
+	e.recordUpdateHealth()
+	// A check on request is answered after the apply, never during it, and never
+	// fails the check-in: whatever it finds goes in its result.
+	check := validationRequest(m, e.now())
+	e.settleValidation(check)
+	err = e.Reconcile(ctx, m)
+	e.checkCandidate(ctx, check)
+	// An offer of an agent build is taken up after both: a configuration apply
+	// finishes first, and the build waits (update_offer.go).
+	e.stepUpdates(ctx, check)
+	return err
 }
+
+// exchange sends the heartbeat and returns the server's answer with the nonce
+// of the request it answers. What a heartbeat carries beyond the identity and
+// the state of the apply is a report, and no report may take the device off the
+// control plane: a server that refuses the heartbeat as invalid (400) is sent it
+// again with fewer of them, each retry with its own nonce and request id. In
+// this order, each step only when the heartbeat still carries something of it:
+//
+//   - the report on agent updates, which a server that refuses it doesn't get for
+//     the rest of this process. It goes first: its rules are written twice, in the
+//     agent and in the server, and no mistake in either may keep a device from
+//     checking in;
+//   - the result of a check on request, which is then never sent again;
+//   - the reports of what Vector logged and found (the log summary and the
+//     diagnostics), the likeliest to hold something a server refuses: they echo
+//     what a pipeline and its events say;
+//   - the other reports (host runtime, state directory, secret names, metrics);
+//   - the announcements of what this agent can check, which a server that
+//     refuses them doesn't get for the rest of this process.
+//
+// A report the server keeps refusing then costs one more request on each
+// check-in for each step it takes to leave it out: one for the log reports, two
+// for the others. Announcements the server refuses are not sent again in this
+// process. The first time a report is left out of a check-in that goes through,
+// the log says so (Notice). The agent can't tell which of the reports left out
+// in one step the server refused, so it names all it left out, not the culprit.
+// A refusal that leaving all of them out doesn't end is a failed check-in.
+func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, error) {
+	announcementsDropped, updateDropped := false, false
+	// What the check-in that goes through lacks: said once it has.
+	var left []string
+	for {
+		b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", h)
+		if err == nil {
+			if announcementsDropped {
+				e.validation.optionalRefused = true
+			}
+			if updateDropped {
+				e.update.memberRefused = true
+			}
+			e.sayLeftOut(left)
+			return b, h.Nonce, nil
+		}
+		if ce, ok := AsConnectionError(err); !ok || ce.Status != http.StatusBadRequest {
+			return nil, h.Nonce, err
+		}
+		if h.AgentUpdate != nil {
+			h.AgentUpdate = nil
+			updateDropped = true
+			left = append(left, reportAgentUpdate)
+		} else if h.ValidationResult != nil {
+			e.dropValidationResult()
+			h.ValidationResult = nil
+			left = append(left, reportCheckResult)
+		} else if kinds := h.withoutLogReports(); len(kinds) > 0 {
+			left = append(left, kinds...)
+		} else if kinds := h.withoutOtherReports(); len(kinds) > 0 {
+			left = append(left, kinds...)
+		} else if h.AgentFeatures != nil || h.Readiness != nil {
+			h.AgentFeatures, h.Readiness = nil, nil
+			announcementsDropped = true
+			left = append(left, reportAnnouncements)
+		} else {
+			return nil, h.Nonce, err
+		}
+		var raw [32]byte
+		if _, err = rand.Read(raw[:]); err != nil {
+			return nil, h.Nonce, err
+		}
+		h.Nonce, h.RequestID = base64.StdEncoding.EncodeToString(raw[:]), RandomID()
+	}
+}
+
+// The kinds of report exchange leaves out of a check-in the server refused, as
+// the log names them.
+const (
+	reportAgentUpdate   = "agent update report"
+	reportCheckResult   = "Check on devices result"
+	reportAnnouncements = "Check on devices announcement"
+	reportLogSummary    = "Vector log summary"
+	reportDiagnostics   = "diagnostics"
+	reportHostRuntime   = "host runtime settings"
+	reportStateDir      = "state directory"
+	reportSecretNames   = "secret names"
+	reportMetrics       = "metrics"
+)
+
+// withoutLogReports removes the log summary and the diagnostics of an apply
+// error (the heartbeat's and its attempt's) and names what it removed. The
+// issues are copies (cloneIssue), so removing their diagnostics changes nothing
+// the agent keeps.
+func (h *Heartbeat) withoutLogReports() []string {
+	var kinds []string
+	if h.VectorLogSummary != nil {
+		h.VectorLogSummary = nil
+		kinds = append(kinds, reportLogSummary)
+	}
+	bare := func(issue *Issue) *Issue {
+		if issue == nil || len(issue.Diagnostics) == 0 {
+			return issue
+		}
+		copy := *issue
+		copy.Diagnostics = nil
+		return &copy
+	}
+	hadDiagnostics := h.Error != nil && len(h.Error.Diagnostics) > 0
+	h.Error = bare(h.Error)
+	if h.ConfigurationAttempt != nil && h.ConfigurationAttempt.Error != nil && len(h.ConfigurationAttempt.Error.Diagnostics) > 0 {
+		hadDiagnostics = true
+		attempt := *h.ConfigurationAttempt
+		attempt.Error = bare(attempt.Error)
+		h.ConfigurationAttempt = &attempt
+	}
+	if hadDiagnostics {
+		kinds = append(kinds, reportDiagnostics)
+	}
+	return kinds
+}
+
+// withoutOtherReports removes the reports about the host and the agent that are
+// not about Vector's output, and names what it removed.
+func (h *Heartbeat) withoutOtherReports() []string {
+	var kinds []string
+	if h.HostRuntime != nil {
+		h.HostRuntime = nil
+		kinds = append(kinds, reportHostRuntime)
+	}
+	if h.StateDir != "" {
+		h.StateDir = ""
+		kinds = append(kinds, reportStateDir)
+	}
+	if h.SecretNames != nil {
+		h.SecretNames = nil
+		kinds = append(kinds, reportSecretNames)
+	}
+	if h.Telemetry != nil {
+		h.Telemetry = nil
+		kinds = append(kinds, reportMetrics)
+	}
+	return kinds
+}
+
+// sayLeftOut tells the operator, once for each kind in a run of the agent, that
+// a check-in the server refused went through without it. The words are fixed:
+// nothing the server or Vector said is in them.
+func (e *Engine) sayLeftOut(kinds []string) {
+	for _, kind := range kinds {
+		if e.saidLeftOut[kind] {
+			continue
+		}
+		if e.saidLeftOut == nil {
+			e.saidLeftOut = map[string]bool{}
+		}
+		e.saidLeftOut[kind] = true
+		if e.Notice != nil {
+			e.Notice("The server refused a check-in; the agent sent it again without the " + kind + ".")
+		}
+	}
+}
+
+// incompatibleVectorMessage names both versions. The manifest is signed, and
+// its version is still shown only as a bounded printable token.
+func incompatibleVectorMessage(wanted, adopted string) string {
+	if release, _, ok := vectorRelease(wanted); ok {
+		wanted = release
+	} else if wanted = safeText(strings.TrimSpace(wanted), 24); wanted == "" {
+		wanted = "an unknown version"
+	}
+	return "This version is built for Vector " + wanted + ", but this device runs Vector " + adopted + ". Only patch releases of the same minor version are interchangeable."
+}
+
 func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	if e.State.HighestGeneration != m.Generation || Identity(e.State.Desired) != Identity(m.Desired) {
 		return errors.New("manifest superseded before reconciliation")
@@ -246,19 +543,25 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return e.save()
 	}
 	d := m.Desired
-	if d.VectorVersion != VectorVersion {
-		return e.failAttempt("INCOMPATIBLE", "compatibility", "Desired configuration requires an unsupported Vector version")
+	// A manifest built for another patch release of this device's Vector is
+	// fine: patch releases fix bugs without changing configuration.
+	if adopted := e.Settings.adoptedVectorVersion(); !sameVectorSeries(d.VectorVersion, adopted) {
+		return e.failAttempt("INCOMPATIBLE", "compatibility", incompatibleVectorMessage(d.VectorVersion, adopted))
 	}
 	if !e.Settings.Adopted {
 		return e.failAttempt("ADOPTION_REQUIRED", "preflight", "Host operator must explicitly adopt the fixed Vector binary and sole managed config")
 	}
 	template, err := e.loadTemplate(ctx, d)
 	if err != nil {
-		return e.failAttempt("DOWNLOAD_FAILED", "download", "Cannot obtain a digest-verified authorized template")
+		var failure *downloadFailure
+		if !errors.As(err, &failure) {
+			failure = &downloadFailure{code: "DOWNLOAD_FAILED", message: "Cannot obtain a digest-verified authorized template"}
+		}
+		return e.failAttemptWith(failure.code, "download", failure.message, failure.diagnostics)
 	}
 	data, usesSecrets, err := resolveLocalSecrets(template, e.Settings.SecretFiles, e.Settings.CapabilityPolicy.FullVectorConfig)
 	if err != nil {
-		return e.failAttempt("SECRET_RESOLUTION_FAILED", "materialization", "Cannot resolve configuration references; check the approved local bindings and private secret files")
+		return e.failAttemptWith("SECRET_RESOLUTION_FAILED", "materialization", "Cannot resolve configuration references; check the approved local bindings and private secret files", e.secretDiagnostics(err, template))
 	}
 	effectiveSHA := Digest(data)
 	if e.State.FailedGeneration != nil && *e.State.FailedGeneration == m.Generation && (e.State.FailedEffectiveSHA256 == effectiveSHA || (e.State.FailedEffectiveSHA256 == "" && !usesSecrets)) {
@@ -291,8 +594,11 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	e.State.ActualSHA256 = actual
 	if actual == effectiveSHA && e.State.LastGoodSHA256 == effectiveSHA {
 		if e.Driver.Alive() {
-			e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
-			return e.save()
+			e.markApplied(m.Generation, d, effectiveSHA, attemptRevision, usesSecrets)
+			if err = e.save(); err != nil {
+				return err
+			}
+			return e.completeTransaction(effectiveSHA)
 		}
 		if e.supervisor != nil {
 			// Continuous Run restores this exact established content on its local
@@ -308,18 +614,35 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttempt("CAPABILITY_DENIED", "validation", "Effective configuration violates the local capability policy")
+		return e.failAttemptWith("CAPABILITY_DENIED", "validation", e.Settings.CapabilityPolicy.refusedMessage(), e.policyDiagnostics(err, data))
 	}
 	stage := filepath.Join(filepath.Dir(e.Settings.ManagedConfig), ".vectory-stage-"+RandomID()+".json")
 	if err = AtomicWrite(stage, data); err != nil {
-		return e.failAttempt("WRITE_FAILED", "staging", "Cannot securely stage configuration")
+		return e.failAttemptWith("WRITE_FAILED", "staging", storageMessage("Cannot securely stage configuration", err), e.storageDiagnostic(err))
 	}
 	defer os.Remove(stage)
 	if err = e.Driver.Validate(ctx, stage); err != nil {
+		if _, full := diskFullFrom(err); full {
+			// Validation needs room for its own temporary files. That is the
+			// disk's problem, not the version's: nothing holds it back.
+			return e.failAttemptWith("WRITE_FAILED", "validation", storageMessage("Cannot prepare Vector's validation", err), e.storageDiagnostic(err))
+		}
+		// A version that validation could not verify in time is held back like
+		// a rejected one: it is never treated as valid. Vector did not reject it.
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttempt("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; run doctor for local checks and review the desired published version")
+		message := "Vector rejected this version on the device"
+		if failure := asVectorFailure(err); failure != nil {
+			switch failure.Phase {
+			case "timeout":
+				message = "Vector did not finish validating this version in time, so it was not applied"
+			case "prepare":
+				// Vector never ran: the failure's own words say why.
+				message = failure.Summary
+			}
+		}
+		return e.failAttemptWith("VALIDATION_FAILED", "validation", message, e.diagnoseFailure(err, data))
 	}
 	e.attemptProgress("validated")
 	if err = e.save(); err != nil {
@@ -344,12 +667,12 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	if readErr == nil {
 		if err = AtomicWrite(filepath.Join(e.Dir, "pre-attempt.json"), previous); err != nil {
-			return e.failAttempt("WRITE_FAILED", "commit", "Cannot securely preserve pre-apply content")
+			return e.failAttemptWith("WRITE_FAILED", "commit", storageMessage("Cannot securely preserve pre-apply content", err), e.storageDiagnostic(err))
 		}
 	}
-	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), SecretRevision: attemptRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
+	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), PreviousAbsent: os.IsNotExist(readErr), SecretRevision: attemptRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
-		return e.failAttempt("WRITE_FAILED", "commit", "Cannot persist the apply recovery journal")
+		return e.failAttemptWith("WRITE_FAILED", "commit", storageMessage("Cannot persist the apply recovery journal", err), e.storageDiagnostic(err))
 	}
 	if err = e.boundary("prepared"); err != nil {
 		return err
@@ -361,11 +684,11 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return e.save()
 	}
 	if err = AtomicWrite(e.Settings.ManagedConfig, data); err != nil {
-		return e.rollback(ctx, m.Generation, "Managed configuration replacement failed", j.ConfigurationAttempt)
+		return e.replacementFailed(ctx, m.Generation, err, j)
 	}
 	j.Stage = "written"
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
-		return e.rollback(ctx, m.Generation, "Cannot persist managed replacement recovery state", j.ConfigurationAttempt)
+		return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot persist managed replacement recovery state", j.ConfigurationAttempt, err)
 	}
 	e.attemptProgress("written")
 	if err = e.save(); err != nil {
@@ -382,7 +705,12 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.rollback(ctx, m.Generation, "Effective configuration activation could not be verified", j.ConfigurationAttempt)
+		if _, full := diskFullFrom(err); full {
+			// Vector's runtime settings couldn't be written: nothing was
+			// reloaded, and the version is not at fault.
+			return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot write Vector's runtime settings", j.ConfigurationAttempt, err)
+		}
+		return e.rollbackWith(ctx, m.Generation, "Vector didn't confirm it runs this version", j.ConfigurationAttempt, e.diagnoseFailure(err, data))
 	}
 	if e.actual() != effectiveSHA {
 		return e.rollback(ctx, m.Generation, "Managed content changed during activation", j.ConfigurationAttempt)
@@ -391,9 +719,9 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = AtomicWrite(filepath.Join(e.Dir, "good-"+effectiveSHA+".json"), data); err != nil {
-		return e.rollback(ctx, m.Generation, "Cannot persist verified recovery content", j.ConfigurationAttempt)
+		return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot persist verified recovery content", j.ConfigurationAttempt, err)
 	}
-	e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
+	e.markApplied(m.Generation, d, effectiveSHA, attemptRevision, usesSecrets)
 	if err = e.save(); err != nil {
 		return err
 	}
@@ -408,14 +736,39 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	return e.cleanupGood()
 }
-func (e *Engine) markApplied(generation uint64, templateSHA, effectiveSHA string, revision uint64, usesSecrets bool) {
+
+// completeTransaction finishes an apply whose verification is already durable
+// when a leftover says otherwise: a journal that describes the verified
+// content is removed, and so are the superseded recovery copies. That is what
+// remains to do when the state was saved but the process could not finish (the
+// disk filled up between the two). A journal of any other candidate stays.
+func (e *Engine) completeTransaction(effectiveSHA string) error {
+	path := filepath.Join(e.Dir, "journal.json")
+	if _, err := os.Lstat(path); err != nil {
+		return nil
+	}
+	var j Journal
+	if ReadJSON(path, &j) != nil || j.DesiredSHA256 != effectiveSHA {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := syncDir(e.Dir); err != nil {
+		return err
+	}
+	return e.cleanupGood()
+}
+
+func (e *Engine) markApplied(generation uint64, d *Desired, effectiveSHA string, revision uint64, usesSecrets bool) {
 	e.State.LastGoodSHA256 = effectiveSHA
 	e.State.ActualSHA256 = effectiveSHA
 	e.State.ReportedGeneration = generation
 	e.State.AppliedTemplateSHA256 = ""
 	if usesSecrets {
-		e.State.AppliedTemplateSHA256 = templateSHA
+		e.State.AppliedTemplateSHA256 = d.SHA256
 	}
+	e.noteApplied(generation, d)
 	e.State.AppliedSecretRevision = revision
 	e.attemptProgress("verified_applied")
 	e.State.FailedGeneration = nil
@@ -429,13 +782,15 @@ func (e *Engine) loadTemplate(ctx context.Context, d *Desired) ([]byte, error) {
 	}
 	data, err := e.Client.request(ctx, "GET", d.ArtifactPath, nil)
 	if err != nil {
-		return nil, err
+		return nil, classifyDownload(err)
 	}
+	// The bytes stay in memory until they are exactly what the signed manifest
+	// names, so a cut-off or altered download never leaves a file behind.
 	if int64(len(data)) != d.Size || Digest(data) != d.SHA256 {
-		return nil, errors.New("artifact size or digest verification failed")
+		return nil, mismatchFailure(len(data), d.Size, int64(len(data)) == d.Size)
 	}
 	if err = AtomicWrite(path, data); err != nil {
-		return nil, err
+		return nil, &downloadFailure{code: "WRITE_FAILED", message: storageMessage("Cannot save the downloaded configuration", err), diagnostics: e.storageDiagnostic(err)}
 	}
 	files, err := filepath.Glob(filepath.Join(e.Dir, "template-*.json"))
 	if err != nil {
@@ -451,15 +806,80 @@ func (e *Engine) loadTemplate(ctx context.Context, d *Desired) ([]byte, error) {
 	return data, nil
 }
 func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt) error {
-	fail := func(code, message string) error {
-		e.attemptOutcome(attempt, "failed", &Issue{code, "rollback", message})
-		return e.fail(code, "rollback", message)
+	return e.rollbackWith(ctx, g, reason, attempt, nil)
+}
+
+// rollbackWith restores the last verified configuration. Diagnostics explain
+// why the candidate failed; restore failures add their own. The version is
+// held back until someone asks for another attempt.
+func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, diagnostics []Diagnostic) error {
+	return e.restoreLastGood(ctx, g, reason, attempt, diagnostics, true)
+}
+
+// rollbackAfterWriteFailure restores the last verified configuration after a
+// write to disk failed. The version is not at fault (the disk was full, a
+// file was locked), so it is not held back: the next check-in tries it again.
+func (e *Engine) rollbackAfterWriteFailure(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, cause error) error {
+	return e.restoreLastGood(ctx, g, storageMessage(reason, cause), attempt, e.storageDiagnostic(cause), false)
+}
+
+// replacementFailed handles a managed file that could not be replaced. The
+// replacement is atomic, so a failure normally leaves the previous content in
+// place: there is nothing to undo, Vector was never touched, and the version
+// is not held back. If the new content is there after all (the failure came
+// after the swap), the last good one is restored.
+func (e *Engine) replacementFailed(ctx context.Context, generation uint64, cause error, j Journal) error {
+	if e.managedUnchanged(j) {
+		// No transaction is in flight, so no journal should be left to make a
+		// restart roll back and hold the version.
+		if removeErr := os.Remove(filepath.Join(e.Dir, "journal.json")); removeErr == nil || os.IsNotExist(removeErr) {
+			_ = syncDir(e.Dir)
+		}
+		return e.failAttemptWith("WRITE_FAILED", "commit", storageMessage("Cannot write the managed configuration", cause), e.storageDiagnostic(cause))
 	}
-	e.State.FailedGeneration = &g
-	e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
+	return e.rollbackAfterWriteFailure(ctx, generation, "Managed configuration replacement failed", j.ConfigurationAttempt, cause)
+}
+
+// managedUnchanged reports whether the managed file still holds what it held
+// when the journal was written.
+func (e *Engine) managedUnchanged(j Journal) bool {
+	data, err := readArtifact(e.Settings.ManagedConfig)
+	if os.IsNotExist(err) {
+		return j.PreviousAbsent
+	}
+	return err == nil && !j.PreviousAbsent && Digest(data) == j.PreviousSHA256
+}
+
+// restoreLastGood puts the last verified configuration back, activates and
+// verifies it. suppress holds the failed version back from automatic retries.
+func (e *Engine) restoreLastGood(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, diagnostics []Diagnostic, suppress bool) error {
+	fail := func(code, message string, restore ...Diagnostic) error {
+		all := append(append([]Diagnostic(nil), diagnostics...), restore...)
+		if len(all) > maxDiagnostics {
+			all = all[:maxDiagnostics]
+		}
+		e.attemptOutcome(attempt, "failed", &Issue{Code: code, Stage: "rollback", Message: message, Diagnostics: all})
+		return e.failWith(code, "rollback", message, all)
+	}
+	if suppress {
+		e.State.FailedGeneration = &g
+		e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
+	}
 	if e.State.LastGoodSHA256 == "" {
+		// Nothing verified ever ran here: this was the device's first
+		// version, so there is nothing earlier to go back to. Stop Vector and
+		// withdraw the failed version from the managed path, so no report
+		// claims it runs.
 		_ = e.Driver.Stop()
-		return fail("ROLLBACK_UNAVAILABLE", reason+"; no verified recovery content exists")
+		e.withdrawFirstVersion()
+		err := fail("ROLLBACK_UNAVAILABLE", reason+"; Vector is stopped and there is no earlier version to go back to")
+		// The outcome is durable and nothing is left to recover.
+		if e.save() == nil {
+			if removeErr := os.Remove(filepath.Join(e.Dir, "journal.json")); removeErr == nil || os.IsNotExist(removeErr) {
+				_ = syncDir(e.Dir)
+			}
+		}
+		return err
 	}
 	b, err := readArtifact(e.goodPath())
 	if err != nil || Digest(b) != e.State.LastGoodSHA256 {
@@ -469,17 +889,23 @@ func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt 
 		return fail("ROLLBACK_FAILED", "Recovery content violates current local capability policy")
 	}
 	if err = AtomicWrite(e.Settings.ManagedConfig, b); err != nil {
-		return fail("ROLLBACK_FAILED", "Cannot restore verified recovery content")
+		return fail("ROLLBACK_FAILED", storageMessage("Cannot restore verified recovery content", err), e.storageDiagnostic(err)...)
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
-		return fail("ROLLBACK_FAILED", "Restored configuration validation failed")
+		if _, full := diskFullFrom(err); full {
+			return fail("ROLLBACK_FAILED", storageMessage("Cannot check the restored configuration", err), e.storageDiagnostic(err)...)
+		}
+		return fail("ROLLBACK_FAILED", "Restored configuration validation failed", e.diagnoseFailure(err, b)...)
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return fail("ROLLBACK_FAILED", "Restored Vector activation could not be verified")
+		if _, full := diskFullFrom(err); full {
+			return fail("ROLLBACK_FAILED", storageMessage("Cannot load the restored configuration", err), e.storageDiagnostic(err)...)
+		}
+		return fail("ROLLBACK_FAILED", "Vector didn't confirm it runs the restored configuration", e.diagnoseFailure(err, b)...)
 	}
 	e.State.ActualSHA256 = e.State.LastGoodSHA256
 	e.State.ApplyState = "rolled_back"
-	e.State.Error = &Issue{"APPLY_ROLLED_BACK", "rollback", reason + "; last verified configuration restored"}
+	e.State.Error = &Issue{Code: "APPLY_ROLLED_BACK", Stage: "rollback", Message: reason + "; last verified configuration restored", Diagnostics: diagnostics}
 	e.attemptOutcome(attempt, "rolled_back", e.State.Error)
 	if err = e.save(); err != nil {
 		return err
@@ -489,6 +915,28 @@ func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt 
 	}
 	return syncDir(e.Dir)
 }
+
+// withdrawFirstVersion puts the managed path back as it was before a failed
+// attempt on a device that never verified a configuration: no file, or the
+// file the attempt replaced. Only the attempt's own content is withdrawn,
+// as the journal identifies it; anything else is left alone. The actual
+// digest then describes what is there, so nothing claims the failed version.
+func (e *Engine) withdrawFirstVersion() {
+	defer func() { e.State.ActualSHA256 = e.actual() }()
+	var j Journal
+	if ReadJSON(filepath.Join(e.Dir, "journal.json"), &j) != nil || j.DesiredSHA256 == "" || e.actual() != j.DesiredSHA256 {
+		return
+	}
+	if j.PreviousAbsent {
+		_ = os.Remove(e.Settings.ManagedConfig)
+		return
+	}
+	previous, err := readArtifact(filepath.Join(e.Dir, "pre-attempt.json"))
+	if err == nil && Digest(previous) == j.PreviousSHA256 {
+		_ = AtomicWrite(e.Settings.ManagedConfig, previous)
+	}
+}
+
 func (e *Engine) cleanupGood() error {
 	files, err := filepath.Glob(filepath.Join(e.Dir, "good-*.json"))
 	if err != nil {
@@ -538,7 +986,8 @@ func OpenEngine(dir string) (*Engine, error) {
 		return nil, err
 	}
 	st.DeviceID = cred.DeviceID
-	engine := &Engine{Dir: dir, Settings: s, State: st, Credentials: cred, Client: client, BootID: RandomID(), Driver: &VectorDriver{Settings: s}}
+	log := newVectorLog(dir)
+	engine := &Engine{Dir: dir, Settings: s, State: st, Credentials: cred, Client: client, BootID: RandomID(), Driver: &VectorDriver{Settings: s, Dir: dir, Log: log}, Log: log}
 	if s.MetricsURL != "" {
 		engine.Metrics, err = NewMetricsCollector(s.MetricsURL)
 		if err != nil {
@@ -577,7 +1026,130 @@ func (e *Engine) renewForced(ctx context.Context) error {
 	_ = os.Remove(filepath.Join(e.Dir, "renewal-key.pem"))
 	return nil
 }
+
+// runningAgentBuild identifies this process's executable. Run reads it first
+// thing: an upgrade can replace the file while recovery and startup run. On
+// Linux /proc/self/exe is the running image even after the file is replaced.
+func runningAgentBuild() *AgentBuild {
+	digest, err := runningExecutableDigest()
+	if err != nil {
+		return nil
+	}
+	return &AgentBuild{Version: Version, SHA256: digest}
+}
+
+func runningExecutableDigest() (string, error) {
+	if runtime.GOOS == "linux" {
+		if f, err := os.Open("/proc/self/exe"); err == nil {
+			defer f.Close()
+			h := sha256.New()
+			if _, err = io.Copy(h, f); err == nil {
+				return hex.EncodeToString(h.Sum(nil)), nil
+			}
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return FileDigest(exe)
+}
+
+// interruptedCheckIn reports a check-in cut short by the agent stopping: a
+// clean stop, not an outage.
+func interruptedCheckIn(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	ce, ok := AsConnectionError(err)
+	return ok && ce.Code == "CANCELED"
+}
+
+// failureNews says whether a failed check-in is worth a line: the first one,
+// or one for another reason than the one already said. A device the server
+// keeps refusing, or can't reach, is told once rather than at every retry;
+// `vectory status` shows how long it has lasted. A failure that isn't a
+// connection problem is always said.
+func failureNews(said string, err error) (code string, news bool) {
+	ce, connection := AsConnectionError(err)
+	if !connection || ce.Code == "" {
+		return "", true
+	}
+	return ce.Code, ce.Code != said
+}
+
+// recordCheckInFailure keeps the outage for status: the first failed
+// check-in since the last success, with the latest reason. Only network
+// failures count, never a check-in interrupted by stopping the agent.
+func (e *Engine) recordCheckInFailure(ctx context.Context, err error, message string) {
+	ce, network := AsConnectionError(err)
+	if !network || interruptedCheckIn(ctx, err) {
+		return
+	}
+	failure := CheckInFailure{Since: e.now(), Message: message, Code: ce.Code}
+	if previous := e.State.CheckInFailure; previous != nil {
+		failure.Since = previous.Since
+	}
+	e.State.CheckInFailure = &failure
+	_ = e.save()
+}
+
+// takeQueuedRetry answers `vectory retry` run while this agent holds the
+// lock: it lifts the hold on the failed version, as the stopped-agent retry
+// does, so the next reconciliation tries it again. It reports whether a
+// failed version was waiting.
+func (e *Engine) takeQueuedRetry() bool {
+	path := filepath.Join(e.Dir, retryRequestName)
+	if _, err := os.Lstat(path); err != nil {
+		return false
+	}
+	held := e.State.FailedGeneration != nil || e.State.FailedEffectiveSHA256 != ""
+	e.State.FailedGeneration = nil
+	e.State.FailedEffectiveSHA256 = ""
+	if held && e.save() != nil {
+		return false
+	}
+	if os.Remove(path) == nil {
+		_ = syncDir(e.Dir)
+	}
+	return held
+}
+
+// runOptions change how Run reports itself. serviceManager overrides what the
+// environment says: setup's one-shot check-in is none, since the process
+// stops right after it, and the Windows service entry is windows.
+type runOptions struct {
+	once           bool
+	serviceManager string
+	// noWake: check in on the schedule only, never holding a wait open.
+	noWake bool
+	// verbose also logs every check-in (vectory run --verbose).
+	verbose bool
+}
+
+// Run runs the agent: continuously, or for one complete check-in.
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
+	return runWith(ctx, dir, runOptions{once: once}, report)
+}
+
+// RunContinuous runs the agent continuously with the options of vectory run:
+// noWake checks in on the schedule only and never holds a wait open
+// (--no-wake); verbose also logs every check-in (--verbose).
+func RunContinuous(ctx context.Context, dir string, noWake, verbose bool, report func(string)) error {
+	return runWith(ctx, dir, runOptions{noWake: noWake, verbose: verbose}, report)
+}
+
+// RunWindowsService runs the agent as the Windows service.
+func RunWindowsService(ctx context.Context, dir string, report func(string)) error {
+	return runWith(ctx, dir, runOptions{serviceManager: "windows"}, report)
+}
+
+func runWith(ctx context.Context, dir string, options runOptions, report func(string)) error {
+	once := options.once
+	build := runningAgentBuild()
 	unlock, err := Lock(dir)
 	if err != nil {
 		return err
@@ -587,15 +1159,37 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 	if err != nil {
 		return err
 	}
-	defer func() { e.Client.Close() }()
-	if e.Metrics != nil {
-		defer e.Metrics.client.CloseIdleConnections()
+	e.State.Agent = build
+	e.Notice = report
+	e.ServiceManager = options.serviceManager
+	if e.ServiceManager == "" {
+		e.ServiceManager = runningServiceManager()
 	}
+	defer func() { e.Client.Close() }()
+	// A build being downloaded is dropped with the process: nothing under a final
+	// name is left, and the next run starts the transfer over.
+	defer e.stopUpdateDownload()
 	defer func() {
-		_ = e.Driver.Stop()
+		if e.Metrics != nil {
+			e.Metrics.client.CloseIdleConnections()
+		}
+		if e.Log != nil {
+			e.Log.close()
+		}
+	}()
+	defer func() {
+		alive := e.Driver.Alive()
+		if alive {
+			report(fmt.Sprintf("Stopping Vector: it finishes in-flight events for up to %d s.", e.Settings.gracefulShutdownSeconds()))
+		}
+		started := time.Now()
+		stopped := e.Driver.Stop()
+		if alive {
+			report(stoppedLine(time.Since(started), e.Settings.gracefulShutdownSeconds(), stopped))
+		}
 		if e.State.ApplyState == "verified_applied" {
 			e.State.ApplyState = "verification_unknown"
-			e.State.Error = &Issue{"PROCESS_STOPPED", "observation", "The agent supervisor stopped; restart the service to re-establish activation"}
+			e.State.Error = &Issue{Code: "PROCESS_STOPPED", Stage: "observation", Message: "The agent supervisor stopped; restart the service to re-establish activation"}
 			e.observeVerifiedAttempt("verification_unknown", e.State.Error)
 			_ = e.save()
 		}
@@ -604,46 +1198,187 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		report(err.Error())
 	} else if err = e.StartExisting(ctx); err != nil {
 		report(err.Error())
+	} else if line := startupLine(e.State, e.Driver.Alive()); line != "" {
+		report(line)
 	}
-	failures := 0
+	// The outcome already true at start isn't news; each new one is said once.
+	announced, _ := outcomeLine(e.State)
+	if e.Settings.VectorVersion == "" {
+		// Adopted before the version was recorded: report what the binary says.
+		if version, err := ProbeVector(ctx, e.Settings); err == nil {
+			e.Settings.VectorVersion = version
+		}
+	}
+	failures, followed, complete := 0, false, false
+	// The reason of the failed check-in already said, until one succeeds.
+	said := ""
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
+	// `vectory status` reads this from the state: a run that never waits says so
+	// at the start, and one that waits clears what the last run saw.
+	if options.noWake {
+		e.noteWake(wakeOffRun)
+	} else {
+		e.noteWake("")
+	}
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
+		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
+		known := slices.Clone(e.State.ServerFeatures)
+		checks := e.validation.runs
+		if e.takeQueuedRetry() {
+			report("Retry requested on this host: trying the failed version again.")
+		}
 		err = supervisor.poll(ctx, e, report)
-		if err != nil {
+		switch {
+		case err != nil && ctx.Err() != nil:
+			// Stopping the agent interrupted the check-in: not an outage.
+			if once {
+				return err
+			}
+			return nil
+		case err != nil:
 			failures++
-			report(err.Error())
-		} else {
-			failures = 0
-			report("heartbeat: " + e.State.ApplyState)
-		}
-		if once {
-			return err
-		}
-		seconds := e.State.Policy.HeartbeatSeconds
-		if seconds < 10 || seconds > 3600 {
-			seconds = 60
-		}
-		if failures > 0 {
-			seconds = 5 << min(failures, 6)
-			if seconds > 300 {
-				seconds = 300
+			// A version that failed to apply is said once, in the words of
+			// its diagnostic; a failed check-in is said as a connection problem.
+			if _, network := AsConnectionError(err); !network {
+				if key, line := outcomeLine(e.State); key != "" && key != announced {
+					announced = key
+					report(line)
+					break
+				}
+			}
+			message := describeCheckInFailure(err, e.State.LastHeartbeat, e.now())
+			if code, news := failureNews(said, err); news {
+				said = code
+				report(message)
+			}
+			e.recordCheckInFailure(ctx, err, message)
+		default:
+			failures, said = 0, ""
+			if failure := e.State.CheckInFailure; failure != nil {
+				report(fmt.Sprintf("Reconnected to %s after %s.", e.Settings.Server, preciseDuration(e.now().Sub(failure.Since))))
+				e.State.CheckInFailure = nil
+				_ = e.save()
+			}
+			if key, line := outcomeLine(e.State); key != "" && key != announced {
+				announced = key
+				report(line)
+			}
+			if options.verbose {
+				report("Checked in: " + applyStateLabels[e.State.ApplyState] + ".")
 			}
 		}
+		if once {
+			// A first check-in learns which fields the server accepts. A
+			// process that stops right after it sends one complete check-in
+			// more, so the server sees what a running agent reports (host
+			// runtime, what keeps it running, whether Vector runs).
+			if err == nil && !complete && learnedFeatures(known, e.State.ServerFeatures) {
+				complete = true
+				continue
+			}
+			return err
+		}
+		seconds := checkInSeconds(e.State.Policy, failures)
 		var b [1]byte
 		_, _ = rand.Read(b[:])
 		delay := time.Duration(float64(seconds) * (0.8 + float64(b[0])/255*0.4) * float64(time.Second))
+		// Never two follow-ups in a row: a flapping outcome can't speed up
+		// the check-in cadence. A change in where an agent update stands is
+		// one more reason for a follow-up: it is reported at once, once.
+		followed = err == nil && !followed && (followUp(reported, appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}) || e.update.unreported)
+		if followed {
+			delay = followUpDelay
+		}
+		if e.validation.runs != checks {
+			// The result of a check on request goes out at once, once, instead of
+			// at the next interval: validationSpacing bounds how often.
+			delay = followUpDelay
+		}
 		if delay < e.Client.RetryAfter {
 			delay = e.Client.RetryAfter
 		}
-		if !supervisor.wait(ctx, e, delay, report) {
+		// Where the server offers it, a change reaches this agent within
+		// seconds instead of at the next check-in (see wake.go).
+		if !supervisor.wait(ctx, e, delay, report, e.wakeAllowed(options.noWake, failures)) {
 			return nil
 		}
 	}
 }
+
+// checkInSeconds is how long to wait before the next check-in, before jitter:
+// the policy's interval while check-ins succeed, and while they fail a wait
+// that doubles from 10 s and stops at 5 min. That bounds every retry of a
+// failed check-in, download included: one attempt per wait, never a tight loop,
+// never more often than every ten seconds and never less often than every five
+// minutes.
+func checkInSeconds(policy Policy, failures int) int {
+	seconds := policy.HeartbeatSeconds
+	if seconds < 10 || seconds > 3600 {
+		seconds = 60
+	}
+	if failures > 0 {
+		seconds = min(5<<min(failures, 6), 300)
+	}
+	return seconds
+}
+
+// learnedFeatures reports whether the server lists a heartbeat field the
+// agent didn't know it accepts before the last check-in.
+func learnedFeatures(before, after []string) bool {
+	for _, feature := range after {
+		if !slices.Contains(before, feature) {
+			return true
+		}
+	}
+	return false
+}
+
+// runningServiceManager says what keeps this process running, from what
+// service managers put in the environment of the processes they start:
+// systemd sets INVOCATION_ID for every unit and launchd sets
+// XPC_SERVICE_NAME to the job's label. The Windows service entry says so
+// itself. Anything else is none: a foreground run, a supervisor of the
+// operator's own, or nothing at all.
+func runningServiceManager() string {
+	switch runtime.GOOS {
+	case "linux":
+		if os.Getenv("INVOCATION_ID") != "" && SystemdAvailable() {
+			return "systemd"
+		}
+	case "darwin":
+		if os.Getenv("XPC_SERVICE_NAME") == launchdLabel {
+			return "launchd"
+		}
+	}
+	return "none"
+}
+
+// appliedOutcome is what a heartbeat tells the server about the last apply.
+type appliedOutcome struct {
+	state      string
+	generation uint64
+}
+
+// followUpDelay brings an apply's outcome to the dashboard within seconds
+// instead of a full check-in interval. Activation already watched Vector stay
+// up; one second is the spacing wake-ups keep too.
+const followUpDelay = time.Second
+
+// followUp reports whether this poll finished an apply the last heartbeat
+// didn't report. The follow-up heartbeat reports it, so the next poll sees
+// no change and returns to the normal interval: one follow-up per outcome.
+func followUp(reported, now appliedOutcome) bool {
+	switch now.state {
+	case "verified_applied", "failed", "rolled_back":
+		return now != reported
+	}
+	return false
+}
+
 func StateSummary(dir string) (map[string]any, error) {
 	st, err := LoadState(dir)
 	if err != nil {
@@ -654,7 +1389,8 @@ func StateSummary(dir string) (map[string]any, error) {
 		return nil, err
 	}
 	h, _ := FileDigest(s.ManagedConfig)
-	return map[string]any{"state": st, "actual_sha256": h, "local_paused": LocalPaused(dir), "drift": st.LastGoodSHA256 != "" && h != st.LastGoodSHA256, "telemetry_available": st.Telemetry != nil, "version": Version, "configuration_mode": s.CapabilityPolicy.ConfigurationMode(), "diagnostics": localDiagnostics(dir, s, st)}, nil
+	running, _ := readArtifact(s.ManagedConfig)
+	return map[string]any{"state": st, "actual_sha256": h, "local_paused": LocalPaused(dir), "drift": st.LastGoodSHA256 != "" && h != st.LastGoodSHA256, "telemetry_available": st.Telemetry != nil, "version": Version, "configuration_mode": s.CapabilityPolicy.ConfigurationMode(), "diagnostics": localDiagnostics(dir, s, st), "host_runtime": hostRuntimeFor(s, dir, running), "vector_log": filepath.Join(dir, vectorLogName)}, nil
 }
 func Doctor(ctx context.Context, dir string) (map[string]any, error) {
 	return doctorWithProbe(ctx, dir, ProbeVector)
@@ -723,7 +1459,4 @@ func ConfigureFullVector(dir string, enabled bool) error {
 		return commitSettingsWithRetryReset(dir, doc, s)
 	}
 	return doc.save(s)
-}
-func ExitDescription(code int) string {
-	return fmt.Sprintf("exit %d: 0 success; 1 operational error; 2 invalid command; 3 security/preflight rejection", code)
 }

@@ -1,7 +1,7 @@
 // Actual component inspector with isolated local state. No preview or API writes.
 import { createServer, transformWithEsbuild } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -326,6 +326,13 @@ try {
         host_key: "host",
       };
       await fixture({ kind: "sources", value: initial });
+      // Both lists hold paths, and both say so: Path 1 and Add path.
+      await expect(
+        page.getByRole("button", { name: "Add path", exact: true }),
+      ).toHaveCount(2);
+      await expect(
+        page.getByRole("button", { name: "Add item", exact: true }),
+      ).toHaveCount(0);
       const scroller = page.locator(".editor-inspector-body");
       expect(
         await scroller.evaluate(
@@ -428,6 +435,45 @@ try {
     },
   );
   await check(
+    "a file source's included and excluded paths are both lists of paths, at desktop and phone width in both themes",
+    async () => {
+      const value = {
+        type: "file",
+        include: ["/var/log/app/*.log"],
+        exclude: ["/var/log/app/debug.log"],
+      };
+      for (const [width, theme] of [
+        [1280, "light"],
+        [390, "light"],
+        [390, "dark"],
+      ]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.evaluate(
+          (theme) => (document.documentElement.dataset.theme = theme),
+          theme,
+        );
+        await fixture({ kind: "sources", value });
+        await expect(
+          page.getByRole("button", { name: "Add path", exact: true }),
+        ).toHaveCount(2);
+        await expect(
+          page.locator(".schema-array-entry").filter({ hasText: "Path 1" }),
+        ).toHaveCount(2);
+        await expect(
+          page.locator(".schema-array-entry").filter({ hasText: "Item 1" }),
+        ).toHaveCount(0);
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBeLessThanOrEqual(width);
+        await axe("file source paths " + width + " " + theme);
+        await page.screenshot({
+          path: resolve(output, "file-paths-" + width + "-" + theme + ".png"),
+          animations: "disabled",
+        });
+      }
+    },
+  );
+  await check(
     "read-only fields and 899px/375px light-dark inspector states remain accessible and contained",
     async () => {
       const value = {
@@ -514,7 +560,7 @@ try {
     },
   );
   if (testFilter) expect(results.length).toBeGreaterThan(0);
-  else expect(results).toHaveLength(7);
+  else expect(results).toHaveLength(8);
   expect(results.filter((result) => !result.passed)).toEqual([]);
   expect(errors).toEqual([]);
   expect(requests).toEqual([]);

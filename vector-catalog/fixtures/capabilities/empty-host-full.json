@@ -1,0 +1,58 @@
+{
+  "description": "Components that run programs need full mode: exec and lua.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "run": {
+        "type": "exec",
+        "mode": "scheduled",
+        "command": [
+          "date"
+        ],
+        "scheduled": {
+          "exec_interval_secs": 60
+        }
+      }
+    },
+    "transforms": {
+      "script": {
+        "type": "lua",
+        "version": "2",
+        "inputs": [
+          "run"
+        ],
+        "hooks": {
+          "process": "function (event, emit) emit(event) end"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "script"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sources/run"
+      },
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/transforms/script"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

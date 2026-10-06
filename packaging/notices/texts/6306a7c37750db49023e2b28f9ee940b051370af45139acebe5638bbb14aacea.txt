@@ -1,0 +1,14 @@
+{
+  "name": "@replit/codemirror-css-color-picker",
+  "version": "6.3.0",
+  "author": {
+    "name": "Faris Masad",
+    "email": "faris@repl.it"
+  },
+  "license": "MIT",
+  "gitHead": "2eb228cdf8140b0bb586f5c561cf5347d05d4cc6",
+  "repository": {
+    "url": "git+https://github.com/replit/Codemirror-CSS-color-picker.git",
+    "type": "git"
+  }
+}

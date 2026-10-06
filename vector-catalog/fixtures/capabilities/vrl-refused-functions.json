@@ -1,0 +1,66 @@
+{
+  "description": "VRL that reaches the environment, secrets, the network or files needs full mode, wherever the program sits.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "http_server",
+        "address": "0.0.0.0:8080",
+        "auth": {
+          "strategy": "custom",
+          "source": "get_env_var!(\"TOKEN\") == .headers.authorization"
+        }
+      }
+    },
+    "transforms": {
+      "dns": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ".ip = dns_lookup!(.host)"
+      },
+      "keep": {
+        "type": "filter",
+        "inputs": [
+          "dns"
+        ],
+        "condition": "http_request!(\"https://example.net/allow\") != \"\""
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "keep"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/sources/in/auth/source"
+      },
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/transforms/dns/source"
+      },
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/transforms/keep/condition"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [
+      "0.0.0.0:8080"
+    ],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

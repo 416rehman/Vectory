@@ -6,11 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
+	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
+
+// openNoFollow makes an open fail on a symbolic link rather than follow it.
+const openNoFollow = unix.O_NOFOLLOW
 
 func protect(path string, dir bool) error {
 	info, err := os.Lstat(path)
@@ -70,8 +76,134 @@ func checkPrivateFile(path string) error {
 	}
 	return f.Close()
 }
+
+// privateFileProblem says which check made openPrivateFile refuse path, and a
+// command that fixes it.
+func privateFileProblem(path string, openErr error) (problem, fix string) {
+	info, err := os.Lstat(path)
+	switch {
+	case os.IsNotExist(err):
+		return "doesn't exist", ""
+	case err != nil || errors.Is(openErr, fs.ErrPermission):
+		return "can't be read by this account", "Run the command with sudo."
+	case info.Mode()&os.ModeSymlink != 0 || errors.Is(openErr, unix.ELOOP):
+		return "is a symbolic link", "Pass the real file's path."
+	case !info.Mode().IsRegular():
+		return "isn't a regular file", ""
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "isn't private", ""
+	}
+	quoted := ShellQuote(path)
+	var problems, fixes []string
+	if stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 {
+		owner := "uid " + strconv.FormatUint(uint64(stat.Uid), 10)
+		if account, err := user.LookupId(strconv.FormatUint(uint64(stat.Uid), 10)); err == nil {
+			owner = account.Username
+		}
+		problems = append(problems, "belongs to "+owner)
+		fixes = append(fixes, "chown root "+quoted)
+	}
+	if perm := info.Mode().Perm(); perm&0077 != 0 {
+		problems = append(problems, fmt.Sprintf("is readable by other accounts (mode %04o)", perm))
+		fixes = append(fixes, "chmod 600 "+quoted)
+	}
+	switch {
+	case stat.Nlink != 1:
+		return strings.Join(append(problems, fmt.Sprintf("has %d hard links", stat.Nlink)), " and "), "Save the token in a new file, then chmod 600 it."
+	case len(problems) == 0:
+		return "isn't private", ""
+	case stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 && os.Geteuid() != 0:
+		return strings.Join(problems, " and "), "Use a file you own, with chmod 600."
+	}
+	return strings.Join(problems, " and "), "Fix it: " + strings.Join(fixes, " && ")
+}
+
+// keepOwner gives the temporary file that is about to replace path the owner
+// and group of the file it replaces, when this process is root. Files the
+// service account owns then stay the service account's when root replaces
+// them (a foreground run, pause or retry as root), instead of turning into
+// files the service can no longer read. Only the owner and group carry over:
+// the replacement stays private (0600), whatever the old file allowed. An
+// owner other than the one the directory itself belongs to is never kept.
+// Failing to keep an owner leaves root's ownership, which is safe.
+func keepOwner(tmp, path string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	old, err := os.Lstat(path)
+	if err != nil || !old.Mode().IsRegular() {
+		return
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return
+	}
+	oldStat, oldOK := old.Sys().(*syscall.Stat_t)
+	parentStat, parentOK := parent.Sys().(*syscall.Stat_t)
+	if !oldOK || !parentOK || oldStat.Uid != parentStat.Uid {
+		return
+	}
+	_ = os.Lchown(tmp, int(oldStat.Uid), int(oldStat.Gid))
+}
+
+// ownedLikeParent makes a file this process just created belong to the user
+// and group of the directory that holds it, when this process is root: the
+// agent's files belong to the account that has its state directory, and a file
+// left to root would be one that account can't write. Without root the file is
+// already this account's.
+func ownedLikeParent(path string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	stat, ok := parent.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	return os.Lchown(path, int(stat.Uid), int(stat.Gid))
+}
 func rejectPlatformLink(path string) error { return nil }
 func replaceFile(from, to string) error    { return os.Rename(from, to) }
+
+// The places the agent makes directories, which Windows makes with an access list
+// of their own (platform_windows.go). Here the mode is the access.
+
+// makeSharedDirectory makes one directory above a private one, searchable by
+// everyone whatever the umask.
+func makeSharedDirectory(dir string) error {
+	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(dir, 0755)
+}
+
+// ensureStateRoot is what the code that makes or reuses the agent's state directory
+// does first about the directory that holds it under ProgramData on Windows (see
+// state_root.go). Nothing here keeps the agent's own directories in a directory that
+// other accounts may create, so it has nothing to do.
+func ensureStateRoot(path string) error { return nil }
+
+// stateRootProblem is setup's first look at that directory, which changes nothing.
+func stateRootProblem(dir string, elevated bool) error { return nil }
+
+// makePrivateDirectory makes a private directory, and what is missing above it.
+func makePrivateDirectory(path string) error { return os.MkdirAll(path, 0700) }
+
+// makeInstallDirectory makes the directory the agent is installed in, and what is
+// missing above it.
+func makeInstallDirectory(dir string) error { return os.MkdirAll(dir, 0755) }
+
+// createInstallTemp makes the file the new agent is written to before it takes the
+// place of the installed one.
+func createInstallTemp(dir string) (*os.File, error) {
+	return os.CreateTemp(dir, ".vectory-install-*")
+}
+
 func syncDir(path string) error {
 	f, e := os.Open(path)
 	if e != nil {
@@ -132,7 +264,48 @@ func lockAgentFile(dir string) (func(), error) {
 	}
 	if e = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); e != nil {
 		f.Close()
-		return nil, errors.New("another agent operation is running")
+		return nil, lockHeld(dir)
 	}
-	return func() { unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
+	recordLockOwner(f)
+	return func() { clearLockOwner(f); unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
+}
+
+// closedAbove is the first directory above path, up to but not including stop
+// (empty: all the way to the root), that the account with this uid and gid can't
+// search: it neither belongs to the account nor lets everyone in.
+func closedAbove(path, stop string, uid, gid int) (dir string, mode os.FileMode, err error) {
+	for p := filepath.Dir(filepath.Clean(path)); p != stop; p = filepath.Dir(p) {
+		info, err := os.Stat(p)
+		if err == nil {
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			mode = info.Mode().Perm()
+			open := mode&0001 != 0 ||
+				ok && int(stat.Uid) == uid && mode&0100 != 0 ||
+				ok && int(stat.Gid) == gid && mode&0010 != 0
+			if !open {
+				return p, mode, nil
+			}
+		} else if !os.IsNotExist(err) {
+			return "", 0, err
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	return "", 0, nil
+}
+
+// checkServiceCanReach refuses a layout the service account can't get through:
+// a directory above path that neither belongs to the account nor lets everyone
+// search it. Registering the service anyway would leave an agent that can
+// never write its managed configuration or its state.
+func checkServiceCanReach(path, account string, uid, gid int) error {
+	closed, mode, err := closedAbove(path, "", uid, gid)
+	if err != nil {
+		return err
+	}
+	if closed != "" {
+		return fmt.Errorf("%s (mode %04o) is closed to the service account %s, so it could not reach %s. Run `chmod o+x %s`, then run this command again", closed, mode, account, path, ShellQuote(closed))
+	}
+	return nil
 }

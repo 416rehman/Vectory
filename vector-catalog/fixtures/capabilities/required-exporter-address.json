@@ -1,0 +1,52 @@
+{
+  "description": "An exporter without an address would listen on Vector's default; restricted mode needs it written out.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "m": {
+        "type": "log_to_metric",
+        "inputs": [
+          "in"
+        ],
+        "metrics": [
+          {
+            "type": "counter",
+            "field": "message",
+            "name": "lines"
+          }
+        ]
+      }
+    },
+    "sinks": {
+      "metrics": {
+        "type": "prometheus_exporter",
+        "inputs": [
+          "m"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "LISTENER_DENIED",
+        "at": "/sinks/metrics/address"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

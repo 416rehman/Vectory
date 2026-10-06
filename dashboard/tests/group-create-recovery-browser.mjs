@@ -1,12 +1,13 @@
 // Actual App/Groups recovery; all HTTP uses explicitly synthetic isolated state.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
@@ -183,6 +184,11 @@ async function start(f = state(), options = {}) {
       seed: options.seed,
     },
   );
+  const fleet = fleetReplies({
+    devices: () => f.devices,
+    groups: () => f.groups,
+    groupById: false,
+  });
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url()),
@@ -219,7 +225,27 @@ async function start(f = state(), options = {}) {
         },
         csrf_token: "synthetic",
       });
+    // Pages of devices, one device, and the groups without their members.
+    if (await fulfillFleetRead(fleet, route)) return;
     if (method === "GET" && path === "/devices") return reply(f.devices);
+    // The group overview lists assignments; member edits preview their effects.
+    if (method === "GET" && path === "/deployments/history")
+      return route.fulfill({
+        json: { items: [], total: 0, page: 1, page_size: 12 },
+      });
+    if (method === "POST" && path === "/groups/membership-preview") {
+      const body = request.postDataJSON();
+      return route.fulfill({
+        json: {
+          group_id: body.group_id,
+          revision: body.revision,
+          stale: false,
+          ready: true,
+          blockers: [],
+          devices: [],
+        },
+      });
+    }
     if (method === "GET" && path === "/groups") return reply(f.groups);
     if (method === "GET" && path === "/groups/requests") {
       const page = Number(url.searchParams.get("page") || 1),
@@ -646,6 +672,9 @@ try {
           .first()
           .click();
         await s.page
+          .getByRole("tab", { name: "Edit members", exact: true })
+          .click();
+        await s.page
           .getByRole("textbox", { name: "Group name", exact: true })
           .fill("Synthetic CAS edit");
         await s.page
@@ -696,8 +725,11 @@ try {
           .getByRole("button", { name: "Open group", exact: true })
           .click();
         await expect(
-          s.page.getByRole("textbox", { name: "Group name", exact: true }),
-        ).toHaveValue(s.f.groups[0].name);
+          s.page.getByRole("dialog").getByRole("heading", {
+            name: s.f.groups[0].name,
+            exact: true,
+          }),
+        ).toBeVisible();
         await expect(s.page.getByRole("dialog")).toHaveCount(1);
         await expect
           .poll(() =>
@@ -707,7 +739,7 @@ try {
           )
           .toBe(true);
         observations.push({
-          scenario: "Open group keyboard handoff",
+          scenario: "Open group keyboard focus",
           focus: await s.page.evaluate(() => ({
             tag: document.activeElement?.tagName,
             label: document.activeElement?.getAttribute("aria-label"),
@@ -715,9 +747,17 @@ try {
           })),
         });
         await s.page.keyboard.press("Tab");
+        expect(
+          await s.page.evaluate(
+            () => !!document.activeElement?.closest('[role="dialog"]'),
+          ),
+        ).toBe(true);
+        await s.page
+          .getByRole("tab", { name: "Edit members", exact: true })
+          .click();
         await expect(
           s.page.getByRole("textbox", { name: "Group name", exact: true }),
-        ).toBeFocused();
+        ).toHaveValue(s.f.groups[0].name);
         expect(s.f.groups).toHaveLength(1);
         await clean(s.f);
       } finally {

@@ -1,7 +1,7 @@
 // Actual account/metrics tables with synthetic data only; no real API mutations.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
@@ -83,14 +83,30 @@ const samples = [
     errors: 10,
     components,
   },
+  { sampled_at: "2026-09-26T12:04:00Z", errors: 12 },
 ];
-const device = { id: id(100), name: "Synthetic device", telemetry: samples[1] };
+// A 10 s check-in: the empty 12:01 slot is a missed report, drawn as a gap.
+const device = {
+  id: id(100),
+  name: "Synthetic device",
+  effective_policy: {
+    heartbeat_seconds: 10,
+    sync_paused: false,
+    telemetry_enabled: true,
+  },
+  telemetry: samples[1],
+};
 const results = [],
   accessibility = [],
+  scrolling = [],
   calls = [],
   errors = [],
   unexpected = [];
-async function fixture() {
+async function fixture({
+  history = { samples },
+  audit = [],
+  auditTotal = audit.length,
+} = {}) {
   const context = await browser.newContext({
     viewport: { width: 899, height: 960 },
     reducedMotion: "reduce",
@@ -106,7 +122,12 @@ async function fixture() {
       path === `/api/v1/devices/${device.id}/telemetry` &&
       call.method === "GET"
     )
-      return route.fulfill({ json: { device_id: device.id, samples } });
+      return route.fulfill({ json: { device_id: device.id, ...history } });
+    // The device's own apply events, which the charts mark.
+    if (path === "/api/v1/audit/history" && call.method === "GET")
+      return route.fulfill({
+        json: { items: audit, total: auditTotal, page: 1, page_size: 50 },
+      });
     unexpected.push(call);
     return route.fulfill({
       status: 500,
@@ -115,7 +136,8 @@ async function fixture() {
       },
     });
   });
-  await page.goto(`${origin}/__table-fixture`);
+  // A cold dev-server transform can exceed the action timeout on a busy host.
+  await page.goto(`${origin}/__table-fixture`, { timeout: 60000 });
   await page.waitForFunction(() => window.ready);
   return { page, close: () => context.close() };
 }
@@ -164,7 +186,7 @@ try {
           "Person 6",
           "Person 3",
         ]);
-        await headerFilter(f.page, "Access");
+        await headerFilter(f.page, "Status");
         await f.page
           .getByRole("radio", { name: "Disabled", exact: true })
           .click();
@@ -199,7 +221,7 @@ try {
         await f.page
           .getByRole("radio", { name: "Viewer", exact: true })
           .click();
-        await headerFilter(f.page, "Access");
+        await headerFilter(f.page, "Status");
         await f.page
           .getByRole("radio", { name: "Active", exact: true })
           .click();
@@ -215,7 +237,7 @@ try {
         ).toBeVisible();
         await expect(
           f.page.getByRole("button", {
-            name: "Filter Access (active)",
+            name: "Filter Status (active)",
             exact: true,
           }),
         ).toBeVisible();
@@ -246,20 +268,16 @@ try {
           exact: true,
         });
         await expect(table.locator("tbody tr")).toHaveCount(4);
-        const path = f.page.locator("path.metrics-series"),
+        const path = f.page.locator(".telemetry-series.in path").first(),
           original = await path.getAttribute("d");
-        await table
-          .getByRole("button", { name: /^Sort by Events \/ s/ })
-          .click();
+        await table.getByRole("button", { name: /^Sort by Out \/ s/ }).click();
         expect(await rowNames(table)).toEqual([
           "zero",
           "two",
           "ten",
           "missing",
         ]);
-        await table
-          .getByRole("button", { name: /^Sort by Events \/ s/ })
-          .click();
+        await table.getByRole("button", { name: /^Sort by Out \/ s/ }).click();
         expect(await rowNames(table)).toEqual([
           "ten",
           "two",
@@ -267,42 +285,222 @@ try {
           "missing",
         ]);
         await table
-          .getByRole("button", { name: "Filter Events / s", exact: true })
+          .getByRole("button", { name: "Filter Component", exact: true })
           .click();
         await f.page
-          .getByRole("textbox", { name: "Filter Events / s", exact: true })
-          .fill("0");
+          .getByRole("textbox", { name: "Filter Component", exact: true })
+          .fill("http");
         await f.page.keyboard.press("Escape");
-        expect(await rowNames(table)).toEqual(["ten", "zero"]);
-        await f.page.getByText("View sample history", { exact: true }).click();
+        expect(await rowNames(table)).toEqual(["ten"]);
+        await f.page
+          .getByText("View samples as a table", { exact: true })
+          .click();
         const history = f.page.getByRole("table", {
-          name: "Metric sample history",
+          name: "Metric samples",
           exact: true,
         });
         await expect(history.locator("tbody tr")).toHaveCount(3);
-        await history
-          .getByRole("button", { name: /^Sort by Events \/ second/ })
-          .click();
+        await history.getByRole("button", { name: /^Sort by In \/ s/ }).click();
         expect(
           await history.locator("tbody tr td:nth-child(2)").allTextContents(),
         ).toEqual(["0", "10", "—"]);
-        await history
-          .getByRole("button", { name: /^Sort by Events \/ second/ })
-          .click();
+        await history.getByRole("button", { name: /^Sort by In \/ s/ }).click();
         expect(
           await history.locator("tbody tr td:nth-child(2)").allTextContents(),
         ).toEqual(["10", "0", "—"]);
         await expect(path).toHaveAttribute("d", original);
         await f.page
-          .getByRole("img", { name: /Source events per second/ })
+          .getByRole("img", { name: /^Throughput, events \/ second/ })
           .focus();
         await f.page.keyboard.press("ArrowLeft");
-        await expect(f.page.locator(".metrics-chart-readout")).toContainText(
-          "No sample reported",
-        );
+        await expect(
+          f.page.locator(".telemetry-readout").first(),
+        ).toContainText("No report");
         expect(calls.every((call) => call.method === "GET")).toBe(true);
       } finally {
         await f.close();
+      }
+    },
+  );
+  await check(
+    "A young device's charts say what they cover, mark its version changes from the audit log and count from the change, without a pointer",
+    async () => {
+      const minute = 60_000;
+      const now = Date.now();
+      const ago = (minutes) => now - minutes * minute;
+      const at = (minutes) => new Date(ago(minutes)).toISOString();
+      // Four whole minutes of history, errors counting up across a switch to v2
+      // that the audit log recorded between the second and third.
+      const young = {
+        ...device,
+        created_at: at(6),
+        telemetry: {
+          sampled_at: at(0.5),
+          events_per_second: 44,
+          events_out_per_second: 33,
+          errors: 150,
+          errors_per_minute: 1,
+          uptime_seconds: 3600,
+          components,
+        },
+      };
+      const history = {
+        step_seconds: 60,
+        samples: [
+          [5, 100],
+          [4, 110],
+          [3, 130],
+          [2, 145],
+        ].map(([minutesAgo, errors], index) => ({
+          bucket: Math.floor(ago(minutesAgo) / minute),
+          sampled_at: at(minutesAgo),
+          samples: 1,
+          events_per_second: 40 + index,
+          events_out_per_second: 30 + index,
+          errors,
+          uptime_seconds: 3600,
+        })),
+      };
+      // Audit rows as the server lists them, newest first.
+      const audit = [
+        {
+          id: "00000000-0000-4000-8000-0000000000a2",
+          actor_id: device.id,
+          actor: "Synthetic device",
+          actor_kind: "device",
+          action: "device.apply_state",
+          target: device.id,
+          target_id: device.id,
+          target_kind: "device",
+          target_name: "Synthetic device",
+          device_id: device.id,
+          outcome: "verified_applied",
+          created_at: at(3.4),
+          request_id: null,
+        },
+        {
+          id: "00000000-0000-4000-8000-0000000000a1",
+          actor_id: id(1),
+          actor: "Synthetic admin",
+          actor_kind: "user",
+          action: "deployment.release",
+          target: id(2),
+          target_id: id(2),
+          target_kind: "deployment",
+          target_name: "Edge syslog v2",
+          device_id: device.id,
+          outcome: "success",
+          created_at: at(3.6),
+          request_id: null,
+        },
+      ];
+      const f = await fixture({ history, audit });
+      try {
+        await f.page.evaluate((device) => window.renderMetrics(device), young);
+        const throughput = f.page.locator(".telemetry-chart").first();
+        // The chart covers the minutes the device has existed, and says so.
+        await expect(throughput.locator(".telemetry-span")).toHaveText(
+          /^Last \d+ minutes$/,
+        );
+        // One marker, in the status vocabulary's tone, with its words on hover.
+        const marker = throughput.locator(".telemetry-marker");
+        await expect(marker).toHaveCount(1);
+        await expect(marker).toHaveAttribute("data-tone", "success");
+        await marker.locator(".telemetry-marker-dot").hover();
+        await expect(marker.locator(".telemetry-marker-tip")).toContainText(
+          "Applied Edge syslog v2",
+        );
+        await f.page.mouse.move(0, 0);
+        // The legend names the kind of change the plot shows, beside the lines.
+        const legend = throughput.locator(".telemetry-legend");
+        await expect(legend.getByText("In (sources)")).toBeVisible();
+        await expect(legend.locator("li[data-tone='success']")).toHaveText(
+          "Applied",
+        );
+        // The same change is a link to its audit event, beneath the charts.
+        const changes = f.page.getByRole("region", {
+          name: "Changes in this range",
+        });
+        await expect(
+          changes.getByRole("link", { name: "Applied Edge syslog v2" }),
+        ).toHaveAttribute(
+          "href",
+          /^#\/audit\/00000000-0000-4000-8000-0000000000a2/,
+        );
+        // The keyboard reaches it too: the readout names a change in the slot
+        // an arrow key moves to.
+        const plot = f.page.getByRole("img", { name: /^Throughput, events/ });
+        await plot.focus();
+        const readout = throughput.locator(".telemetry-readout");
+        for (let press = 0; press < 8; press++) {
+          if ((await readout.innerText()).includes("Applied Edge syslog v2"))
+            break;
+          await f.page.keyboard.press("ArrowLeft");
+        }
+        await expect(readout).toContainText("Applied Edge syslog v2 at");
+        // The sample table lists the change as a row.
+        await f.page
+          .getByText("View samples and changes as tables", { exact: true })
+          .click();
+        await expect(
+          f.page
+            .getByRole("table", { name: "Changes on this device" })
+            .getByRole("row", { name: /Applied.*Edge syslog v2/ }),
+        ).toHaveCount(1);
+        // Errors count from the switch, and Vector's own total stays in reach.
+        const note = f.page.locator(".telemetry-tile-note", {
+          hasText: "since v2 applied",
+        });
+        await expect(note).toHaveText("20 since v2 applied");
+        await expect(note).toHaveAttribute(
+          "title",
+          /Vector reports 150 since it started/,
+        );
+        for (const [width, theme] of [
+          [1280, "light"],
+          [375, "dark"],
+        ]) {
+          await f.page.setViewportSize({ width, height: 960 });
+          await f.page.evaluate(
+            (theme) => (document.documentElement.dataset.theme = theme),
+            theme,
+          );
+          await f.page.mouse.move(0, 0);
+          const axe = await new AxeBuilder({ page: f.page }).analyze();
+          accessibility.push({
+            view: "young device charts",
+            width,
+            theme,
+            violations: axe.violations,
+          });
+          expect(axe.violations).toEqual([]);
+          expect(
+            await f.page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          await f.page.screenshot({
+            path: resolve(output, `young-device-${width}-${theme}.png`),
+            fullPage: true,
+          });
+        }
+        expect(calls.every((call) => call.method === "GET")).toBe(true);
+      } finally {
+        await f.close();
+      }
+      // A device with more events than the audit read holds: the charts say
+      // from when changes are marked, so a missing marker is no "no change".
+      const more = await fixture({ history, audit, auditTotal: 212 });
+      try {
+        await more.page.evaluate(
+          (device) => window.renderMetrics(device),
+          young,
+        );
+        await expect(
+          more.page.getByRole("region", { name: "Changes in this range" }),
+        ).toContainText(/Changes before .+ aren't marked\./);
+      } finally {
+        await more.close();
       }
     },
   );
@@ -331,9 +529,44 @@ try {
               (theme) => (document.documentElement.dataset.theme = theme),
               theme,
             );
+            // On a phone, people and component metrics are cards, not tables
+            // that scroll sideways.
+            const cards = view === "people" ? width < 760 : width < 640;
             const table = f.page.getByRole("table").first();
-            await expect(table.locator("thead")).toBeVisible();
-            await expect(table.getByRole("columnheader").first()).toBeVisible();
+            if (cards) {
+              await expect(table).toBeHidden();
+              const list = f.page.getByRole("list", {
+                name:
+                  view === "people" ? "Workspace access" : "Component metrics",
+                exact: true,
+              });
+              await expect(list).toBeVisible();
+              await expect(list.getByRole("listitem")).toHaveCount(
+                view === "people" ? people.length : components.length,
+              );
+              if (view === "people")
+                await expect(
+                  list.getByRole("button", {
+                    name: "Edit access for Person 3",
+                    exact: true,
+                  }),
+                ).toBeVisible();
+              else {
+                // A card keeps every fact the component reported, with its unit.
+                const ten = list
+                  .getByRole("listitem")
+                  .filter({ hasText: "ten" });
+                await expect(
+                  ten.getByText("Errors", { exact: true }),
+                ).toBeVisible();
+                await expect(ten).toContainText("3 total");
+              }
+            } else {
+              await expect(table.locator("thead")).toBeVisible();
+              await expect(
+                table.getByRole("columnheader").first(),
+              ).toBeVisible();
+            }
             const axe = await new AxeBuilder({ page: f.page }).analyze();
             accessibility.push({
               view,
@@ -347,18 +580,29 @@ try {
                 () => document.documentElement.scrollWidth <= innerWidth,
               ),
             ).toBe(true);
-            const region = f.page.getByRole("region", {
-              name:
-                view === "people"
-                  ? "Workspace access table"
-                  : "Component metrics table",
-              exact: true,
-            });
-            await region.focus();
-            await expect(region).toBeFocused();
-            if (width === 375) {
-              await f.page.keyboard.press("End");
-              await f.page.keyboard.press("ArrowRight");
+            if (!cards) {
+              const region = f.page.getByRole("region", {
+                name:
+                  view === "people"
+                    ? "Workspace access table"
+                    : "Component metrics table",
+                exact: true,
+              });
+              // Only a region that actually scrolls sideways is a keyboard
+              // stop; one that fits has nothing to scroll and no tab stop.
+              const scrolls = await region.evaluate(
+                (node) => node.scrollWidth > node.clientWidth + 1,
+              );
+              scrolling.push({ view, width, scrolls });
+              if (scrolls) {
+                await expect(region).toHaveAttribute("tabindex", "0");
+                await region.focus();
+                await expect(region).toBeFocused();
+                await f.page.keyboard.press("End");
+                await f.page.keyboard.press("ArrowRight");
+              } else {
+                await expect(region).not.toHaveAttribute("tabindex");
+              }
             }
             await f.page.screenshot({
               path: resolve(output, `${view}-${width}-${theme}.png`),
@@ -371,6 +615,9 @@ try {
       }
     },
   );
+  // Phone cards replace the tables below their breakpoints and the tables fit
+  // above them, so a region usually has nothing to scroll: the keyboard path
+  // runs only when one does, and the report says which regions scrolled.
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   const hashes = {};
@@ -393,6 +640,7 @@ try {
           "Actual account and telemetry components with synthetic local fixtures; no real accounts or device mutation",
         results,
         accessibility,
+        scrolling,
         calls,
         errors,
         unexpected,

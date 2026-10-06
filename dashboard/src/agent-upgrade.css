@@ -91,3 +91,98 @@
   color: var(--muted);
   margin: 3px 0 0;
 }
+.agent-upgrade-current {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--success-border);
+  border-radius: var(--radius);
+  background: var(--success-bg);
+  color: var(--success-text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.agent-upgrade-build {
+  margin: 0 0 16px;
+  overflow-wrap: anywhere;
+}
+.agent-upgrade-run h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.agent-upgrade-run > p {
+  margin: 4px 0 10px;
+  color: var(--muted);
+}
+.agent-upgrade-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  /* The block scrolls inside itself; it never widens the dialog. */
+  min-width: 0;
+  max-width: 100%;
+  padding: 12px 12px 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.agent-upgrade-command pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  /* Keep each command line whole; long lines scroll instead of breaking. */
+  white-space: pre;
+  overflow-x: auto;
+}
+.agent-upgrade-command pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+}
+.agent-upgrade-command pre:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.agent-upgrade-command .button {
+  flex-shrink: 0;
+}
+.agent-upgrade-notes {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-upgrade-notes li {
+  margin: 4px 0;
+}
+.agent-upgrade-notes code {
+  /* A flag or command stays whole, never split at its hyphen. */
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+.agent-upgrade-manual {
+  margin: 20px 0 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.agent-upgrade-manual > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.agent-upgrade-manual[open] > summary {
+  margin-bottom: 12px;
+}
+@media (max-width: 639px) {
+  /* A narrow command block stacks Copy under the command. */
+  .agent-upgrade-command {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 12px;
+  }
+  .agent-upgrade-command .button {
+    align-self: flex-start;
+  }
+}

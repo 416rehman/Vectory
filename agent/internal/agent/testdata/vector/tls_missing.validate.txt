@@ -1,0 +1,7 @@
+√ Loaded ["tls_missing.json"]
+√ Transforms configuration
+
+Component errors
+----------------
+x Sink "web": Could not open certificate file "/nonexistent/ca.pem": No such file or directory (os error 2)
+

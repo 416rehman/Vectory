@@ -1,0 +1,50 @@
+{
+  "description": "A literal path into the managed assets directory is refused: only the agent's own substitution may name it.",
+  "host": {
+    "state_dir": "/var/lib/vectory-agent",
+    "managed_config_dir": "/etc/vectory/managed"
+  },
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.net/",
+        "encoding": {
+          "codec": "json"
+        },
+        "tls": {
+          "ca_file": "/var/lib/vectory-agent/assets/sha256/2b7f5b38d1f4e6d39a3c0c5e1f9b7a6d4c3b2a19f8e7d6c5b4a3928170f6e5d4"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sinks/out/tls/ca_file"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "collector.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

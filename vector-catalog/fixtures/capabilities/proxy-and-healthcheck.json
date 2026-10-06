@@ -1,0 +1,51 @@
+{
+  "description": "A component's proxy URLs and a sink's health check URL are destinations too; no_proxy lists none.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.net/ingest",
+        "encoding": {
+          "codec": "json"
+        },
+        "proxy": {
+          "enabled": true,
+          "http": "http://proxy.example.net:3128",
+          "https": "http://proxy.example.net:3128",
+          "no_proxy": [
+            "internal.example.net"
+          ]
+        },
+        "healthcheck": {
+          "enabled": true,
+          "uri": "https://collector.example.net/health"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "collector.example.net:443",
+      "proxy.example.net:3128"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

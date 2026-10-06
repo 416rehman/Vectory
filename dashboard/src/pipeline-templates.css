@@ -1,0 +1,116 @@
+@import "./editor-tokens.css";
+
+/* Start choices for a new pipeline: dense cards, the chosen one outlined. */
+.pipeline-start.pipeline-library-templates label {
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 0;
+}
+.pipeline-start.pipeline-library-templates small {
+  margin-top: 3px;
+  line-height: 1.45;
+}
+.pipeline-start-primary {
+  display: grid;
+  gap: 8px;
+}
+.pipeline-start-heading {
+  margin: 14px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.pipeline-start-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+}
+.pipeline-start-import {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0 26px;
+}
+.pipeline-start-paste {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  width: 100%;
+}
+.pipeline-start-paste textarea {
+  width: 100%;
+  min-height: 132px;
+  font-family: var(--ed-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pipeline-start-import-result {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.pipeline-start-import-result[data-error] {
+  color: var(--ed-danger);
+}
+.pipeline-start-import-result code {
+  font-family: var(--ed-mono);
+}
+.pipeline-start-needs {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ed-info-line);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-info-bg);
+  font-size: 12.5px;
+}
+.pipeline-start-needs ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  line-height: 1.5;
+}
+
+/* Template gallery on an empty canvas. */
+.canvas-templates {
+  display: grid;
+  gap: 8px;
+  width: min(640px, calc(100vw - 48px));
+  margin-top: 18px;
+  text-align: left;
+}
+.canvas-templates-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+.canvas-template {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--ed-radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.canvas-template:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+.canvas-template:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.canvas-template strong {
+  font-size: 13px;
+}
+.canvas-template small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}

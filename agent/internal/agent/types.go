@@ -1,10 +1,78 @@
 package agent
 
-import "time"
+import (
+	"encoding/json"
+	"regexp"
+	"strings"
+	"time"
+)
 
-const Version = "0.1.0-dev"
+const Version = "0.1.0"
+
+// VectorVersion is the Vector release this agent is built and tested with.
+// Any patch release of the same minor version is supported (VectorSeries).
 const VectorVersion = "0.58.0"
+
+// vectorSupportedSeries is the supported major.minor; VectorSeries names it
+// for people: 0.58.x.
+const (
+	vectorSupportedSeries = "0.58"
+	VectorSeries          = vectorSupportedSeries + ".x"
+)
+
+var vectorTriple = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.[0-9]{1,4}$`)
+
+// vectorRelease normalizes a Vector version as a binary, a device or a
+// manifest reports it to "major.minor.patch", and names its "major.minor"
+// series. It accepts what the server's own compatibility check accepts: a
+// leading "v" and build details after the first space, as in
+// "0.58.1 (x86_64-unknown-linux-gnu 2bcad9b 2026-08-26)". Anything else, a
+// pre-release for example, isn't a release the agent knows.
+func vectorRelease(reported string) (release, series string, ok bool) {
+	words := strings.Fields(reported)
+	if len(words) == 0 {
+		return "", "", false
+	}
+	match := vectorTriple.FindStringSubmatch(strings.TrimPrefix(words[0], "v"))
+	if match == nil {
+		return "", "", false
+	}
+	return match[0], match[1] + "." + match[2], true
+}
+
+// vectorPrerelease reports whether a Vector version names a pre-release, such
+// as 0.58.1-rc.1: whatever its numbers, it isn't a release the agent knows.
+func vectorPrerelease(reported string) bool {
+	words := strings.Fields(reported)
+	return len(words) > 0 && strings.Contains(strings.TrimPrefix(words[0], "v"), "-")
+}
+
+// SupportedVectorVersion reports whether a Vector version is a patch release
+// of the supported minor version.
+func SupportedVectorVersion(version string) bool {
+	_, series, ok := vectorRelease(version)
+	return ok && series == vectorSupportedSeries
+}
+
+// sameVectorSeries reports whether two Vector versions share major.minor.
+// Patch releases fix bugs without changing configuration, so a patch
+// difference between a manifest and the adopted binary is not a conflict.
+func sameVectorSeries(a, b string) bool {
+	_, first, ok := vectorRelease(a)
+	if !ok {
+		return false
+	}
+	_, second, ok := vectorRelease(b)
+	return ok && first == second
+}
+
 const MaxArtifact = 1024 * 1024
+
+// MaxAgentBuild bounds an agent build: the download of an update, and the
+// privileged step's copy of it (128 MiB, the contract's bound on a release's
+// artifact). MaxArtifact keeps bounding pipeline artifacts and the signed
+// manifest that carries an offer.
+const MaxAgentBuild = 128 * 1024 * 1024
 const MaxJSONCounter uint64 = 9007199254740991
 
 type Policy struct {
@@ -18,6 +86,13 @@ type Desired struct {
 	Size          int64  `json:"size"`
 	ArtifactPath  string `json:"artifact_path"`
 	VectorVersion string `json:"vector_version"`
+	// VersionNumber and ConfigurationName say which pipeline version this is, in
+	// the server's words, for `vectory status`. They are display-only: Identity
+	// leaves them out, so renaming a pipeline never invalidates a generation,
+	// and a value that isn't well formed reads as absent instead of failing the
+	// manifest. Older servers don't send them.
+	VersionNumber     displayNumber `json:"version_number,omitempty"`
+	ConfigurationName displayName   `json:"configuration_name,omitempty"`
 }
 type Manifest struct {
 	ProtocolVersion  int       `json:"protocol_version"`
@@ -29,6 +104,18 @@ type Manifest struct {
 	PolicyGeneration uint64    `json:"policy_generation"`
 	Policy           Policy    `json:"policy"`
 	Desired          *Desired  `json:"desired,omitempty"`
+	// Features lists additive heartbeat fields this server accepts. Older
+	// servers omit it, and the agent then sends the original heartbeat shape.
+	Features []string `json:"features,omitempty"`
+	// Validation asks this device to check a candidate version without applying
+	// it (validation.go). It stays raw so that a block this agent can't read
+	// never keeps the manifest itself from being verified and applied.
+	Validation json.RawMessage `json:"validation,omitempty"`
+	// AgentUpdate offers this device a build of the agent (update_offer.go). It
+	// stays raw for the same reason: nothing in it is acted on before the release
+	// it carries is verified against the keys this host pins, and a member this
+	// agent can't read never keeps the manifest itself from being verified.
+	AgentUpdate json.RawMessage `json:"agent_update,omitempty"`
 }
 type Envelope struct {
 	Payload   string `json:"payload"`
@@ -52,6 +139,9 @@ type Enrollment struct {
 	AgentVersion      string `json:"agent_version"`
 	VectorVersion     string `json:"vector_version"`
 	ConfigurationMode string `json:"configuration_mode"`
+	// ServiceManager is what keeps the agent running (systemd, launchd,
+	// windows or none), sent by setup. Servers that predate it ignore it.
+	ServiceManager string `json:"service_manager,omitempty"`
 }
 type Heartbeat struct {
 	ProtocolVersion         int                   `json:"protocol_version"`
@@ -72,6 +162,37 @@ type Heartbeat struct {
 	AppliedTemplateSHA256   string                `json:"applied_template_sha256,omitempty"`
 	SecretRevision          uint64                `json:"secret_revision,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
+	HostRuntime             *HostRuntime          `json:"host_runtime,omitempty"`
+	// VectorLogSummary is nil for servers without the feature; an empty list
+	// tells a supporting server there is nothing to report.
+	VectorLogSummary *[]LogSummary `json:"vector_log_summary,omitempty"`
+	// SecretNames are the names bound with configure-secrets (never files or
+	// values), for servers with the secret_names feature.
+	SecretNames *[]string `json:"secret_names,omitempty"`
+	// ServiceManager says what keeps this agent process running: systemd,
+	// launchd or windows when it runs as that service, none otherwise.
+	// VectorRunning says whether the Vector process the agent supervises is
+	// running. Both go only to servers that list them in features.
+	ServiceManager string `json:"service_manager,omitempty"`
+	VectorRunning  *bool  `json:"vector_running,omitempty"`
+	// AgentSHA256 is the SHA-256 of the running agent executable and
+	// StateDir the agent's state directory, a local path and not a secret.
+	// Both go only to servers that list them in features.
+	AgentSHA256 string `json:"agent_sha256,omitempty"`
+	StateDir    string `json:"state_dir,omitempty"`
+	// AgentFeatures announces what this agent can do, ValidationResult answers a
+	// request to check a candidate and Readiness reports facts about this host
+	// (validation.go). Each goes only to servers whose manifest lists
+	// "validation", and AgentFeatures and Readiness in every such heartbeat:
+	// the server reads a heartbeat without them as "not announced now".
+	AgentFeatures    []string          `json:"agent_features,omitempty"`
+	ValidationResult *ValidationResult `json:"validation_result,omitempty"`
+	Readiness        *Readiness        `json:"readiness,omitempty"`
+	// AgentUpdate says what this host consented to for agent updates, and where
+	// an offer of one stands (update_report.go). It goes only to servers whose
+	// manifest lists "agent_update", and is the first report left out when a
+	// server refuses a heartbeat.
+	AgentUpdate *AgentUpdateReport `json:"agent_update,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated
@@ -85,29 +206,61 @@ type ConfigurationAttempt struct {
 	SecretRevision uint64 `json:"secret_revision,omitempty"`
 	Error          *Issue `json:"error,omitempty"`
 }
+
+// Telemetry is one bounded sample. Rates are averages over the interval since
+// the previous sample; Errors and Discarded* are cumulative since Vector
+// started. A nil value is unavailable, never zero.
 type Telemetry struct {
-	SampledAt       time.Time            `json:"sampled_at"`
-	EventsPerSecond *float64             `json:"events_per_second,omitempty"`
-	Errors          *float64             `json:"errors,omitempty"`
-	UptimeSeconds   *float64             `json:"uptime_seconds,omitempty"`
-	MemoryBytes     *float64             `json:"memory_bytes,omitempty"`
-	CPUSeconds      *float64             `json:"cpu_seconds,omitempty"`
-	DiscardedEvents *float64             `json:"discarded_events,omitempty"`
-	BufferBytes     *float64             `json:"buffer_bytes,omitempty"`
-	Components      []ComponentTelemetry `json:"components,omitempty"`
+	SampledAt            time.Time            `json:"sampled_at"`
+	EventsPerSecond      *float64             `json:"events_per_second,omitempty"`
+	EventsOutPerSecond   *float64             `json:"events_out_per_second,omitempty"`
+	BytesInPerSecond     *float64             `json:"bytes_in_per_second,omitempty"`
+	BytesOutPerSecond    *float64             `json:"bytes_out_per_second,omitempty"`
+	Errors               *float64             `json:"errors,omitempty"`
+	ErrorsPerMinute      *float64             `json:"errors_per_minute,omitempty"`
+	UptimeSeconds        *float64             `json:"uptime_seconds,omitempty"`
+	MemoryBytes          *float64             `json:"memory_bytes,omitempty"`
+	CPUSeconds           *float64             `json:"cpu_seconds,omitempty"`
+	DiscardedEvents      *float64             `json:"discarded_events,omitempty"`
+	DiscardedIntentional *float64             `json:"discarded_intentional,omitempty"`
+	DiscardedError       *float64             `json:"discarded_error,omitempty"`
+	FilteredPerMinute    *float64             `json:"filtered_per_minute,omitempty"`
+	DroppedPerMinute     *float64             `json:"dropped_per_minute,omitempty"`
+	BufferBytes          *float64             `json:"buffer_bytes,omitempty"`
+	BufferEvents         *float64             `json:"buffer_events,omitempty"`
+	BufferUtilization    *float64             `json:"buffer_utilization,omitempty"`
+	Components           []ComponentTelemetry `json:"components,omitempty"`
 }
 type ComponentTelemetry struct {
-	ID              string   `json:"id"`
-	Type            string   `json:"type,omitempty"`
-	EventsPerSecond *float64 `json:"events_per_second,omitempty"`
-	Errors          *float64 `json:"errors,omitempty"`
-	DiscardedEvents *float64 `json:"discarded_events,omitempty"`
-	BufferBytes     *float64 `json:"buffer_bytes,omitempty"`
+	ID                      string             `json:"id"`
+	Type                    string             `json:"type,omitempty"`
+	Kind                    string             `json:"kind,omitempty"`
+	EventsPerSecond         *float64           `json:"events_per_second,omitempty"`
+	ReceivedEventsPerSecond *float64           `json:"received_events_per_second,omitempty"`
+	SentByOutput            map[string]float64 `json:"sent_by_output,omitempty"`
+	ReceivedBytesPerSecond  *float64           `json:"received_bytes_per_second,omitempty"`
+	SentBytesPerSecond      *float64           `json:"sent_bytes_per_second,omitempty"`
+	Errors                  *float64           `json:"errors,omitempty"`
+	ErrorsPerMinute         *float64           `json:"errors_per_minute,omitempty"`
+	DiscardedEvents         *float64           `json:"discarded_events,omitempty"`
+	DiscardedIntentional    *float64           `json:"discarded_intentional,omitempty"`
+	DiscardedError          *float64           `json:"discarded_error,omitempty"`
+	FilteredPerMinute       *float64           `json:"filtered_per_minute,omitempty"`
+	DroppedPerMinute        *float64           `json:"dropped_per_minute,omitempty"`
+	BufferBytes             *float64           `json:"buffer_bytes,omitempty"`
+	BufferEvents            *float64           `json:"buffer_events,omitempty"`
+	BufferMaxEvents         *float64           `json:"buffer_max_events,omitempty"`
+	BufferMaxBytes          *float64           `json:"buffer_max_bytes,omitempty"`
+	BufferUtilization       *float64           `json:"buffer_utilization,omitempty"`
+	Utilization             *float64           `json:"utilization,omitempty"`
+	LatencyMeanSeconds      *float64           `json:"latency_mean_seconds,omitempty"`
 }
 type Issue struct {
 	Code    string `json:"code"`
 	Stage   string `json:"stage"`
 	Message string `json:"message"`
+	// Diagnostics are redacted, structured findings from Vector's own output.
+	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 type Settings struct {
 	Server             string            `json:"server"`
@@ -122,7 +275,29 @@ type Settings struct {
 	StartupSeconds     int               `json:"startup_seconds"`
 	MetricsURL         string            `json:"metrics_url,omitempty"`
 	SecretFiles        map[string]string `json:"secret_files,omitempty"`
+	// VectorDataDir is the host-owned data directory offered to pipelines
+	// that do not set data_dir (install --vector-data-dir). Empty: resolved.
+	VectorDataDir string `json:"vector_data_dir,omitempty"`
+	// GracefulShutdownSeconds bounds Vector's drain on stop (default 60).
+	GracefulShutdownSeconds int `json:"graceful_shutdown_seconds,omitempty"`
+	// VectorVersion is what the adopted binary reported at adoption. The
+	// binary's SHA-256 is pinned, so it can't change without re-adoption.
+	VectorVersion string `json:"vector_version,omitempty"`
+	// NoWake: never hold a wait open between check-ins, for networks that cut
+	// idle connections (setup or install --no-wake). The agent then learns of
+	// changes at its next check-in, as older agents do.
+	NoWake bool `json:"no_wake,omitempty"`
 }
+
+// adoptedVectorVersion is the adopted binary's version, or the release this
+// agent is built with for installations adopted before it was recorded.
+func (s Settings) adoptedVectorVersion() string {
+	if release, series, ok := vectorRelease(s.VectorVersion); ok && series == vectorSupportedSeries {
+		return release
+	}
+	return VectorVersion
+}
+
 type State struct {
 	DeviceID                string                `json:"device_id"`
 	HighestGeneration       uint64                `json:"highest_generation"`
@@ -148,12 +323,46 @@ type State struct {
 	MaterializationSHA256   string                `json:"materialization_sha256,omitempty"`
 	FailedEffectiveSHA256   string                `json:"failed_effective_sha256,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
+	ServerFeatures          []string              `json:"server_features,omitempty"`
+	// Agent is the build of the agent process that last saved this state.
+	// Setup compares it with the installed file to restart an outdated service.
+	Agent *AgentBuild `json:"agent,omitempty"`
+	// CheckInFailure is the latest failed check-in since the last success.
+	CheckInFailure *CheckInFailure `json:"check_in_failure,omitempty"`
+	// Applied is the pipeline version this device last verified as running, as
+	// the signed manifest that delivered it named it. Only `vectory status`
+	// reads it.
+	Applied *AppliedVersion `json:"applied,omitempty"`
+	// Wake is what the run loop last saw of wake-ups when it differs from the
+	// ordinary: wakeOffRun or wakeFailed (wake.go). Only `vectory status` reads
+	// it.
+	Wake string `json:"wake,omitempty"`
 }
+
+// CheckInFailure records why the agent couldn't check in. The message is a
+// classified, secret-free explanation.
+type CheckInFailure struct {
+	Since   time.Time `json:"since"`
+	Message string    `json:"message"`
+	// Code is the failure's classification, such as CONNECTION_REFUSED or
+	// CREDENTIAL_REJECTED (the server answers but refuses this agent).
+	Code string `json:"code,omitempty"`
+}
+
+// AgentBuild identifies an agent executable.
+type AgentBuild struct {
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+}
+
 type Journal struct {
-	Stage                string                `json:"stage"`
-	Generation           uint64                `json:"generation"`
-	DesiredSHA256        string                `json:"desired_sha256"`
-	PreviousSHA256       string                `json:"previous_sha256"`
+	Stage          string `json:"stage"`
+	Generation     uint64 `json:"generation"`
+	DesiredSHA256  string `json:"desired_sha256"`
+	PreviousSHA256 string `json:"previous_sha256"`
+	// PreviousAbsent: the managed file didn't exist before this attempt, so
+	// withdrawing a failed first version removes it again.
+	PreviousAbsent       bool                  `json:"previous_absent,omitempty"`
 	SecretRevision       uint64                `json:"secret_revision,omitempty"`
 	ConfigurationAttempt *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 }

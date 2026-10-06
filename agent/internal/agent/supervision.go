@@ -20,6 +20,8 @@ type workloadSupervisor struct {
 	nextAttempt  time.Time
 	healthySince time.Time
 	attempts     int
+	// wakeResume: the server asked (Retry-After) not to wait before then.
+	wakeResume time.Time
 }
 
 func (e *Engine) observeProcessExit() error {
@@ -34,7 +36,7 @@ func (e *Engine) observeProcessExit() error {
 	// A newer candidate's validation error remains in ConfigurationAttempt instead.
 	issue := e.State.Error
 	if issue == nil || (issue.Stage != "startup" && issue.Stage != "recovery" && !(issue.Stage == "rollback" && (issue.Code == "ROLLBACK_FAILED" || issue.Code == "ROLLBACK_UNAVAILABLE"))) {
-		issue = &Issue{"PROCESS_EXITED", "observation", "Owned Vector process is not running; local recovery waits for sync resume or its bounded retry interval"}
+		issue = &Issue{Code: "PROCESS_EXITED", Stage: "observation", Message: "Owned Vector process is not running; local recovery waits for sync resume or its bounded retry interval"}
 	}
 	if e.State.ApplyState == "verification_unknown" && e.State.Error == issue {
 		return nil
@@ -87,11 +89,28 @@ func (s *workloadSupervisor) check(ctx context.Context, e *Engine) error {
 	return err
 }
 
-func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Duration, report func(string)) bool {
+// wait sleeps until the next check-in, keeping the workload supervised. With
+// wake set it also holds a wait open (see wake.go) and ends early, at most
+// once per wakeSpacing, when the server says this device's desired state
+// changed. It reports false when the agent is stopping.
+func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Duration, report func(string), wake bool) bool {
+	began := time.Now()
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	tick := time.NewTicker(workloadCheckInterval)
 	defer tick.Stop()
+	var current *listening
+	if wake {
+		current = s.listen(ctx, e)
+	}
+	defer func() {
+		// A wait the server was still holding when the interval ended works, however
+		// short the interval: an earlier failure is over.
+		if current != nil && time.Since(current.started) >= wakeSpacing {
+			e.noteWake("")
+		}
+		current.stop()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -102,6 +121,45 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 			if err := s.check(ctx, e); err != nil {
 				report(err.Error())
 			}
+			// A retry asked for on this host doesn't wait for the next
+			// scheduled check-in.
+			if _, err := os.Lstat(filepath.Join(e.Dir, retryRequestName)); err == nil {
+				return true
+			}
+			// A build that finished downloading, or the privileged step's verdict
+			// on the one this agent runs on trial, is for the server to hear now.
+			if e.updateAttention() {
+				return true
+			}
+		case answer := <-current.answer():
+			held := time.Since(current.started)
+			current.cancel()
+			current = nil
+			switch {
+			case answer.err != nil:
+				// The ordinary schedule covers this interval; nothing to report,
+				// but `vectory status` says the waits aren't getting through.
+				e.noteWake(wakeFailed)
+				if answer.retryAfter > 0 {
+					s.wakeResume = time.Now().Add(answer.retryAfter)
+				}
+			case answer.changed:
+				e.noteWake("")
+				soonest := wakeSpacing - time.Since(began)
+				if soonest <= 0 {
+					return true
+				}
+				if soonest < delay-time.Since(began) {
+					timer.Reset(soonest)
+				}
+			case held >= wakeSpacing:
+				// The server's hold ended: wait again.
+				e.noteWake("")
+				current = s.listen(ctx, e)
+			}
+			// A wait that ends at once without a change (another process
+			// with this identity replaced it, or the server is stopping) is
+			// not renewed before the next check-in.
 		}
 	}
 }

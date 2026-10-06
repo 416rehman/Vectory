@@ -26,6 +26,8 @@ export type ConfigurationDiagnostic = {
   to: number;
   severity: "error" | "warning";
   message: string;
+  /** `deferred`: a native reference or pattern a device resolves. */
+  code?: string;
   componentId?: string;
   enrichmentTableId?: string;
 };
@@ -63,6 +65,43 @@ function location(text: string, name?: string) {
   ).exec(text);
   const from = match ? match.index + match[0].lastIndexOf(name) : 0;
   return range(text, from, from + (match ? name.length : 1));
+}
+/** Where a component (or option) name is written in configuration text. */
+export function sourceOffset(text: string, name?: string) {
+  return location(text, name).from;
+}
+/** Return a source line only when the field can be located without guessing. */
+export function sourceLineForPath(
+  text: string,
+  format: ConfigurationFormat | string,
+  path: readonly (string | number)[],
+): number | null {
+  if (format === "yaml" || format === "json") {
+    try {
+      const document = parseDocument(text, {
+        schema: format === "json" ? "json" : "core",
+        logLevel: "silent",
+      });
+      const node = document.getIn([...path], true) as
+        { range?: readonly number[] } | undefined;
+      const from = node?.range?.[0];
+      if (typeof from === "number")
+        return text.slice(0, from).split("\n").length;
+    } catch {
+      // YAML aliases and TOML have no reliable node range here.
+    }
+  }
+  const key = path.at(-1);
+  if (typeof key !== "string") return null;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [
+    ...text.matchAll(
+      new RegExp(`(?:^|[\\s{,.])(["']?)${escaped}\\1(?=\\s*[:=])`, "gm"),
+    ),
+  ];
+  return matches.length === 1
+    ? text.slice(0, matches[0].index).split("\n").length
+    : null;
 }
 function failure(text: string, message: string, field?: string): never {
   throw new ConfigurationSourceError([
@@ -106,6 +145,32 @@ export function detectConfigurationFormat(
   if (extension === "json" || extension === "toml") return extension;
   if (extension === "yaml" || extension === "yml") return "yaml";
   throw new Error("Choose a .yaml, .yml, .json or .toml configuration file.");
+}
+
+/** The format of pasted text: JSON objects, TOML tables and keys, else YAML. */
+export function guessConfigurationFormat(text: string): ConfigurationFormat {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) return "json";
+  const tomlLike =
+    /^\s*\[{1,2}[A-Za-z0-9_."-]+\]{1,2}\s*$/m.test(text) ||
+    /^\s*[A-Za-z0-9_."-]+\s*=/m.test(text);
+  const yamlLike = /^\s*[A-Za-z0-9_"'-]+:(\s|$)/m.test(text);
+  return tomlLike && !yamlLike ? "toml" : "yaml";
+}
+
+/** "Line 4:3: message" for the first problem, so a parse error is findable. */
+export function sourceErrorMessage(text: string, error: unknown) {
+  const first =
+    error instanceof ConfigurationSourceError ? error.diagnostics[0] : null;
+  const message = first?.message || (error as Error)?.message || "";
+  if (!message) return "This configuration could not be read.";
+  if (!first || (first.from === 0 && !text.trim())) return message;
+  const before = text.slice(0, first.from).split("\n");
+  const line = before.length,
+    column = before.at(-1)!.length + 1;
+  return /^Line \d+/i.test(message)
+    ? message
+    : `Line ${line}:${column}: ${message.replace(/ at line \d+, column \d+:?$/, "")}`;
 }
 
 /** Parse without coercing non-JSON values, dropping unknown keys, or rounding integers. */
@@ -153,7 +218,9 @@ export function parseSource(
         strict: true,
         prettyErrors: false,
         resolveKnownTags: false,
-        merge: false,
+        // Vector accepts YAML merge keys. Resolve them before building the
+        // graph so `<<` never becomes an invented component option.
+        merge: format === "yaml",
         logLevel: "silent",
       });
       const problems = [...document.errors, ...document.warnings];
@@ -263,6 +330,166 @@ export function parseSource(
   return config;
 }
 
+const mergeableSections = new Set([
+  "sources",
+  "transforms",
+  "sinks",
+  "enrichment_tables",
+]);
+export const MAX_CONFIGURATION_FILES = 32;
+
+/**
+ * Import several Vector files as one draft. Component sections are
+ * joined by ID and tests are appended; every other root option has one owner.
+ * A collision is refused rather than silently taking a value from whichever
+ * file the browser happened to enumerate last.
+ */
+export async function readConfigurationFiles(files: readonly File[]): Promise<{
+  name: string;
+  text: string;
+  format: ConfigurationFormat;
+  config: Config;
+}> {
+  if (!files.length) throw Error("Choose a Vector configuration file.");
+  if (files.length > MAX_CONFIGURATION_FILES)
+    throw Error(
+      `Choose at most ${MAX_CONFIGURATION_FILES} configuration files.`,
+    );
+  const ordered = [...files].sort((a, b) =>
+    (a.webkitRelativePath || a.name).localeCompare(
+      b.webkitRelativePath || b.name,
+    ),
+  );
+  if (
+    ordered.reduce((bytes, file) => bytes + file.size, 0) >
+    MAX_CONFIGURATION_BYTES
+  )
+    throw Error("Configuration files together must be 1 MiB or smaller.");
+  const merged: Config = {};
+  const owners = new Map<string, string>();
+  const testNames = new Map<string, string>();
+  let actualBytes = 0;
+  let onlyText = "";
+  let onlyFormat: ConfigurationFormat = "yaml";
+  for (const file of ordered) {
+    const name = file.webkitRelativePath || file.name;
+    let format: ConfigurationFormat;
+    try {
+      format = detectConfigurationFormat(file.name);
+    } catch (error) {
+      throw Error(`${name}: ${(error as Error).message}`);
+    }
+    const bytes = await file.arrayBuffer();
+    actualBytes += bytes.byteLength;
+    if (actualBytes > MAX_CONFIGURATION_BYTES)
+      throw Error("Configuration files together must be 1 MiB or smaller.");
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw Error(
+        `${name}: the file is not valid UTF-8. Save it as UTF-8 and try again.`,
+      );
+    }
+    let fragment: Config;
+    try {
+      fragment = parseSource(text, format);
+    } catch (error) {
+      throw Error(`${name}: ${sourceErrorMessage(text, error)}`);
+    }
+    if (ordered.length === 1) {
+      onlyText = text;
+      onlyFormat = format;
+    }
+    for (const [key, value] of Object.entries(fragment)) {
+      if (mergeableSections.has(key)) {
+        if (!Object.hasOwn(merged, key))
+          Object.defineProperty(merged, key, {
+            value: {},
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        for (const [id, component] of Object.entries(value as Config)) {
+          const ownerKey = `${key}.${id}`;
+          const previous = owners.get(ownerKey);
+          if (previous)
+            throw Error(
+              `${name}: ${ownerKey} is also defined in ${previous}. Rename or remove one copy.`,
+            );
+          owners.set(ownerKey, name);
+          Object.defineProperty(merged[key], id, {
+            value: component,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        }
+        continue;
+      }
+      if (key === "tests") {
+        if (
+          !Array.isArray(value) ||
+          (merged.tests && !Array.isArray(merged.tests))
+        )
+          throw Error(`${name}: tests must be a list in every file.`);
+        const tests = (merged.tests ||= []);
+        for (const test of value) {
+          const testName = typeof test?.name === "string" ? test.name : null;
+          if (testName) {
+            const previous = testNames.get(testName);
+            if (previous)
+              throw Error(
+                `${name}: test ${testName} is also defined in ${previous}. Rename or remove one copy.`,
+              );
+            testNames.set(testName, name);
+          }
+          tests.push(test);
+        }
+        continue;
+      }
+      const previous = owners.get(key);
+      if (previous)
+        throw Error(
+          `${name}: ${key} is also defined in ${previous}. Keep this global option in one file.`,
+        );
+      owners.set(key, name);
+      Object.defineProperty(merged, key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
+  // A lone file keeps its exact text and format. YAML serialization can be
+  // much larger than compact JSON or TOML, so only merged files need this
+  // additional output-size check.
+  const serialized =
+    ordered.length > 1 ? stringifyConfiguration(merged, "yaml") : onlyText;
+  if (
+    ordered.length > 1 &&
+    new TextEncoder().encode(serialized).length > MAX_CONFIGURATION_BYTES
+  )
+    throw Error("The combined configuration exceeds the 1 MiB limit.");
+  const diagnosis = diagnoseConfiguration(merged);
+  const first = diagnosis.diagnostics.find((item) => item.severity === "error");
+  if (first) throw Error(first.message);
+  return ordered.length === 1
+    ? {
+        name: ordered[0].name,
+        text: onlyText,
+        format: onlyFormat,
+        config: merged,
+      }
+    : {
+        name: `${ordered.length} configuration files`,
+        text: serialized,
+        format: "yaml",
+        config: merged,
+      };
+}
+
 const nativeReference = (value: unknown) =>
   typeof value === "string" &&
   /\$(?:\{|[A-Za-z_])|SECRET\[[^.\[\]\s]+\.[^\[\]\s]+\]|^vectory-secret:/.test(
@@ -355,24 +582,31 @@ function localSchemaIssues(
   return issues;
 }
 
-export function diagnoseConfigurationSource(
-  text: string,
-  format: ConfigurationFormat | string,
-): ConfigurationSourceDiagnosis {
-  let config: Config;
-  try {
-    config = parseSource(text, format);
-  } catch (error) {
-    return {
-      diagnostics:
-        error instanceof ConfigurationSourceError
-          ? error.diagnostics
-          : [syntaxDiagnostic(text, error)],
-      locallyValid: false,
-      runtimeValidationRequired: true,
-    };
+// Schema findings by component path and content: while one step is edited the
+// others are not re-walked. Bounded and content-keyed, so in-place changes by
+// a caller still produce fresh findings.
+const componentIssueCache = new Map<string, string[]>();
+function cachedIssues(
+  value: object,
+  path: string,
+  compute: () => string[],
+): string[] {
+  const key = `${path}\n${JSON.stringify(value)}`;
+  let issues = componentIssueCache.get(key);
+  if (!issues) {
+    if (componentIssueCache.size > 4000) componentIssueCache.clear();
+    componentIssueCache.set(key, (issues = compute()));
   }
+  return issues;
+}
+
+/** Local findings for a parsed configuration; `text` only positions them. */
+function diagnoseParsed(
+  config: Config,
+  text: string | null,
+): ConfigurationDiagnostic[] {
   const diagnostics: ConfigurationDiagnostic[] = [];
+  const seen = new Set<string>();
   const add = (
     message: string,
     severity: "error" | "warning",
@@ -380,18 +614,16 @@ export function diagnoseConfigurationSource(
     componentId?: string,
     enrichmentTableId?: string,
   ) => {
-    if (
-      !diagnostics.some(
-        (item) => item.message === message && item.severity === severity,
-      )
-    )
-      diagnostics.push({
-        ...location(text, field),
-        severity,
-        message,
-        ...(componentId ? { componentId } : {}),
-        ...(enrichmentTableId ? { enrichmentTableId } : {}),
-      });
+    const key = `${severity}\n${message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    diagnostics.push({
+      ...(text === null ? { from: 0, to: 0 } : location(text, field)),
+      severity,
+      message,
+      ...(componentId ? { componentId } : {}),
+      ...(enrichmentTableId ? { enrichmentTableId } : {}),
+    });
   };
   try {
     for (const issue of pipelineIssues(config))
@@ -408,13 +640,21 @@ export function diagnoseConfigurationSource(
         );
         // Attribute table-local errors to both graph roles that edit this
         // same table. Map-level errors stay global below.
-        for (const [tableId, table] of Object.entries(value))
-          for (const message of localSchemaIssues(
-            table,
-            mapValueSchema(tables, tableId),
-            `${key}.${tableId}`,
-          ))
+        for (const [tableId, table] of Object.entries(value)) {
+          const path = `${key}.${tableId}`;
+          const issues =
+            table && typeof table === "object"
+              ? cachedIssues(table, path, () =>
+                  localSchemaIssues(
+                    table,
+                    mapValueSchema(tables, tableId),
+                    path,
+                  ),
+                )
+              : localSchemaIssues(table, mapValueSchema(tables, tableId), path);
+          for (const message of issues)
             add(message, "error", tableId, undefined, tableId);
+        }
       }
       for (const message of localSchemaIssues(
         value,
@@ -437,12 +677,8 @@ export function diagnoseConfigurationSource(
         );
         const schema = definition && componentSchema(definition);
         if (schema)
-          for (const message of localSchemaIssues(
-            component,
-            schema,
-            `${kind}.${id}`,
-            0,
-            false,
+          for (const message of cachedIssues(component, `${kind}.${id}`, () =>
+            localSchemaIssues(component, schema, `${kind}.${id}`, 0, false),
           ))
             add(message, "error", id, id);
         else if (typeof component.type === "string")
@@ -462,6 +698,7 @@ export function diagnoseConfigurationSource(
   }
   let deferred = !!config.provider || !!config.secret;
   function visit(value: unknown, key?: string) {
+    if (deferred) return;
     if (
       nativeReference(value) ||
       (key === "inputs" &&
@@ -476,10 +713,34 @@ export function diagnoseConfigurationSource(
   }
   visit(config);
   if (deferred)
-    add(
-      "Native references, providers or input patterns must be resolved and validated on the device.",
-      "warning",
-    );
+    diagnostics.push({
+      ...(text === null ? { from: 0, to: 0 } : range(text)),
+      severity: "warning",
+      code: "deferred",
+      message:
+        "Each device resolves secrets, environment variables, providers and input patterns before applying.",
+    });
+  return diagnostics;
+}
+
+export function diagnoseConfigurationSource(
+  text: string,
+  format: ConfigurationFormat | string,
+): ConfigurationSourceDiagnosis {
+  let config: Config;
+  try {
+    config = parseSource(text, format);
+  } catch (error) {
+    return {
+      diagnostics:
+        error instanceof ConfigurationSourceError
+          ? error.diagnostics
+          : [syntaxDiagnostic(text, error)],
+      locallyValid: false,
+      runtimeValidationRequired: true,
+    };
+  }
+  const diagnostics = diagnoseParsed(config, text);
   return {
     config,
     diagnostics,
@@ -488,30 +749,45 @@ export function diagnoseConfigurationSource(
   };
 }
 
-/** Use the same local constraints for graph nodes, Check and Code imports. */
+/**
+ * The same local checks for the editor's draft object, without a text round
+ * trip: unchanged components keep their identity and their cached findings.
+ */
 export function diagnoseConfiguration(
   config: Config,
 ): ConfigurationSourceDiagnosis {
+  const failed = (message: string): ConfigurationSourceDiagnosis => ({
+    diagnostics: [{ from: 0, to: 0, severity: "error", message }],
+    locallyValid: false,
+    runtimeValidationRequired: true,
+  });
   try {
-    return diagnoseConfigurationSource(
-      stringifyConfiguration(config, "json"),
-      "json",
-    );
-  } catch (error) {
+    const text = stringifyConfiguration(config, "json");
+    if (
+      text.length * 3 > MAX_CONFIGURATION_BYTES &&
+      new TextEncoder().encode(text).length + 1 > MAX_CONFIGURATION_BYTES
+    )
+      return failed("The rendered pipeline exceeds the 1 MiB publish limit.");
+    if (!record(config)) return failed("The configuration must be an object.");
+    for (const section of sections) {
+      if (!own(config, section)) continue;
+      if (!record(config[section]))
+        return failed(`${section}: the component section must be an object.`);
+      for (const [id, component] of Object.entries(config[section]))
+        if (!record(component))
+          return failed(`${section}.${id}: each component must be an object.`);
+    }
+    const diagnostics = diagnoseParsed(config, null);
     return {
-      diagnostics: [
-        {
-          from: 0,
-          to: 0,
-          severity: "error",
-          message:
-            (error as Error).message ||
-            "The pipeline could not be checked locally.",
-        },
-      ],
-      locallyValid: false,
+      config,
+      diagnostics,
+      locallyValid: !diagnostics.some((item) => item.severity === "error"),
       runtimeValidationRequired: true,
     };
+  } catch (error) {
+    return failed(
+      (error as Error).message || "The pipeline could not be checked locally.",
+    );
   }
 }
 
@@ -538,4 +814,15 @@ export function isEmptyPipeline(config: Config): boolean {
         Object.keys(value).length === 0,
     )
   );
+}
+
+/** How many errors and warnings a source has: "1 error · 0 warnings". */
+export function diagnosticCounts(
+  diagnostics: readonly Pick<ConfigurationDiagnostic, "severity">[],
+): string {
+  const count = (severity: ConfigurationDiagnostic["severity"]) =>
+    diagnostics.filter((item) => item.severity === severity).length;
+  const errors = count("error"),
+    warnings = count("warning");
+  return `${errors} ${errors === 1 ? "error" : "errors"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`;
 }

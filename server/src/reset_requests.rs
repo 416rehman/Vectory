@@ -32,7 +32,7 @@ fn no_query(raw: Option<&str>) -> Result<()> {
 }
 
 pub(crate) fn already_used() -> ApiError {
-    ApiError::conflict("This password reset request already finished. Check its status.")
+    crate::user_requests::already_used()
 }
 
 pub(crate) async fn entry(
@@ -128,8 +128,7 @@ pub async fn cancel(
     }
     let target = crate::deployment_requests::parse_id(&target)?;
     let key = crate::deployment_requests::parse_id(&key)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["admin"], true).await?;
     let actor_id = actor["id"].as_str().unwrap();
     let prior = entry(&mut tx, actor_id, &key, &target).await?;

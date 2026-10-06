@@ -1,185 +1,184 @@
 # Administer Vectory
 
-Use this guide when you operate the Vectory server or manage workspace accounts. To connect a workload host to an existing instance, use [Install an agent](#/docs/installation).
-
-## Plan the installation
-
-The supplied deployment runs one Vectory server, a TLS proxy and an isolated Vector validator on a Linux Docker host with Compose. Use durable local storage and a DNS name with an issued certificate. The dashboard uses HTTPS port 443; agents use a separate HTTPS listener on port 8443. Keep the internal HTTP and validation ports private.
-
-The server database and keys belong together in the persistent `data` volume. Run one active server against that volume. Network filesystems and active-active replicas are not supported by this SQLite deployment.
-
-Read [Compatibility and release evidence](#/docs/compatibility) before choosing a host or promising platform support. The Compose definition has been checked, but container build/start and isolation still need acceptance on a Docker-capable host. The instructions below describe the deployment procedure, not a completed production certification.
-
-## Start a new server
-
-Run these commands from the repository root. Replace example paths and the hostname with your own values.
-
-1. Prepare the issued TLS certificate chain and private key in a protected host directory. Container UID/GID `10001` must be able to read them. On Linux, a root-owned directory with group `10001`, mode `0750`, and files mode `0440` is suitable.
-2. Build the server image:
-
-```sh
-docker build -f deploy/Dockerfile -t vectory-local:development .
-```
-
-3. Create a random bootstrap secret in that protected directory. The following command writes it to a file without displaying it:
-
-```sh
-docker run --rm --entrypoint python3 vectory-local:development -c 'import secrets; print(secrets.token_hex(32))' > /protected/path/bootstrap
-```
-
-4. Give the bootstrap file the same restricted group and file permissions as the TLS files. Copy `deploy/.env.example` to `deploy/.env`. Set `VECTORY_HOSTNAME`, the absolute certificate/key/bootstrap paths, and `VECTORY_RELEASES_DIRECTORY`. An empty release directory is allowed; the download screen will have no available artifacts until you supply them.
-5. Check the deployment and start it:
-
-```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
-docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build
-docker compose --env-file deploy/.env -f deploy/compose.yaml ps
-docker compose --env-file deploy/.env -f deploy/compose.yaml logs --tail 100 server proxy validator
-```
-
-6. Open `https://YOUR_HOSTNAME`. Use the bootstrap secret to create the first administrator. There is no default account or public signup. After setup, replace the mounted bootstrap file with a new random unused value and restart the server; the database retains the initialized state.
-
-The first build needs dependency registries and container images. For an offline installation, prepare the images and dependency caches in advance. Once built, the dashboard and help pages are served by this instance; external reference links still need internet access.
-
-The validator must remain isolated from production files, credentials and external networks. Do not run it directly under a production server account merely by setting its isolation environment flag. A configured but unavailable validator blocks publication. Configurations needing device resources may instead report native validation as deferred.
+Run your Vectory server: manage people and sign-in security, back up and restore, upgrade, and keep an eye on the instance. To install a server, see [Install the server](install-server.md).
 
 ## Create workspace accounts
 
-Open [**Settings → People & security**](/#/users) → **Add person**. Enter the person's name, email, initial password and role. The password must have at least 12 characters; share it through a protected channel. Account creation does not send an invitation email.
+Open [**Settings → People & security**](/#/users) and choose **Add person**.
 
-**Create user** sends one uniquely identified request after confirming that this server supports request tracking. If the response stalls, **Stop waiting** closes the dialog and **Review account creation** keeps that request available on this page. Check its exact status before trying to add the person again. **Not found** is only a current snapshot: choose **Cancel this request** to block a late creation before starting a new request. If it already created the account, find the person under **Workspace access**. The submitted password is cleared and cannot be recovered here; issue a password reset code if its value is unknown. See [account-creation recovery](#/docs/troubleshooting#account-creation-is-not-confirmed).
+- **Invite link** (recommended): Vectory creates a single-use link that expires after 24 hours. Send it through a channel you trust. The person chooses their own password and is offered two-factor sign-in.
+- **Set a password now:** choose a password of 12 characters or more and share it privately. Vectory doesn't send email.
 
-- **Viewer:** read devices, pipelines and activity.
-- **Editor:** read the workspace and create, edit and validate pipeline drafts.
-- **Operator:** read the workspace, publish and deploy pipelines, schedule changes and manage groups, agent settings, enrollment tokens and device access.
-- **Administrator:** use all workspace controls, including enrollment, account administration and device recovery.
+Before adding anyone, confirm with your own administrator password. If you set the new person's password now and the request is refused, enter both passwords again; Vectory does not keep them for a retry.
 
-Editor and operator are separate roles, not successive permission levels. Choose the role needed for the person's work.
+Pick the role the person's work needs:
+
+| Role | Can do |
+| --- | --- |
+| **Viewer** | View devices, pipelines, deployments and activity; export the audit log. |
+| **Editor** | Viewer access, plus create, edit, check and organize pipeline drafts. Cannot publish or deploy. |
+| **Operator** | Viewer access, plus publish and deploy, and manage schedules, groups, agent settings, enrollment tokens and device access. Review, start, pause and cancel [agent update](agent-updates.md) rollouts, and stop all updates. Cannot edit drafts. |
+| **Administrator** | Everything, including managing people and recovering device identities. Turn agent updates on, hold or change the release key, and prepare and sign releases. |
+
+Editor and Operator are separate jobs, not levels. Someone who both builds and ships pipelines needs Administrator.
 
 ## Change access or offboard a person
 
-In [**Settings → People & security**](/#/users), find the person under **Workspace access** and choose **Edit access**. An administrator can change the full name, role or workspace access; email addresses are not editable here. Review the person's identity and the proposed changes, enter your own current password, then select **Save access**. The password is cleared when you submit the change.
+In **People & security**, find the person and choose **Edit**. You can change their name, role or whether they can sign in. The dialog lists what saving will do. Confirm with your own password and choose **Save changes**.
 
-The change is sent as one uniquely identified request after the dashboard checks that the server can track it. If the response stalls, **Stop waiting** ends the browser wait but does not stop a change already received by the server. **Review access change** keeps the exact request available while this page remains open. **Check request status** can confirm the edit's committed result. **Not found** is only a snapshot; it does not prove a delayed request cannot still apply. **Cancel this request** fences a request that has not committed. If the edit already committed, cancellation reports that result and cannot undo the access change. Review the account's current details before making another change; a later edit by someone else may differ from this request's committed result. See [access-change recovery](#/docs/troubleshooting#access-changes-and-rejected-requests).
+- Changing someone's role or turning off their access signs them out everywhere and cancels their unused reset links. Changing only their name doesn't.
+- Their pipelines, deployments and history stay.
+- At least one active administrator must remain. Promote someone else first.
+- Changing your own role signs you out.
 
-Changing the role or access state signs out that person's browser sessions and cancels unused password reset codes. Disabled accounts cannot sign in. Their account and existing history remain available; disabling a person does not delete their pipelines or stop agents. Re-enabling the account permits a new sign-in but does not restore old sessions or reset codes. Changing only a person's name keeps their sessions.
-
-Demoting or disabling an administrator also revokes their unused reset codes issued for other people. The issuer-tracking upgrade invalidates older codes that could not be attributed to an administrator; issue a fresh code if someone was in the middle of a reset during that upgrade.
-
-For offboarding, disable workspace access first, then separately review any device credentials, local secrets or infrastructure access that person controlled. Vectory account access does not revoke credentials held outside Vectory.
-
-At least one administrator must remain active. Make another person an administrator before demoting or disabling the last one. If someone else changes the account while your dialog is open, use **Load latest details** and review the current values before trying again. Changing your own role or access signs you out when the change succeeds. If that response is lost, your revoked session cannot check the administrator-only request status. Sign in again if you still have access, or ask another administrator to verify the account's current access; they cannot claim your exact request status from their own account.
+Offboarding someone from Vectory doesn't revoke credentials they hold elsewhere, such as device access or secrets on hosts. Review those separately.
 
 ## Change your password or close other sessions
 
-Under your account in [**People & security**](/#/users), choose **Change password**. Enter your current password and the new password twice. The new password must have at least 12 characters. A successful change keeps this browser signed in with a new session, signs out all other browsers and invalidates unused password reset codes for your account and codes you issued for others. MFA remains enabled if you already use it.
+In **People & security**, under your account:
 
-Choose **Sign out other sessions** when you want to keep this browser signed in while closing other Vectory sessions. Confirm with your current password. This action does not change your password or recall reset codes you previously issued. Change your password if someone else may know it; that also invalidates your unused issued reset codes.
+- **Change password** keeps this browser signed in and signs out every other session. It also cancels unused reset links you created for others.
+- **Sign out other sessions** keeps this browser signed in and ends the rest, without changing your password.
 
-Both actions stop waiting after 30 seconds. You can also use **Stop waiting**, the close button or Escape. Ending a wait does not cancel a change that reached the server. Password fields are cleared after submission and are never saved for replay.
-
-If a password change is not confirmed, choose **Go to sign in** and try the new password you chose, with two-factor verification if enabled. If a session sign-out is not confirmed, **Review another sign-out** asks for your current password again and explicitly includes other sessions created since the earlier attempt. Neither action silently resubmits the earlier request. [Recover an interrupted account change](#/docs/troubleshooting#a-password-change-or-session-sign-out-is-not-confirmed) explains these outcomes.
+The sessions list shows where you're signed in. Sign out any session you don't recognize, then change your password.
 
 ## Help someone reset a forgotten password
 
-1. As an administrator, find the active account under **Workspace access** and choose **Reset password**. Confirm with your own current password and select **Create reset code**.
-2. Copy the displayed code and share it through a protected channel. It is shown once by the server, expires after 15 minutes and can be used once. **Hide for now** keeps this browser's copy on the page; **Show reset code** opens it again. Choose **I've shared the code** when finished. Creating another code replaces the previous one. Issuing a code does not yet change the person's password or sign out their sessions.
-3. Ask the person to select **Reset password** on the Vectory sign-in page, enter the code and choose a new password. After the password is set, they must sign in normally. Successful reset signs out their existing sessions.
+<!-- steps -->
+1. In **People & security**, open the person's actions and choose **Reset password**. Confirm with your own password and choose **Create reset link**.
+2. Send the link privately. It works once, for 15 minutes, and replaces any earlier link.
+3. The person opens it, chooses a new password and signs in. Two-factor sign-in stays on.
 
-Reset codes cannot be used for disabled accounts. Re-enable access only after reviewing why it was disabled, then issue a fresh code. Vectory does not send password reset email. A password reset does not disable MFA, replace an authenticator or restore used recovery codes.
-
-If issuing a code has no confirmed reply, choose **Review reset request** on this page. **Check request status** reads the exact request without revealing its code. **Not found** is only a snapshot and an in-flight issue may still complete. **Cancel this request** blocks that late issue or revokes its unused code before you start another. If a code was already used, cancellation cannot undo the password change. Closing the dialog or selecting **Stop waiting** only stops the browser wait; your password entry is cleared. Resolve the request before leaving the page, because its ID and any displayed code are held only in this browser tab. See [reset-code recovery](#/docs/troubleshooting#an-administrator-reset-code-is-not-confirmed).
-
-If the person submitted a code and their own password-reset response was interrupted, ask them to return to sign-in and try the new password they chose before requesting another code. A timeout does not prove their reset failed; its one-use code may already be consumed.
+A reset link changes only the password. Disabled accounts can't use reset links. If no administrator can sign in at all, use [`vectory-admin reset-password`](vectory-admin.md#reset-password) on the stopped server.
 
 ## Set up an authenticator
 
-1. In [**People & security**](/#/users), choose **Set up authenticator** under your account and confirm your current password.
-2. In your authenticator app, add an account and scan the QR code. If the app is installed on the device you are using, **Open authenticator app** passes the setup to its registered app handler. If scanning or opening the app is unavailable, expand **Can’t scan the code?** and use **Copy setup key** to add a time-based account manually.
-3. Enter the app’s current six-digit code and select **Enable two-factor authentication**. Scanning alone does not enable MFA. An incorrect code can be retried. If this QR no longer works, **Start a new setup** asks for your password and creates a different key. If Vectory cannot confirm the result, check the current status before starting again.
-4. Save the eight single-use recovery codes somewhere private outside the Vectory server. You can hide and reopen the codes in this browser tab until you mark them saved. Once you leave or acknowledge them, the server cannot show the same codes again.
-5. On a later sign-in, enter your email and password first. Vectory then asks for an authenticator code. If necessary, choose **Use a recovery code instead** with one unused recovery code, then **Verify and sign in**. You are signed in only after verification succeeds.
+<!-- steps -->
+1. In **People & security**, find **Two-factor authentication** under your account and choose **Set up**. Confirm your password and choose **Continue**.
+2. Scan the QR code with your authenticator app. On a phone, choose **Open authenticator app**; to type it instead, use the setup key shown below the code, which **Copy key** copies. The QR code is generated in your browser, without any outside service.
+3. Enter the app's current 6-digit code and choose **Turn on two-factor**. The QR code expires after 10 minutes; the dialog counts them down.
+4. Save the eight single-use recovery codes somewhere safe, outside Vectory, with **Copy**, **Download** or **Print**, then choose **I've saved these codes**. They can't be shown again. Each shows in groups of four characters so you can type it from paper; the spaces are optional.
 
-The QR code is generated inside your browser, without an external QR service. Treat it and the manual setup key as private. **Hide setup** closes the dialog but keeps its QR in this tab so you can continue. Reloading or leaving discards the browser's copy; Vectory warns before leaving. A pending server setup expires after ten minutes. A new setup can invalidate a previous QR, so confirm with the current authenticator code before relying on it.
+From then on, sign-in asks for your password, then a code from the app. If you don't have the app, choose **Use a recovery code**. After a recovery-code sign-in, Vectory says how many codes are left, for example "You used a recovery code; 7 left", and suggests generating new ones under **People & security** when two or fewer remain. **New recovery codes**, next to **Two-factor authentication**, does that.
 
-If a setup, confirmation or disable request stops waiting, **Check current status** reads only whether an authenticator is enabled now. It cannot prove which request finished or recover an unread setup key or recovery codes. Vectory never resends the request automatically. A lost confirmation response can leave MFA enabled without retrievable recovery codes; keep your working authenticator, then deliberately disable and set it up again to obtain new codes. A lost disable response should not be blindly resent because another disable can revoke newer sessions. If your sign-in changes while codes or a setup key are visible, this tab hides them. [Recover an interrupted authenticator change](#/docs/troubleshooting#an-authenticator-change-is-not-confirmed) gives the steps for each result.
+> [!IMPORTANT]
+> **Keep recovery codes somewhere else**
+> If you lose both your authenticator and your recovery codes, another administrator must reset two-factor sign-in for you. Keep the server's and your phone's clocks accurate.
 
-Keep the server and authenticator clocks accurate. Enabling or disabling MFA revokes other browser sessions. The instance bootstrap secret cannot bypass an existing account's MFA. An administrator-issued password reset code changes only the password. There is no MFA-reset workflow for a person who has lost both their authenticator and all recovery codes.
+To replace a lost authenticator, sign in with a recovery code, then choose **Turn off** next to **Two-factor authentication**. The dialog asks for your password and a code: with no app, choose **Use a recovery code instead** and give another unused recovery code. Choose **Turn off two-factor**, then set up the new authenticator. Turning two-factor sign-in on or off signs out your other sessions.
 
-If you lost your authenticator but still have recovery codes, sign in with one unused code. In **People & security**, choose **Disable authenticator**, then **Use a recovery code instead**. Confirm your password and a different unused recovery code; the sign-in code has already been consumed. Once disabled, choose **Set up authenticator** to register its replacement and save the new recovery codes. Previously issued codes become invalid when the old authenticator is removed.
+An administrator can choose **Reset two-factor** for a person who lost both, confirmed with the administrator's password. If no administrator can sign in, use [`vectory-admin disable-mfa`](vectory-admin.md#disable-mfa) on the stopped server.
 
 ## Back up the complete state
 
-Back up before upgrading, restoring or rotating signing keys. A copy of only the live `vectory.db` file can omit committed WAL data. The supplied `deploy/backup.py` uses SQLite's backup API, includes the complete key tree and optional artifact directory, and checks database integrity. Pause key rotation, migrations and external artifact writes during the snapshot; stop the server for a stronger maintenance boundary.
+The data volume holds the database and the server's keys, and they only work together. Back them up together with the supplied tool, which uses SQLite's backup API and checks integrity. Copying a running database file can miss recent changes.
 
-For a running Compose instance, replace `backup-UNIQUE` with a new name:
-
-```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml exec server python3 /app/operations/backup.py backup --state /var/lib/vectory --out /var/lib/vectory/backup-UNIQUE
-docker compose --env-file deploy/.env -f deploy/compose.yaml cp server:/var/lib/vectory/backup-UNIQUE /private/backups/
-```
-
-Keep an encrypted, access-restricted copy outside the server volume. Back up externally provisioned TLS material, Compose settings and release mirrors separately. The snapshot manifest contains file hashes; it is not a signed backup or encryption. Check destination permissions, particularly when copying to Windows.
-
-## Restore or upgrade
-
-Stop the server before restoring. Using the checked-out source and Python, restore to a new destination that does not already exist:
+With Compose, from your server kit folder (or `deploy` for a contributor source build):
 
 ```sh
-python3 deploy/backup.py restore --from /private/backups/backup-UNIQUE --out /private/restored-vectory
+docker compose exec server python3 /app/operations/backup.py backup \
+  --state /var/lib/vectory --out /var/lib/vectory/backup-2026-09-29
+docker compose cp server:/var/lib/vectory/backup-2026-09-29 /srv/backups/
 ```
 
-The restore tool checks the manifest, file hashes and database integrity. Keep the original state intact. Provision the restored state into a new volume or directory with the server identity's private permissions, including the complete `keys/` tree and `mfa-sealing.key`. Restore the matching TLS files. Keep dashboard and agent listeners isolated from ordinary users/devices until both access and generation recovery are reviewed.
+Use a new folder name for each backup.
 
-An old backup also restores old passwords, roles, disabled-account state, device revocations and unused-code records. Before starting the restored server, confirm that an authorized administrator knows the restored password and has a working authenticator if MFA is enabled. Then preview and explicitly apply access invalidation as the server's operating-system identity:
+- Keep backups encrypted and access-restricted, off the server: they contain the server's private keys. With [agent updates](agent-updates.md) on and **This server signs** chosen, that includes the release key: whoever holds the backup can approve builds that hosts install as root. A key kept offline is never in a backup.
+- Back up your TLS files, `.env` and any agent download mirror separately. With the prebuilt server kit, the TLS pair and setup secret are in the private `vectory_secrets` volume. Retain that volume alongside the complete data backup, using your own project prefix if you changed it.
+- Avoid rotating signing keys or upgrading while a backup runs. For the strongest guarantee, stop the server first.
+- The backup's manifest lists file hashes. It detects damage; it isn't a signature.
+
+## Restore a backup
+
+Restore into a new, empty folder while the server is stopped, and keep the current state untouched:
 
 ```sh
-vectory-admin --data-dir /private/restored-vectory invalidate-restored-access
-vectory-admin --data-dir /private/restored-vectory invalidate-restored-access --apply
+python3 deploy/backup.py restore \
+  --from /srv/backups/backup-2026-09-29 --out /srv/restored-vectory
 ```
 
-The first command shows counts without invalidating access. The second atomically signs out all browser sessions, deletes all password reset codes and MFA recovery codes, and revokes all enrollment/device-recovery tokens. It records an audit event and refuses to run against a live server. **Every saved MFA recovery code becomes unusable; a working authenticator remains required.** Passwords and MFA enrollment are preserved, so this is not an MFA-reset or account-recovery bypass.
+The tool checks the manifest, hashes and database integrity. Give the restored folder to the server's account (UID/GID 10001 in Compose) with private permissions, including the whole `keys/` folder and `mfa-sealing.key`.
 
-Next, start one server in an isolated administrative network. Reconcile post-backup offboarding, roles, passwords, authenticator changes and device revocations using reviewed change records. The command cannot discover or repair that missing history and does not change devices, deployments or generation counters. Keep access isolated when those decisions cannot be established. After review, users with a working authenticator can disable and set up MFA again to obtain new recovery codes. Issue new enrollment tokens only when needed. Confirm login/MFA, rejected old sessions/codes, credential renewal, artifacts and deployment history before reconnecting ordinary users or devices.
+An old backup also restores old decisions: accounts that were disabled, old roles and passwords, revoked devices, used codes and tokens. For [agent updates](agent-updates.md) that means a release key you revoked since is back in use, releases you withdrew are ready again, rollouts that ended are running again and a stop you set since is gone. Before anyone reconnects:
 
-An older backup can advertise generations below those already accepted by agents. Agents correctly reject that state. Keep rollouts paused; never delete agent state or lower counters to bypass the rejection. While the server is stopped, the supplied maintenance binary exports a report for review:
+<!-- steps -->
+1. Confirm an administrator can sign in to the restored state, with a working authenticator if they use one.
+2. With the server stopped, end old sessions and revoke old codes and tokens: [`vectory-admin invalidate-restored-access`](vectory-admin.md#invalidate-restored-access), first without and then with `--apply`. With agent updates on, `--apply` also stops all updates, so nothing is offered to a host until step 5.
+3. Start the server on an isolated network. Re-apply every access change made since the backup: offboarding, roles, passwords and device revocations.
+4. If devices accepted newer configurations than the backup knows, [raise the generation counters](vectory-admin.md#recover-generations) before resuming rollouts.
+5. If agent updates are on, review what the backup brought back: the release keys in **Settings → Agent updates**, the releases and the rollouts in **Devices → Agent updates**. Revoke a key you had revoked, withdraw a release you had withdrawn and cancel a rollout that shouldn't run. Then an administrator chooses **Clear the stop** in **Settings → Agent updates**, which resumes nothing. See [Stop all updates](agent-updates.md#stop-all-updates).
+6. Reconnect people and devices, and confirm fresh check-ins.
 
-```sh
-vectory-admin --data-dir /var/lib/vectory generation-recovery-state
-vectory-admin --data-dir /var/lib/vectory recover-generations --report /protected/reviewed.json
-vectory-admin --data-dir /var/lib/vectory recover-generations --report /protected/reviewed.json --apply
-```
+> [!CAUTION]
+> Never delete a device's state, lower its counters or re-enroll it to make it accept an older server. Devices refuse older configurations on purpose.
 
-Save the first command's JSON as UTF-8. Fill its initially null counters from each known device's actual durable state: highest configuration generation, highest policy generation and highest secret attempt revision. Review the restored version, digest and policy before previewing and applying the report. If counters or identity cannot be recovered, use explicit device identity recovery and reassignment; do not guess. The full report format is documented in the source distribution's `server/README.md`.
+If you rotated or rolled over the release key after the backup was made, hosts can pin a newer key than the restored server knows. The review lists them as **This host doesn't pin the key that signed this release** until you run their **Upgrade agent** command with the key the restored server signs with. See [Agent updates](agent-updates.md#rotate-or-replace-the-release-key).
 
-For an upgrade, retain the previous image digest and Compose configuration, take a snapshot and test restoring it. Start the new image against a copy of that state first. Confirm migration, account access and representative device heartbeats before replacing production. If an upgrade fails, restore the complete pre-upgrade snapshot to a new volume with the previous image. Do not assume an older binary can read a migrated database.
+If the server's log says it holds a release key whose sealed private half can't be read or opened, the `keys/` folder doesn't match the database. Restore the `keys/` folder from a backup that holds both the sealed key and the sealing key. Until then no release can be signed, and the server deletes none of the sealed key files in that folder.
+
+## Upgrade the server
+
+<!-- steps -->
+1. [Back up](#back-up-the-complete-state) and test restoring the backup.
+2. Note the current image digests and keep a copy of your server kit's `.env` and Compose configuration.
+3. Try the new version against a copy of the restored state first. Confirm the database migrated, people can sign in and representative devices check in.
+4. Download and verify the new release's prebuilt images using its [server kit](install-server.md), load them, and update the image references in your existing Compose configuration. From that directory, run `docker compose up -d --wait`. Keep the existing data volume, TLS files, and environment settings.
+
+Server upgrades use prebuilt images; no source checkout or compilation is needed. Cross-release upgrades have not yet been qualified for this first developer preview, so test the exact transition against restored state before changing a consequential installation.
+
+The first start after an upgrade migrates the database before the server answers. Some upgrades build an index over stored telemetry, so that start can take a while when the telemetry table is large. Let it finish.
+
+If a migration fails, nothing from it is kept: the database stays at the previous migration, and the server stops with a message that names the failed migration, its cause and where the database stands. Fix the cause and start again, or restore the pre-upgrade backup.
+
+Migrations only move forward. An older server refuses a database that a newer one migrated, so going back to a previous version means restoring its backup: if an upgrade fails, stop and restore the pre-upgrade backup into a new volume with the previous image.
+
+## Rotate the signing key
+
+Devices check manifests with the server's signing key. To rotate it, back up, stop the server and run [`vectory-admin rotate-signing-key`](vectory-admin.md#rotate-signing-key). Devices move to the new key at their next certificate renewal.
+
+## Rotate the device certificate authority
+
+The server's device certificate authority (CA), `keys/device-ca.pem`, signs every device's certificate. It's valid for 10 years. Rotate it before it expires, or when your policy asks for a new one. Devices keep working throughout.
+
+<!-- steps -->
+1. [Back up](#back-up-the-complete-state), then stop the server.
+2. Run [`vectory-admin rotate-device-ca`](vectory-admin.md#rotate-device-ca). It prints the new and previous CA fingerprints and how many devices hold certificates from the previous CA.
+3. Start the server. Certificates from either CA are accepted. New devices, and devices that renew, get certificates from the new CA.
+4. Watch **Settings → General → Device certificates** until no device uses the previous CA. Devices renew in their certificate's last day, so this takes up to 30 days; a device that renewed keeps its old certificate as a fallback for another 24 hours. To stop waiting for a device that won't come back, revoke it on its device page.
+5. Stop the server and run [`vectory-admin retire-device-ca`](vectory-admin.md#retire-device-ca). It checks, and names any device still on the previous CA. When it says **Ready**, run it again with `--apply`, then start the server.
+
+After retirement the server refuses certificates from the previous CA. A device that missed the move needs [identity recovery](agents.md#recover-a-device-identity).
+
+The CA key alone can't impersonate a device: every request also needs a certificate the server issued and still has on record. If you suspect the CA key leaked, rotate, then revoke any device you don't recognize.
 
 ## Monitor the instance
 
-Watch available disk space, database growth, backup age and server/proxy/validator logs. `VECTORY_TELEMETRY_RETENTION_DAYS` defaults to seven and accepts 1–30 days. Security audit history is separate and is not automatically pruned. `VECTORY_MAX_AGENT_CONNECTIONS` is an admission bound, not a tested fleet-capacity promise.
+- **Disk:** watch free space and the database's growth.
+- **Database load:** with `RUST_LOG=vectory_server=info,vectory_server::sqlite=debug`, the server logs once a minute how busy its single database writer was (`busy_percent`) and how long writes waited. A share that stays high means check-ins are queuing for the writer. See [Server settings](server-config.md#server-settings).
+- **Backups:** track the age of your last good backup.
+- **Logs:** `docker compose logs --tail 100 server proxy validator`.
+- **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30).
+- **The audit log** is never pruned, and each event takes about 0.8 KB. A busy fleet of 1,000 devices that takes five deployments a day adds about 8 MB a day (an estimate: [Audit log storage](telemetry.md#audit-log-storage) has the rules and a table). A device can add at most 4 events a minute of each kind about itself, besides the start and the result of each version it is sent, so a device that misbehaves can't grow it at will. To keep a copy elsewhere before you archive the database, [export the events](#review-and-export-audit-events) as JSONL, a date range at a time. Vectory has no command that deletes events.
+- **Device check results** (**Check on devices**) are kept for 24 hours. A check's candidate configuration is removed when the device answers, when a newer check for that device replaces it, when the device is revoked, and within a minute after the check expires ten minutes after it was requested.
+- **Connections:** `VECTORY_MAX_AGENT_CONNECTIONS` (16,384 by default) limits concurrent agent connections. It protects the server; it isn't a supported fleet size.
 
-Use [Troubleshoot a problem](#/docs/troubleshooting) for device and rollout symptoms. Keep the source distribution's `docs/BACKUP-RESTORE.md` with your operational runbook for signing-key rotation and recovery details.
+A load test on 2026-09-30 ran a release build on a shared Linux virtual machine with 4 vCPUs and 16 GB of RAM, with 10,000 simulated devices, an all-at-once rollout to all of them and 5 enrollments a second. Unassigned devices checking in every minute (about 170 check-ins a second) kept the database writer half busy, with a typical 99th-percentile latency of 34 ms. Once every device had an assignment, the writer saturated at 140 to 160 check-ins a second: latency rose to seconds, the rest were refused and retried, and after 14 minutes 9,035 of the 10,000 devices had reported the rollout applied. The simulated devices ran no Vector, so there is no supported fleet size yet: test with your own fleet before relying on large numbers, and watch the database load line above.
 
 ## Review and export audit events
 
-Open [**Activity → Audit log**](/#/audit) to review who changed a pipeline, deployed a version or changed access. All signed-in workspace roles can read and export this history. The list loads 12 events at a time; search and filters apply to the whole recorded history.
+[**Activity → Audit log**](/#/audit) records who changed what, and when: pipelines, deployments, devices, settings and access. Every role can read and export it.
 
-Use **Search activity** for event metadata. Column-header filters narrow **Event** to a group or action, **Result** to an outcome, and **Time** to a date range. When following an actor's activity, **By** shows that actor scope and lets you clear it. Select a sortable column title to change the order, then select it again to reverse it. Dates cover whole days in UTC, including both endpoints. Search does not inspect free-form reasons, credentials or raw diagnostic content. An empty result means no recorded events match the current filters.
+- Search, then filter the **Event**, **Result** and **Time** columns. Dates cover whole days in UTC.
+- Select an event for its details, including the reason and request ID when recorded. **Event link** copies a link to it.
+- Names show each person's and resource's current name; the recorded ID is what the event refers to. An issue reads as its title on its device, and a device recovery as completed by the token that authorized it.
+- A run of device results from a rollout shares one row. For one device the row reads its last state, such as **edge-nyc-02 · rolled back**, and counts its steps (**12 results**); for several devices it reads, for example, **4 results for 2 devices**, with each device's last state counted. Select the row to read every step in order.
+- [Agent updates](agent-updates.md) record who turned them on or off, stopped them, rotated, rolled over or revoked a key, prepared, signed or withdrew a release, and started, paused, resumed or cancelled a rollout. Filter the **Event** column by **Agent updates**, **Release keys**, **Agent releases** or **Agent update rollouts**. Each device's result (updated, rolled back, failed or refused) is **Device agent update**, at most four rows a minute per device. Details hold versions, counters, digests, fingerprints and codes, never key material.
 
-Select an event to open **Event details**, including the recorded reason and request ID when available. **Event link** copies a direct link with the current filter context. People and resource names are current labels for their recorded IDs; they are not claims about the names in use when the event occurred. Older events may have fewer details.
+To export:
 
-For **Group updated**, **Previous group revision** and **Group revision** identify the version before and after the saved edit. Revision zero is a valid starting point for a group created before revision tracking. Older events show **Not recorded** where a value was not stored; Vectory does not infer it from the current group. Recorded revision values also appear in the event details of JSONL exports. These values identify a group edit, not device application of its assignments.
+<!-- steps -->
+1. Choose **Export results** and check **Included events**.
+2. Choose **Prepare export**. Vectory takes a consistent snapshot; later events aren't included.
+3. When **File ready** appears, check the event count and size, then choose **Download JSONL**.
 
-From a device's activity, **View device activity** opens audit history tied to that device identity. It does not infer earlier activity from the device's current group membership or name. Follow the event's device or target link when available; identifiers without a known destination remain plain text.
-
-To export the matching events:
-
-1. Choose **Export results** and review **Included events**. The export includes all matching pages.
-2. Choose **Prepare export**. The server creates a consistent snapshot; events recorded afterward are excluded.
-3. When **File ready** appears, review the exact event count, file size and expiry, then choose **Download JSONL**. Check your browser's downloads to confirm completion.
-
-[JSONL](#/docs/glossary#export-formats) stores one JSON object per line. The file contains snapshot metadata, event records and a final completion record. **File verification** shows the SHA-256 digest of the complete file. Keep the complete file if you need to check its integrity.
-
-Prepared files expire after ten minutes and require the same signed-in session that created them. Reopen **Export results** to find **Earlier prepared files**, each with its original filters. Use **Discard** to free an earlier file, or **Discard file** for the file currently shown; neither deletes audit events. Each export supports up to 100,000 events, 128 MiB and two minutes of preparation. If a limit is reached, narrow the date range and prepare again. Vectory reports an error instead of presenting a partial export as complete.
-
-This is an on-demand export. It does not continuously forward audit events to another service.
+The file has one JSON object per line: snapshot details, the events and a completion record. **File verification** shows the file's SHA-256, so you can check you have all of it. An export holds up to 100,000 events or 128 MiB and must finish within two minutes; narrow the dates if you hit a limit. Prepared files expire after 10 minutes and download only in the session that created them.

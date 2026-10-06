@@ -5,7 +5,10 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, Request, State as AppState},
+    extract::{
+        DefaultBodyLimit, Path, Query, RawQuery, Request, State as AppState,
+        rejection::QueryRejection,
+    },
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
@@ -75,6 +78,23 @@ pub fn router(s: State) -> Router {
             "/api/v1/password-reset",
             post(crate::accounts::redeem_reset),
         )
+        .route("/api/v1/account/sessions", get(auth::sessions))
+        .route(
+            "/api/v1/account/sessions/{id}/revoke",
+            post(auth::revoke_session),
+        )
+        .route(
+            "/api/v1/users/{id}/two-factor-reset",
+            post(crate::mfa::admin_reset),
+        )
+        .route(
+            "/api/v1/invite/preview",
+            post(crate::accounts::preview_invite),
+        )
+        .route(
+            "/api/v1/invite/accept",
+            post(crate::accounts::accept_invite),
+        )
         .route("/api/v1/openapi.json", get(openapi))
         .route("/api/v1/audit/history", get(crate::audit::history))
         .route(
@@ -91,6 +111,7 @@ pub fn router(s: State) -> Router {
         )
         .route("/api/v1/audit/{id}", get(crate::audit::detail))
         .route("/api/v1/issues/history", get(crate::issues::history))
+        .route("/api/v1/issues/groups", get(crate::issues::groups))
         .route("/api/v1/issues/{id}", get(crate::issues::detail))
         .route(
             "/api/v1/issues/{id}/acknowledge",
@@ -100,6 +121,14 @@ pub fn router(s: State) -> Router {
         .route("/api/v1/mfa", get(crate::mfa::status))
         .route("/api/v1/mfa/{action}", post(crate::mfa::manage))
         .route("/api/v1/deployments/preview", post(deployment_preview))
+        .route(
+            "/api/v1/device-validations/{id}",
+            get(crate::device_validations::get),
+        )
+        .route(
+            "/api/v1/deployments/binding-suggestions",
+            post(crate::deployment_history::binding_suggestions),
+        )
         .route(
             "/api/v1/deployments/requests",
             get(crate::deployment_requests::history),
@@ -138,10 +167,18 @@ pub fn router(s: State) -> Router {
         )
         .route(
             "/api/v1/deployments/{id}/targets",
-            get(crate::deployment_history::targets),
+            get(crate::deployment_history::targets)
+                .layer(middleware::from_fn_with_state(s.clone(), target_wake)),
         )
-        .route("/api/v1/vrl/test", post(synthetic_vrl))
-        .route("/api/v1/configurations/test", post(pipeline_tests))
+        .route(
+            "/api/v1/deployments/{id}/rollout",
+            get(crate::deployment_history::rollout),
+        )
+        .route("/api/v1/vrl/test", post(validation::synthetic_vrl))
+        .route(
+            "/api/v1/configurations/test",
+            post(validation::pipeline_tests),
+        )
         .route(
             "/api/v1/configurations/library",
             get(crate::pipeline_library::library),
@@ -154,7 +191,36 @@ pub fn router(s: State) -> Router {
             "/api/v1/configurations/{id}/revisions/{revision_id}",
             get(crate::pipelines::revision_detail),
         )
-        .route("/api/v1/devices/{id}/telemetry", get(telemetry_history))
+        .route("/api/v1/devices/inventory", get(crate::fleet::inventory))
+        .route(
+            "/api/v1/devices/inventory/ids",
+            get(crate::fleet::inventory_ids),
+        )
+        .route("/api/v1/groups/{id}/members", get(crate::fleet::members))
+        .route(
+            "/api/v1/devices/{id}/telemetry",
+            get(crate::telemetry::device_history),
+        )
+        .route(
+            "/api/v1/telemetry/summary",
+            get(crate::telemetry::fleet_summary),
+        )
+        .route(
+            "/api/v1/versions/{id}/telemetry",
+            get(crate::telemetry::version_telemetry),
+        )
+        .route(
+            "/api/v1/configurations/{id}/telemetry",
+            get(crate::telemetry::configuration_telemetry),
+        )
+        .route(
+            "/api/v1/devices/{id}/configuration",
+            get(crate::effective_config::configuration),
+        )
+        .route(
+            "/api/v1/devices/{id}/configuration/diff",
+            get(crate::effective_config::diff),
+        )
         .route(
             "/api/v1/devices/{id}/revoke",
             post(crate::device_revocation::post),
@@ -178,6 +244,10 @@ pub fn router(s: State) -> Router {
         .route(
             "/api/v1/groups/requests",
             get(crate::group_requests::history),
+        )
+        .route(
+            "/api/v1/groups/membership-preview",
+            post(crate::group_requests::membership_preview),
         )
         .route(
             "/api/v1/groups/requests/{id}",
@@ -208,6 +278,10 @@ pub fn router(s: State) -> Router {
             get(crate::policy_requests::history),
         )
         .route(
+            "/api/v1/policies/{id}",
+            get(crate::policy_requests::detail).put(crate::policy_requests::edit),
+        )
+        .route(
             "/api/v1/policies/requests/{id}",
             get(crate::policy_requests::lookup),
         )
@@ -223,7 +297,120 @@ pub fn router(s: State) -> Router {
             "/api/v1/tokens/requests/{id}/cancel",
             post(crate::token_requests::cancel),
         )
-        .route("/api/v1/{collection}", get(list).post(create))
+        .route(
+            "/api/v1/notifications/channels",
+            get(crate::notifications::list).post(crate::notifications::create),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}",
+            get(crate::notifications::detail)
+                .put(crate::notifications::update)
+                .delete(crate::notifications::remove),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}/test",
+            post(crate::notifications::test),
+        )
+        .route(
+            "/api/v1/notifications/preview",
+            post(crate::notifications::preview),
+        )
+        .route(
+            "/api/v1/notifications/deliveries",
+            get(crate::notifications::deliveries),
+        )
+        .route(
+            "/api/v1/detection",
+            get(crate::detection::get).put(crate::detection::put),
+        )
+        .route("/api/v1/agent-updates", get(crate::agent_updates::get))
+        .route(
+            "/api/v1/agent-updates/settings",
+            put(crate::agent_updates::put),
+        )
+        .route(
+            "/api/v1/agent-updates/stop",
+            post(crate::agent_updates::stop),
+        )
+        .route(
+            "/api/v1/agent-updates/stop/clear",
+            post(crate::agent_updates::clear),
+        )
+        .route(
+            "/api/v1/agent-release-keys",
+            get(crate::agent_release_keys::get),
+        )
+        .route(
+            "/api/v1/agent-release-keys/rotate",
+            post(crate::agent_release_keys::rotate),
+        )
+        .route(
+            "/api/v1/agent-release-keys/rollover",
+            post(crate::agent_release_keys::rollover),
+        )
+        .route(
+            "/api/v1/agent-release-keys/{fingerprint}/revoke",
+            post(crate::agent_release_keys::revoke),
+        )
+        .route(
+            "/api/v1/agent-releases",
+            get(crate::agent_releases::list).post(crate::agent_releases::prepare),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}/signature",
+            put(crate::agent_releases::signature),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}/withdraw",
+            post(crate::agent_releases::withdraw),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}",
+            get(crate::agent_releases::get),
+        )
+        .route(
+            "/api/v1/agent-releases/{id}/manifest",
+            get(crate::agent_releases::manifest),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts",
+            get(crate::agent_update_rollouts::list).post(crate::agent_update_rollouts::create),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/preview",
+            post(crate::agent_update_rollouts::preview),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}",
+            get(crate::agent_update_rollouts::detail::get),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/targets",
+            get(crate::agent_update_rollouts::detail::targets),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/pause",
+            post(crate::agent_update_rollouts::pause),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/resume",
+            post(crate::agent_update_rollouts::resume),
+        )
+        .route(
+            "/api/v1/agent-update-rollouts/{id}/cancel",
+            post(crate::agent_update_rollouts::cancel),
+        )
+        .route("/api/v1/releases", get(crate::install::list_releases))
+        .route(
+            "/api/v1/releases/{name}",
+            get(crate::install::download_release),
+        )
+        .route("/api/v1/agent-install", get(crate::install::details))
+        .route(
+            "/api/v1/agent-install/activity",
+            get(crate::install::activity),
+        )
+        .route("/api/v1/{collection}", get(list_collection).post(create))
         .route("/api/v1/{collection}/{id}", get(detail).put(edit_group))
         .route(
             "/api/v1/{collection}/{id}/{action}",
@@ -232,42 +419,87 @@ pub fn router(s: State) -> Router {
         .route("/api/{*path}", any(|| async { ApiError::missing() }))
         .route("/agent/{*path}", any(|| async { ApiError::missing() }))
         .fallback_service(spa)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn(reject_oversized))
         .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn_with_state(s.clone(), fleet_changes))
+        // Once a request has finished, agents whose desired state it changed
+        // are told to check in (see wake.rs).
+        .layer(middleware::from_fn_with_state(
+            s.clone(),
+            crate::wake::middleware,
+        ))
         .with_state(s)
+}
+/// Target rows add the read-only `wake:{listening}` of their device (see
+/// wake.rs), so the rollout says "usually a few seconds" only for an agent
+/// that holds a wait right now.
+async fn target_wake(AppState(s): AppState<State>, request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    if !s.wake.enabled() || response.status() != StatusCode::OK {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 16 * 1024 * 1024).await else {
+        return ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL",
+            "Target page could not be read",
+        )
+        .into_response();
+    };
+    let Ok(mut page) = serde_json::from_slice::<Value>(&bytes) else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    for item in page["items"].as_array_mut().into_iter().flatten() {
+        if let Some(wake) = item["device_id"]
+            .as_str()
+            .and_then(|id| s.wake.projection(id))
+        {
+            item["wake"] = wake;
+        }
+    }
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, axum::body::Body::from(page.to_string()))
+}
+/// Any request that can change something ends the shared fleet projection,
+/// once it has answered: the next read, the caller's included, sees it.
+async fn fleet_changes(AppState(s): AppState<State>, request: Request, next: Next) -> Response {
+    let change = !matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    let response = next.run(request).await;
+    if change {
+        s.fleet.invalidate();
+    }
+    response
+}
+/// Largest accepted request body for the dashboard/API and agent listeners.
+pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
+/// Refuse a declared oversized body before reading any of it. `DefaultBodyLimit`
+/// still bounds chunked bodies, but only once a handler starts reading.
+pub async fn reject_oversized(request: Request, next: Next) -> Response {
+    let declared = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > MAX_REQUEST_BODY as u64) {
+        return ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PAYLOAD_TOO_LARGE",
+            "Request body is larger than 1 MiB",
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 async fn help_redirect(uri: Uri) -> Redirect {
     let location = uri
         .query()
         .map_or_else(|| "/help/".to_string(), |query| format!("/help/?{query}"));
     Redirect::permanent(&location)
-}
-async fn telemetry_history(
-    AppState(s): AppState<State>,
-    h: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &[], false).await?;
-    let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE id=?")
-        .bind(&id)
-        .fetch_one(&s.pool)
-        .await?;
-    if exists == 0 {
-        return Err(ApiError::missing());
-    }
-    let rows = sqlx::query(
-        "SELECT bucket,data FROM telemetry WHERE device_id=? ORDER BY bucket DESC LIMIT 120",
-    )
-    .bind(&id)
-    .fetch_all(&s.pool)
-    .await?;
-    let mut samples = Vec::new();
-    for row in rows.into_iter().rev() {
-        let mut sample = db::parse(row.get("data"))?;
-        sample["bucket"] = json!(row.get::<i64, _>("bucket"));
-        samples.push(sample);
-    }
-    Ok(Json(json!({"device_id":id,"samples":samples})))
 }
 async fn openapi(AppState(s): AppState<State>, h: HeaderMap) -> Result<Response> {
     auth::authorize(&s, &h, &[], false).await?;
@@ -276,188 +508,6 @@ async fn openapi(AppState(s): AppState<State>, h: HeaderMap) -> Result<Response>
         include_str!("../../contracts/openapi.json"),
     )
         .into_response())
-}
-async fn pipeline_tests(
-    AppState(s): AppState<State>,
-    h: HeaderMap,
-    Json(input): Json<Value>,
-) -> Result<Json<Value>> {
-    let user = auth::authorize(&s, &h, &["editor"], true).await?;
-    s.limit(
-        format!("pipeline-tests:{}", text(&user, "id")),
-        20,
-        std::time::Duration::from_secs(60),
-    )?;
-    let mut checked = validation::validate(&input["config"]);
-    checked["tests_run"] = json!(false);
-    if checked["valid"] != true {
-        return Ok(Json(checked));
-    }
-    if validation::mark_device_deferred(&mut checked, &input["config"]) {
-        checked["valid"] = json!(false);
-        checked["deferred"] = json!(true);
-        checked["errors"] = json!([
-            "Run these tests on the device with its Vector platform and local resources. See the listed deferral reasons."
-        ]);
-        return Ok(Json(checked));
-    }
-    let unavailable = || {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "CAPABILITY_DENIED",
-            "Isolated Vector pipeline test runner is unavailable",
-        )
-    };
-    let url = s.settings.validation_url.as_ref().ok_or_else(unavailable)?;
-    let _permit = s.validation_slots.try_acquire().map_err(|_| {
-        ApiError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "RATE_LIMITED",
-            "Validation capacity busy; retry later",
-        )
-    })?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|_| unavailable())?;
-    let mut response = client
-        .post(format!("{}/tests", url.trim_end_matches('/')))
-        .json(&input)
-        .send()
-        .await
-        .map_err(|_| unavailable())?;
-    if !response.status().is_success() {
-        return Err(unavailable());
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
-        if bytes.len() + chunk.len() > 65536 {
-            return Err(unavailable());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
-    if !value["valid"].is_boolean()
-        || !value["tests_run"].is_boolean()
-        || !value["errors"].is_array()
-        || value["vector_version"] != validation::VECTOR_VERSION
-    {
-        return Err(unavailable());
-    }
-    let public = validation::public_pipeline_test_result(&input["config"], &value)
-        .ok_or_else(unavailable)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
-    auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
-    db::audit(
-        &mut tx,
-        text(&user, "id"),
-        "configuration.tests",
-        "",
-        if public["valid"] == true {
-            "success"
-        } else {
-            "failed"
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(public))
-}
-async fn synthetic_vrl(
-    AppState(s): AppState<State>,
-    h: HeaderMap,
-    Json(input): Json<Value>,
-) -> Result<Json<Value>> {
-    let user = auth::authorize(&s, &h, &["editor"], true).await?;
-    db::string(&input, "program", 16384)?;
-    if !input["sample"].is_object() || input["sample"].to_string().len() > 65536 {
-        return Err(ApiError::invalid(
-            "Provide one synthetic sample object of at most64KiB",
-        ));
-    }
-    s.limit(
-        format!("vrl:{}", text(&user, "id")),
-        20,
-        std::time::Duration::from_secs(60),
-    )?;
-    let url = s.settings.validation_url.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "CAPABILITY_DENIED",
-            "Isolated synthetic sample runner is not configured",
-        )
-    })?;
-    let _permit = s.validation_slots.try_acquire().map_err(|_| {
-        ApiError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "RATE_LIMITED",
-            "Validation capacity busy; retry later",
-        )
-    })?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|_| ApiError::invalid("Validator client unavailable"))?;
-    let mut response = client
-        .post(format!("{}/vrl-test", url.trim_end_matches('/')))
-        .json(&input)
-        .send()
-        .await
-        .map_err(|_| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "VALIDATION_FAILED",
-                "Isolated sample runner unavailable",
-            )
-        })?;
-    if !response.status().is_success() {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "VALIDATION_FAILED",
-            "Isolated sample runner unavailable or busy",
-        ));
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| ApiError::invalid("Sample response failed"))?
-    {
-        if bytes.len() + chunk.len() > 65536 {
-            return Err(ApiError::invalid("Sample output exceeds limit"));
-        }
-        bytes.extend_from_slice(&chunk)
-    }
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| ApiError::invalid("Invalid sample runner response"))?;
-    if !value["valid"].is_boolean() || !value["errors"].is_array() {
-        return Err(ApiError::invalid("Invalid sample runner response"));
-    }
-    let public = if value["valid"] == true {
-        json!({"valid":true,"output":value.get("output").cloned().unwrap_or(Value::Null),"errors":[]})
-    } else {
-        json!({"valid":false,"output":null,"errors":["VRL compilation or synthetic execution failed. Review the program and sample."]})
-    };
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
-    auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
-    db::audit(
-        &mut tx,
-        text(&user, "id"),
-        "vrl.synthetic_test",
-        "",
-        if public["valid"] == true {
-            "success"
-        } else {
-            "failed"
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(public))
 }
 pub async fn security_headers(request: Request, next: Next) -> Response {
     let embedded_reference = request.method() == axum::http::Method::GET
@@ -535,11 +585,21 @@ pub(crate) fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 pub async fn list(
+    state: AppState<State>,
+    h: HeaderMap,
+    collection: Path<String>,
+) -> Result<Json<Value>> {
+    list_collection(state, h, collection, RawQuery(None), Ok(Query(Vec::new()))).await
+}
+/// `GET /api/v1/{collection}`. Only `groups` and `overview` read options.
+pub async fn list_collection(
     AppState(s): AppState<State>,
     h: HeaderMap,
     Path(collection): Path<String>,
+    RawQuery(raw): RawQuery,
+    options: std::result::Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Json<Value>> {
-    auth::authorize(
+    let reader = auth::authorize(
         &s,
         &h,
         if collection == "tokens" {
@@ -550,15 +610,27 @@ pub async fn list(
         false,
     )
     .await?;
+    if collection == "overview" {
+        // Before taking a connection: it may wait for the shared projection.
+        return Ok(Json(
+            crate::fleet::overview(&s, &reader, raw.as_deref(), options).await?,
+        ));
+    }
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => json!(rollout::devices(&mut conn).await?),
+        "devices" => json!(rollout::list_devices(&mut conn).await?),
         "deployments" => json!(rollout::deployments(&mut conn).await?),
         "configurations" => json!(db::records(&mut conn, "configuration").await?),
-        "groups" => json!(crate::groups::list(&mut conn).await?),
+        "groups" => crate::fleet::group_list(&mut conn, raw.as_deref(), options).await?,
         "policies" => json!(db::records(&mut conn, "policy").await?),
         "issues" => json!(crate::issues::legacy(&mut conn).await?),
-        "audit" => json!(audit_view(&mut conn).await?),
+        "audit" => json!(
+            audit_view(&mut conn)
+                .await?
+                .into_iter()
+                .map(|event| crate::audit::for_reader(event, &reader))
+                .collect::<Vec<_>>()
+        ),
         "tokens" => {
             let rows = sqlx::query("SELECT data FROM enrollment_tokens ORDER BY id")
                 .fetch_all(&mut *conn)
@@ -569,20 +641,10 @@ pub async fn list(
                     .collect::<Result<Vec<_>>>()?
             )
         }
-        "releases" => json!(releases(&s).await?),
         "settings" => {
-            json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name})
-        }
-        "overview" => {
-            let devices = rollout::devices(&mut conn).await?;
-            let configurations: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='configuration'")
-                    .fetch_one(&mut *conn)
-                    .await?;
-            let deployments = db::records(&mut conn, "deployment").await?;
-            let issues_open = crate::issues::open_count(&mut conn).await?;
-            let audit = recent_activity(&mut conn).await?;
-            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"devices":devices,"recent_activity":audit})
+            let mut settings = json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name,"schedule_late_start_seconds":crate::schedule::late_start_seconds(&s.settings)});
+            settings["device_ca"] = crate::device_ca::status(&mut conn, &s.keys).await?;
+            settings
         }
         _ => return Err(ApiError::missing()),
     };
@@ -592,43 +654,29 @@ pub async fn detail(
     AppState(s): AppState<State>,
     h: HeaderMap,
     Path((collection, id)): Path<(String, String)>,
+    RawQuery(raw): RawQuery,
+    options: std::result::Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Response> {
     auth::authorize(&s, &h, &[], false).await?;
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => rollout::devices(&mut conn)
-            .await?
-            .into_iter()
-            .find(|d| d["id"] == id)
-            .ok_or_else(ApiError::missing)?,
+        "devices" => {
+            let groups = crate::fleet::wants_groups(raw.as_deref(), options)?;
+            let mut device = rollout::device(&mut conn, &id)
+                .await?
+                .ok_or_else(ApiError::missing)?;
+            if groups {
+                device["groups"] = crate::fleet::device_groups(&mut conn, &id).await?;
+            }
+            if let Some(wake) = s.wake.projection(&id) {
+                device["wake"] = wake;
+            }
+            device
+        }
         "configurations" => db::record(&mut conn, "configuration", &id).await?,
         "groups" => crate::groups::normalized(db::record(&mut conn, "group", &id).await?)?,
         "versions" => db::record(&mut conn, "version", &id).await?,
         "deployments" => rollout::deployment(&mut conn, &id).await?,
-        "releases" => {
-            let catalog = releases(&s).await?;
-            let metadata = catalog
-                .iter()
-                .find(|r| r["name"] == id)
-                .ok_or_else(ApiError::missing)?;
-            let bytes = tokio::fs::read(s.settings.releases_dir.join(&id))
-                .await
-                .map_err(|_| ApiError::missing())?;
-            if db::hash(&bytes) != text(metadata, "sha256") {
-                return Err(ApiError::conflict("Release integrity check failed"));
-            }
-            let mut response = bytes.into_response();
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            response.headers_mut().insert(
-                header::CONTENT_DISPOSITION,
-                HeaderValue::from_str(&format!("attachment; filename=\"{id}\""))
-                    .map_err(|_| ApiError::invalid("Invalid filename"))?,
-            );
-            return Ok(response);
-        }
         _ => return Err(ApiError::missing()),
     };
     Ok(Json(out).into_response())
@@ -670,8 +718,7 @@ pub async fn create(
         true,
     )
     .await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(
         &mut tx,
         &h,
@@ -711,6 +758,44 @@ pub(crate) fn description(v: &Value) -> Result<String> {
     }
     Ok(d.into())
 }
+
+fn plaintext_credential_error(findings: Vec<validation::CredentialFinding>) -> ApiError {
+    let message = findings[0].message.clone();
+    let truncated = findings.len() > 20;
+    ApiError::invalid(message).with_fields(json!({
+        "reason": "plaintext_credential",
+        "problems": findings.into_iter().take(20).collect::<Vec<_>>(),
+        "truncated": truncated,
+    }))
+}
+
+/// Pipeline metadata is viewer-readable history too. Only strong token and URL
+/// shapes are refused here; ordinary names and prose are never guessed to be
+/// credentials. The scanner itself never includes a candidate value in output.
+pub(crate) fn validate_pipeline_metadata(v: &Value) -> Result<()> {
+    let mut fields = serde_json::Map::new();
+    for name in ["name", "description", "message"] {
+        if let Some(Value::String(value)) = v.get(name) {
+            fields.insert(name.into(), json!(value));
+        }
+    }
+    if let Some(variables) = v.get("variables") {
+        fields.insert("variables".into(), variables.clone());
+    }
+    let metadata = Value::Object(fields);
+    if let Some(path) = validation::credential_scan_limit_paths(&metadata).first() {
+        return Err(ApiError::invalid(format!(
+            "Credential scan limit exceeded at `{path}`. Shorten this field before saving."
+        )));
+    }
+    let findings = validation::credential_findings(&metadata);
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(plaintext_credential_error(findings))
+    }
+}
+
 pub(crate) fn validate_draft(v: &Value) -> Result<()> {
     if !v["config"].is_object()
         || !v["graph"]["nodes"].is_array()
@@ -725,17 +810,52 @@ pub(crate) fn validate_draft(v: &Value) -> Result<()> {
     {
         return Err(ApiError::invalid("Graph exceeds 1000 nodes or 5000 edges"));
     }
+    validate_pipeline_metadata(v)?;
     crate::variables::declarations(&v["config"], v.get("variables").unwrap_or(&json!([])))?;
     for field in ["config", "graph"] {
         let security = validation::validate(&v[field]);
-        if security["errors"].as_array().unwrap().iter().any(|e| {
-            e.as_str()
-                .is_some_and(|s| s.contains("Plaintext credentials"))
-        }) {
-            return Err(ApiError::invalid(
-                "Plaintext credentials cannot be stored in draft history",
-            ));
+        let errors = security["errors"].as_array().unwrap();
+        let messages = || errors.iter().filter_map(Value::as_str);
+        let reference = messages().find(|message| {
+            message.contains("Only credential fields can hold a device secret")
+                || message.contains("must be exactly `vectory-secret:NAME`")
+        });
+        if let Some(message) = reference {
+            return Err(ApiError::invalid(message));
         }
+    }
+    for section in ["config", "graph"] {
+        if let Some(path) = validation::credential_scan_limit_paths(&v[section]).first() {
+            let path = if section == "graph" {
+                format!("graph.{path}")
+            } else {
+                path.to_owned()
+            };
+            return Err(ApiError::invalid(format!(
+                "Credential scan limit exceeded at `{path}`. Shorten this field before saving."
+            )));
+        }
+    }
+    let findings: Vec<_> = ["config", "graph"]
+        .into_iter()
+        .flat_map(|section| {
+            validation::credential_findings(&v[section])
+                .into_iter()
+                .map(move |mut finding| {
+                    if section == "graph" {
+                        finding.path = format!("graph.{}", finding.path);
+                        finding.field = finding.path.clone();
+                        finding.message = format!(
+                            "Plaintext credentials cannot be stored in `{}`. {}",
+                            finding.path, finding.fix
+                        );
+                    }
+                    finding
+                })
+        })
+        .collect();
+    if !findings.is_empty() {
+        return Err(plaintext_credential_error(findings));
     }
     Ok(())
 }
@@ -746,6 +866,8 @@ pub(crate) async fn revision(
     message: &str,
     source: Option<Value>,
 ) -> Result<()> {
+    validate_pipeline_metadata(c)?;
+    validate_pipeline_metadata(&json!({"message":message}))?;
     let mut entry = json!({"id":db::id(),"configuration_id":c["id"],"revision":c["revision"],"name":c["name"],"description":c["description"],"graph":c["graph"],"config":c["config"],"variables":c.get("variables").cloned().unwrap_or_else(||json!([])),"message":message,"created_at":db::now(),"author":text(actor,"name"),"author_id":text(actor,"id"),"archived":c["archived"]==true});
     if let Some(source) = source {
         entry["source"] = source;
@@ -763,8 +885,7 @@ pub async fn draft(
         return Err(ApiError::missing());
     }
     validate_draft(&v)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
     let mut c = db::record(&mut tx, "configuration", &id).await?;
     crate::pipelines::ensure_editable(&c)?;
@@ -776,7 +897,7 @@ pub async fn draft(
         ));
     }
     if v.get("name").is_some() {
-        c["name"] = json!(db::string(&v, "name", 120)?);
+        c["name"] = json!(db::name(&v, "name", 120, "a pipeline name")?);
     }
     if v.get("description").is_some() {
         if !v["description"].is_string() {
@@ -793,6 +914,9 @@ pub async fn draft(
             .or_else(|| c.get("variables"))
             .unwrap_or(&json!([])),
     )?;
+    // Omitted fields may come from an older saved draft. Check the merged
+    // record before it becomes a new revision, not only the request body.
+    validate_pipeline_metadata(&c)?;
     c["updated_at"] = json!(db::now());
     let message = v["message"].as_str().unwrap_or("");
     if message.len() > 2000 {
@@ -838,11 +962,11 @@ pub async fn edit_group(
     if collection != "groups" {
         return Err(ApiError::missing());
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let previous = db::record(&mut tx, "group", &id).await?;
     let next_revision = crate::groups::check_revision(&previous, &v)?;
+    db::name(&v, "name", 120, "a group name")?;
     let mut g = group(&mut tx, &v, Some(&id)).await?;
     g["created_at"] = previous["created_at"].clone();
     g["revision"] = json!(next_revision);
@@ -883,7 +1007,9 @@ pub async fn action(
     };
     auth::authorize(&s, &h, roles, true).await?;
     let v = body.map(|j| j.0).unwrap_or_else(|| json!({}));
-    if collection == "configurations" && action == "publish" {
+    let publishing = collection == "configurations" && action == "publish";
+    let acknowledged = publishing && crate::publish_tests::acknowledged(&v)?;
+    if publishing {
         if let Some(version) =
             crate::publication_requests::before_validation(&s, &h, &id, &v).await?
         {
@@ -891,6 +1017,7 @@ pub async fn action(
         }
     }
     let mut checked = None;
+    let mut tests = None;
     if collection == "configurations" && (action == "validate" || action == "publish") {
         let mut conn = s.pool.acquire().await?;
         let configuration = db::record(&mut conn, "configuration", &id).await?;
@@ -906,10 +1033,16 @@ pub async fn action(
                 "Draft changed; review before publishing",
             ));
         }
-        checked = Some(validation::validate_isolated(&s, &configuration["config"]).await?);
+        validate_pipeline_metadata(&configuration)?;
+        let accepted = validation::validate_isolated(&s, &configuration["config"]).await?;
+        // The tests of a draft Vector accepted. An invalid draft is refused
+        // below, with its problems, exactly as before.
+        if accepted["valid"] == true {
+            tests = crate::publish_tests::run(&s, &configuration["config"]).await?;
+        }
+        checked = Some(accepted);
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, roles, true).await?;
     let out = match (collection.as_str(), action.as_str()) {
         ("configurations", "duplicate") => {
@@ -937,6 +1070,7 @@ pub async fn action(
                         "Draft changed; review before publishing",
                     ));
                 }
+                validate_pipeline_metadata(&c)?;
                 let validation = checked.unwrap_or_else(|| validation::validate(&c["config"]));
                 if validation["valid"] != true {
                     return Err(ApiError::new(
@@ -951,6 +1085,11 @@ pub async fn action(
                             .join("; "),
                     ));
                 }
+                // Like the refusal above, this one is definitive: the replay of
+                // a committed request was looked for first.
+                if let Some(outcome) = &tests {
+                    outcome.check(acknowledged)?;
+                }
                 let artifact = validation::render(&c["config"])
                     .map_err(|_| ApiError::invalid("Cannot render artifact"))?;
                 if artifact.len() > 1024 * 1024 {
@@ -962,20 +1101,34 @@ pub async fn action(
                 if message.len() > 2000 {
                     return Err(ApiError::invalid("Message is too long"));
                 }
+                validate_pipeline_metadata(&json!({"message":message}))?;
                 let variables = crate::variables::declarations(
                     &c["config"],
                     c.get("variables").unwrap_or(&json!([])),
                 )?;
                 let mut version = json!({"id":db::id(),"configuration_id":id,"number":number,"graph":c["graph"],"config":c["config"],"variables":variables,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now(),"message":message,"author":text(&actor,"name"),"author_id":text(&actor,"id"),"source_revision":c["revision"],"validation":validation,"uses_local_secrets":validation::local_secret_references(&c["config"]).0});
                 db::insert(&mut tx, "version", &version).await?;
-                db::audit(
-                    &mut tx,
-                    text(&actor, "id"),
-                    "configuration.publish",
-                    text(&version, "id"),
-                    "success",
-                )
-                .await?;
+                // Published over failing tests: the row says so, with counts.
+                match tests.as_ref().and_then(|outcome| outcome.audit_details()) {
+                    Some(details) => {
+                        db::insert(
+                            &mut tx,
+                            "audit",
+                            &json!({"id":db::id(),"actor":text(&actor,"id"),"action":"configuration.publish","target":text(&version,"id"),"outcome":"success","created_at":db::now(),"details":details}),
+                        )
+                        .await?
+                    }
+                    None => {
+                        db::audit(
+                            &mut tx,
+                            text(&actor, "id"),
+                            "configuration.publish",
+                            text(&version, "id"),
+                            "success",
+                        )
+                        .await?
+                    }
+                }
                 crate::publication_requests::remember(
                     &mut tx,
                     text(&actor, "id"),
@@ -1085,11 +1238,21 @@ pub async fn action(
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
+            crate::wake::stage(&id);
             let generation: i64 =
                 sqlx::query_scalar("SELECT desired_generation FROM devices WHERE id=?")
                     .bind(&id)
                     .fetch_one(&mut *tx)
                     .await?;
+            // A device-specific artifact is stored per generation; the retry
+            // resends the exact same one under the new generation.
+            let version_id = parsed_version.hyphenated().to_string();
+            if let Some(artifact) =
+                crate::variables::current(&mut tx, &id, current_generation, &version_id).await?
+            {
+                crate::variables::snapshot(&mut tx, &id, generation, &version_id, &artifact)
+                    .await?;
+            }
             if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
                 let changed=sqlx::query("UPDATE deployment_targets SET state='desired',generation=?,verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(generation).bind(&assignment).bind(&id).execute(&mut *tx).await?.rows_affected()>0;
                 let mut d = db::record(&mut tx, "deployment", &assignment).await?;
@@ -1100,10 +1263,8 @@ pub async fn action(
                 }
             }
             db::audit(&mut tx, text(&actor, "id"), "device.retry", &id, "success").await?;
-            rollout::devices(&mut tx)
+            rollout::device(&mut tx, &id)
                 .await?
-                .into_iter()
-                .find(|d| d["id"] == id)
                 .ok_or_else(ApiError::missing)?
         }
         ("tokens", "revoke") => {
@@ -1139,61 +1300,45 @@ pub async fn action(
 pub async fn deployment_preview(
     AppState(s): AppState<State>,
     h: HeaderMap,
-    Json(v): Json<Value>,
+    Json(mut v): Json<Value>,
 ) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &["operator"], true).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
-    auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
-    Ok(Json(rollout::preview(&mut tx, &v).await?))
-}
-async fn releases(s: &State) -> Result<Vec<Value>> {
-    let bytes = match tokio::fs::read(s.settings.releases_dir.join("catalog.json")).await {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(_) => return Err(ApiError::invalid("Release catalog unavailable")),
-    };
-    if bytes.len() > 1024 * 1024 {
-        return Err(ApiError::invalid("Release catalog is too large"));
+    let user = auth::authorize(&s, &h, &["operator"], true).await?;
+    // `device_validation` and `run_tests` ask for a check on the devices and
+    // are no part of a deployment: they leave the body here.
+    let check = crate::device_validations::Request::take(&mut v)?;
+    check.check(&v)?;
+    check.limit(&s, &user)?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
+    let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
+    if !check.device_validation {
+        // A preview never persists anything: its transaction ends unfinished.
+        return Ok(Json(rollout::preview(&mut tx, &v).await?));
     }
-    let entries: Vec<Value> = serde_json::from_slice(&bytes)
-        .map_err(|_| ApiError::invalid("Release catalog is invalid"))?;
-    let mut out = Vec::new();
-    for mut e in entries.into_iter().take(100) {
-        let name = text(&e, "name");
-        if name.is_empty()
-            || name.starts_with('.')
-            || name.len() > 150
-            || !name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        {
-            continue;
-        }
-        let path = s.settings.releases_dir.join(name);
-        let meta = match tokio::fs::symlink_metadata(&path).await {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if !meta.is_file()
-            || meta.len() > 128 * 1024 * 1024
-            || e["size"].as_u64() != Some(meta.len())
-        {
-            continue;
-        }
-        let content = tokio::fs::read(&path)
-            .await
-            .map_err(|_| ApiError::missing())?;
-        if db::hash(content) != text(&e, "sha256") {
-            continue;
-        }
-        e["url"] = json!(format!("/api/v1/releases/{name}"));
-        e["signed"] = json!(false);
-        out.push(e)
+    // The preview runs in a savepoint that is rolled back, so the only thing
+    // this transaction keeps is the check itself.
+    let mut simulation = sqlx::Acquire::begin(&mut *tx).await?;
+    let mut preview = rollout::preview(&mut simulation, &v).await?;
+    simulation.rollback().await?;
+    let created = crate::device_validations::create(
+        &mut tx,
+        text(&actor, "id"),
+        &v,
+        &preview,
+        check.run_tests,
+    )
+    .await?;
+    if let Some(created) = &created {
+        preview["validation_id"] = json!(created.id);
+        preview["validation_truncated"] = json!(created.truncated);
     }
-    Ok(out)
+    tx.commit().await?;
+    // Only a committed check asks anyone to check in.
+    for device in created.iter().flat_map(|created| &created.asked) {
+        crate::wake::ask(device);
+    }
+    Ok(Json(preview))
 }
-async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
+pub(crate) async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
     Ok(crate::audit::rows(
         conn,
         &crate::audit::Filters::default(),
@@ -1208,6 +1353,11 @@ async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>
     .map(|(value, _)| value)
     .collect())
 }
+/// The unpaged list is a convenience for scripts. The audit trail grows without
+/// bound, so it answers with the newest events only; clients that need more
+/// page through `GET /audit/history`.
+const LEGACY_AUDIT_EVENTS: i64 = 1000;
+
 async fn audit_view(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
-    crate::audit::legacy(conn, i64::MAX).await
+    crate::audit::legacy(conn, LEGACY_AUDIT_EVENTS).await
 }

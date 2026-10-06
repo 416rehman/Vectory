@@ -1,299 +1,454 @@
-# Troubleshoot a problem
+# Troubleshooting
 
-Start with the device's connection state, last heartbeat and pipeline status. A connected agent does not prove that its desired pipeline is running. A past **Applied** result on an offline device is historical evidence.
-
-Use the same state directory and operating-system identity as the installed agent in all host commands below. Replace `/var/lib/vectory-agent` with your actual path; Windows paths are supported by the same options.
-
-## A page is blank or cannot load
-
-If a page's files fail to load, Vectory keeps the surrounding navigation available and shows **This page couldn’t load**. A download that has not finished after 30 seconds shows **This page is taking too long**. This can happen after a connection interruption or when an older browser tab requests files from a previous dashboard version.
-
-1. Check your connection to the dashboard. You can use the navigation to open another page while the affected page is unavailable.
-2. Choose **Reload page** when you are ready. Reload is deliberate: Vectory does not refresh the workspace or resend an interrupted action automatically. A request to keep work still open cancels the reload.
-3. If the problem remains, ask the instance administrator to check that the dashboard's HTML and asset files belong to the same complete build. Repeated reloads cannot repair missing files on the server.
-
-**This page stopped working** means a rendering error interrupted an already loaded page. Unsaved changes on that page may no longer be available; reload reopens saved data. If an action was interrupted, review its request status or current saved state before trying it again.
-
-If the entire window is blank, the dashboard may have failed before it could show recovery controls. Use your browser's reload action and open this installation's `/help/` address directly for the static Help center. The in-page recovery view cannot handle failure of the dashboard's initial entry files. See [Open your workspace](#/docs/getting-started#open-your-workspace) for connection and sign-in recovery.
+Find your symptom, check the likely causes in order, and fix the first one that matches. Start from the device page: its connection, last check-in and pipeline status narrow most problems down.
 
 ## A device is offline or never connects
 
-1. Confirm that the agent is running under its intended service account. Starting an additional foreground agent against the same state directory fails the single-instance lock. Use the existing supervisor's logs rather than launching a competing process.
-2. Inspect the local installation and last known state:
+<!-- steps -->
+1. **Is the agent running?** On the device, `sudo vectory status`. It shows the last check-in and when the next is due: `overdue by 2 min` means the agent runs but isn't getting through. If the service is stopped, `sudo vectory service-start`. Don't start a second agent by hand: only one can use the state directory.
+2. **Does anything keep it running?** On a host without a service manager (most containers, WSL, Alpine with OpenRC), setup checks in once and stops: it prints `[!!] Service` with the command to run and exits with code 3, and **Add device** reads "checked in once, but nothing keeps its agent running". Start the agent with that command, such as `sudo /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent`, under whatever keeps processes running there. See [Keep the agent running](installation.md#keep-the-agent-running).
+3. **Can it reach the server?** Run `sudo vectory doctor`. It checks name resolution, the TLS connection, the certificate, the clock and the device's credentials, and prints a fix for each failure.
+4. **Is the address right?** Agents use port **8443**; browsers use **443**. `--server` must be `https://` with the agent listener's name.
+5. **Is the certificate trusted?** A private CA needs the pin from **Add device** or a `--ca-file`. See [Trust the server certificate](installation.md#trust-the-server-certificate). Never turn verification off.
+6. **Is the clock right?** Certificates fail when the device's clock is far off.
+7. **Was the device revoked or replaced?** A revoked identity can't reconnect. See [Recover a device identity](agents.md#recover-a-device-identity).
+8. **Does `sudo vectory status` say `The server rejected the request (HTTP 400)`?** The server refused the check-in as invalid, though Vector may run the version. A report in the check-in is the usual cause, such as what Vector logged. The agent sends a refused check-in again without the reports it can do without, and says so once in its log: `The server refused a check-in; the agent sent it again without the Vector log summary.` The device stays online, and its **Recent Vector errors** stays empty until the server accepts that report. If the 400 stays, [prepare a problem report](#prepare-a-useful-problem-report) with the agent's log lines.
 
-```sh
-vectory doctor --state-dir /var/lib/vectory-agent
-vectory status --state-dir /var/lib/vectory-agent
+Once fixed, the device's check-in time updates within one check-in interval. A Vector that was already running keeps running while the server is unreachable.
+
+If Vector itself stops, the agent restarts it with the last working configuration, backing off up to five minutes between attempts. It doesn't restart Vector while configuration sync is paused.
+
+## Enrollment fails
+
+Keep the state directory. Don't delete keys or `enrollment.json` to start over: the server may already have accepted the request.
+
+| Message or situation | Fix |
+| --- | --- |
+| Can't reach the server, or the certificate isn't trusted | Fix the address or trust as in [A device is offline](#a-device-is-offline-or-never-connects), then run the same command again. Without a pin, setup prints the fingerprint of the certificate it was sent in rows of eight pairs: compare it with **Add device**, then copy the command from there. Never pin what the host was sent. |
+| `The server's certificates don't match the pinned CA`, with `expected` and `received` fingerprints and the first byte that differs | Compare both with the fingerprint on **Add device** and copy the command again. If it still doesn't match, this address may lead to a different server: don't continue. |
+| Unreadable or invalid CA file | Copy the correct public PEM to a stable path the agent can read, then retry with `--ca-file PATH`. |
+| `that isn't a whole enrollment token` | The pasted token isn't 64 characters, so it was never sent. Copy it again with **Copy token** on **Add device**. |
+| `The server refused this enrollment (HTTP 401).` (`ENROLLMENT_REFUSED` with `--json`) | The server refused the token or name, and doesn't say which. Ask an administrator to check the token's expiry, uses, name prefix and revocation in **Add device**, then run the command again; a new token is fine. A token can't take over a name that belongs to another device. |
+| Already enrolled | The device already has an identity. Look it up in **Devices**. Re-enroll only through [identity recovery](agents.md#recover-a-device-identity). |
+| Interrupted | Run the same command again with the same server, name and token. The agent reuses its pending request, so nothing is created twice. |
+| `Vector 0.58.x isn't installed here` | Setup looked on `PATH` and in the usual places and found no Vector 0.58. Install it, or pass `--vector-binary PATH`; **Add device → Advanced → Vector binary** puts the path into the command you copy. |
+| The service account can't run Vector or the agent | Setup names the folder or file that blocks it, such as a private `/root`. Install Vector system-wide (https://vector.dev/download/) or pass `--vector-binary` with a path the account can read. Keep the agent at mode `0755`. |
+| `C:\ProgramData\Vectory belongs to PC\alice, not to SYSTEM or the Administrators, so that account can replace what the agent keeps in it.` (Windows, with the folder's real owner) | Another account made the folder before setup ran, so setup stopped before it changed anything, in a dry run too. Look at what the folder holds, because that account could have changed it. Then make the Administrators its owner and run `vectory setup` again in an elevated PowerShell. Remove the folder instead only if it holds no enrolled agent's state directory: removing that is the start-over this section warns about. |
+
+For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log. A refusal is recorded once for each token or address and reason a minute, and at most 60 a minute in all. When more arrive, the audit log adds one **Device enroll refusals summarized** event that says how many were left out.
+
+| Reason | **Add device** says | Fix |
+| --- | --- | --- |
+| `TOKEN_UNKNOWN` | the token wasn't recognized | Check that the whole token was pasted, then run the command again. |
+| `TOKEN_EXPIRED` | the token expired | Create a new command and run it again. |
+| `TOKEN_REVOKED` | the token was revoked | Create a new command and run it again. |
+| `TOKEN_EXHAUSTED` | the token was already used | Create a new command for this device. |
+| `NAME_TAKEN` | that name belongs to an existing device | Run the command again with another `--name`, or authorize recovery from the existing device's page to replace it. |
+| `NAME_PREFIX_MISMATCH` | the token only allows other device names | Use a name the token allows, or create a new command without a name restriction. |
+| `DEVICE_NAME_MISMATCH` | the command was made for another device name | Run it with the `--name` it was made for, or create a new command for this name. A command made for a typed name enrolls only that name. |
+| `RECOVERY_NAME_MISMATCH` | this recovery token is for another device name | Use the recovered device's exact name. |
+| `RECOVERY_TARGET_MISSING` | the device being recovered no longer exists | Create a new command to add it as a new device. |
+| `REQUEST_MISMATCH` | a different key reused an earlier request | Run setup again from the same state directory, or start over with a new command. |
+| `DEVICE_REVOKED` | the device this request enrolled was revoked | Create a new command to add the host again. |
+| `MALFORMED` | the request was incomplete or used an unsupported agent | Use the agent from this server's install command. |
+
+A refusal that repeats for the same token and reason is recorded once a minute, so a host that keeps retrying doesn't fill the audit log.
+
+A device that enrolled but "checked in once, but nothing keeps its agent running" has no service manager: start the agent with the command setup printed, as in [A device is offline](#a-device-is-offline-or-never-connects).
+
+## Setup stops because Vector is already running
+
+Setup never takes over a running Vector. It records how that Vector was started, copies the configuration files it loads and stops. The only thing it has written is the copies, in `adoption-inventory` in the state directory. For a Vector that loads one plain file, it says:
+
+```text
+[i]  Inventory    Vector started with: /usr/bin/vector --config /etc/vector/vector.yaml; configuration files:
+                  /etc/vector/vector.yaml (sha256 2f69f4e8c932…), backed up to
+                  /var/lib/vectory-agent/adoption-inventory/20260930T101500Z.
+[!!] Existing     Vector is already running here: vector.service (pid 812). Setup won't take it over.
+                  To hand its workload to Vectory, save its configuration as JSON at
+                  /etc/vectory/managed/vector.json, stop it (for example: sudo systemctl disable --now
+                  vector.service), then run this command again. To leave it running untouched beside
+                  Vectory, add --keep-existing-vector. Its configuration is backed up in
+                  /var/lib/vectory-agent/adoption-inventory/20260930T101500Z.
 ```
 
-`doctor` checks the adopted binary digest before running its fixed Vector version probe, then checks the managed path and configured mode. It reports whether a metrics endpoint is configured. It does **not** test server connectivity or prove credentials are currently accepted. `status` reports local pause, drift and the persisted apply state; compare that with the dashboard's last heartbeat. Both commands include read-only `diagnostics` with a next action and local checks of the cached desired configuration. Add `--json` for machine-readable output.
+When the Vector loads more than that one file, the second message names what it found and the two ways forward:
 
-3. Read the existing agent process or service log for connection errors. Verify the configured HTTPS origin, DNS/firewall reachability and certificate hostname. Agents normally use port **8443**, while the browser uses **443**. Check the host clock. If the device needs a private CA certificate, follow [Trust the server certificate](#/docs/installation#trust-the-server-certificate), including the steps for administrators who run the server themselves. Keep certificate verification enabled.
-4. For a new enrollment failure, ask an administrator to check token expiry, use count, name scope and revocation in [**Devices → Add device**](/#/enrollment). A reusable token cannot take over an existing device name.
-5. If an existing identity can no longer renew, ask an administrator to authorize recovery from the device page. Follow the supplied recovery command while the daemon is stopped, retaining the existing state directory. The replacement identity starts without inherited groups or assignments; restore those deliberately.
+```text
+[!!] Existing     Vector is already running here: vector.service (pid 812). Setup won't take it over, and
+                  the agent manages exactly one JSON file, so adopting it would drop what these load:
+                  Vector loads 2 configuration files: /etc/vector/conf.d/10-sources.yaml,
+                  /etc/vector/conf.d/20-sinks.yaml.
+                  Merge what it loads into one JSON file at /etc/vectory/managed/vector.json (the Help
+                  center's Connect a device page, under Keep an existing workload, shows how), or adopt it
+                  as it is: the agent then manages only /etc/vectory/managed/vector.json; what it loads
+                  stays where it is (backed up in
+                  /var/lib/vectory-agent/adoption-inventory/20260930T101500Z) and no Vector started by
+                  Vectory reads it. Either way, stop it (for example: sudo systemctl disable --now
+                  vector.service), then run this command again with --adopt-existing.
+```
 
-After fixing the cause, confirm that the heartbeat timestamp advances and inspect the desired/applied pipeline separately. Losing control-plane connectivity does not stop an already running Vector workload. Stopping the agent does stop its supervised Vector process, so schedule restarts accordingly.
+| Message | Fix |
+| --- | --- |
+| `Setup won't take it over.` with `To hand its workload to Vectory…` | Save its configuration as JSON at the managed path, stop it and run the command again. Add `--keep-existing-vector` only to leave it running beside the agent. |
+| `…so adopting it would drop what these load:` and the files or findings | Merge what it loads into one JSON file, or adopt it as it is. Either way, stop it and run the command again with `--adopt-existing`. Every finding is explained in [When setup stops for a running Vector](agents.md#when-setup-stops-for-a-running-vector). |
+| `You chose to adopt it as it is (--adopt-existing): stop it…` | The flag is noted, and setup still won't take over a Vector that runs. Stop it and run the same command again. |
+| `A Vector that ran here (recorded 2026-09-30 10:15 UTC) loaded configuration the agent doesn't manage:` | The old Vector has stopped, and setup remembers what it loaded. Run the command again with `--adopt-existing`. Merging the files first doesn't replace this: setup can't see what a merge left out. |
+| `The record of an earlier inventory (…) can't be read` | Keep the folder and check the copies in it. Run the command again with `--adopt-existing` once you're sure nothing is lost. |
+| `Nothing was copied: State directory contains unrelated files…` | Setup won't write copies into a folder that isn't a Vectory state directory. Choose an empty `--state-dir`, or copy the files yourself before you change them. |
+| `Nothing was copied:` with `permission denied` | Run setup with `sudo` (an elevated shell on Windows), or copy the files yourself. |
+| `--adopt-existing hands the workload of a running Vector to Vectory, and --keep-existing-vector…` | Pass only one of them. |
 
-If its owned Vector process exits, the running agent attempts to restore the established workload even during a control-plane outage, after unassignment, or while a newer pipeline remains rejected. Repeated startup failures use an increasing delay of up to five minutes. Local or remote configuration-sync pause prevents this automatic restart; inspect the host before deliberately resuming. An explicit agent startup retains its existing behavior of starting the adopted workload while sync is paused.
+[Adopt a Vector that already runs](agents.md#adopt-a-vector-that-already-runs) has the whole procedure.
 
-Recovery can wait for an in-flight network request or native check to finish. Restoring the established process does not mark a rejected pipeline successful or advance its verified generation. Check fresh device reports and actual event delivery after recovery.
+## A proxy is in the way
 
-## A token request is interrupted
+The agent honors `HTTPS_PROXY` and `NO_PROXY`, and tunnels through an HTTP proxy with `CONNECT`, so TLS and the device's certificate stay end to end and the server pin still applies. See [ports](ports.md). When the proxy is the problem, the message names it:
 
-An interrupted browser response does not prove that token creation or revocation failed. For token creation, **Add device** retains a nonsecret request reminder in this browser, scoped to the account that started it.
+| Message | Fix |
+| --- | --- |
+| `Can't reach the proxy at proxy.example.net:3128.` | Check `HTTPS_PROXY`, or add the server to `NO_PROXY` if it should be reached directly. |
+| `The proxy at proxy.example.net:3128 couldn't connect to vectory.example.com:8443.` or `…refused to connect… (Forbidden)` | Allow this server in the proxy, or add it to `NO_PROXY`. |
+| `The proxy at proxy.example.net:3128 requires sign-in.` | Ask the proxy administrator to allow this server without proxy sign-in, or provide a direct route and add the server to `NO_PROXY`. This preview has no protected store for unattended proxy credentials; don't put a password in `HTTPS_PROXY`. |
+| `The proxy at proxy.example.net:3128 rejected this host's authentication.` | Remove the credential-bearing proxy URL. Ask the proxy administrator for an unauthenticated route to this server, or use a direct route with `NO_PROXY`. |
+| A TLS error that adds `This connection goes through the proxy at … (HTTPS_PROXY). A proxy that inspects TLS presents a certificate of its own, and the agent doesn't accept it` | Ask the proxy's administrator to let this server through uninspected, or add it to `NO_PROXY`. Never trust the proxy's certificate in place of the server's. |
 
-1. Open **Check request**, then **Check status**. This reads the exact request; it never creates another token or retrieves its secret.
-2. If the secret is unavailable, choose **Cancel request** or **Revoke token and cancel**. Cancellation prevents late creation and revokes the token associated with that request. A result saying no token is recorded yet is not cancellation.
-3. Wait for **Request cancelled**, then choose **Continue setup**. If cancellation itself times out, check status again. Keep the reminder until cancellation is confirmed.
-
-For a token revoked from **Manage enrollment tokens**, an uncertain reply offers **Check current status**. A fresh read confirms whether that exact token is revoked. If it remains available, a separate confirmation lets you revoke it again. This revocation reminder lasts only on the current page; after leaving or reloading, review that token's status in the token list. Existing device identities stay connected in either workflow.
-
-If browser storage is unavailable, restore it before creating a token so interrupted requests can be recovered. A damaged reminder with a usable request identity still offers lookup and cancellation. Keep using the same account and browser profile to find the reminder. A server upgrade may be needed if the dashboard cannot verify request-correlation support. See [saving a token](#/docs/installation#save-the-enrollment-token).
-
-If a damaged reminder has no usable identity, **Review unreadable reminder** explains how to dismiss only that browser record. Review the token inventory and revoke unwanted tokens first. Dismissal does not cancel any server request, retrieve its secret or automatically create a replacement.
-
-## A device recovery request is interrupted
-
-The browser's authorization request and the host's `recover-enrollment` command are separate steps. First establish whether the token ever reached the host.
-
-- **The token was never used on the host:** return to that device page with the same account and browser profile. Open **Device recovery → Check request**, then **Check status**. If the secret cannot be retrieved, choose **Cancel request** or **Revoke token and cancel**. Wait for **Recovery request cancelled** and choose **Continue** before creating another token. A negative lookup is not cancellation; an uncertain cancellation needs another status check.
-- **Recovery has started on the host:** retain the pending recovery files and original token, and inspect the replacement identity in **Devices**. Retry an interrupted host command with its original inputs while that token remains eligible. If replacement credentials were already saved locally, the agent can finish that local transition without another enrollment request; server acceptance alone does not prove those credentials reached the host. Revoking a token can block an unfinished request; a new token cannot simply replace the one saved by a pending recovery. If the original token is expired or revoked, preserve local state for administrator review.
-- **The token has already been used:** checking the request reports that fact. Inspect the replacement identity and its credentials before authorizing anything else. Cancelling the old authorization does not disconnect the replacement or bring back the retired identity.
-
-Closing a token dialog only hides its in-page copy. **Show token** reopens it until you acknowledge, discard, leave, reload or end the session. An acknowledged or lost secret is never available from request lookup. **Discard token copy** does not revoke it.
-
-If the browser reminder is damaged, **Review reminder** uses its exact request identity where available. A reminder without a usable identity can only be deliberately dismissed after reviewing unwanted recovery tokens under **Devices → Add device → Manage enrollment tokens**. Dismissal removes that browser record, not a server request or device identity. Storage must be available before starting a new authorization. See the [device identity recovery procedure](#/docs/installation#recover-a-device-identity).
-
-## An enrollment command fails
-
-Keep the existing state directory. Do not delete keys, `enrollment.json` or recovery files to make a retry appear fresh: the server may already have accepted a request whose response was interrupted.
-
-- **Unreadable or invalid CA file:** follow [the server certificate guide](#/docs/installation#trust-the-server-certificate). Copy the correct public PEM to a stable location readable by the agent, then retry with `--ca-file PATH`. On agents with enrollment preflight protection, a missing or invalid CA is rejected before saving connection settings or creating a new enrollment request.
-- **Already enrolled:** ordinary `enroll` preserves the existing identity and connection settings. Inspect the existing device in the dashboard. Use administrator-authorized `recover-enrollment` only when that identity actually needs replacement; do not re-enroll to fix a pipeline or heartbeat problem.
-- **Invalid local options or empty token:** correct the reported input and retry. Use the same state directory, and supply the token through hidden interactive input, `--token-stdin` or a protected token file.
-- **Interrupted request or server rejection:** retry the original server, machine name, state directory and token. Omit `--ca-file` to keep the saved trust path; supply a path to repair it deliberately, or `--ca-file=` to select system trust. Existing pending requests keep their key and request ID. A different server/name is refused instead of silently changing the pending identity.
-- **Original token expired or revoked:** ask an instance administrator to inspect the device and enrollment-token status. A new token cannot simply replace the original token on a pending request. Preserve the local files for review; an uncertain enrollment is not permission to clear identity or generation state.
-
-These local-preflight protections require an agent artifact containing the enrollment fix. Older development builds can save connection settings before returning an error. If an older attempt already pinned a wrong server/name, retain the pending files and inspect the situation before making changes; upgrading cannot prove that an earlier request was never sent. After a request has been prepared or sent, an error does not imply that every local write or server action was rolled back.
-
-## The adopted Vector binary changed
-
-`doctor` and the running agent refuse a Vector executable whose checksum no longer matches the locally adopted identity. First establish why the file changed. If the replacement was deliberate and independently verified, stop the agent and follow [Replace the adopted Vector binary](#/docs/installation#replace-the-adopted-vector-binary) to approve its exact checksum with `re-adopt`. If the change was unexpected, preserve the evidence and restore a trusted executable before resuming operation.
-
-Re-adoption retains the current workload, identity, pauses and retry state. It validates the supported replacement against existing configurations but does not start or verify a workload. Repeating `install --adopt`, changing a dashboard assignment or retrying a pipeline does not approve changed executable bytes.
-
-## A local settings update is refused
-
-Stop the agent through its existing supervisor before changing local allowances, configuration mode, metrics or secret bindings. A sync pause keeps the agent running and does not release its operation lock. If the command reports another operation, wait for that process to exit; do not delete `agent.lock` or start another agent against the same state directory.
-
-An invalid option in a combined `install` request rejects all requested settings changes before saving. Correct the reported URL, policy or binding and submit the complete intended request again. A fresh installation also checks these inputs before creating its state or adoption backup. Policy files only set allowances; choose full or restricted mode with the explicit mode flag. On older builds without this fix, inspect the saved settings before retrying because earlier options may already have been applied.
-
-An access-preservation error means the maintenance account could not safely retain the installation's existing owner or permissions. Keep the files in place and ask the host administrator to inspect the intended service identity's access, including the state directory, settings and local resources. Do not replace protected files with broadly readable copies or remove ACLs to bypass the error. Use the [local settings procedure](#/docs/installation#update-local-agent-settings), then verify the service under its actual identity after restarting.
-
-If the error says settings were saved but retry-state cleanup failed, the new mode or allowances may already be in effect. Keep the agent stopped, inspect `status` and `doctor`, and correct the reported local write failure. After reviewing the saved settings, use the separate `vectory retry --state-dir PATH` command if another attempt is intended. Repeating unchanged settings does not clear a suppressed attempt. Do not restore older state or reset counters to force it.
-
-An incomplete fresh installation is different: settings may have been written before initial state creation failed. Keep the agent stopped and preserve its files and adoption backup for inspection. Repeating `install` refuses missing or unreadable state instead of reporting success or inventing replacement state. The `retry` command does not repair an incomplete installation.
-
-If a previous agent build already removed a provisioned permission, this update cannot reconstruct that grant. Restore the intended access from your protected installation records rather than granting access to every local account. A command that succeeds under an administrator account does not establish service-account access or workload health.
-
-## A secret-binding map is rejected
-
-Pass the map with `configure-secrets --secret-files PATH` and the existing `--state-dir`. The map must be one JSON object, saved as UTF-8 without a byte-order mark (BOM), whose unique names point to absolute private credential-file paths. Do not put credential values in this map. Fix malformed JSON, duplicate names, `null`, lists, trailing content or invalid paths, then submit the complete intended map again. Use `{}` only when deliberately removing every binding.
-
-An input rejection leaves existing bindings and retry state unchanged. Review the file error without removing access controls or making credential files public. Follow [the device-local binding procedure](#/docs/resources#keep-credentials-on-the-device), using the actual service identity and checking the command result before restarting.
-
-This strict behavior requires an agent package containing the secret-binding input fix. Older development builds can interpret `null` as clearing bindings or silently choose the last duplicate name. If an older command already succeeded, review the saved bindings before resubmitting a corrected complete map; upgrading does not reconstruct removed entries. Verify the artifact through your trusted release channel because development builds may share a version label.
-
-## A dashboard page keeps loading
-
-Dashboard reads stop waiting after 30 seconds, including a stalled response body. Background refresh lets an existing read finish instead of repeatedly replacing it. A timeout does not mean records were deleted or a device stopped. Check your connection to the instance, then choose **Try again** or **Refresh**. Changing pages cancels the abandoned read; a late response cannot replace the new page's data.
+The installed service does not inherit the `HTTPS_PROXY` you set only in the shell that ran enrollment. For a proxy **without credentials** on Linux, run `sudo systemctl edit vectory.service`, add `[Service]` and `Environment="HTTPS_PROXY=http://proxy.example.net:3128"`, then run `sudo systemctl restart vectory.service`. Do not put a user name or password there: [systemd exposes service environment variables to unprivileged D-Bus clients](https://www.man7.org/linux/man-pages/man5/systemd.exec.5.html). On macOS, the system launch daemon likewise needs `HTTPS_PROXY` in its `EnvironmentVariables` in `/Library/LaunchDaemons/io.vectory.agent.plist`, followed by a service restart; recheck that setting after reinstalling the agent. On Windows, the Vectory service cannot take a per-service proxy setting in this preview. A PowerShell session variable affects only the interactive command; arrange a direct route or a host-level unauthenticated proxy before enrollment and confirm that the **service** checks in after it starts.
 
 ## A pipeline is rejected or rolled back
 
-Open the device's **Activity** and the deployment details. Use the reported failure stage to choose the next action:
+Open the device and read its issue: it names the stage and the reason.
 
-| Reported problem                                     | Next action                                                                                                                                                                               |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Restricted capability or unsupported component       | Compare the pipeline with the device's reported configuration mode. Have the host operator review local allowances or explicitly choose full mode; a deployment cannot grant it remotely. |
-| Missing local file, secret or environment value      | Provision the resource for the actual agent service account on every target. A value in your interactive shell or on the Vectory server does not supply it to Vector.                     |
-| Invalid Vector configuration or failing native tests | Correct the draft, check the relevant Vector field/platform requirements and run pipeline tests. Publish a corrected version and review its targets.                                      |
-| Startup or sink health check failure                 | Check destination availability, permissions and port conflicts on the host. Preserve the verified running configuration while addressing the dependency.                                  |
-| Rolled back                                          | The new activation failed and the agent restored its last verified configuration. Read the failure before retrying; the attempted version is not the active version.                      |
-| Check required                                       | Current activation could not be verified. Inspect local status and the owned process before treating it as healthy.                                                                       |
+| Issue code | What happened | Fix |
+| --- | --- | --- |
+| `VALIDATION_FAILED` | Vector rejected the configuration on the device, its tests failed, `vector validate` didn't finish in time (the finding `VECTOR_TIMEOUT`: the version is never treated as valid), or the adopted Vector binary changed (the finding `VECTOR_BINARY_UNAVAILABLE`: Vector never ran). | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. For a changed binary, see [The adopted Vector binary changed](#the-adopted-vector-binary-changed). |
+| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The device page reads **Apply failed because this host's restricted mode doesn't allow it** (**local policy** on a full-mode device), and the reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. Some findings read differently, because no allowance can lift them: an `api` block is never allowed in restricted mode (**Apply failed because restricted mode refuses an api block**, `LOCAL_API_DENIED`), nor is an AWS credentials file (`CREDENTIALS_FILE_DENIED`), AWS credentials the host supplies (`AMBIENT_CREDENTIALS_DENIED`) or a VRL call that passes a file to `parse_groks` or `parse_etld` (`DYNAMIC_CAPABILITY_DENIED`, which says the step reads a file with that function and names its argument), and a component ID that is a path is refused in both modes (**Apply failed because a component ID names a path**, `INVALID_COMPONENT_ID`). The deployment's failure reasons and the issue say the same. | Have the host operator run the command the fix names, with the agent stopped, such as `vectory allow --network 127.0.0.1:9`, or switch the device to full mode. The dashboard can't grant it. For those findings: remove the `api` block, the credentials file or the file argument of the VRL call, give an AWS sink explicit access keys as device secrets, or deploy to a full-mode device, and rename a component whose ID is a path along with the inputs that name it. `vectory status` on the device shows the same problem and fix, and the deploy review writes the commands for each host. |
+| `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, its file can't be read or its value was refused, or it sits in a field that can't hold a secret. The diagnostic names the step, the field and the secret. | Bind the name, or fix the secret file's permissions, then start the agent: its next check-in applies the version. The device page's **Device secrets** card shows which names are bound. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
+| `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
+| `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
+| `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. A full disk is named (the finding `DISK_FULL`): nothing was half written, and the running configuration is untouched. | Check disk space, ownership and permissions, and remove symlinks from the paths. After a full disk, free space and wait: the next check-in applies the same version. |
+| `INCOMPATIBLE` | The version was built for a different Vector minor version than the device runs. Patch releases of the same minor (0.58.0, 0.58.1) are interchangeable, so a patch difference never causes this. `vectory status` names both versions. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
+| `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary yet. | Run `vectory install ... --adopt` on the device. |
+| `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, the download was cut off or too large, or the bytes didn't match the signed size and digest. Nothing was applied and the partial file was removed. | Check connectivity; the agent retries on its own at its next check-in. The finding says which case it was. |
+| `ROLLBACK_UNAVAILABLE` | The device's first version didn't start, so there was nothing earlier to go back to. Vector is stopped and nothing runs; the device page reads **Nothing running: Vector stopped after v1 failed to start.** | Fix the problem the issue names, such as a listener on port 514, then deploy a corrected version or choose **Retry application**. Nothing on the host needs recovering. |
+| `ROLLBACK_FAILED`, `RECOVERY_INVALID` | The new version failed and the last working configuration couldn't be restored. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
+| `MANIFEST_EXPIRED` | The approval expired before the switch. | Nothing: the agent waits for its next check-in. |
 
-After a rejected apply, the managed file may still be the last working configuration. Read `diagnostics.desired_configuration` to inspect the **desired** template instead: the agent checks its cached size and digest, resolves approved local secret-file bindings in memory and checks local capability allowances. A denied destination, listener or file root gets a specific category and corrective action. Missing or corrupt cache and unavailable secret bindings are reported separately. `capability_allowed` means only those local checks passed; it does not establish that Vector accepted or activated the version.
+The issue, the device page and `sudo vectory status --json` (under `configuration_attempt.error.diagnostics`) show Vector's own message, with secret values removed. For the most common findings, the agent adds a fix:
 
-These diagnostics do not run native validation, pipeline tests, providers or environment interpolation, and do not change retry state, counters, pause or managed content. A successful `doctor` exit does not clear an apply failure. For native validation or test failures, inspect the desired published version and its host requirements under the actual service identity. General diagnostics deliberately avoid returning resolved credentials and raw provider output. Do not paste real secrets into a draft to make validation succeed. Use the [resource guide](#/docs/resources) to choose the appropriate reference mechanism.
+| Finding | Fix the product prints |
+| --- | --- |
+| `DATA_DIR_MISSING` | Remove data_dir from the pipeline to use the device's own data directory, or create this directory on the device. See [Vector says the data directory doesn't exist](#vector-says-the-data-directory-doesnt-exist). |
+| `DATA_DIR_NOT_WRITABLE` | Give the Vector service account write access, or remove data_dir from the pipeline to use the device's own data directory. |
+| `ADDRESS_IN_USE` | Stop the other process, or change this component's address. |
+| `PRIVILEGED_PORT` | Use a port from 1024 up, such as 1514, and point senders there. Or allow it: sudo systemctl edit vectory.service, add [Service] AmbientCapabilities=CAP_NET_BIND_SERVICE, then restart. See [A listener on a port below 1024 doesn't start](#a-listener-on-a-port-below-1024-doesnt-start). |
+| `PERMISSION_DENIED` | Give the Vector service account access to the path, or change the path. |
+| `FILE_NOT_FOUND` | Check that the path exists on the device. |
+| `ENV_VAR_MISSING` | Set it in the Vector service's environment on the device, or remove the reference from the pipeline. |
+| `LOCAL_API_DENIED` | Remove the api block, or deploy to a full-mode device. Vector's local API has no authentication, so no host allowance can permit it. See [Restricted and full mode](security.md#restricted-and-full-mode). |
+| `CREDENTIALS_FILE_DENIED` | A sink sets `credentials_file` under `auth`, and a credentials file can name a program that Vector runs, so restricted mode refuses it. Remove it and give the sink its access keys as device secrets, or deploy to a full-mode device. See [Restricted and full mode](security.md#restricted-and-full-mode). |
+| `AMBIENT_CREDENTIALS_DENIED` | A sink uses `auth.strategy: aws` without explicit keys, so it would sign with this host's own AWS identity. Give it `access_key_id` and `secret_access_key` as device secrets, with no `assume_role`, `imds` or `profile`, or deploy to a full-mode device. The message names where the keys go: `auth` for `elasticsearch`, `auth.auth` for `http`, `loki` and `prometheus_exporter`. |
+| `INVALID_COMPONENT_ID` | Rename the component and the inputs that name it. An ID can't contain a slash, a backslash or a control character, or start with a drive letter and a colon (like `C:`), because Vector uses it as a directory name in its data directory. Devices in both modes refuse it. |
+| `DISK_FULL` | Free some space on that disk. The agent applies this version at its next check-in; there is nothing else to do. |
+| `DOWNLOAD_INTERRUPTED` | Nothing was applied. The agent tries again at its next check-in. If it keeps happening, look for a proxy or firewall that cuts long responses. |
+| `DOWNLOAD_TOO_LARGE` | Nothing was applied. Publish a smaller version. |
+| `ARTIFACT_MISMATCH` | Nothing was applied. The agent tries again at its next check-in. If it keeps failing, something between the server and this device may be altering downloads. |
+| `VECTOR_TIMEOUT` | Vector kept running the previous configuration. A destination whose health check never answers is the usual cause: check them from this device, then choose Retry application. |
+| `VECTOR_BINARY_UNAVAILABLE` | Vector never ran: the binary the agent approved is missing, unreadable or changed, as after an operating-system package upgrade. Restore it, or stop the agent and approve the new one with `vectory re-adopt`, then choose Retry application. See [The adopted Vector binary changed](#the-adopted-vector-binary-changed). |
 
-An identical failed attempt may be suppressed to prevent repeated restarts. `diagnostics.retry_status` is `suppressed` when the current desired generation and effective content match the rejected attempt, `not_suppressed` when they do not, or `unknown` when the cache or secret bindings cannot be inspected. A rotated local secret can permit a new attempt; reading diagnostics does not consume a revision or request a retry. Once the cause is fixed, an authorized operator can use **Retry** where offered, deploy a corrected version, or have the host operator stop the agent, run `vectory retry --state-dir /var/lib/vectory-agent`, and restart it. Stopping the agent also stops its supervised Vector process. Do not delete state, edit accepted generation counters or re-enroll as a retry mechanism.
+The device page's **Recent Vector errors** shows what Vector logged since it last started or reloaded a configuration, so errors of a version it no longer runs don't appear there.
 
-## Device controls change while a request is pending
+A device doesn't retry a failed version by itself, so a bad version can't restart Vector in a loop. After fixing the cause, use **Retry application** on the device, deploy a corrected version, or run `vectory retry` on the host (while the agent runs, the retry is queued and taken within seconds). Never delete state, edit counters or re-enroll to force a retry.
 
-The device page follows the latest assignment, pause and access state it has received. If those change while **Retry application** or **Check status** is waiting, the old response cannot update the new controls. A pause can disable Retry; revoked access or lost operating permission removes it. If a new assignment is eligible, you can review it and explicitly request a retry without waiting for the old reply.
+## Vector says the data directory doesn't exist
 
-Leaving the page or seeing a control disappear does not cancel a retry that reached the server. Return to the device and refresh its assignment and reported state. A retry request advances the desired generation; only subsequent device verification establishes that it applied. The dashboard never automatically resends the abandoned request. Follow [Retry a failed application](#/docs/telemetry#retry-a-failed-application) if another attempt is still needed.
+Vector refuses to start when its data directory is missing, with a message like:
 
-An open agent-settings review closes if you lose operating permission, the device becomes unavailable, or its access is revoked. If access is restored, open a new review deliberately; the earlier dialog will not reopen on its own. Device identity recovery is a separate operation with its own [interruption procedure](#/docs/troubleshooting#a-device-recovery-request-is-interrupted).
+```text
+data_dir "/var/lib/vector/" does not exist
+```
+
+- If the pipeline sets **Data directory** in its general settings, create that folder on every device and give the agent's service account write access. On restricted devices, also allow it as a file root.
+- If the pipeline leaves it empty, the agent gives Vector its own private data directory. Update the agent if you still see this message.
+
+## A listener on a port below 1024 doesn't start
+
+On Linux, ports below 1024 need a privilege the agent's service account doesn't have. A source that listens on one, such as syslog on 514, fails with `PRIVILEGED_PORT`:
+
+```text
+Vector can't listen on 0.0.0.0:514: ports below 1024 need a privilege the service account lacks.
+```
+
+- **Use a higher port.** Listen on 1514, for example, and point your senders there.
+- **Or allow it on this host.** Run `sudo systemctl edit vectory.service`, add the lines below, then `sudo systemctl restart vectory.service`. Only this service gets the privilege.
+
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  ```
+
+On a restricted device, the address must also be in the host's allowed listeners. macOS and Windows have no privileged ports.
+
+## A pipeline can't write a file: read-only file system
+
+A file sink, a disk buffer or a `data_dir` in a read-only part of the file system fails. Vector logs it, and `sudo vectory logs` shows it:
+
+```text
+Unable to open the file. path=/srv/logs/out-2026-10-02.log error=Read-only file system (os error 30)
+```
+
+Which parts are read-only depends on the unit that runs the agent:
+
+| Unit | Read-only to the agent and Vector |
+| --- | --- |
+| Registered by `vectory setup` or `vectory service-install` | `/usr`, `/boot`, `/etc` and home directories, except the state and managed configuration directories. |
+| Packaged (`/usr/lib/systemd/system/vectory.service`) | The whole file system, and home directories are hidden, except `/var/lib/vectory-agent`, `/etc/vectory/managed` and `/var/lib/vector`. |
+
+Add the folder to the service. Run `sudo systemctl edit vectory.service`, add the lines below, then `sudo systemctl restart vectory.service`. This applies to full mode and to a restricted-mode file root from `vectory allow --file-root`. See [What the systemd service can write](installation.md#what-the-systemd-service-can-write).
+
+```ini
+[Service]
+ReadWritePaths=/srv/logs
+```
 
 ## Validation says deferred or unavailable
 
-**Deferred** means the server could not perform the native check without device-specific resources or platform features. Inspect those requirements and the target's configuration mode before deployment. The device must still run native validation and any configured tests before activation. Deferred is not a successful native test.
+- **Deferred:** part of the check needs the device, such as a local file, a device secret, an environment variable or a provider. The device runs that check before applying. Deferred is not a pass.
+- **Unavailable:** the server got no usable answer from its validator, so publishing is blocked until it's back. It never skips the check. An administrator can read the cause in the server log: `docker compose logs server | grep "isolated validator"` prints one warning for each unusable answer, with the `path` it was for (`validate`, `tests` or `transform-test`) and a `reason`, such as `the server could not connect to it`, `it did not answer within 8 seconds`, `it answered HTTP 503`, `it speaks another protocol, or runs another Vector, than this server expects` or `its diagnostics are not in the expected form`. The warning never quotes what the validator sent. Then check the `validator` container.
+- **Structural only:** you're on a development preview without a validator. Production servers can't run that way.
 
-**Structural-only** without an isolated validator is a development-preview result, not a production validation mode. A production server requires the isolated Vector validator at startup. If its configured worker later becomes unreachable or fails, publication is blocked. An instance administrator should inspect the validator and server logs and restore that service; repeated publication attempts do not resolve an unavailable worker.
+## A credential is refused when you save or publish
+
+Credentials stay on the devices, so a credential field holds a secret name, never the value. The message names the step and the field. When a save is refused, your edits stay and **Go to field** opens the setting:
+
+| Message | Fix |
+| --- | --- |
+| Plaintext credentials cannot be stored in a credential field | Replace the value with a device secret name, then bind it on each device with `vectory configure-secrets`. |
+| A header or URL field looks like it holds a plaintext credential | Remove it from the draft. On a full-mode device, a native Vector secret backend or service-environment reference may work where Vector supports one. Device secrets for headers and URLs are not supported in this preview. |
+| Only credential fields can hold a device secret | Move the reference out of the URL, header, path or program, into the step's credential field, such as `auth.token`. |
+| The field must be exactly `vectory-secret:NAME` | Remove any text around the reference, and start the name with a letter. |
+
+See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
+
+## A device check fails or doesn't answer
+
+[**Check on devices**](deployments.md#check-on-devices) asks each target device to check a version on its own host. A check never changes the device, so nothing needs undoing. Each row says one of these things:
+
+| Row says | What happened | Fix |
+| --- | --- | --- |
+| **Needs a secret**: Secret `API_KEY` isn't bound on this device (finding `SECRET_BINDING_MISSING`) | The version names a device secret, and this host has no file bound to it. | Run the commands on the row on that host, with the agent stopped (**Copy** takes them), then check again. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
+| **Needs a fix** with `SECRET_FILE_UNREADABLE` | The secret is bound, but its file is missing, empty or readable by other accounts. | Run `vectory configure-secrets` on the host. It prints the exact fix. |
+| **Needs a fix** with `CAPABILITY_DENIED` | The host's restricted mode doesn't allow a destination, listener or path the version uses. | Have the host operator run the `vectory allow` command the finding names, or [switch the host to full mode](agents.md#switch-between-restricted-and-full-mode). |
+| **Needs a fix** with `VECTOR_TIMEOUT` | Vector didn't finish validating, so the version isn't treated as valid. | A destination whose health check never answers is the usual cause. Check them from this device, then check again. |
+| **Needs a fix** with another Vector finding | Vector rejected the configuration on this host, or a test failed. | Read the first finding on the row: it names the step and the field, and often the fix. The [findings above](#a-pipeline-is-rejected-or-rolled-back) explain the common ones. |
+| **Needs a fix** with `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary, so it can't check. | Run `vectory setup`, or `vectory install ... --adopt`, on the host. |
+| **Needs a fix** with `DISK_FULL` or `CHECK_UNAVAILABLE` | The agent couldn't stage the version on this host. | Free space on the disk the finding names, or run `vectory doctor` on the host, then check again. |
+| **Needs a fix** with `DOWNLOAD_INTERRUPTED`, `DOWNLOAD_TOO_LARGE` or `ARTIFACT_MISMATCH` | The device couldn't fetch the version, or what it got wasn't what was signed. | Check connectivity, then check again. A version above the agent's size limit needs a smaller one. |
+| **Needs a fix** with `CHECK_EXPIRED` | The server stopped offering the version to this device: the check ran out, or a newer check for this device replaced it. | Check again. Only the newest check for a device counts. |
+| **Offline: not checked** | The device hasn't checked in for three of its own intervals, so it wasn't asked. | Start its agent or restore its network, then choose **Retry**. See [A device is offline or never connects](#a-device-is-offline-or-never-connects). |
+| **No answer in time** | It didn't answer within 10 minutes (its agent stopped, it can't reach the server, or an apply on it ran long), or a newer check for the same device replaced this one. | Check that its agent runs and checks in, then choose **Retry**. |
+| **Older agent: can't check** | The agent never announced that it can check versions. | Choose **Upgrade agent** on its device page, then **Retry**. See [Upgrade the agent](agents.md#upgrade-the-agent). |
+| **These results are for the previous selection** | You changed the devices or their values after the check. | Choose **Check on devices** again. |
+| **Checks are limited to a few a minute. Try again in 40 s.** | Six checks a minute are allowed for each person. | Wait for the time the button names. |
+| **Too many checks are waiting for devices to answer.** | The server holds candidates for devices that haven't answered yet, up to a limit. | Try again in a few minutes. |
+| **These results are no longer available.** | Vectory keeps results for 24 hours, and only the person who asked, or an administrator, can read them. | Choose **Check on devices** again. |
+| **Your role can't run a check.** | Checks need the Operator or Administrator role. | Ask an operator or administrator. |
+| **Vectory didn't answer, so the check may not have started.** | The request or its answer was lost on the way. | Try again. A newer check for a device replaces an older one. |
+
+A check passing is the device's own report that validation found no error. It isn't evidence that the version is applied or healthy: only **Applied** says that.
 
 ## A deployment is pending, paused or conflicting
 
-Check [**Activity → Deployments**](/#/deployments) and the exact target preview:
+| Status | Check |
+| --- | --- |
+| Offline target | The device needs to reconnect before it can apply anything. |
+| Applies on its next check-in | Its agent isn't waiting for changes: an older agent, wake-ups turned off on the host (`--no-wake`) or on the server (`VECTORY_AGENT_WAKE_LIMIT=0`), or a network that cuts idle connections. It still applies at its next check-in. |
+| Scheduled | The start time, and whether the schedule was missed. |
+| Canary waiting | **Canary gate** names what it is waiting for, for example "Waiting for edge-nyc-02 to apply" or "Measuring delivery on edge-nyc-02 (2 of 3 samples)". Each canary device must report **Applied** with a fresh check-in for the whole observation period. If the canary has applied and is delivering, **Release next stage now** goes ahead without waiting. |
+| Held on previous version | The newest version failed on this device, but it still runs its previous version and delivers on it. Fix the pipeline and deploy again, or roll the rollout back. The device page has the failure. |
+| Sync paused | Whether the pause was set on the rollout, in agent settings or on the host (`vectory resume` clears only a host pause). |
+| Not sure what the device runs | The device page's **Effective configuration** says whether the file its agent reports is what Vectory offered and, when it isn't, which earlier offer it is. See [Read what a device was offered](deployments.md#read-what-a-device-was-offered). |
+| Priority conflict | Two different pipelines, or two different agent settings, at the same priority. Choose a higher priority, or remove the deployment you don't need. A group edit that would cause one names the device and both assignments. |
+| Target set changed | Group membership changed since you reviewed. Review again and confirm. |
 
-- **Offline target:** it cannot acknowledge a new configuration until it reconnects.
-- **Scheduled:** verify the intended start time and whether the schedule has been marked missed. Refresh or recreate it using the offered controls and review the target set again.
-- **Canary waiting:** look for unverified, failed or stale initial devices. A canary needs continuously fresh successful observations before releasing more targets.
-- **Sync paused:** distinguish rollout pause, remote agent sync pause and host-local pause. A host operator clears local pause with `vectory resume --state-dir /var/lib/vectory-agent`; remote resume cannot override it. Review any manual changes before resuming reconciliation.
-- **Priority conflict:** different payloads at equal priority do not get an arbitrary winner. Review active assignments, choose a deliberate priority or preview unassigning an obsolete assignment.
-- **Target set changed:** membership changed since preview. Refresh the preview, review the new concrete devices and confirm again.
+Removing or cancelling a deployment never stops Vector. See [Deploy and roll back](deployments.md).
 
-Unassigning or canceling a deployment does not stop Vector. Another winning assignment may become effective; without one, the device retains its established workload. See [Deploy and roll back](#/docs/deployments).
+## An agent update doesn't happen
 
-## A device page shows mismatched details
+Start with the device's page: its **Agent updates** card says what the host reported, in its own words, and **Not reported** when it sent nothing. Then read the reason, which is the agent's code with a sentence. The same reasons appear in the review's **Won't update** list and on the rollout page. See [Agent updates](agent-updates.md).
 
-If the dashboard says the returned details do not match the requested record, choose **Try again**. It has rejected a response belonging to a different device, pipeline or version. The affected details and their dependent controls stay hidden until a matching response arrives. You can also use **Back to devices** and reopen the intended device.
+| Reason | What to do |
+| --- | --- |
+| **Not reported**, or **This agent is too old** (`AGENT_TOO_OLD`) | The agent predates updates, or is below the release's minimum. Run its **Upgrade agent** command once, with a choice about updates. |
+| **Updates are off on this host** (`UPDATES_OFF`) | The host never agreed, or chose **Off**. Run its **Upgrade agent** command with **Automatic (recommended)** or **Ask on the host**. |
+| **Updates are paused on this host** (`UPDATES_PAUSED`) | Run `sudo vectory update resume` on the host. A host paused with `vectory pause` is paused for updates too. |
+| **This host doesn't pin the key that signed this release** (`KEY_NOT_PINNED`) | The release was signed by a key the host never pinned and can't reach through a rollover. Run its **Upgrade agent** command, which pins the current key. If a key that is no longer current signed the release, pinning the current key doesn't help: withdraw the release and prepare it again. |
+| **The release's signature didn't verify on this host** (`SIGNATURE_INVALID`) or its **manifest broke a rule of its format** (`MANIFEST_INVALID`) | Don't retry. Withdraw the release and prepare it again, and check the signature with `vectory release verify`. |
+| **This release has expired** (`MANIFEST_EXPIRED`) | Prepare a new release. A release expires 180 days after it is prepared, by each host's own clock. |
+| **This host saw two successors of its key** (`KEY_ROLLOVER_CONFLICT`) | Someone else signed a statement from a key the host pins. Run its **Upgrade agent** command with the key you trust. See [If a key is stolen](agent-updates.md#if-a-key-is-stolen). |
+| **This build was tried here and rolled back** (`RELEASE_ALREADY_TRIED`), or **older than one this host already tried** (`COUNTER_REPLAYED`) | While the update step stays installed, the host refuses a release it already tried. It counts a release as tried a moment before it replaces the agent, so an update interrupted just then lands here too. Prepare a new one with a higher counter. Turning updates off removes this record; see [Agent updates](agent-updates.md#limits). |
+| **This version is outside the releases this host takes** (`VERSION_NOT_ON_TRACK`) | The host takes patch releases only. Run **Upgrade agent** with **Minor releases too**. A new major version is an upgrade by hand. |
+| **This host already runs this version** (`ALREADY_RUNNING`), **runs a newer agent** (`DOWNGRADE_REFUSED`) | Nothing to fix. A host never goes backward. |
+| **A package manager owns this agent** (`PACKAGE_MANAGED`) | Update it with the package manager. The system's own directories count, and so do Homebrew's (`/opt/homebrew`, `/usr/local/Cellar`) and, on a Mac only, MacPorts' (`/opt/local`). |
+| **No service keeps this agent running** (`NO_SERVICE`) | Run it under a service, then use **Upgrade agent**. |
+| **A directory on the agent's path can be written by others** (`UNTRUSTED_LOCATION`), **The host can't write in the agent's install directory** (`READ_ONLY`) | Only root may own and write the agent's directories and every directory above them. Change who owns them or their permissions. On a Mac, an access list entry that gives another account anything but reading, listing and searching counts too, whatever it is called: `ls -led /usr/local/bin` shows the entries and `sudo chmod -N /usr/local/bin` removes them. So does a volume that doesn't keep owners (an external disk or a disk image attached with ownership ignored, where every account counts as an owner of every file) and one that isn't stored on the Mac (a network share): the message names the volume, and `sudo diskutil enableOwnership /Volumes/Name` turns ownership on for one that ignores it; otherwise install the agent on the system volume. Homebrew on an Intel Mac owns `/usr/local/bin`, so install the agent in another directory only root can write, with the installer's `--install-dir`. **The host can't write in the agent's install directory** also means that the agent, its directory, or the build an earlier update kept beside it (`.vectory-previous`, or `.vectory-previous.new`) carries an immutable or append-only flag, which would make the swap fail after the service had stopped: on Linux `lsattr -d /usr/local/bin/vectory /usr/local/bin /usr/local/bin/.vectory-previous*` shows `i` or `a` and `sudo chattr -i` or `sudo chattr -a` clears it, and on a Mac `ls -lOd` shows `uchg`, `schg`, `uappnd` or `sappnd` and `sudo chflags nouchg` (or `noschg`, `nouappnd`, `nosappnd`) clears it. The update step's log names the path and the flag. On Windows, only SYSTEM, the Administrators and TrustedInstaller may own or change the agent's directory and the agent. `icacls "C:\Program Files\Vectory"` shows who can. The directories above them may let other accounts add files and folders, as Windows does in `C:\` and in `C:\ProgramData`. None may delete, rename or take over what a directory holds, and none may be owned by another account. No other account may be able to add to `%ProgramData%\Vectory`, or to change it or its `updates` and `update-state` folders. Run `vectory setup` again, in an elevated PowerShell, to close one that belongs to root and is open to others, whether or not updates are on. If another account owns `%ProgramData%\Vectory`, setup stops before it changes anything and names that account. With `--updates`, setup does the same for an `updates` or `update-state` folder in it that another account made. Look at what a folder holds before you remove it, because that account could have changed it. |
+| **The update step on this host isn't running** (`HELPER_NOT_RUNNING`) | Run `sudo vectory doctor` on the host. It prints the fix. On Windows the step is the `VectoryUpdate` service: run `vectory doctor` in an elevated PowerShell, and `sc.exe query VectoryUpdate` shows whether it runs. |
+| **The host's service definition is older than this release needs** (`SERVICE_DEFINITION_OUTDATED`) | Run the **Upgrade agent** command once. |
+| **This release has no build for this host's platform** (`PLATFORM_NOT_IN_RELEASE`) | This server's catalog has no build of that version for it, or the agent was built without updates for its operating system. Update the host by hand. |
+| **The download failed** (`DOWNLOAD_FAILED`), **didn't match the release's size and digest** (`ARTIFACT_MISMATCH`), **no room for the new build** (`DISK_FULL`) | The agent tries again at its next check-in, and gives up after three failures for one release. Check the disk space and the connection to the server. |
+| **The new build didn't report the version and platform the release names** (`PROBE_FAILED`) | The host installed nothing. Check that the build in the catalog is the one the release names. |
+| **Failed**: **The update was interrupted** (`INTERRUPTED`) | The update step stopped while it prepared the build, before it replaced the agent, so the host runs the agent it ran. Run `sudo vectory update status` on the host, then prepare a new release with a higher counter. |
+| **Rolled back**: **couldn't start**, **didn't check in within 5 minutes**, **wasn't healthy**, **was interrupted** | The host took the new build back and won't try it again. Read `sudo vectory update status` and `sudo vectory logs` on the host, fix the cause, and roll out a new release. See [When a host rolls back](agent-updates.md#when-a-host-rolls-back). |
+| **The previous build isn't healthy either** (`ROLLBACK_UNHEALTHY`) | The previous build was started again and didn't report healthy within five minutes, or it couldn't be put back. Run `sudo vectory update status` and `sudo vectory doctor`: they point first at the agent's service and the update step's log, then at the network and the server. Repair or reinstall the agent by hand if they show it is the agent. |
+| **The device doesn't check in, and `sudo vectory update status` says the update is rolling back and the update step is trying to start the previous build again** | The service manager won't start the previous build. The update step tries again every 30 seconds and goes on until it can; the rollback isn't over, and the build isn't called unhealthy. Look at the agent's service (`systemctl status vectory.service`, `sudo launchctl print system/io.vectory.agent` or `sc.exe query Vectory`) and the update step's log (`journalctl -u vectory-update.service -n 50` on Linux, `/Library/Application Support/Vectory/update-state/private/step.log` on a Mac, `update-step.log` in `%ProgramData%\Vectory\update-state\private` on Windows): each try that failed is a line there, with what the service manager said. If the service can never start (its job disabled with `launchctl disable`, its unit masked), start the agent by hand, as [When a host rolls back](agent-updates.md#when-a-host-rolls-back) lists for each system, or run `sudo vectory update off` or `sudo vectory service-uninstall`: both end a rollback whose previous build is back in place and only waits for a start, and then do what you asked (on a Mac they wait up to a minute and a half for the update step's run to end first). Neither reports a result: the update step's files go with the step, so the dashboard doesn't show **Rolled back**, and the server fails the device's update with `NO_REPORT` 30 minutes after it started applying. If the registration of the agent's service is gone (its definition, unit or service was removed by hand), both refuse and say so: run `sudo vectory service-install` (in an elevated PowerShell on Windows), and the update step finishes the rollback by itself. |
+| **`sudo vectory update off` or `sudo vectory service-uninstall` says an update is being rolled back, and that the update step puts the previous build back and starts it, tries every 30 seconds until it can, and then watches it for up to 5 minutes** | The update step is still putting the previous build back, can't stop the build it takes back, or is watching the previous build it started, so the rollback isn't over. It names no time because none is known: it tries every 30 seconds, and the watch ends within 5 minutes of the start. Run the command again in a few minutes. `sudo vectory update status` shows the rollback, and the update step's log says why a try failed. |
+| **`sudo vectory update off` or `sudo vectory service-uninstall` says the agent's service isn't registered, so the update step can't start the previous build** | The definition, unit or service of the agent was removed by hand while a rollback waited for a start, and the update step can't find the executable the service runs. Run `sudo vectory service-install` (`vectory service-install` in an elevated PowerShell on Windows), with the `--state-dir` the service had if that isn't the default, and on Linux and macOS its `--service-user`. An open rollback doesn't hold it up, and the update step finishes the rollback by itself, usually within a minute or two. Then run the command again. |
+| **`sudo vectory update off` or `sudo vectory service-uninstall` says an update is being applied, and that the update step stops the agent's service, replaces the executable and starts the service again, and tries every 30 seconds if it can't** | The update step stopped the agent's service and can't start it again, or can't stop it. It names no time: it tries every 30 seconds, and the update ends only when a start works. Start the agent by hand, as [When a host rolls back](agent-updates.md#when-a-host-rolls-back) lists for each system (run `sudo vectory service-install` first if the service's registration is gone), and the update step's next run finishes the update. `sudo vectory update status` and the update step's log say why a try failed. |
+| **The device stopped reporting after the update began** (`NO_REPORT`) | A build that couldn't check in would have been rolled back by now. Check the host: it may be off, or the agent may not run. |
+| **Waiting for the host** | The host is set to **Ask on the host**. Run `sudo vectory update apply` on it. |
+| **Waiting for its window** | The host installs when its update window opens. The device page shows when. |
 
-On a selected-device banner, **Try again** reloads the original selection; **Clear selection** removes that selection. A metrics mismatch is a read error, not evidence that the device has never reported metrics. Previously accepted measurements from the same device can still appear with their timestamps.
-
-A mismatch does not mean your device was replaced, its access was revoked or its pipeline changed. Do not re-enroll it or repeat a deployment to resolve a page-loading error. If it persists, ask the instance administrator to inspect the application and any proxy or cache serving its API. Copy the intended page URL when reporting the problem, without including tokens or credentials. See [device assignments](#/docs/telemetry#understand-the-devices-assignments) for what the linked pipeline and settings records mean.
-
-## A device revocation is unconfirmed
-
-Open the original device's **Device access** section and choose **Check revocation**. The dashboard reads the status of that exact device identity; it does not send another revocation automatically. **Device access revoked** confirms the current state even when the original reply was lost.
-
-If the identity is not revoked at the time of the check, an earlier request may still arrive. Review the device and deliberately confirm again only if revocation is still intended. Revocation is permanent for that identity, so a later repeated request is a no-op. A name can belong to a replacement identity; use **Device identity** to check the original UUID.
-
-If the read fails, keep the reminder and use **Check status** again when the server is reachable. A server without device-access status support cannot complete this guarded flow; the instance administrator must use matching server and dashboard versions. Browser storage must be available before a new revocation can be sent. If a confirmed result's reminder cannot be cleared, access remains revoked; a later status check can clear that exact reminder.
-
-Closing, navigating away or ending the session does not undo an already submitted request. The reminder contains no credentials and is scoped to this browser profile, account and device. It cannot recover a request after the browser's saved data has been erased; inspect the exact device's current access instead. See [device access and revocation](#/docs/telemetry#revoke-device-access) for the effect on groups, assignments and local workloads.
-
-## An old issue stays open after device recovery
-
-Issues resolve automatically after a fresh, verified apply report from the same device identity. Revoking a device or replacing its identity through recovery prevents further reports from the old identity, so its existing issues can remain open.
-
-Open the issue's device link and check whether it belongs to the revoked or retired identity. Assess the replacement device separately using its new identity, latest heartbeat and applied version. An old open issue does not establish that the replacement failed, and retiring an identity is not evidence that its previous workload recovered.
-
-An Operator or Admin can record that decision in [**Activity → Issues**](/#/issues):
-
-1. Find the original device's issue. Review **Investigation details** and confirm its device ID.
-2. Choose **Acknowledge issue**. This is available only for unresolved issues on revoked device identities.
-3. Enter a reason, such as where the replacement was checked or why the device was retired, and confirm. Keep secrets and private diagnostic output out of the reason.
-
-**Acknowledged** issues leave the open list and open count, but stay in history with the reason, actor and time. Acknowledgement does not verify recovery, reconnect a device, retry Vector or change an assignment. Choose **Acknowledged** or **All issues** in the **Status** column filter to find them again. **Reopen issue** records a new reason and returns an unresolved issue to the open list; it cannot undo verified resolution.
-
-If the issue changes while a dialog is open, select **Review latest issue** and inspect its latest count, time and status. If its status is unchanged, you can confirm again after reviewing the new report. If another action already changed its status, close the dialog and find it under its current status; the confirmation will not switch from acknowledgement to reopening. A fresh failure report clears a previous acknowledgement and returns the issue to the open list. Issue actions are recorded in the [audit log](/#/audit).
-
-## A capability-policy file is rejected
-
-Use a protected local JSON object saved as UTF-8 without a byte-order mark (BOM). The three allowance fields are `allowed_file_roots`, `allowed_network_hosts` and `allowed_listen_addresses`. Use unique property names and supply each list as an array of strings. File roots must be absolute, and destinations and listeners need an exact `host:port`. On Windows, JSON paths need doubled backslashes, such as `C:\\ProgramData\\VectoryData`. See the [policy file examples](#/docs/installation#configure-restricted-allowances).
-
-Malformed UTF-8 and unpaired Unicode escape sequences are refused instead of being silently replaced with a different resource name. Valid Unicode names, including a deliberate replacement-character name, remain supported. Reopen the original file with the correct encoding, verify the intended resource names and save valid UTF-8. Do not blindly replace characters or broaden an allowance to make the error disappear. A top-level `null`, array, duplicate property, unsupported field, wrong value type or trailing document is also rejected.
-
-Keep the agent stopped while applying the corrected file through `install --capability-policy`. Check the command result before restarting; stopping the agent also stops its supervised Vector process. A refused input leaves current settings and retry state unchanged, including when other install options were supplied. A successful changed policy replaces all three lists and permits another attempt at a previously rejected configuration; it does not resume a paused device, grant full mode or prove activation. An empty object removes all restricted allowances. Follow the [allowance update procedure](#/docs/installation#update-a-devices-local-allowances) rather than editing installed state directly.
-
-This strict encoding check requires an agent package containing the policy-input fix. Older development builds can report success after silently converting malformed bytes or an unpaired Unicode escape to a replacement character. If that happened, have the host operator review the installed allowance lists against the intended resource names, then supply a complete corrected policy through a verified package. Upgrading alone does not reconstruct the original names. Check the artifact through your trusted release channel; a reused development version label does not establish which parser is installed.
-
-## A metrics endpoint update is refused
-
-Stop the agent through its existing supervisor before changing its local settings; this also stops its supervised Vector process. Use the same absolute state directory as that installation. `configure-metrics` requires exactly one of `--metrics-url URL` or `--clear-metrics-url`. Supply the flag as well as its value: a URL passed as a positional argument is not accepted.
-
-To set an endpoint, use `http://127.0.0.1:9598/metrics` with the actual loopback IP and port. Hostnames, non-loopback addresses, HTTPS, credentials, queries and other paths are rejected. An empty URL does not clear the setting. For deliberate removal, use `--clear-metrics-url` without a URL or `=false`. Invalid input leaves the saved endpoint and unrelated settings unchanged.
-
-If the command or flag is unknown, inspect `vectory help` and use a verified agent package that includes the feature. Do not delete settings or re-enroll to work around an older command. If the operation lock or access-preservation check refuses the update, follow [local settings troubleshooting](#/docs/troubleshooting#a-local-settings-update-is-refused). Check the command result before restarting; saving a URL does not establish that the exporter is reachable. The [endpoint change and removal procedure](#/docs/telemetry#change-or-remove-a-metrics-endpoint) explains restart behavior, remote collection settings and retained history.
+Updates also stop for reasons that aren't about one host. **Agent updates are stopped** at the top of **Devices → Agent updates** means an Operator or Administrator used **Stop all updates**: an administrator clears it in **Settings → Agent updates**. A rollout that stopped by itself names what stopped it: too many devices rolled back or failed, or an updated device stopped delivering. A device in two rollouts is refused in the second: wait for the first.
 
 ## Metrics are missing, or no events reach a destination
 
-A dash means a measurement was not reported. For metrics, follow [Monitor devices](#/docs/telemetry): configure `internal_metrics` and a loopback `prometheus_exporter`, set the agent's metrics URL while stopped, and enable telemetry in the effective agent settings. Check that the service account can reach that endpoint. The first counter sample needs a later sample before a rate exists; old history is not a current measurement.
+**No metrics:** the pipeline needs a loopback Prometheus exporter fed by `internal_metrics` (**Add monitoring** adds one, and restricted devices run it without an allowance), and **Collect operational metrics** must be on. See [Enable real metrics](telemetry.md#enable-real-metrics). A rate needs two samples, and a dash means "not reported", not zero.
 
-If metrics are present but destination data is missing, inspect the pipeline path. Confirm that the source is receiving events, conditions are not intentionally discarding them, and the sink's credentials, connectivity and downstream service are correct. Source throughput and **Applied** do not guarantee final delivery. Use synthetic inputs in VRL or pipeline tests to check transformations; Vectory does not capture your production events for inspection.
+**No events at the destination:** **Applied** and throughput prove Vector runs and reads events; they don't prove delivery. When the device reports metrics, Vectory checks delivery for you: see [A pipeline applies but delivers nothing](#a-pipeline-applies-but-delivers-nothing). Check that the source receives events, that no condition discards them on purpose, and that the sink's address, credentials and destination are right. Test transforms with sample events in [pipeline tests](resources.md#test-transformations).
+
+## A pipeline applies but delivers nothing
+
+The device reads **Not delivering**: the version applied and Vector runs it, but its metrics show events aren't getting through. The device page names the component, the reason and the fix, and the issue appears in **Needs you** and [**Activity → Issues**](/#/issues).
+
+| Issue | What Vectory measured | Likely cause |
+| --- | --- | --- |
+| **The pipeline stopped delivering** | Events keep arriving, but none have been delivered for three checks, and a sink is struggling. | A destination is down. Its buffer filled, so Vector paused every path that feeds it. |
+| **_sink_ can't deliver events** | The sink failed at least one request a minute, two checks in a row. | Wrong address or credentials, the destination is down, or a firewall blocks it. |
+| **_component_'s buffer is filling up** | A buffer is over 80% full and rising, or over 95% full. | The destination is slow, throttling or unreachable. |
+| **_component_ is dropping events** | The component dropped events because of errors, at least one a minute. | A transform fails on some events, or a sink rejects them. |
+
+<!-- steps -->
+1. Open the device and read **Applied, but not delivering**. The Vector log line under the issue, such as `Connection refused`, usually names the cause.
+2. Fix the destination, or the component's address, credentials or program. For a quick recovery, roll the pipeline back to its last working version.
+3. Watch the device. The issue closes by itself after three clean checks (about three check-in intervals), and the device returns to **Applied**.
+
+A canary rollout checks this before it releases more devices. While Vectory takes its first measurements the gate reads **Measuring delivery on** the device, with how many samples it has; a canary that isn't delivering counts as a failure against the rollout's failure threshold, and the rollout page shows why. A device without metrics is judged on its apply state alone.
+
+These checks need metrics: see [Enable real metrics](telemetry.md#enable-real-metrics). Without them the device page reads **Delivery health: not measured**, and only a sink that fails requests shows up, from Vector's own log: the same sink issue opens after two check-ins, its message ending "measured from Vector's log (no metrics)". On the host, `sudo vectory status` shows the failing sink under **Vector** and what to check next. A filter or route that drops events on purpose never counts as a delivery problem.
+
+## The adopted Vector binary changed
+
+The agent refuses to run a Vector binary whose SHA-256 changed since adoption. A version deployed meanwhile fails as `VALIDATION_FAILED` with the finding `VECTOR_BINARY_UNAVAILABLE`, and `sudo vectory status` and `sudo vectory doctor` say the binary changed or is missing. Vector never ran that version.
+
+If you replaced Vector on purpose, [approve the new binary](agents.md#replace-the-vector-binary). If you didn't, find out why before doing anything else, and restore a trusted binary. Then choose **Retry application** on the device page, or run `sudo vectory retry`.
+
+## A command on the device is refused
+
+Stop the agent before changing local settings. A command that needs it stopped names what holds the state directory and how to stop it:
+
+| Message | Fix |
+| --- | --- |
+| `The agent service is running (vectory.service, pid 812), and this command needs the agent stopped.` | `sudo vectory service-stop`, run the command again, then `sudo vectory service-start`. |
+| `The agent is running (vectory run, pid 812), and this command needs it stopped.` | Stop it with Ctrl-C where it runs (or `sudo kill 812`), run the command again, then start the agent again. |
+| `Another vectory command is using /var/lib/vectory-agent (vectory install, pid 812).` | Wait for it to finish, then run the command again. |
+| `There is no Vectory service to stop` | The host has no systemd, so the agent runs as `vectory run`: stop it with Ctrl-C where it runs. `vectory status` shows its pid. |
+
+`pause`, `resume` and `retry` work while the agent runs. Don't delete `agent.lock` or start a second agent. A command that rejects its input changes nothing, so fix the input and run it again.
+
+### A local settings update is refused
+
+- **Can't preserve access:** the command couldn't keep the existing owner or permissions. Keep the files and ask the host administrator to check the service account's access. Don't make files world-readable to get past it.
+- **Settings saved but retry state not updated:** the new settings are in effect. Check `vectory status`, fix the reported write problem, and run `vectory retry` only if you want another attempt.
+
+### A capability-policy file is rejected
+
+The file must be one JSON object, saved as UTF-8 without a byte-order mark, with the three lists `allowed_file_roots`, `allowed_network_hosts` and `allowed_listen_addresses` and nothing else. Use absolute file roots, exact `host:port` pairs, unique names and no comments. On Windows, double each backslash. The file is refused, not repaired, if its encoding is broken. See the [allowance format](installation.md#configure-restricted-allowances).
+
+### A file root is refused
+
+`vectory allow`, `install --capability-policy` and `setup` refuse a file root that would give pipelines the agent's own files, and change nothing. The message names the root and what it overlaps, for example `File root /var/lib contains the agent's state directory, /var/lib/vectory-agent.`
+
+A root can't be:
+
+- `/`, the root of a drive (`C:\`) or the root of a network share (`\\server\share`);
+- the agent's state directory, the managed configuration directory, or a directory that holds or lies inside either;
+- a file bound to a device secret, or a directory that holds it.
+
+Allow the directory that holds the files your pipelines need instead, such as `/var/log/app`. If a secret file is in the way, move it out of the directory you want to allow, then bind it again with `vectory configure-secrets`. A root allowed before this check existed stays until you replace the lists with `install --capability-policy`, which checks every root in the file.
+
+### A secret-binding map is rejected
+
+The map must be one JSON object of names to absolute paths of private files, with unique names and no values. `{}` removes all bindings; `null`, lists and trailing content are refused. Pass it with `--secret-files PATH`.
+
+### A metrics endpoint update is refused
+
+`configure-metrics` needs exactly one of `--metrics-url URL` or `--clear-metrics-url`. The URL must be `http://` with a literal loopback IP, a port and a path, such as `http://127.0.0.1:9598/metrics`. Host names, HTTPS, credentials and query strings are refused.
+
+## A page is blank or cannot load
+
+- **This page couldn't load** or **This page is taking too long:** check your connection, then choose **Reload page**. The rest of the app keeps working meanwhile. Reloading is always your choice; interrupted actions are never resent.
+- **This page stopped working:** a display error interrupted the page. Reloading shows your saved data; unsaved changes on that page may be lost.
+- **The whole window is blank:** reload the browser tab. The Help center stays available at `/help/` on your server.
+
+If a page keeps failing after reloads, ask your administrator to check that the server's dashboard files come from one complete build.
+
+## A device page shows mismatched details
+
+If a page says the details don't match the record you asked for, it has refused a reply meant for a different device or pipeline. Choose **Try again**. This is a loading problem: don't re-enroll the device or redeploy. If it keeps happening, ask your administrator to check any proxy or cache in front of the server.
+
+## An old issue stays open after device recovery
+
+Issues resolve when the same device identity next applies a version and confirms it. A revoked or replaced identity can't report again, so its old issues stay open.
+
+<!-- steps -->
+1. Open the issue's device link and confirm it's the old, revoked identity.
+2. Check the replacement device separately: its check-ins and applied version.
+3. In [**Activity → Issues**](/#/issues), choose **Acknowledge issue** and record why, for example where you checked the replacement.
+
+Acknowledged issues leave the open list but stay in history with the reason, who acknowledged them and when. **Reopen issue** brings one back.
 
 ## You cannot sign in
 
 ### Loading or sign-in does not finish
 
-The dashboard stops waiting for a connection, sign-in, verification or password-reset response after 30 seconds. **Retry connection** replaces a pending startup check; **Try again** retries a failed check. These actions only read connection and session status. An unavailable or unreadable session response is shown as a connection problem, not treated as a confirmed sign-out.
-
-If you see **Sign-in result unknown**, select **Check sign-in status**. This reads the current browser session without resending credentials or a one-use code. A current enabled session for the email you entered opens the workspace. A different account is identified without switching you into it. If no current session is found, **Start a new sign-in** returns to the password step; use a fresh authenticator code or an unused recovery code when prompted. A missing session does not prove that the earlier request failed or cannot still finish.
-
-If you see **Setup result unknown**, select **Check setup status**. If the instance is already initialized, **Go to sign in** opens ordinary sign-in. That status does not identify who created the first account. If setup is not visible, check again before using **Return to setup**: the previous request may still complete. If the status check fails, restore the connection and check again; setup is never resubmitted automatically.
-
-If you see **Password reset result unknown**, use **Back to sign in** and try the new password you chose, with MFA if enabled. The reset may already have consumed its code. Do not resubmit that code; ask an administrator for a new one if sign-in still fails.
-
-Closing a page or ending a wait does not undo a server-side account change, session cookie or consumed code. Passwords, setup secrets and verification codes are cleared from the uncertain form; they are not saved for automatic replay. [Open your workspace](#/docs/getting-started#open-your-workspace) explains normal sign-in.
+The dashboard stops waiting after 30 seconds. Choose **Retry connection**, or **Check sign-in status** if you already submitted your password: it checks this browser's session without sending your password or code again. See [If a request is interrupted](interrupted-requests.md#accounts-and-sign-in).
 
 ### Credentials or account access are rejected
 
-Confirm that you are opening the correct instance. After setup, the bootstrap secret cannot create another administrator. Enter your email and password first. If your account uses two-factor authentication, Vectory then asks for an authenticator code. Check the authenticator and server clocks. Choose **Use a recovery code instead** if you have an unused recovery code. If verification expires, sign in again with your email and password. Repeated attempts can be rate-limited; wait before retrying.
+- **Wrong password:** after several failures, sign-in pauses for that account and the message says when to try again. Ask an administrator for a [reset link](administer.md#help-someone-reset-a-forgotten-password) if you forgot it.
+- **Code rejected:** check that your phone's clock is right, or choose **Use a recovery code**. If the code step expires, start again with your email and password.
+- **Account disabled:** an administrator must turn access back on under **People & security**.
+- **After a restore:** old sessions and recovery codes no longer work. Sign in with your password and authenticator.
 
-If you forgot your password, ask an administrator for a password reset code. Select **Reset password** on the sign-in page and enter the code with a new password. The code expires after 15 minutes, works once and becomes invalid when a newer code is issued. Vectory does not send reset email. After resetting, sign in normally with MFA if enabled; the reset does not replace an authenticator or restore a used recovery code.
+The bootstrap secret only creates the first administrator; it can't sign anyone in afterwards.
 
-An administrator can inspect the account's status under [**Settings → People & security**](/#/users) → **Workspace access**. A disabled account cannot sign in or use a reset code. Re-enabling it requires a fresh sign-in and, if needed, a newly issued reset code; old sessions and codes remain invalid.
+## Error messages
 
-If both the authenticator and all recovery codes are lost, there is no MFA-reset workflow. Preserve the database and matching key tree while investigating; deleting MFA keys or resetting initialization is not an account-recovery procedure. See [Administer Vectory](#/docs/administer).
-
-After an administrator runs restored-access invalidation during disaster recovery, all older browser sessions, password reset codes and MFA recovery codes are intentionally invalid. Sign in with the reviewed account password and a working authenticator. Request a newly issued password reset code if needed; it still cannot bypass MFA. Restored account or device restrictions must be reconciled before normal access resumes.
-
-## Sign-out is not confirmed
-
-A missing or unreadable response does not prove sign-out failed. Select **Check sign-out status**; it only reads the current session. A rejected request also offers a status check before another attempt. Both the sign-out request and the status check stop waiting after 30 seconds, including a response that starts but never finishes.
-
-- **This session is still active:** the last check matched the session you originally chose to end. **Retry sign out** sends a new request only when you choose it. The earlier request may still finish.
-- **No active session found:** the last check found no signed-in session. **Go to sign in** asks again about any unsaved work before leaving. Declining keeps your local editor open; server actions require sign-in.
-- **Your sign-in changed:** another sign-in or account change has replaced the context you reviewed. **Reload workspace** checks for unsaved changes and reads the current account. Review that workspace before starting a separate sign-out; the old request is not redirected to the newer session.
-
-Use **Stop waiting**, the close button or Escape to leave a pending dialog. The account menu retains **Check sign-out status** while this workspace remains open. A late response to a closed dialog cannot take you away from new edits. Closing a wait does not cancel the server operation or prevent a delayed cookie update. If a check fails, restore the connection and check again; the dashboard does not silently repeat sign-out.
-
-If you return to unsaved work, copy or preserve it before choosing **Go to sign in** or **Reload workspace**. Those actions still respect the editor's leave confirmation. Reloading the browser itself starts a fresh session check and does not retain the earlier in-memory review. [Sign out of your workspace](#/docs/getting-started#sign-out-of-your-workspace) describes the normal flow.
-
-## An account change fails or signs you out
-
-### Account creation is not confirmed
-
-If **Create user** does not return a confirmed receipt, open **Review account creation** on the same People & security page. **Check request status** reads the exact request ID without sending the password again. **Created** identifies the account; if you no longer know its initial password, issue a password reset code from **Workspace access**. If the account's current details have changed since creation, the review does not select it automatically; inspect the refreshed workspace list before another action. **Not found** only means the request has not committed at the instant of the check. Select **Cancel this request** to fence any late arrival before starting another account creation. If the status or cancellation check fails, restore the connection and try that check again; do not submit a second account first.
-
-**Stop waiting**, closing the dialog and Escape end only the browser wait. They do not reverse a completed server write. Submitted passwords are cleared immediately and never saved for replay. A changed sign-in or administrator role closes the old review; the same administrator can reopen its exact request after access is restored while this page remains mounted. Navigating away or reloading loses this page-local request ID, so resolve an uncertain request first. A server that cannot confirm request tracking does not receive the creation request.
-
-### An administrator reset code is not confirmed
-
-If **Create reset code** has no confirmed reply, open **Review reset request** on the same **People & security** page. **Check request status** reads only the exact request ID and whether its code is still active; it cannot display a lost code again. **Not found** does not rule out a late issue. Select **Cancel this request** and wait for a confirmed cancelled status before issuing another code. Cancellation revokes an unused code but cannot undo a password change if the person already used it. A failed status or cancellation check leaves the outcome unresolved; restore the connection and repeat the exact check instead of creating another code.
-
-**Stop waiting**, the close button and Escape end only the browser wait. The administrator's submitted password is cleared. A received code can be hidden and reopened through **Show reset code** until it is marked shared, the page is left, or the sign-in changes. If the browser clock or account details change, verify the exact code status with the server before sharing. These codes and request IDs are held only on this page, never in browser storage. A server that cannot confirm request tracking does not receive a new code request.
-
-### A password change or session sign-out is not confirmed
-
-**Change password** and **Sign out other sessions** wait up to 30 seconds for the response, including its body. **Stop waiting**, the close button and Escape return to your account immediately. The server may still complete the request; closing cannot undo it or prevent a late session cookie from arriving. The dashboard clears all submitted password fields and ignores obsolete results.
-
-For **Password change not confirmed**, choose **Go to sign in** and try the new password you chose, then complete two-factor verification if required. If that password does not work, try your previous password or ask an administrator for a reset code. A session check cannot prove which password is in use, so the dashboard does not turn a current session into a password-change success message or resend the password change.
-
-For **Session sign-out not confirmed**, checking this browser’s session cannot tell you whether the others ended. **Review another sign-out** starts a separate review with an empty current-password field. Confirming it ends all other sessions present when the new request completes, including any created since your earlier attempt. Cancel returns to the unresolved review; it does not mark the first request successful.
-
-**Back to account** keeps each action’s review available while this People & security page remains open. Reopening it or opening the other action does not send another request. Leaving the page or reloading clears these in-memory reviews; preserve the outcome information before leaving. No passwords or session credentials are saved in browser storage for recovery.
-
-If the account or session changes, **Reload workspace** reads the current sign-in afresh. It does not confirm the earlier change. Both leaving for sign-in and reloading respect the workspace’s current navigation guard. A rejected confirmation password keeps the form available for a fresh entry when the same session is still valid. [Change your password or close other sessions](#/docs/administer#change-your-password-or-close-other-sessions) describes the normal procedure.
-
-### An authenticator change is not confirmed
-
-Setup, confirmation and disable requests stop waiting after 30 seconds, including a stalled response body. **Stop waiting** ends the browser wait; it does not cancel a server change. **Check current status** reads whether two-factor authentication is enabled now. It does not identify which request finished, show a pending setup key or retrieve recovery codes from an unread confirmation response. No change is resent automatically.
-
-If setup was interrupted, start a new password-gated setup only after reviewing status. A new QR can invalidate an earlier one; if its code is rejected, check status and start again. If confirmation was interrupted and MFA is now enabled, keep the working authenticator. Its eight recovery codes cannot be retrieved from the unread response. To obtain new codes, deliberately disable MFA with that authenticator and set it up again. If disable was interrupted, do not blindly submit the same code again: another disable can revoke sessions created since the first attempt. Review the current setting before choosing a new action.
-
-**Hide setup** keeps the QR in the current tab, and **Hide for now** keeps confirmed recovery codes there until you acknowledge them. Leaving or reloading discards that browser-only copy after a warning. A changed sign-in hides setup keys and recovery codes. [Set up an authenticator](#/docs/administer#set-up-an-authenticator) explains the normal path.
-
-### Access changes and rejected requests
-
-Sensitive account changes require your current password. A wrong confirmation password leaves the current session usable; correct it and retry. If the account changed since you opened its editor, select **Load latest details**, review the current role and access, then save again. Do not keep submitting an outdated dialog.
-
-If **Edit access** does not return a readable result, use **Review access change** on the same page. **Stop waiting**, closing the review and pressing Escape end only the browser wait; the server may still commit the change. **Check request status** reads the exact request made from your administrator account. **Applied** confirms that request's committed details, which may differ from the person's access now if a later edit followed. **Not found** does not rule out a delayed request. **Cancel this request** blocks a not-yet-committed request; if the change already applied, it reports the result but does not roll it back. The original request is not resent automatically. A status error or a changed sign-in must not be treated as success or safe cancellation. Keep the displayed request ID and review available until the outcome is clear; leaving or reloading this page loses its in-memory review.
-
-The last active administrator cannot be demoted or disabled. Give another active person the administrator role first. Changing your own role or access intentionally signs you out. If its response is lost, the revoked session cannot use administrator-only request status or cancellation. Sign in again only if the resulting account still permits it; if you no longer have administrator access, ask another administrator to inspect the account's current access. Their account cannot read your exact request record. A password change keeps its current browser session but signs out the others. **Sign out other sessions** keeps only the browser that requested it.
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| `UNAUTHENTICATED` (401) | Not signed in, or the session ended. | Sign in again. |
+| `FORBIDDEN` (403) | Your role doesn't allow this, or the page is out of date. | Ask for the role you need, or reload. |
+| `SIGNIN_THROTTLED`, `RATE_LIMITED` (429) | Too many attempts. | Wait for the time in the message. |
+| `STALE_REVISION` (409) | Someone saved a newer version first. | Load the latest, review, then save again. |
+| `ACTIVE_CANARY_OVERLAP` (409) | A running canary already covers some of these devices. | Wait for it to finish, or pause it deliberately. |
+| `FULL_VECTOR_MODE_REQUIRED` | The version needs full mode on a restricted device. | Deploy to full-mode devices, or change the pipeline. |
+| `VECTOR_VERSION_INCOMPATIBLE` | The device doesn't run Vector 0.58.x. | Install a 0.58 release on the device and approve it. |
+| `DEVICE_SYNC_PAUSED` | The device's configuration sync is paused. | Resume sync before retrying. |
+| `CAPACITY_BUSY` | The agent listener is at its connection limit. | Nothing: agents retry on their own. |
+| `IDEMPOTENCY_CONFLICT` | A request ID was reused for a different request. | Start a new request. |
+| `AGENT_UPDATES_OFF` (404) | Agent updates are off. | An administrator turns them on in **Settings → Agent updates**. |
+| `AGENT_UPDATES_STOPPED` (409) | Someone used **Stop all updates**, and no new rollout can start. | An administrator chooses **Clear the stop** in **Settings → Agent updates**. |
+| `AGENT_UPDATE_ROLLOUTS_ACTIVE` (409) | Updates can't be turned off while an update rollout is running. | Cancel it, or choose **Stop all updates**, then turn updates off. |
+| `CUSTODY_REQUIRED`, `CUSTODY_LOCKED` (409) | There is no release key, so a custody must be chosen, or the custody can't change while updates are on. | Choose who holds the key, or turn updates off and on again to change it. |
+| `RELEASE_KEY_INVALID` (422), `RELEASE_KEY_IN_USE` (409) | The text isn't a valid release key line, or the key is one this server already uses. | Paste the whole line `vectory release keygen` printed, from a key made for this purpose. |
+| `RELEASE_SIGNATURE_INVALID` (422) | No signature in the file is by the current key and verifies over this release. | Sign the file you downloaded for this release, with the current key, and upload `release.json.sig`. |
+| `RELEASE_NOT_IN_CATALOG`, `RELEASE_EXISTS`, `RELEASE_NOT_READY`, `RELEASE_STORAGE_FULL` | The catalog has no such build, the release exists, it isn't signed, withdrawn or expired, or 20 releases (or the release store's space) are in use. | Choose a build from **Newer builds**, sign or prepare the release again, or withdraw releases you no longer need. |
+| `UPDATE_REVIEW_CHANGED` (409) | A device, the release or the key changed since you reviewed. Nothing started. | Review again, then start. |
+| `UPDATE_ROLLOUT_OVERLAP`, `NOTHING_TO_UPDATE` (409) | A device is already in an update rollout, or the review has nobody who will update. | Wait for the other rollout, or fix what the review's **Won't update** list names. |
+| `UPDATE_ROLLOUT_LIMIT` (409) | 200 update rollouts are active or paused. | Cancel one, or wait for one to finish, then start the rollout again. |
 
 ## Prepare a useful problem report
 
-Record the instance and agent version, Vector version, OS/architecture, device ID, relevant timestamps and timezone, reported stage, deployment/version ID and any request ID shown. Include the steps that caused the issue and a minimal synthetic configuration when possible. Review local diagnostic output before sharing it: paths and identifiers may be sensitive even when credential values are omitted.
+Include the Vectory and agent versions, the Vector version, the device's OS and CPU, the device ID, times with their time zone, the issue code and stage, the deployment or version ID, and any request ID shown. A minimal synthetic pipeline that reproduces the problem helps most.
 
-Do not attach enrollment/recovery tokens, private keys, cookies, authenticator secrets, secret-provider files or the rendered managed configuration containing credentials. Share the report through your organization's approved support channel; Vectory does not automatically upload a support bundle.
+Never include tokens, private keys, cookies, authenticator secrets, secret files or a device's rendered configuration. Vectory never uploads diagnostics by itself.

@@ -139,13 +139,13 @@ def main():
         session = api("/bootstrap", {"bootstrap_secret": bootstrap, "name": "Synthetic upgrade admin", "email": "upgrade-admin@example.invalid", "password": admin_password})
         csrf = session["csrf_token"]
         admin_id = session["user"]["id"]
-        account = api("/users", {"name": "Synthetic upgrade operator", "email": "upgrade-operator@example.invalid", "password": operator_password, "role": "operator"})
+        account = api("/users", {"name": "Synthetic upgrade operator", "email": "upgrade-operator@example.invalid", "password": operator_password, "role": "operator", "current_password": admin_password})
         op_session = api("/login", {"email": account["email"], "password": operator_password}, opener=operator)
         op_csrf = op_session["csrf_token"]
         setup = api("/mfa/setup", {"password": operator_password}, opener=operator, token=op_csrf)
         recovery = api("/mfa/confirm", {"code": totp(setup["secret"], int(time.time()) // 30)}, opener=operator, token=op_csrf)
         assert recovery["enabled"] and len(recovery["recovery_codes"]) == 8
-        disabled = api("/users", {"name": "Synthetic disabled account", "email": "upgrade-disabled@example.invalid", "password": os.urandom(24).hex(), "role": "viewer"})
+        disabled = api("/users", {"name": "Synthetic disabled account", "email": "upgrade-disabled@example.invalid", "password": os.urandom(24).hex(), "role": "viewer", "current_password": admin_password})
         api("/users/" + disabled["id"], {"name": disabled["name"], "role": "viewer", "enabled": False, "revision": disabled["revision"], "current_password": admin_password}, method="PUT")
 
         agent_state, config_dir, vector_data = temp / "agent-state", temp / "config", temp / "vector-data"

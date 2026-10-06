@@ -3,3 +3,7 @@
 *.jpg binary
 *.zip binary
 *.gz binary
+# Preserve upstream legal text whitespace; its recorded hashes verify content.
+NOTICE whitespace=-blank-at-eol,-blank-at-eof
+dashboard/public/NOTICE.txt whitespace=-blank-at-eol,-blank-at-eof
+packaging/notices/**/*.txt whitespace=-blank-at-eol,-blank-at-eof

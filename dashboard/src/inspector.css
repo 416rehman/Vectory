@@ -1,3 +1,4 @@
+@import "./editor-tokens.css";
 /* The property toolbar stays in place while the fields beneath it scroll. */
 .editor-inspector:has(> .editor-inspector-properties-toolbar) {
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -36,6 +37,82 @@
   color: var(--muted);
   font-size: 10px;
   line-height: 14px;
+  font-weight: 500;
+}
+/* The one explanation of device secrets, above the step's fields. */
+.pipeline-secret-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--success-border);
+  border-radius: var(--ed-radius-sm);
+  background: var(--success-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pipeline-secret-note > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--success-text);
+}
+.pipeline-secret-note p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pipeline-secret-note code {
+  padding: 0;
+  background: transparent;
+  font-family: var(--ed-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.pipeline-input-patterns {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--ed-radius-sm);
+  background: var(--surface-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pipeline-input-patterns strong {
+  font-size: 12.5px;
+}
+.pipeline-input-patterns ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pipeline-input-patterns li {
+  display: block;
+  color: var(--muted);
+}
+.pipeline-input-patterns li code {
+  margin-right: 6px;
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--ed-mono);
+  font-weight: 600;
+}
+.pipeline-input-patterns small {
+  color: var(--muted);
+}
+.editor-component-panel .editor-inspector-type {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-family: var(--ed-mono, var(--font-mono));
+  font-size: 10.5px;
   font-weight: 500;
 }
 .editor-component-panel .editor-inspector-identity h2 {
@@ -237,54 +314,77 @@
 .pipeline-settings > .schema-fields {
   margin-bottom: 20px;
 }
-.pipeline-settings .pipeline-disclosure > summary {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 550;
+
+.pipeline-vector-problems {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ed-danger-line);
+  border-radius: var(--ed-radius-sm);
+  color: var(--ink);
+  background: var(--ed-danger-bg);
+  font-size: 13px;
+  line-height: 1.5;
 }
-.pipeline-settings .pipeline-disclosure {
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
+.pipeline-vector-problems strong {
+  font-weight: 600;
+}
+.pipeline-vector-problems ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
   padding: 0;
-  margin: 0;
+  list-style: none;
 }
-.pipeline-settings .pipeline-disclosure[open] {
-  padding-bottom: 12px;
+.pipeline-vector-problems li {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--ed-danger);
 }
-.pipeline-settings .pipeline-disclosure > summary {
-  padding: 12px 0;
+.pipeline-vector-problems li[data-severity="warning"] {
+  border-left-color: var(--ed-warning);
 }
-.pipeline-settings .pipeline-disclosure[open] > summary {
-  margin-bottom: 8px;
+.pipeline-vector-problems code {
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  font-family: var(--ed-mono);
+  font-size: 11.5px;
 }
-.pipeline-settings .pipeline-disclosure > p {
-  margin: 9px 0;
+.pipeline-vector-problems small {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.55;
 }
-.pipeline-settings .pipeline-disclosure > summary {
-  list-style: none;
-  cursor: pointer;
+
+/* Wide VRL studio: the program and the sample tester side by side. */
+.modal.vrl-studio {
+  width: min(1320px, calc(100vw - 32px));
+  height: min(860px, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
 }
-.pipeline-settings .pipeline-disclosure > summary::after {
-  content: "+";
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 15px;
-  font-weight: 400;
+.vrl-studio-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px 20px;
+  overflow: auto;
 }
-.pipeline-settings .pipeline-disclosure[open] > summary::after {
-  content: "−";
+.vrl-studio-program .vrl-editor .cm-scroller {
+  min-height: 420px;
+  max-height: calc(100dvh - 260px);
 }
-.pipeline-settings .pipeline-disclosure > summary::-webkit-details-marker {
-  display: none;
+.vrl-studio-samples .sample-tester {
+  margin-top: 0;
 }
-.pipeline-settings :is(summary, .pipeline-remove-option):focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 2px;
+.vrl-studio-samples .sample-tester-wide .sample-tester-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 900px) {
+  .vrl-studio-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

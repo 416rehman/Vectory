@@ -93,7 +93,7 @@ try:
     csrf=api('/bootstrap',{'bootstrap_secret':bootstrap,'name':'Synthetic administrator',
         'email':'admin@example.invalid','password':password})['csrf_token']
     user=api('/users',{'name':'Synthetic colleague','email':'colleague@example.invalid',
-        'password':password,'role':'viewer'})
+        'password':password,'role':'viewer','current_password':password})
     target=user['id']; path=f'/users/{target}'
     request=urllib.request.Request(origin+'/api/v1'+path)
     jar.add_cookie_header(request)

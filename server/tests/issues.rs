@@ -54,6 +54,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Actor) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Issue tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -183,25 +184,28 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
         .0,
         StatusCode::FORBIDDEN
     );
-    for reason in [
-        json!(""),
-        json!(" \n\t "),
-        json!("bad\u{0}reason"),
-        json!("🌐".repeat(1001)),
-        json!(false),
+    for (action, reason) in [
+        ("acknowledge", json!("bad\u{0}reason")),
+        ("acknowledge", json!("🌐".repeat(1001))),
+        ("acknowledge", json!(false)),
+        // Reopening states why; an acknowledgement note is optional.
+        ("reopen", json!("")),
+        ("reopen", json!(" \n\t ")),
+        ("reopen", Value::Null),
     ] {
         assert_eq!(
             call(
                 &app,
                 "POST",
-                &path(&old, "acknowledge"),
+                &path(&old, action),
                 json!({"revision":1,"reason":reason}),
                 Some(&admin),
                 true
             )
             .await
             .0,
-            StatusCode::BAD_REQUEST
+            StatusCode::BAD_REQUEST,
+            "{action} {reason}"
         );
     }
     for body in [
@@ -224,7 +228,7 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
             StatusCode::BAD_REQUEST
         );
     }
-    for record in [&current, &absent, &resolved] {
+    for record in [&absent, &resolved] {
         for action in ["acknowledge", "reopen"] {
             assert_eq!(
                 call(
@@ -241,7 +245,36 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
             );
         }
     }
+    // Not acknowledged yet, so there is nothing to reopen.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &path(&current, "reopen"),
+            json!({"revision":1,"reason":"x"}),
+            Some(&admin),
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
     let before = runtime(&s).await;
+    // Live devices can be acknowledged, and the note is optional.
+    let (status, live) = call(
+        &app,
+        "POST",
+        &path(&current, "acknowledge"),
+        json!({"revision":1}),
+        Some(&admin),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{live}");
+    assert_eq!(live["acknowledged"], true);
+    assert!(live["acknowledgement_reason"].is_null());
+    assert_eq!(live["device_revoked"], false);
+    assert_eq!(live["revision"], 2);
     let operator = actor(&s, "operator").await;
     let (status, ack) = call(
         &app,
@@ -272,15 +305,27 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
     );
     assert_eq!(
         get(&app, &path(&current, ""), &admin).await["acknowledged"],
-        false
+        true
     );
     assert_eq!(runtime(&s).await, before);
     let overview = get(&app, "/api/v1/overview", &admin).await;
-    assert_eq!(overview["issues_open"], 2);
+    assert_eq!(overview["issues_open"], 1);
     assert_eq!(
         get(&app, "/api/v1/issues/history?state=acknowledged", &admin).await["total"],
-        1
+        2
     );
+    let (status, reopened) = call(
+        &app,
+        "POST",
+        &path(&current, "reopen"),
+        json!({"revision":2,"reason":"Still failing after the fix"}),
+        Some(&admin),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reopened}");
+    assert_eq!(reopened["disposition"], "open");
+    assert_eq!(reopened["revision"], 3);
     assert_eq!(
         get(&app, "/api/v1/issues/history?state=resolved", &admin).await["total"],
         1
@@ -665,11 +710,21 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         .0,
         StatusCode::OK
     );
-    let issue_id = db::hash(format!("{id}:APPLY_FAILED:apply"));
+    let issue_id = db::hash(format!("{id}:{version}:APPLY_FAILED:apply"));
     let endpoint = format!("/api/v1/issues/{issue_id}");
     let first = get(&app, &endpoint, &admin).await;
     assert_eq!(first["revision"], 1);
     assert_eq!(first["count"], 1);
+    assert_eq!(first["reports"], 1);
+    assert_eq!(first["desired_version_id"], version);
+    assert_eq!(
+        first["title"],
+        "The device couldn't apply the configuration"
+    );
+    assert_eq!(
+        first["message"],
+        "The device reported a failure while applying this version."
+    );
     assert!(!first.to_string().contains("PRIVATE_AGENT"));
     sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
         .bind(&id)
@@ -723,9 +778,37 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         .0,
         StatusCode::OK
     );
+    // Check-ins about the same failed attempt are reports, not occurrences:
+    // they never undo the operator's acknowledgement.
+    let repeated = get(&app, &endpoint, &admin).await;
+    assert_eq!(repeated["revision"], 2);
+    assert_eq!(repeated["count"], 1);
+    assert_eq!(repeated["reports"], 2);
+    assert_eq!(repeated["disposition"], "acknowledged");
+    // A new attempt (generation) is a new occurrence and clears it.
+    sqlx::query("UPDATE devices SET desired_generation=2 WHERE id=?")
+        .bind(&id)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    heartbeat["reported_generation"] = json!(2);
+    assert_eq!(
+        call(
+            &agent,
+            "POST",
+            "/agent/v1/heartbeat",
+            heartbeat.clone(),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     let repeated = get(&app, &endpoint, &admin).await;
     assert_eq!(repeated["revision"], 3);
     assert_eq!(repeated["count"], 2);
+    assert_eq!(repeated["reports"], 3);
     assert_eq!(repeated["disposition"], "open");
     assert!(repeated["acknowledged_by"].is_null());
     assert!(repeated["acknowledgement_reason"].is_null());
@@ -762,7 +845,8 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
     );
     let bad = get(&app, &endpoint, &admin).await;
     assert_eq!(bad["resolved"], false);
-    assert_eq!(bad["revision"], 4);
+    assert_eq!(bad["revision"], 3);
+    assert_eq!(bad["count"], 2);
     heartbeat["actual_sha256"] = json!(sha);
     assert_eq!(
         call(
@@ -779,9 +863,10 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
     );
     let resolved = get(&app, &endpoint, &admin).await;
     assert_eq!(resolved["resolved"], true);
-    assert_eq!(resolved["revision"], 5);
+    assert_eq!(resolved["resolved_reason"], "verified");
+    assert_eq!(resolved["revision"], 4);
     assert_eq!(resolved["disposition"], "resolved");
-    assert_eq!(resolved["count"], 3);
+    assert_eq!(resolved["count"], 2);
     assert_eq!(
         call(
             &agent,
@@ -795,7 +880,7 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         .0,
         StatusCode::OK
     );
-    assert_eq!(get(&app, &endpoint, &admin).await["revision"], 5);
+    assert_eq!(get(&app, &endpoint, &admin).await["revision"], 4);
     heartbeat["apply_state"] = json!("failed");
     assert_eq!(
         call(
@@ -811,9 +896,10 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         StatusCode::OK
     );
     let recurrence = get(&app, &endpoint, &admin).await;
-    assert_eq!(recurrence["revision"], 6);
-    assert_eq!(recurrence["count"], 4);
+    assert_eq!(recurrence["revision"], 5);
+    assert_eq!(recurrence["count"], 3);
     assert_eq!(recurrence["resolved"], false);
+    assert!(recurrence["resolved_reason"].is_null());
     sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
         .bind(id)
         .execute(&s.pool)
@@ -948,4 +1034,159 @@ async fn issue_sort_is_global_bounded_and_retains_strict_query_validation() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
         assert_eq!(body["error"]["code"], "INVALID_INPUT");
     }
+}
+
+#[tokio::test]
+async fn issue_groups_list_each_groups_newest_fifty_members_in_one_page() {
+    let (_temp, s, app, admin) = fixture().await;
+    let device = device_record(&s, 1, "edge-01", false).await;
+    // 60 apply failures on no version and three data_dir failures on v1.
+    for n in 0..63u64 {
+        let mut item = issue(n, &device);
+        item["last_seen"] = json!(format!("2026-01-02T00:{:02}:00Z", n % 60));
+        if n >= 60 {
+            item["code"] = json!("DATA_DIR_MISSING");
+            item["desired_version_id"] = json!("20000000-0000-4000-8000-000000000001");
+            item["last_seen"] = json!(format!("2026-01-03T00:00:0{}Z", n - 60));
+        }
+        insert(&s, "issue", &item).await;
+    }
+    let page = get(&app, "/api/v1/issues/groups?page_size=5", &admin).await;
+    assert_eq!(page["total"], 2);
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items[0]["code"], "DATA_DIR_MISSING");
+    assert_eq!(items[0]["issue_count"], 3);
+    assert_eq!(items[0]["devices"].as_array().unwrap().len(), 3);
+    assert_eq!(items[0]["devices"][0]["id"], db::hash("issue-62"));
+    assert_eq!(items[1]["code"], "APPLY_FAILED");
+    assert_eq!(items[1]["issue_count"], 60);
+    let members = items[1]["devices"].as_array().unwrap();
+    assert_eq!(members.len(), 50);
+    assert_eq!(members[0]["id"], db::hash("issue-59"));
+    assert!(members.iter().all(|m| m["code"] == "APPLY_FAILED"));
+    let second = get(&app, "/api/v1/issues/groups?page_size=1&page=2", &admin).await;
+    assert_eq!(second["items"][0]["code"], "APPLY_FAILED");
+    assert_eq!(second["items"][0]["devices"].as_array().unwrap().len(), 50);
+    let searched = get(&app, "/api/v1/issues/groups?search=edge-01", &admin).await;
+    assert_eq!(searched["total"], 2);
+}
+
+/// A device's failed check-in, as the heartbeat route records it: the real
+/// writer of an issue, which keeps a code and no title.
+async fn fail_with(agent: &Router, code: &str, stage: &str) {
+    let heartbeat = json!({"protocol_version":1,"request_id":"issue-title-test","nonce":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","boot_id":"issue-boot","agent_version":"test","vector_version":"0.58.0","reported_generation":1,"policy_generation":0,"actual_sha256":null,"apply_state":"failed","local_paused":false,"remote_pause_acknowledged":false,"error":{"code":code,"stage":stage,"message":"PRIVATE_AGENT_DIAGNOSTIC"}});
+    let (status, body) = call(agent, "POST", "/agent/v1/heartbeat", heartbeat, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+// An issue record keeps its code, not its title, so the audit log builds the
+// name of an issue event from the code, as the issue list does. Every role
+// that reads the log reads issues, and sees the same name.
+#[tokio::test]
+async fn issue_events_are_named_by_their_title_on_their_device_for_every_role() {
+    let (_temp, s, app, admin) = fixture().await;
+    let operator = actor(&s, "operator").await;
+    let viewer = actor(&s, "viewer").await;
+    let id = device_record(&s, 1, "edge-nyc-02", false).await;
+    let version = db::id();
+    insert(
+        &s,
+        "version",
+        &json!({"id":version,"sha256":db::hash("{}\n"),"size":3,"artifact":"{}\n"}),
+    )
+    .await;
+    sqlx::query("UPDATE devices SET desired_version_id=?,desired_generation=1,policy_generation=0 WHERE id=?").bind(&version).bind(&id).execute(&s.pool).await.unwrap();
+    let fingerprint = db::hash("issue-title-credential");
+    sqlx::query(
+        "INSERT INTO credentials(fingerprint,device_id,expires_at,signing_key_id) VALUES(?,?,?,?)",
+    )
+    .bind(&fingerprint)
+    .bind(&id)
+    .bind("2099-01-01T00:00:00Z")
+    .bind(s.keys.active_signing_id())
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let agent =
+        device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(fingerprint))));
+    fail_with(&agent, "APPLY_FAILED", "apply").await;
+    fail_with(&agent, "VALIDATION_FAILED", "validation").await;
+    let apply = db::hash(format!("{id}:{version}:APPLY_FAILED:apply"));
+    let validation = db::hash(format!("{id}:{version}:VALIDATION_FAILED:validation"));
+    // The record the writer made holds a code and no title.
+    let stored: String = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND id=?")
+        .bind(&apply)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert!(!stored.contains("\"title\""), "{stored}");
+    // An operator acknowledges one issue and reopens it, and acknowledges the
+    // other.
+    for (issue, action, revision, reason) in [
+        (&apply, "acknowledge", 1, "Looking into it"),
+        (&apply, "reopen", 2, "It failed again"),
+        (&validation, "acknowledge", 1, ""),
+    ] {
+        let (status, body) = call(
+            &app,
+            "POST",
+            &format!("/api/v1/issues/{issue}/{action}"),
+            json!({"revision":revision,"reason":reason}),
+            Some(&operator),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{action}: {body}");
+    }
+    for (role, reader) in [
+        ("viewer", &viewer),
+        ("operator", &operator),
+        ("admin", &admin),
+    ] {
+        let history = get(&app, "/api/v1/audit/history?page_size=50", reader).await;
+        let rows = |action: &str, issue: &str| -> Vec<Value> {
+            history["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["action"] == action && row["target"] == issue)
+                .cloned()
+                .collect()
+        };
+        for (action, issue, title) in [
+            (
+                "issue.acknowledge",
+                &apply,
+                "The device couldn't apply the configuration on edge-nyc-02",
+            ),
+            (
+                "issue.reopen",
+                &apply,
+                "The device couldn't apply the configuration on edge-nyc-02",
+            ),
+            (
+                "issue.acknowledge",
+                &validation,
+                "Vector rejected the configuration on edge-nyc-02",
+            ),
+        ] {
+            let found = rows(action, issue);
+            assert_eq!(found.len(), 1, "{role} {action}");
+            assert_eq!(found[0]["target_name"], title, "{role} {action}");
+            assert_eq!(found[0]["target_kind"], "issue", "{role} {action}");
+            assert_eq!(found[0]["target_exists"], true, "{role} {action}");
+            assert_eq!(found[0]["device_name"], "edge-nyc-02", "{role} {action}");
+        }
+        // The log is searchable by the name it now carries.
+        let found = get(
+            &app,
+            "/api/v1/audit/history?search=rejected%20the%20configuration",
+            reader,
+        )
+        .await;
+        assert_eq!(found["total"], 1, "{role}");
+    }
+    // The name is what the issue list shows, to the same readers.
+    let shown = get(&app, &format!("/api/v1/issues/{validation}"), &viewer).await;
+    assert_eq!(shown["title"], "Vector rejected the configuration");
 }

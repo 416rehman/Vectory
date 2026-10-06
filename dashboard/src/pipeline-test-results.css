@@ -1,0 +1,86 @@
+@import "./editor-tokens.css";
+
+/* Pipeline test explorer: one row per test, failures expand to Vector's text. */
+.pipeline-test-results {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.pipeline-test-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pipeline-test-list > li {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--ed-radius-sm);
+  background: var(--surface);
+}
+.pipeline-test-list > li:not([data-passed], [data-not-run]) {
+  border-color: var(--ed-danger-line);
+}
+.pipeline-test-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.pipeline-test-name svg {
+  flex: none;
+  color: var(--ed-danger);
+}
+.pipeline-test-list > li[data-passed] .pipeline-test-name svg {
+  color: var(--ed-success, var(--muted));
+}
+.pipeline-test-list > li[data-not-run] .pipeline-test-name svg {
+  color: var(--muted);
+}
+.pipeline-test-skipped {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.pipeline-test-list details {
+  margin: 6px 0 0 23px;
+  font-size: 12.5px;
+}
+.pipeline-test-list summary {
+  cursor: pointer;
+  color: var(--ink);
+}
+.pipeline-test-list details p {
+  margin: 8px 0 4px;
+  color: var(--muted);
+}
+.pipeline-test-list pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-code-bg, var(--surface-hover));
+  font-family: var(--ed-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pipeline-test-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.pipeline-test-reason,
+.pipeline-test-hint {
+  margin: 6px 0 0 23px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.pipeline-test-hint {
+  color: var(--ink);
+}

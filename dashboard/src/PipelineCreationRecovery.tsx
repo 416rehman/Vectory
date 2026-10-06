@@ -649,7 +649,7 @@ function RecoveryCenter({
                     {request && (
                       <p>
                         {reminder?.operation === "create"
-                          ? "Retry uses the original name, description, configuration and graph."
+                          ? "Retry uses the original name, description, configuration, graph and variable declarations."
                           : "Retry uses the originally reviewed source revision. If the source changed before this request was saved, review it before starting again."}
                       </p>
                     )}
@@ -702,20 +702,25 @@ function RecoveryCenter({
                         <div>
                           <dt>Configuration</dt>
                           <dd>
-                            Original configuration and graph are retained
-                            exactly in this browser.
+                            Original configuration, graph and variable
+                            declarations are retained exactly in this browser.
                           </dd>
                         </div>
                       )}
                     </dl>
                     {reminder?.operation === "create" && (
                       <details className="pipeline-creation-original-data">
-                        <summary>View original configuration and graph</summary>
+                        <summary>
+                          View original configuration, graph and variables
+                        </summary>
                         <pre tabIndex={0}>
                           {JSON.stringify(
                             {
                               config: reminder.request.config,
                               graph: reminder.request.graph,
+                              ...(reminder.request.variables
+                                ? { variables: reminder.request.variables }
+                                : {}),
                             },
                             null,
                             2,

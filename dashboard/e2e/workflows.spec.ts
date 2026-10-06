@@ -131,7 +131,7 @@ test("native device metrics and persisted history appear without fabricated valu
     page.getByRole("heading", { name: "Operational metrics", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("img", { name: /Source events per second/ }),
+    page.getByRole("img", { name: /^Throughput, events \/ second/ }),
   ).toBeVisible();
   const history = await page.request
     .get(`/api/v1/devices/${native.device_id}/telemetry`)
@@ -290,7 +290,7 @@ test("build an empty pipeline, connect steps, preserve raw fields and publish", 
     .getByRole("button", { name: "Choose devices", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Deploy version 1", exact: true }),
+    page.getByRole("heading", { name: `Deploy ${title} v1`, exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Review deployment" }),
@@ -521,7 +521,7 @@ test("staged enrollment, token management, groups and deployment review use real
   ).toBeDisabled();
   await page
     .getByRole("dialog")
-    .getByRole("checkbox", { name: /^Select / })
+    .getByRole("checkbox", { name: /^Select (?!devices on this page)/ })
     .first()
     .check();
   const previewResponse = page.waitForResponse(

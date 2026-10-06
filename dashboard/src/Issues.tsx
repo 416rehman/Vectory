@@ -1,47 +1,151 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  Server,
+  Undo2,
+  Wrench,
+} from "lucide-react";
+import {
   APIError,
   api,
   can,
   post,
   when,
+  type Device,
   type Issue,
+  type IssueGroup,
+  type IssueGroupPage,
   type IssueHistoryPage,
   type User,
 } from "./api";
 import {
-  Badge,
+  StatusBadge,
   Button,
   ErrorBox,
   Field,
   Modal,
+  Pagination,
   PageHeader,
-  RefreshButton,
+  InlineError,
+  SegmentedControl,
   SearchBox,
+  Spinner,
   useResource,
 } from "./ui";
+import { agentRefusal } from "./agentRefusals";
+import { isAgentUpdateIssue } from "./agentUpdateAttention";
+import { countLabel } from "./countLabel";
 import DocLink from "./DocLink";
-import { DataTable, type TableColumn, type TableSort } from "./DataTable";
+import { DataTable, type TableColumn } from "./DataTable";
+import DiagnosticList from "./DiagnosticList";
+import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
+import { leadingDiagnostic } from "./runtimeModel";
+import { requestRollbackReview } from "./deploymentStatus";
+import { deviceDisplay, deviceLabel } from "./deviceName";
+import { RetiredName } from "./RetiredBadge";
+import {
+  groupSubject,
+  issueAction,
+  issueSubject,
+  type IssueAction,
+} from "./issueActions";
+import { isDataPlaneCode, issueDispositions } from "./status";
+import { useHashQuery } from "./urlState";
 import "./control.css";
 import "./issues.css";
+import NotificationsHint from "./NotificationsHint";
+import type { Notify } from "./toast";
 
-const words = (value: string) =>
-  value.replaceAll("_", " ").replaceAll(".", " ");
 const issueTime = (value: string | null) =>
   value ? when(value) : "Unavailable";
 type Disposition = Issue["disposition"] | "all";
-const labels = {
-  open: "Open",
-  acknowledged: "Acknowledged",
-  resolved: "Resolved",
-  all: "All issues",
+type View = "groups" | "list";
+const dispositions: Disposition[] = ["open", "acknowledged", "resolved", "all"];
+const sortColumns = ["code", "disposition", "device", "last_seen", "count"];
+/**
+ * A triage view is a link: `#/issues?q=nginx&state=all&view=list`. Values
+ * that aren't in use stay out of the URL.
+ */
+const issueQuery = {
+  q: "",
+  state: "open",
+  view: "groups",
+  sort: "last_seen",
+  dir: "desc",
+  page: 1,
+  gpage: 1,
 };
+const labels = {
+  open: issueDispositions.open.label,
+  acknowledged: issueDispositions.acknowledged.label,
+  resolved: issueDispositions.resolved.label,
+  all: "All",
+};
+const PAGE_SIZE = 12;
 const emptyPage: IssueHistoryPage = {
   items: [],
   total: 0,
   page: 1,
-  page_size: 12,
+  page_size: PAGE_SIZE,
 };
+const emptyGroups: IssueGroupPage = {
+  items: [],
+  total: 0,
+  page: 1,
+  page_size: PAGE_SIZE,
+};
+
+type VersionContext = {
+  configuration_id?: string | null;
+  configuration_name?: string | null;
+  version_number?: number | null;
+};
+function versionLabel(context: VersionContext, versionId?: string | null) {
+  if (!versionId) return "No pipeline version";
+  const name = context.configuration_name || "Pipeline";
+  return context.version_number
+    ? `${name} · version ${context.version_number}`
+    : name;
+}
+function attemptsLabel(attempts: number, reports?: number, code?: string) {
+  // Delivery issues count openings, and the checks that found the problem.
+  if (isDataPlaneCode(code)) {
+    const text = countLabel(attempts, "occurrence");
+    return reports ? `${text} · seen in ${countLabel(reports, "check")}` : text;
+  }
+  const text = countLabel(attempts, "failed attempt");
+  return reports && reports > attempts
+    ? `${text} · reported ${countLabel(reports, "time")}`
+    : text;
+}
+function resolution(issue: Issue) {
+  switch (issue.resolved_reason) {
+    case "unassigned":
+      return "Resolved when its pipeline assignment was removed.";
+    case "healthy":
+      return "Resolved when the pipeline delivered normally for three checks in a row.";
+    case "superseded":
+      return "Resolved when the device stopped running the version this was measured on.";
+    case "unmonitored":
+      return "Resolved when metrics were turned off, so delivery can't be checked any more.";
+    case "revoked":
+      return "Resolved when the device was revoked. It can't check in any more.";
+    default:
+      return "Resolved when the device verified a configuration after this failure.";
+  }
+}
+function canAct(user: User, issue: Issue) {
+  // The original device identity must still exist; revoked identities can
+  // still be acknowledged as a record of the operator's decision.
+  return (
+    can(user, "operate") && !issue.resolved && issue.device_revoked !== null
+  );
+}
+
+type Dialog =
+  { kind: "disposition"; issue: Issue } | { kind: "retry"; issue: Issue };
 
 export default function Issues({
   user,
@@ -50,24 +154,36 @@ export default function Issues({
   deviceId,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: (path: string) => void;
   deviceId?: string;
 }) {
-  const [search, setSearch] = useState(""),
-    [query, setQuery] = useState(""),
-    [state, setState] = useState<Disposition>("open"),
-    [sort, setSort] = useState<TableSort | null>({
-      column: "last_seen",
-      direction: "desc",
-    }),
-    [page, setPage] = useState(1),
-    [selected, setSelected] = useState<Issue | null>(null),
-    [refreshing, setRefreshing] = useState(false);
+  const [url, update] = useHashQuery(issueQuery);
+  // Anything a hand-edited link gets wrong falls back to the default.
+  const state = (dispositions as string[]).includes(url.state)
+    ? (url.state as Disposition)
+    : "open";
+  // One device's issues are a list; its page has no groups to show.
+  const view: View = deviceId || url.view === "list" ? "list" : "groups";
+  const sort = {
+    column: sortColumns.includes(url.sort) ? url.sort : "last_seen",
+    direction: url.dir === "asc" ? ("asc" as const) : ("desc" as const),
+  };
+  const { page, gpage: groupPage } = url;
+  const query = url.q;
+  // Typing settles for a moment before it becomes the URL's search; a new
+  // search from the URL (Back, a shared link) replaces what the box shows.
+  const [search, setSearch] = useState(url.q);
+  const [urlSearch, setUrlSearch] = useState(url.q);
+  if (urlSearch !== url.q) {
+    setUrlSearch(url.q);
+    if (search.trim() !== url.q) setSearch(url.q);
+  }
+  const [dialog, setDialog] = useState<Dialog | null>(null);
   const opener = useRef<HTMLButtonElement | null>(null),
     container = useRef<HTMLDivElement | null>(null);
-  function closeIssue(saved = false) {
-    setSelected(null);
+  function closeDialog(saved = false) {
+    setDialog(null);
     requestAnimationFrame(() => {
       const target =
         !saved && opener.current?.isConnected
@@ -80,158 +196,92 @@ export default function Issues({
   }
   useEffect(() => {
     if (search.trim() === query) return;
-    const timer = window.setTimeout(() => {
-      setQuery(search.trim());
-      setPage(1);
-    }, 250);
+    const timer = window.setTimeout(
+      () => update({ q: search.trim(), page: 1, gpage: 1 }),
+      250,
+    );
     return () => window.clearTimeout(timer);
-  }, [search, query]);
-  useEffect(() => {
-    setPage(1);
-  }, [deviceId]);
-  const params = new URLSearchParams({
+  }, [search, query, update]);
+  const listParams = new URLSearchParams({
     search: query,
     state,
     page: String(page),
-    page_size: "12",
-    sort: sort?.column || "last_seen",
-    direction: sort?.direction || "desc",
+    page_size: String(PAGE_SIZE),
+    sort: sort.column,
+    direction: sort.direction,
   });
-  if (deviceId) params.set("device_id", deviceId);
-  const resource = useResource<IssueHistoryPage>(
-    `/issues/history?${params}`,
+  if (deviceId) listParams.set("device_id", deviceId);
+  const groupParams = new URLSearchParams({
+    search: query,
+    state,
+    page: String(groupPage),
+    page_size: String(PAGE_SIZE),
+  });
+  const list = useResource<IssueHistoryPage>(
+    view === "list" ? `/issues/history?${listParams}` : null,
     emptyPage,
   );
+  const groups = useResource<IssueGroupPage>(
+    view === "groups" ? `/issues/groups?${groupParams}` : null,
+    emptyGroups,
+  );
+  const active = view === "list" ? list : groups;
+  // A page past the end (issues resolved meanwhile, an old link) moves back.
+  const lastPage = Math.max(1, Math.ceil(list.data.total / PAGE_SIZE));
+  const lastGroupPage = Math.max(1, Math.ceil(groups.data.total / PAGE_SIZE));
   useEffect(() => {
-    if (!resource.loading && !resource.error)
-      setPage((current) =>
-        Math.min(current, Math.max(1, Math.ceil(resource.data.total / 12))),
-      );
-  }, [resource.loading, resource.error, resource.data.total]);
+    if (view === "list" && !list.loading && !list.error && page > lastPage)
+      update({ page: lastPage });
+  }, [view, list.loading, list.error, page, lastPage, update]);
+  useEffect(() => {
+    if (
+      view === "groups" &&
+      !groups.loading &&
+      !groups.error &&
+      groupPage > lastGroupPage
+    )
+      update({ gpage: lastGroupPage });
+  }, [view, groups.loading, groups.error, groupPage, lastGroupPage, update]);
+  function act(kind: Dialog["kind"], issue: Issue, target: HTMLButtonElement) {
+    opener.current = target;
+    setDialog({ kind, issue });
+  }
+  // Rows from before a failed refresh stay readable, but nothing acts on them.
+  const stale = !!active.error;
+  // A device in a group card has no link of its own: the card leads.
+  const actions = (issue: Issue, primary = true) => (
+    <IssueActions
+      issue={issue}
+      user={user}
+      onAct={act}
+      stale={stale}
+      primary={primary}
+    />
+  );
   const columns: TableColumn<Issue>[] = [
     {
       id: "code",
       header: "Issue",
-      value: (issue) => issue.code,
+      value: (issue) => issue.title || issue.code,
       className: "issue-summary-cell",
-      cell: (issue) => (
-        <div className="issue-summary">
-          <strong>{words(issue.code)}</strong>
-          <p>{issue.message}</p>
-          {issue.acknowledged && (
-            <div className="issue-acknowledgement">
-              <p>
-                <strong>
-                  Acknowledged by {issue.acknowledged_by_name || "an operator"}
-                </strong>
-                {issue.acknowledged_at && <> · {when(issue.acknowledged_at)}</>}
-              </p>
-              <p>{issue.acknowledgement_reason}</p>
-            </div>
-          )}
-          <details className="control-disclosure">
-            <summary>Investigation details</summary>
-            {issue.disposition === "resolved" ? (
-              <p>
-                This device reported a verified configuration application after
-                the failure. Check its current status for present health.
-              </p>
-            ) : issue.device_revoked ? (
-              <p>
-                This device identity is retired and cannot report recovery.
-                Check any replacement separately. Acknowledging records your
-                decision and removes this issue from the open list; it does not
-                verify recovery.
-              </p>
-            ) : (
-              <p>
-                Run <code>vectory doctor</code> on this device. Check its error,
-                Vector version, permissions, and available disk, then fix the
-                cause and retry from the device page.
-              </p>
-            )}
-            <DocLink
-              topic="troubleshooting"
-              section={
-                issue.device_revoked
-                  ? "an-old-issue-stays-open-after-device-recovery"
-                  : "a-pipeline-is-rejected-or-rolled-back"
-              }
-            >
-              Troubleshooting guide
-            </DocLink>
-            <dl className="control-summary-list">
-              <div>
-                <dt>Device ID</dt>
-                <dd className="control-wrap-code">{issue.device_id}</dd>
-              </div>
-              <div>
-                <dt>Stage</dt>
-                <dd>{words(issue.stage)}</dd>
-              </div>
-              <div>
-                <dt>First seen</dt>
-                <dd>{issueTime(issue.first_seen)}</dd>
-              </div>
-              <div>
-                <dt>Code</dt>
-                <dd className="control-wrap-code">{issue.code}</dd>
-              </div>
-            </dl>
-          </details>
-        </div>
-      ),
+      cell: (issue) => <IssueSummary issue={issue} />,
     },
     {
       id: "disposition",
       header: "Status",
       value: (issue) => issue.disposition,
-      filter: {
-        value: state,
-        onChange: (value) => {
-          setState(value as Disposition);
-          setPage(1);
-        },
-        emptyValue: "all",
-        allLabel: "All issues",
-        manual: true,
-        options: Object.entries(labels)
-          .filter(([value]) => value !== "all")
-          .map(([value, label]) => ({ value, label })),
-      },
-      cell: (issue) => (
-        <Badge
-          status={
-            issue.disposition === "open"
-              ? "failed"
-              : issue.disposition === "resolved"
-                ? "completed"
-                : undefined
-          }
-        >
-          {labels[issue.disposition]}
-        </Badge>
-      ),
+      cell: (issue) => <DispositionBadge issue={issue} />,
     },
     {
       id: "device",
       header: "Device",
       value: (issue) => issue.device_name,
-      cell: (issue) => (
-        <>
-          <a
-            className="control-row-title"
-            href={`#/devices/${encodeURIComponent(issue.device_id)}`}
-          >
-            {issue.device_name || "Open device"}
-          </a>
-          {issue.device_revoked && <small>Device access revoked</small>}
-        </>
-      ),
+      className: "issue-nowrap",
+      cell: (issue) => <DeviceCell issue={issue} />,
     },
     {
       id: "last_seen",
-      header: "Last seen",
+      header: "Last reported",
       value: (issue) => issue.last_seen,
       cell: (issue) => (
         <time dateTime={issue.last_seen || undefined}>
@@ -241,142 +291,824 @@ export default function Issues({
     },
     {
       id: "count",
-      header: "Occurrences",
+      header: "Attempts",
       value: (issue) => issue.count,
-      cell: (issue) => issue.count,
+      className: "issue-nowrap",
+      cell: (issue) => (
+        <>
+          {issue.count.toLocaleString()}
+          {issue.reports !== undefined && issue.reports > issue.count && (
+            <small>reported {countLabel(issue.reports, "time")}</small>
+          )}
+        </>
+      ),
     },
     {
       id: "actions",
       header: <span className="sr-only">Issue actions</span>,
-      cell: (issue) => (
-        <>
-          {can(user, "operate") &&
-            issue.device_revoked === true &&
-            !issue.resolved && (
-              <Button
-                variant="secondary"
-                onClick={(event) => {
-                  opener.current = event.currentTarget;
-                  setSelected(issue);
-                }}
-              >
-                {issue.disposition === "acknowledged"
-                  ? "Reopen issue"
-                  : "Acknowledge issue"}
-              </Button>
-            )}
-        </>
-      ),
+      cell: (issue) => actions(issue),
     },
   ];
+  const emptyState = (
+    <div className="control-empty">
+      <h2>
+        {query
+          ? "No matching issues"
+          : state === "all"
+            ? "No issues reported"
+            : `No ${labels[state].toLowerCase()} issues`}
+      </h2>
+      <p>
+        {query
+          ? "Try another search or status."
+          : state === "open"
+            ? "No device has reported a failure that needs attention. Check Devices for connectivity and current health."
+            : "Issues with this status will appear here."}
+      </p>
+    </div>
+  );
   return (
     <div className="control-page issue-page" ref={container}>
       <PageHeader
         title="Issues"
-        description="Agent failures, investigation, and recorded follow-up."
+        description="Failures devices reported while applying or running a pipeline version, with Vector's reason and the fix."
         help={{
           topic: "troubleshooting",
-          section: "an-old-issue-stays-open-after-device-recovery",
+          section: "a-pipeline-is-rejected-or-rolled-back",
+        }}
+        live={{
+          updatedAt: active.updatedAt,
+          error: active.error || undefined,
+          loading: active.loading,
+          refreshing: active.refreshing,
+          onRefresh: () => void active.reload(),
         }}
       />
+      <NotificationsHint user={user} placement="page" />
       <div className="control-toolbar issue-toolbar">
         <SearchBox
           value={search}
           onChange={setSearch}
           maxLength={200}
-          placeholder="Search devices, codes, or messages"
+          placeholder="Search devices, pipelines, or reasons"
+          shortcut
         />
-        <RefreshButton
-          busy={refreshing}
-          onClick={async () => {
-            setRefreshing(true);
-            try {
-              await resource.reload();
-            } finally {
-              setRefreshing(false);
-            }
-          }}
-          disabled={resource.loading}
-        >
-          Refresh
-        </RefreshButton>
+        <SegmentedControl
+          label="Issue status"
+          value={state}
+          options={(["open", "acknowledged", "resolved", "all"] as const).map(
+            (value) => ({ value, label: labels[value] }),
+          )}
+          onChange={(value) => update({ state: value, page: 1, gpage: 1 })}
+        />
+        {!deviceId && (
+          <SegmentedControl
+            label="Issue layout"
+            value={view}
+            options={[
+              { value: "groups", label: "By version and reason" },
+              { value: "list", label: "All issues" },
+            ]}
+            onChange={(value) => update({ view: value })}
+          />
+        )}
       </div>
       {deviceId && (
         <p className="issue-scope">
           Issues for{" "}
           <a href={`#/devices/${encodeURIComponent(deviceId)}`}>
-            {resource.data.items[0]?.device_name || "this device"}
+            {list.data.items[0]?.device_name || "this device"}
           </a>{" "}
           <Button variant="ghost" onClick={() => navigate("issues")}>
             Show all devices
           </Button>
         </p>
       )}
-      {resource.error && (
-        <ErrorBox message={resource.error} retry={resource.reload} />
-      )}
-      <div className="control-table issue-table-panel">
-        <DataTable
-          data={resource.error ? [] : resource.data.items}
-          columns={columns}
-          rowKey={(issue) => issue.id}
-          label="Issues"
-          className="issue-table"
-          loading={resource.loading}
-          manualSorting
-          sort={sort}
-          onSortChange={(value) => {
-            setSort(value);
-            setPage(1);
-          }}
-          pagination={
-            resource.error
-              ? undefined
-              : {
-                  page,
-                  size: 12,
-                  total: resource.data.total,
-                  onPage: setPage,
-                }
-          }
-          empty={
-            resource.error ? (
-              "Issues could not be loaded."
-            ) : (
-              <div className="control-empty">
-                <h2>
-                  {query
-                    ? "No matching issues"
-                    : `No ${state === "all" ? "reported" : state} issues`}
-                </h2>
-                <p>
-                  {query
-                    ? "Try another search or status."
-                    : state === "open"
-                      ? "No open failures have been reported. Check Devices for connectivity and current health."
-                      : "Issues with this status will appear here."}
-                </p>
-              </div>
-            )
-          }
+      {view === "list" ? (
+        <div className="control-table issue-table-panel">
+          <DataTable
+            data={list.data.items}
+            columns={columns}
+            rowKey={(issue) => issue.id}
+            label="Issues"
+            className="issue-table"
+            error={
+              list.error
+                ? {
+                    title: list.updatedAt
+                      ? "Couldn't refresh issues."
+                      : "Couldn't load issues.",
+                    message: list.error,
+                    updatedAt: list.updatedAt,
+                    retry: () => void list.reload(),
+                    retrying: list.refreshing,
+                  }
+                : null
+            }
+            loading={list.loading}
+            manualSorting
+            sort={sort}
+            onSortChange={(value) =>
+              update({
+                sort: value?.column || "last_seen",
+                dir: value?.direction || "desc",
+                page: 1,
+              })
+            }
+            pagination={
+              list.error
+                ? undefined
+                : {
+                    page,
+                    size: PAGE_SIZE,
+                    total: list.data.total,
+                    onPage: (next) => update({ page: next }),
+                  }
+            }
+            empty={emptyState}
+            mobileCard={(issue) => ({
+              title:
+                issue.title || "The device couldn't apply the configuration",
+              status: <DispositionBadge issue={issue} />,
+              meta: [
+                <DeviceLine key="device" issue={issue} />,
+                `Last reported ${issueTime(issue.last_seen)}`,
+                attemptsLabel(issue.count, issue.reports, issue.code),
+              ],
+              actions: actions(issue),
+            })}
+          />
+        </div>
+      ) : (
+        <IssueGroups
+          page={groups.data}
+          loading={groups.loading}
+          error={groups.error}
+          updatedAt={groups.updatedAt}
+          retry={() => void groups.reload()}
+          retrying={groups.refreshing}
+          empty={emptyState}
+          actions={actions}
+          user={user}
+          onPage={(next) => update({ gpage: next })}
         />
-      </div>
-      {selected && (
+      )}
+      {dialog?.kind === "disposition" && (
         <IssueDisposition
-          key={`${selected.id}:${selected.revision}`}
-          issue={selected}
+          key={`${dialog.issue.id}:${dialog.issue.revision}`}
+          issue={dialog.issue}
           close={() => {
-            closeIssue();
-            void resource.reload();
+            closeDialog();
+            void active.reload();
           }}
           onDone={(message) => {
-            closeIssue(true);
-            void resource.reload();
-            notify(message);
+            closeDialog(true);
+            void active.reload();
+            notify(message, { tone: "success" });
+          }}
+        />
+      )}
+      {dialog?.kind === "retry" && (
+        <RetryDialog
+          issue={dialog.issue}
+          user={user}
+          close={() => {
+            closeDialog();
+            void active.reload();
+          }}
+          onDone={(message) => {
+            closeDialog(true);
+            void active.reload();
+            notify(message, { tone: "success" });
           }}
         />
       )}
     </div>
+  );
+}
+
+function DispositionBadge({ issue }: { issue: Issue }) {
+  return <StatusBadge domain="issue" value={issue.disposition} />;
+}
+
+function DeviceCell({ issue }: { issue: Issue }) {
+  const shown = issue.device_name ? deviceDisplay(issue.device_name) : null;
+  const link = (
+    <a
+      className="control-row-title"
+      href={`#/devices/${encodeURIComponent(issue.device_id)}`}
+    >
+      {shown?.name || "Open device"}
+    </a>
+  );
+  return (
+    <>
+      {shown?.retired ? <RetiredName>{link}</RetiredName> : link}
+      {issue.device_revoked && <small>Device access revoked</small>}
+      {issue.device_revoked === null && <small>Device no longer exists</small>}
+    </>
+  );
+}
+
+/** The device an issue came from, as one line of a phone card. */
+function DeviceLine({ issue }: { issue: Issue }) {
+  return (
+    <>
+      <a href={`#/devices/${encodeURIComponent(issue.device_id)}`}>
+        {issue.device_name ? deviceLabel(issue.device_name) : "Open device"}
+      </a>
+      {issue.device_revoked && " · access revoked"}
+      {issue.device_revoked === null && " · no longer exists"}
+    </>
+  );
+}
+
+function IssueSummary({ issue }: { issue: Issue }) {
+  const fix = leadingDiagnostic(issue.diagnostics)?.hint;
+  const refusal =
+    issue.code === "CAPABILITY_DENIED" ? agentRefusal(issue.diagnostics) : null;
+  return (
+    <div className="issue-summary">
+      <strong>
+        {issue.title || "The device couldn't apply the configuration"}
+      </strong>
+      {/* The column sorts by this code, so its order reads at a glance. */}
+      <code className="issue-code">{issue.code}</code>
+      <p className="issue-context">
+        {isAgentUpdateIssue(issue) ? (
+          // The agent's own build: there is no pipeline version to name.
+          <a href="#/agent-updates">Agent update</a>
+        ) : (
+          <>
+            {issue.desired_version_id && issue.configuration_id ? (
+              <a
+                href={`#/configurations/${encodeURIComponent(issue.configuration_id)}`}
+              >
+                {versionLabel(issue, issue.desired_version_id)}
+              </a>
+            ) : (
+              versionLabel(issue, issue.desired_version_id)
+            )}
+            {issue.deployment_id && (
+              <>
+                {" · "}
+                <a
+                  href={`#/deployments/${encodeURIComponent(issue.deployment_id)}`}
+                >
+                  Deployment
+                </a>
+              </>
+            )}
+          </>
+        )}
+      </p>
+      <p>{issue.message}</p>
+      {fix && (
+        <p className="issue-fix">
+          <strong>Fix</strong> {fix}
+        </p>
+      )}
+      {issue.acknowledged && (
+        <div className="issue-acknowledgement">
+          <p>
+            <strong>
+              Acknowledged by {issue.acknowledged_by_name || "an operator"}
+            </strong>
+            {issue.acknowledged_at && <> · {when(issue.acknowledged_at)}</>}
+          </p>
+          {issue.acknowledgement_reason && (
+            <p>{issue.acknowledgement_reason}</p>
+          )}
+        </div>
+      )}
+      <details className="control-disclosure">
+        <summary>Investigation details</summary>
+        {issue.disposition === "resolved" ? (
+          <p>{resolution(issue)} Check the device for its present health.</p>
+        ) : issue.device_revoked ? (
+          <p>
+            This device identity is retired and cannot report recovery. Check
+            any replacement separately. Acknowledging records your decision and
+            removes this issue from the open list; it does not verify recovery.
+          </p>
+        ) : isDataPlaneCode(issue.code) ? (
+          <p>
+            The version applied, but the device's telemetry shows it isn't
+            delivering. Fix the destination or the component, or roll back to
+            the last working version. This closes by itself after three clean
+            checks. On the host, <code>vectory logs</code> shows Vector's full
+            output.
+          </p>
+        ) : refusal ? (
+          <p>
+            {refusal.reason} {refusal.next} On the host,{" "}
+            <code>vectory status</code> shows the same finding.
+          </p>
+        ) : (
+          <p>
+            Fix the cause, then retry on the device or deploy a corrected
+            version. On the host, <code>vectory status</code> shows the same
+            findings and <code>vectory logs</code> shows Vector's full output.
+          </p>
+        )}
+        <DiagnosticList diagnostics={issue.diagnostics} />
+        <DocLink
+          topic="troubleshooting"
+          section={
+            issue.device_revoked
+              ? "an-old-issue-stays-open-after-device-recovery"
+              : isDataPlaneCode(issue.code)
+                ? "a-pipeline-applies-but-delivers-nothing"
+                : "a-pipeline-is-rejected-or-rolled-back"
+          }
+        >
+          Troubleshooting guide
+        </DocLink>
+        <dl className="control-summary-list">
+          <div>
+            <dt>Attempts</dt>
+            <dd>{attemptsLabel(issue.count, issue.reports, issue.code)}</dd>
+          </div>
+          <div>
+            <dt>First seen</dt>
+            <dd>{issueTime(issue.first_seen)}</dd>
+          </div>
+          <div>
+            <dt>Stage</dt>
+            <dd>{issue.stage.replaceAll("_", " ")}</dd>
+          </div>
+          <div>
+            <dt>Code</dt>
+            <dd className="control-wrap-code">{issue.code}</dd>
+          </div>
+          <div>
+            <dt>Device ID</dt>
+            <dd className="control-wrap-code">{issue.device_id}</dd>
+          </div>
+        </dl>
+      </details>
+    </div>
+  );
+}
+
+const actionIcons = {
+  rollback: Undo2,
+  fix: Wrench,
+  rollout: ArrowRight,
+  device: Server,
+} as const;
+
+/**
+ * What an issue most likely needs next, as a link. Roll back opens the
+ * rollout with its rollback review ready; the review still asks before
+ * anything changes. `about` tells links apart for people who hear them in a
+ * list.
+ */
+function IssueLink({ action, about }: { action: IssueAction; about: string }) {
+  const Icon = actionIcons[action.kind];
+  return (
+    <a
+      className="button compact issue-primary-action"
+      href={action.href}
+      data-issue-action={action.kind}
+      aria-label={`${action.label} for ${about}`}
+      title={
+        action.kind === "rollback"
+          ? "Opens the rollback review. Nothing changes until you confirm there."
+          : undefined
+      }
+      onClick={(event) => {
+        if (
+          action.deployment &&
+          event.button === 0 &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey
+        )
+          requestRollbackReview(action.deployment);
+      }}
+    >
+      <Icon size={14} aria-hidden="true" />
+      {action.label}
+    </a>
+  );
+}
+
+function IssueActions({
+  issue,
+  user,
+  onAct,
+  stale = false,
+  primary = true,
+}: {
+  issue: Issue;
+  user: User;
+  stale?: boolean;
+  /** Lead with the link to what the issue needs. */
+  primary?: boolean;
+  onAct: (
+    kind: Dialog["kind"],
+    issue: Issue,
+    target: HTMLButtonElement,
+  ) => void;
+}) {
+  // A row names its device as a link already; its own next step is the rest.
+  const found = primary ? issueAction(issueSubject(issue), user) : null;
+  const next = found?.kind === "device" ? null : found;
+  const acting = canAct(user, issue);
+  if (!next && !acting) return null;
+  return (
+    <div className="issue-actions">
+      {next && (
+        <IssueLink action={next} about={issue.device_name || "this device"} />
+      )}
+      {acting &&
+        !issue.device_revoked &&
+        issue.desired_version_id &&
+        !isDataPlaneCode(issue.code) &&
+        !isAgentUpdateIssue(issue) && (
+          <Button
+            variant="secondary compact"
+            aria-label={`Retry on device ${issue.device_name || ""}`.trim()}
+            disabled={stale}
+            onClick={(event) => onAct("retry", issue, event.currentTarget)}
+          >
+            Retry on device
+          </Button>
+        )}
+      {acting && (
+        <Button
+          variant="ghost compact"
+          aria-label={`${issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"} issue on ${issue.device_name || "this device"}`}
+          disabled={stale}
+          onClick={(event) => onAct("disposition", issue, event.currentTarget)}
+        >
+          {issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function IssueGroups({
+  page,
+  loading,
+  error,
+  updatedAt,
+  retry,
+  retrying,
+  empty,
+  actions,
+  user,
+  onPage,
+}: {
+  page: IssueGroupPage;
+  loading: boolean;
+  error: string;
+  updatedAt: number | null;
+  retry: () => void;
+  retrying: boolean;
+  empty: React.ReactNode;
+  actions: (issue: Issue, primary?: boolean) => React.ReactNode;
+  user: User;
+  onPage: (page: number) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const failure = error && (
+    <InlineError
+      title={updatedAt ? "Couldn't refresh issues." : "Couldn't load issues."}
+      error={error}
+      updatedAt={updatedAt}
+      retry={retry}
+      retrying={retrying}
+    />
+  );
+  if (failure && !page.items.length) return failure;
+  if (loading && !page.items.length)
+    return (
+      <div className="issue-loading">
+        <Spinner /> Loading issues
+      </div>
+    );
+  if (!page.items.length) return empty;
+  return (
+    <div
+      className={`issue-groups${loading ? " refreshing" : ""}`}
+      aria-busy={loading || undefined}
+      data-stale={failure ? "" : undefined}
+    >
+      {failure}
+      {page.items.map((group) => (
+        <IssueGroupCard
+          key={group.key}
+          group={group}
+          expanded={expanded.has(group.key)}
+          onToggle={() =>
+            setExpanded((current) => {
+              const next = new Set(current);
+              if (next.has(group.key)) next.delete(group.key);
+              else next.add(group.key);
+              return next;
+            })
+          }
+          actions={actions}
+          user={user}
+        />
+      ))}
+      {page.total > page.page_size && (
+        <Pagination
+          page={page.page}
+          size={page.page_size}
+          count={page.total}
+          onPage={onPage}
+        />
+      )}
+    </div>
+  );
+}
+
+function IssueGroupCard({
+  group,
+  expanded,
+  onToggle,
+  actions,
+  user,
+}: {
+  group: IssueGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  actions: (issue: Issue, primary?: boolean) => React.ReactNode;
+  user: User;
+}) {
+  const fix = leadingDiagnostic(group.diagnostics)?.hint;
+  const next = issueAction(groupSubject(group), user);
+  const counts = (["open", "acknowledged", "resolved"] as const)
+    .map((disposition) => ({
+      disposition,
+      count: group.devices.filter((issue) => issue.disposition === disposition)
+        .length,
+    }))
+    .filter((entry) => entry.count > 0);
+  const detailsId = `issue-group-${group.key}`;
+  const columns: TableColumn<Issue>[] = [
+    {
+      id: "device",
+      header: "Device",
+      value: (issue) => issue.device_name,
+      cell: (issue) => <DeviceCell issue={issue} />,
+    },
+    {
+      id: "disposition",
+      header: "Status",
+      value: (issue) => issue.disposition,
+      cell: (issue) => (
+        <>
+          <DispositionBadge issue={issue} />
+          {issue.acknowledged && issue.acknowledgement_reason && (
+            <small className="issue-note">{issue.acknowledgement_reason}</small>
+          )}
+        </>
+      ),
+    },
+    {
+      id: "count",
+      header: "Attempts",
+      value: (issue) => issue.count,
+      cell: (issue) => attemptsLabel(issue.count, issue.reports, issue.code),
+    },
+    {
+      id: "last_seen",
+      header: "Last reported",
+      value: (issue) => issue.last_seen,
+      cell: (issue) => (
+        <time dateTime={issue.last_seen || undefined}>
+          {issueTime(issue.last_seen)}
+        </time>
+      ),
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">Device actions</span>,
+      cell: (issue) => actions(issue, false),
+    },
+  ];
+  return (
+    <article className="issue-group" aria-labelledby={`${detailsId}-title`}>
+      <div className="issue-group-header">
+        <div>
+          <h2 id={`${detailsId}-title`}>{group.title}</h2>
+          <p className="issue-context">
+            {isAgentUpdateIssue(group) ? (
+              <a href="#/agent-updates">Agent update</a>
+            ) : (
+              <>
+                {group.version_id && group.configuration_id ? (
+                  <a
+                    href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}
+                  >
+                    {versionLabel(group, group.version_id)}
+                  </a>
+                ) : (
+                  versionLabel(group, group.version_id)
+                )}
+                {group.deployment_ids.map((id, index) => (
+                  <span key={id}>
+                    {" · "}
+                    <a href={`#/deployments/${encodeURIComponent(id)}`}>
+                      {group.deployment_ids.length > 1
+                        ? `Deployment ${index + 1}`
+                        : "Deployment"}
+                    </a>
+                  </span>
+                ))}
+              </>
+            )}
+          </p>
+        </div>
+        <p className="issue-group-status">
+          {group.issue_count > group.devices.length
+            ? countLabel(group.issue_count, "issue")
+            : counts.map((entry, index) => (
+                <span
+                  key={entry.disposition}
+                  className={`issue-count ${entry.disposition}`}
+                >
+                  {index > 0 && "· "}
+                  {entry.count} {labels[entry.disposition].toLowerCase()}
+                </span>
+              ))}
+        </p>
+      </div>
+      <p className="issue-group-reason">{group.message}</p>
+      {fix && (
+        <p className="issue-fix">
+          <strong>Fix</strong> {fix}
+        </p>
+      )}
+      <p className="issue-group-meta">
+        {countLabel(group.device_count, "device")} ·{" "}
+        {attemptsLabel(group.attempts, group.reports, group.code)}
+        {group.first_seen && (
+          <> · failing since {issueTime(group.first_seen)}</>
+        )}
+        {group.last_seen && <> · last reported {issueTime(group.last_seen)}</>}
+      </p>
+      <div className="issue-group-footer">
+        <button
+          type="button"
+          className="issue-group-toggle"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={onToggle}
+        >
+          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          {expanded ? "Hide devices and findings" : "Show devices and findings"}
+        </button>
+        {next && <IssueLink action={next} about={group.title} />}
+      </div>
+      {expanded && (
+        <div className="issue-group-details" id={detailsId}>
+          {group.diagnostics.length > 0 && (
+            <>
+              <h3>What Vector reported</h3>
+              <DiagnosticList diagnostics={group.diagnostics} />
+            </>
+          )}
+          <h3>Devices</h3>
+          <div className="control-table">
+            <DataTable
+              data={group.devices}
+              columns={columns}
+              rowKey={(issue) => issue.id}
+              label={`Devices with ${group.title}`}
+              className="issue-device-table"
+              defaultSort={{ column: "last_seen", direction: "desc" }}
+            />
+          </div>
+          {group.issue_count > group.devices.length && (
+            <p className="control-muted">
+              Showing the {group.devices.length} most recent of{" "}
+              {group.issue_count.toLocaleString()} issues. Use All issues to
+              browse every device.
+            </p>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function RetryDialog({
+  issue,
+  user,
+  close,
+  onDone,
+}: {
+  issue: Issue;
+  user: User;
+  close: () => void;
+  onDone: (message: string) => void;
+}) {
+  const device = useResource<Device | null>(
+    `/devices/${encodeURIComponent(issue.device_id)}`,
+    null,
+  );
+  const current = device.data;
+  const changed =
+    !!current && current.desired_version_id !== issue.desired_version_id;
+  const review = current
+    ? JSON.stringify([
+        current.id,
+        current.desired_version_id,
+        current.desired_generation,
+        current.apply_state,
+        !!current.local_paused,
+        !!current.sync_paused,
+        current.retry_preconditions === true,
+      ])
+    : "";
+  return (
+    <Modal
+      open
+      onClose={close}
+      title="Retry on device"
+      description={`Ask ${issue.device_name || "this device"} to apply its current assignment again.`}
+    >
+      <div className="modal-body issue-review">
+        <h3>{issue.title}</h3>
+        <p>{issue.message}</p>
+        {device.error && (
+          <ErrorBox message={device.error} retry={device.reload} />
+        )}
+        {!current && device.loading ? (
+          <div className="issue-loading">
+            <Spinner /> Loading the device
+          </div>
+        ) : current ? (
+          <>
+            <dl className="control-summary-list">
+              <div>
+                <dt>Device</dt>
+                <dd>{current.name}</dd>
+              </div>
+              <div>
+                <dt>Current state</dt>
+                <dd>
+                  <StatusBadge domain="apply" value={current.apply_state} />
+                </dd>
+              </div>
+              <div>
+                <dt>Assignment</dt>
+                <dd>
+                  {current.desired_version_id
+                    ? changed
+                      ? "A different version than the one that failed"
+                      : `${versionLabel(issue, issue.desired_version_id)} (the version that failed)`
+                    : "No pipeline assigned"}
+                </dd>
+              </div>
+            </dl>
+            {changed && (
+              <p className="control-note">
+                This device's assignment changed after this failure. A retry
+                applies its current assignment, not the version in this issue.
+              </p>
+            )}
+            <p>
+              Retry sends the same version again as a new attempt. Fix the cause
+              first, or it will fail the same way. The device confirms success
+              only when the agent verifies it.
+            </p>
+            {!eligibleState(current) && current.desired_version_id && (
+              <p className="control-note">
+                This device isn't in a failed state now, so there is nothing to
+                retry. Check the device for its current status.
+              </p>
+            )}
+            <DeviceApplicationRetry
+              key={review}
+              device={current}
+              user={user}
+              onDone={onDone}
+              onRefresh={device.reload}
+            />
+          </>
+        ) : null}
+      </div>
+      <div className="modal-footer">
+        <a
+          className="button secondary"
+          href={`#/devices/${encodeURIComponent(issue.device_id)}`}
+          onClick={close}
+        >
+          Open device
+        </a>
+        <Button variant="secondary" onClick={close}>
+          Close
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -401,9 +1133,12 @@ function IssueDisposition({
   const reopen = issue.disposition === "acknowledged";
   const expectedDisposition = reopen ? "acknowledged" : "open";
   const available =
-    snapshot.device_revoked === true &&
+    snapshot.device_revoked !== null &&
     !snapshot.resolved &&
     snapshot.disposition === expectedDisposition;
+  const note = reason.trim();
+  const tooLong = [...note].length > 1000;
+  const missing = reopen && !note;
   useEffect(() => {
     const guard = (event: Event) => {
       if (committing.current) event.preventDefault();
@@ -433,21 +1168,16 @@ function IssueDisposition({
     }
   }
   async function save() {
-    if (
-      committing.current ||
-      stale ||
-      !available ||
-      !reason.trim() ||
-      [...reason.trim()].length > 1000
-    )
-      return;
+    if (committing.current || stale || !available || missing || tooLong) return;
     committing.current = true;
     setBusy(true);
     setError("");
     try {
       await post<Issue>(
         `/issues/${snapshot.id}/${reopen ? "reopen" : "acknowledge"}`,
-        { revision: snapshot.revision, reason: reason.trim() },
+        note
+          ? { revision: snapshot.revision, reason: note }
+          : { revision: snapshot.revision },
       );
       onDone(
         reopen
@@ -472,30 +1202,35 @@ function IssueDisposition({
       onClose={() => {
         if (!committing.current) close();
       }}
-      title={reopen ? "Reopen issue" : "Acknowledge retired-device issue"}
+      title={reopen ? "Reopen issue" : "Acknowledge issue"}
       description={
         reopen
           ? "Return this failure to the open list and record why it needs follow-up."
-          : "Record your decision about this retired identity. Its failure will remain in the issue history."
+          : "Record that this failure is known and being handled. It leaves the open list until the device fails a new attempt."
       }
     >
       <div className="modal-body issue-review">
-        <h3>{words(snapshot.code)}</h3>
+        <h3>{snapshot.title || snapshot.code}</h3>
         <p>{snapshot.message}</p>
         <dl className="control-summary-list">
           <div>
             <dt>Device</dt>
-            <dd>{snapshot.device_name || "Unnamed device"}</dd>
+            <dd>
+              {snapshot.device_name
+                ? deviceLabel(snapshot.device_name)
+                : "Unnamed device"}
+              {snapshot.device_revoked && " (access revoked)"}
+            </dd>
           </div>
           <div>
-            <dt>Device ID</dt>
-            <dd className="control-wrap-code">{snapshot.device_id}</dd>
+            <dt>Pipeline</dt>
+            <dd>{versionLabel(snapshot, snapshot.desired_version_id)}</dd>
           </div>
           <div>
             <dt>Last reported</dt>
             <dd>
-              {issueTime(snapshot.last_seen)} · {snapshot.count}{" "}
-              {snapshot.count === 1 ? "occurrence" : "occurrences"}
+              {issueTime(snapshot.last_seen)} ·{" "}
+              {attemptsLabel(snapshot.count, snapshot.reports, snapshot.code)}
             </dd>
           </div>
           <div>
@@ -505,14 +1240,16 @@ function IssueDisposition({
         </dl>
         <p>
           {reopen
-            ? "Reopening does not reconnect the retired device or change its pipeline."
-            : "Acknowledgement removes this from the open issue count. It does not mark the device healthy or confirm that a replacement recovered."}
+            ? "Reopening doesn't change the device or its pipeline."
+            : snapshot.device_revoked
+              ? "This device identity is retired and can't report recovery. Acknowledging records your decision; it doesn't verify a replacement."
+              : "Acknowledging doesn't mark the device healthy. The issue resolves when the device verifies a configuration, and a new failed attempt reopens it."}
         </p>
         {!available && (
           <p className="control-note">
             {snapshot.disposition !== expectedDisposition
               ? `This issue is now ${labels[snapshot.disposition].toLowerCase()}. Close this dialog to review it in the issue list.`
-              : "This issue is no longer eligible. Only unresolved issues on revoked device identities can be acknowledged or reopened."}
+              : "This issue can no longer be changed: it is resolved, or its device no longer exists."}
           </p>
         )}
         {error && <ErrorBox message={error} />}
@@ -526,8 +1263,12 @@ function IssueDisposition({
           </Button>
         )}
         <Field
-          label={reopen ? "Reason for reopening" : "Reason for acknowledgement"}
-          hint="Required. Recorded in the audit log; avoid secrets or private diagnostics."
+          label={reopen ? "Reason for reopening" : "Note (optional)"}
+          hint={
+            reopen
+              ? "Required. Recorded in the audit log; avoid secrets."
+              : "Shown with the acknowledgement and recorded in the audit log; avoid secrets."
+          }
         >
           <textarea
             rows={3}
@@ -536,8 +1277,8 @@ function IssueDisposition({
             onChange={(event) => setReason(event.target.value)}
           />
         </Field>
-        {[...reason.trim()].length > 1000 && (
-          <p role="alert">Keep the reason to 1,000 characters or fewer.</p>
+        {tooLong && (
+          <p role="alert">Keep the note to 1,000 characters or fewer.</p>
         )}
       </div>
       <div className="modal-footer">
@@ -552,13 +1293,7 @@ function IssueDisposition({
         </Button>
         <Button
           busy={busy}
-          disabled={
-            stale ||
-            refreshing ||
-            !available ||
-            !reason.trim() ||
-            [...reason.trim()].length > 1000
-          }
+          disabled={stale || refreshing || !available || missing || tooLong}
           onClick={() => void save()}
         >
           {reopen ? "Reopen issue" : "Acknowledge issue"}

@@ -51,8 +51,14 @@ func checkNoPendingPurge(dir string) error {
 }
 
 func createFreshStateDirectory(dir string) error {
-	// A previously absent parent has no installed state to purge yet.
-	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
+	// On Windows, the directory that holds the state directory under ProgramData is
+	// judged before anything is made in it (see state_root.go).
+	if err := ensureStateRoot(dir); err != nil {
+		return err
+	}
+	// A previously absent parent has no installed state to purge yet. It stays
+	// traversable: the service account owns the state directory below it.
+	if err := makeTraversable(filepath.Dir(dir)); err != nil {
 		return err
 	}
 	releaseLifecycle, err := lockLifecycle(dir)
@@ -63,7 +69,7 @@ func createFreshStateDirectory(dir string) error {
 	if err := checkNoPendingPurge(dir); err != nil {
 		return err
 	}
-	return os.MkdirAll(dir, 0700)
+	return makePrivateDirectory(dir)
 }
 
 // Lock keeps the existing state-file lock for the duration of an operation.

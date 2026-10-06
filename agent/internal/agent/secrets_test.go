@@ -24,7 +24,7 @@ func secretTemplate(uri string) []byte {
 func secretFixture(t *testing.T) (*Engine, Manifest, *fakeDriver, string) {
 	t.Helper()
 	e, m, d := fixture(t, secretTemplate("https://sink.example/events"))
-	p := filepath.Join(t.TempDir(), "token")
+	p := filepath.Join(privateTempDir(t), "token")
 	if err := AtomicWrite(p, []byte("first-sensitive-token")); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func secretFixture(t *testing.T) (*Engine, Manifest, *fakeDriver, string) {
 	return e, m, d, p
 }
 func TestSecretTypedResolutionAndNegativePaths(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "token")
+	p := filepath.Join(privateTempDir(t), "token")
 	value := "x\"},\"sources\":{\"evil\":{}}\nline2"
 	if err := AtomicWrite(p, []byte(value+"\n")); err != nil {
 		t.Fatal(err)
@@ -72,8 +72,13 @@ func TestSecretTypedResolutionAndNegativePaths(t *testing.T) {
 	if err != nil || used || !bytes.Equal(got, plain) {
 		t.Fatal("ordinary config bytes changed")
 	}
+	// The fields accepted before the table existed still resolve. Vector 0.58's
+	// elasticsearch sink has no bearer token, so it has user and password.
 	for _, typ := range []string{"http", "loki", "elasticsearch"} {
 		for _, field := range []string{"user", "password", "token"} {
+			if typ == "elasticsearch" && field == "token" {
+				continue
+			}
 			raw := []byte(`{"sinks":{"out":{"type":"` + typ + `","auth":{"` + field + `":"vectory-secret:API_TOKEN"},"large":9007199254740993}}}`)
 			got, used, err := ResolveLocalSecrets(raw, bindings)
 			if err != nil || !used || !bytes.Contains(got, []byte("9007199254740993")) {
@@ -85,7 +90,7 @@ func TestSecretTypedResolutionAndNegativePaths(t *testing.T) {
 func TestSecretPrivateFileAndBounds(t *testing.T) {
 	for name, value := range map[string][]byte{"empty": {}, "oversized": bytes.Repeat([]byte("x"), MaxSecret+1), "nul": {'x', 0}, "nonutf8": {0xff}} {
 		t.Run(name, func(t *testing.T) {
-			p := filepath.Join(t.TempDir(), "token")
+			p := filepath.Join(privateTempDir(t), "token")
 			if err := AtomicWrite(p, value); err != nil {
 				t.Fatal(err)
 			}
@@ -94,7 +99,7 @@ func TestSecretPrivateFileAndBounds(t *testing.T) {
 			}
 		})
 	}
-	p := filepath.Join(t.TempDir(), "token")
+	p := filepath.Join(privateTempDir(t), "token")
 	if err := AtomicWrite(p, []byte("secret")); err != nil {
 		t.Fatal(err)
 	}

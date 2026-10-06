@@ -1,0 +1,40 @@
+/* Editor-scoped tokens. Status colors alias the shared status tokens
+   (tokens.css) so a warning is the same amber in the editor and the shell;
+   the code palette is editor-only (light, then dark). */
+:root {
+  --ed-danger: var(--danger-text);
+  --ed-danger-bg: var(--danger-bg);
+  --ed-danger-line: var(--danger-border);
+  --ed-warning: var(--warning-text);
+  --ed-warning-bg: var(--warning-bg);
+  --ed-warning-line: var(--warning-border);
+  --ed-success: var(--success-text);
+  --ed-success-bg: var(--success-bg);
+  --ed-success-line: var(--success-border);
+  --ed-info: var(--info-text);
+  --ed-info-bg: var(--info-bg);
+  --ed-info-line: var(--info-border);
+  --ed-neutral-bg: var(--neutral-bg);
+  --ed-neutral-line: var(--neutral-border);
+  --ed-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  --ed-code-path: #235ca8;
+  --ed-code-function: #7440a3;
+  --ed-code-string: #216441;
+  --ed-code-literal: #9a4b12;
+  --ed-code-number: #845818;
+  --ed-code-comment: #6f6b64;
+  --ed-radius: 8px;
+  --ed-radius-sm: 6px;
+  --ed-elevation: 0 1px 2px #2925220d, 0 8px 24px #2925220f;
+}
+[data-theme="dark"] {
+  --ed-code-path: #a6c6ff;
+  --ed-code-function: #d6b2ed;
+  --ed-code-string: #acd5b8;
+  --ed-code-literal: #f0b78a;
+  --ed-code-number: #e2c287;
+  --ed-code-comment: #a39e99;
+  --ed-elevation: 0 1px 2px #0006, 0 10px 30px #0005;
+}

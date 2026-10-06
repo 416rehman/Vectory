@@ -1,0 +1,73 @@
+# Local Linux preview only. The server's development mode requires a literal
+# loopback bind; host networking keeps that protection inside the container.
+services:
+  server:
+    image: ${VECTORY_PREVIEW_SERVER_IMAGE:?Run ./start.sh first}
+    pull_policy: never
+    user: "10001:10001"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    environment:
+      VECTORY_DEVELOPMENT: "true"
+      VECTORY_COOKIE_SECURE: "false"
+      VECTORY_HTTP_ADDR: 127.0.0.1:${VECTORY_PREVIEW_WEB_PORT:-8080}
+      VECTORY_AGENT_ADDR: 127.0.0.1:${VECTORY_PREVIEW_AGENT_PORT:-8443}
+      VECTORY_PUBLIC_URL: http://127.0.0.1:${VECTORY_PREVIEW_WEB_PORT:-8080}
+      VECTORY_PUBLIC_AGENT_URL: https://127.0.0.1:${VECTORY_PREVIEW_AGENT_PORT:-8443}
+      VECTORY_TLS_CERT: /run/preview/pki/agent-chain.pem
+      VECTORY_TLS_KEY: /run/preview/pki/server-key.pem
+      VECTORY_BOOTSTRAP_SECRET_FILE: /run/preview/bootstrap
+      VECTORY_VALIDATION_URL: http://127.0.0.1:${VECTORY_PREVIEW_VALIDATOR_PORT:-18081}
+      VECTORY_INSTANCE_NAME: Local preview
+    volumes:
+      - data:/var/lib/vectory
+      - pki:/run/preview:ro
+    healthcheck:
+      test: [CMD-SHELL, 'curl --fail --silent http://127.0.0.1:${VECTORY_PREVIEW_WEB_PORT:-8080}/api/v1/status >/dev/null']
+      interval: 3s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+    depends_on:
+      validator:
+        condition: service_healthy
+  validator:
+    image: ${VECTORY_PREVIEW_VALIDATOR_IMAGE:?Run ./start.sh first}
+    pull_policy: never
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,uid=10002,gid=10002"]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 64
+    environment:
+      VECTORY_VALIDATOR_ISOLATED: "true"
+    ports:
+      - 127.0.0.1:${VECTORY_PREVIEW_VALIDATOR_PORT:-18081}:8081
+    networks: [validation]
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8081 &&
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status":"ok"' <&3
+      interval: 3s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+volumes:
+  data:
+  pki:
+    external: true
+    name: ${VECTORY_PREVIEW_PROJECT:-vectory-preview}_pki
+networks:
+  validation:
+    internal: true

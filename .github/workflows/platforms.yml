@@ -1,0 +1,894 @@
+name: platforms
+# The product on every platform it claims, with real Vector 0.58.0 and a real
+# server: the agent as a systemd service on Linux (the generated unit and the
+# packaged strict one), as a launchd daemon on macOS and as a Windows service,
+# and the dashboard in Firefox and WebKit. docs/internal/CI.md says what each
+# job proves. It runs by hand (workflow_dispatch) and when this file or a script
+# it runs changes, so it can be worked on without the whole `checks` workflow.
+# Every phase of every job is one named step that writes an evidence file under
+# artifacts/platforms, and the logs are uploaded even when a step fails.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/platforms.yml"
+      - "tests/platform/**"
+      - "tests/native-workflow.mjs"
+      - "tests/protect-fixture.ps1"
+      - "scripts/preview.sh"
+      - "scripts/check-installer.mjs"
+      - "packaging/Start-LocalPreview.ps1"
+      - "packaging/systemd/vectory.service"
+      - "packaging/dev-pki/main.go"
+      - "packaging/build-release.py"
+      - "dashboard/playwright.config.ts"
+      - "dashboard/e2e/cross-browser.spec.ts"
+permissions:
+  contents: read
+# A newer push cancels the Linux and browser runs it replaces. A Windows or macOS
+# run that is under way finishes (the newest one waits for its turn), because their
+# proofs take longer than changes come, and a run that every push cancelled would
+# never end.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+jobs:
+  # Real systemd on a GitHub-hosted VM. The agent is installed with
+  # `vectory setup --create-user`, a pipeline is applied through the service,
+  # the service is restarted, killed and stopped, and the packaged unit
+  # (packaging/systemd/vectory.service, only ExecStart adjusted) takes over and
+  # is read from inside its own mount namespace.
+  #
+  # After those phases, the privileged update step on the same instance
+  # (tests/platform/agent-update.mjs): agents built from copies of the source, a
+  # release key made here, updates turned on with offline custody, a host installed
+  # with the consent flags, and each failure row of the step on the real service,
+  # under its sandboxed unit; then a stand-in for the agent listener that offers what
+  # a host must refuse. A phase runs only when the phases it builds on passed.
+  linux-service:
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: platforms-linux-${{ github.ref }}
+      cancel-in-progress: true
+    timeout-minutes: 210
+    env:
+      VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
+      VECTORY_PREVIEW_AGENT_TARGETS: linux/amd64
+      VECTORY_PLATFORM_OUTPUT: artifacts/platforms/linux-service
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - name: Check the platform helpers against the text the tools print
+        timeout-minutes: 10
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs tests/platform/update-hosts.test.mjs
+      - name: Build the dashboard the instance serves
+        timeout-minutes: 20
+        run: |
+          (cd help-center && npm ci)
+          (cd dashboard && npm ci && npm run build)
+      - name: Build the server, the validator and vectory-admin
+        timeout-minutes: 30
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+      - name: Provide the pinned Vector 0.58.0
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+          VECTOR_SHA256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | sha256sum -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/vector-x86_64-unknown-linux-gnu/bin/vector"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTORY_PREVIEW_VECTOR=$binary" >> "$GITHUB_ENV"
+          echo "VECTORY_VECTOR_BIN=$binary" >> "$GITHUB_ENV"
+      - name: Start a fresh instance with the real validator
+        id: instance
+        timeout-minutes: 10
+        run: scripts/preview.sh start
+      # setup creates the vectory account, registers /etc/systemd/system/vectory.service,
+      # starts it and waits for the first check-in; then the manager, the journal
+      # and the API are read.
+      - name: Install the agent as a systemd service for an unprivileged account and enroll it
+        id: install
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs install
+      - name: Run the clean-install workflow against the service
+        id: apply
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs apply generated
+      # After the apply, which gives the agent a data directory to report. A failed
+      # apply still gets its reading: the mount table is what explains it.
+      - name: Read the generated unit's sandbox from the running service
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/linux-sandbox.mjs generated
+      - name: Restart the service, kill the agent and stop the service
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        timeout-minutes: 25
+        run: node tests/platform/service.mjs lifecycle
+      - name: Remove the service and keep its state
+        id: uninstall
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs uninstall
+      - name: Run the packaged strict unit and read its sandbox
+        id: packaged
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/linux-sandbox.mjs packaged
+      - name: Apply a pipeline under the strict unit
+        if: ${{ !cancelled() && steps.packaged.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs apply strict
+      # Agent updates. The builds are the product's source with a version constant
+      # changed in a copy (two have one more line changed); nothing in the product is a
+      # hook. The host is returned to a clean state first, so these phases don't depend on
+      # what the phases above left, only on the instance and its administrator.
+      - name: Build the agents the update checks roll out, from copies of the source
+        id: update-build
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs build
+      - name: Make a release key and turn agent updates on with offline custody
+        id: update-enable
+        if: ${{ !cancelled() && steps.update-build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs enable
+      - name: Install agent 0.1.0 with the consent flags of Add device, and apply a pipeline
+        id: update-install
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs install
+      - name: Read the update step's units and run it once under them
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs sandbox
+      - name: Update the agent from 0.1.0 to 0.1.1 through a rollout
+        id: update-update
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs update
+      - name: Roll out a build that never starts, and offer it again
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs start-failure
+      - name: Roll out a build that never checks in
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-check-in
+      - name: Roll out a build whose store file is cut short
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs truncated
+      - name: Kill the update step while it swaps and while it tries a build
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs interrupt
+      - name: Roll out a build to a host whose update step has no room
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs disk-full
+      # The listener is taken over: the instance is stopped and a small program answers
+      # the real agent with the instance's own TLS chain and manifest signing key.
+      - name: Offer the host what it must refuse, from a stand-in for the agent listener
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 60
+        run: node tests/platform/agent-update.mjs hostile
+      - name: Install a host without the consent flags, and offer it a good release
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-consent
+      - name: Collect the service's logs and the instance's logs
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set +e
+          node tests/platform/service.mjs collect
+          node tests/platform/agent-update.mjs collect
+          mkdir -p "$VECTORY_PLATFORM_OUTPUT/logs"
+          # What a failed run needs, in the log itself (the artifact holds the rest).
+          echo "::group::The service's journal"
+          sudo journalctl -u vectory --no-pager -n 150
+          echo "::endgroup::"
+          echo "::group::The update step's journal"
+          sudo journalctl -u vectory-update.service -u vectory-update.timer --no-pager -n 150
+          echo "::endgroup::"
+          echo "::group::The folders the service writes"
+          sudo ls -la /etc/vectory /etc/vectory/managed /var/lib/vectory-agent /var/lib/vector
+          echo "::endgroup::"
+          echo "::group::What the update step keeps"
+          sudo ls -laR /var/lib/vectory-update /etc/vectory/updates
+          echo "::endgroup::"
+          scripts/preview.sh stop
+          cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log "$VECTORY_PLATFORM_OUTPUT/logs/"
+          exit 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: platforms-linux-service
+          path: artifacts/platforms/linux-service
+          if-no-files-found: warn
+  # The server and the validator are built and run natively on Windows with
+  # packaging/Start-LocalPreview.ps1. The agent runs in the foreground first
+  # (tests/native-workflow.mjs), then as the Vectory service under
+  # NT SERVICE\Vectory. The Windows preview script starts no validator and
+  # serves the leaf certificate only; this job starts the validator and appends
+  # the CA to the served chain, as scripts/preview.sh does.
+  #
+  # After those phases, the privileged update step on the same instance
+  # (tests/platform/agent-update.mjs), the phases of the Linux job with the host
+  # object of Windows (tests/platform/update-host-windows.mjs): the step is the
+  # VectoryUpdate service under the Service Control Manager, run as LocalSystem from
+  # the helper copy; its swap is two renames, so one more phase ends it between them
+  # (boot-gap); the volume is nearly filled for the disk-full phase, because the path
+  # check refuses a mount point over the step's directory; and the builds are the
+  # product's source with the Windows line of the release gate (update_gate.go) opened
+  # in the copy. These phases are the proof that gates agent updates on Windows: when
+  # one fails and is not fixed by the cut, windowsUpdatesInRelease in
+  # agent/internal/agent/update_gate.go is set to false, and Windows hosts update by
+  # hand in that release.
+  windows:
+    runs-on: windows-2025
+    concurrency:
+      group: platforms-windows-${{ github.ref }}
+      cancel-in-progress: false
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VECTORY_PLATFORM_OUTPUT: artifacts/platforms/windows
+      # Where Start-LocalPreview.ps1 has the server read the release builds from: the
+      # update phases write the build they roll out there.
+      VECTORY_RELEASES_DIR: ${{ github.workspace }}/artifacts/releases
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 10
+        with: { python-version: "3.13" }
+      - name: Check the platform helpers against the text the tools print
+        timeout-minutes: 10
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs tests/platform/update-hosts.test.mjs tests/platform/update-host-windows.test.mjs
+      - name: Build the dashboard the instance serves
+        timeout-minutes: 20
+        run: |
+          Push-Location help-center
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          Push-Location dashboard
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          exit $LASTEXITCODE
+      - name: Build the server, the validator and vectory-admin
+        timeout-minutes: 45
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+          exit $LASTEXITCODE
+      - name: Create the development PKI and let the agent listener present its chain
+        timeout-minutes: 10
+        run: |
+          go run packaging/dev-pki/main.go --out .local/pki --hosts localhost,127.0.0.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Setup pins the CA by fingerprint, which needs the CA in the chain the listener sends.
+          $pki = Join-Path $PWD '.local/pki'
+          [IO.File]::AppendAllText((Join-Path $pki 'server.pem'), [IO.File]::ReadAllText((Join-Path $pki 'ca.pem')))
+      - name: Build the Windows agent release the instance lists
+        timeout-minutes: 15
+        run: |
+          python packaging/build-release.py --target windows/amd64 --out artifacts/releases
+          exit $LASTEXITCODE
+      - name: Provide the pinned Vector 0.58.0
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-pc-windows-msvc.zip
+          VECTOR_SHA256: 72bbedf4772302f7f67e7db2120fe5b42e39ae65873c895876fc2038050c10c5
+          VECTOR_BINARY: bin/vector.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP $env:VECTOR_ARCHIVE
+          Invoke-WebRequest -Uri "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$env:VECTOR_ARCHIVE" -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:VECTOR_SHA256) { throw "Checksum mismatch for $($env:VECTOR_ARCHIVE): expected $($env:VECTOR_SHA256), got $actual" }
+          $destination = Join-Path $env:RUNNER_TEMP 'vector'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binary = (Get-Item -LiteralPath (Join-Path $destination $env:VECTOR_BINARY)).FullName
+          $version = & $binary --version
+          Write-Output $version
+          if ($LASTEXITCODE -ne 0 -or -not "$version".StartsWith('vector 0.58.0 ')) { throw "Unexpected Vector build at ${binary}: $version" }
+          "VECTORY_VECTOR_BIN=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Start the validator with the pinned Vector
+        timeout-minutes: 5
+        env:
+          VECTORY_VALIDATOR_ISOLATED: "true"
+          VECTORY_VALIDATOR_ADDR: 127.0.0.1:8081
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:VECTORY_VECTOR_BINARY = $env:VECTORY_VECTOR_BIN
+          $preview = Join-Path $PWD '.local/preview'
+          New-Item -ItemType Directory -Force $preview | Out-Null
+          # The runner ends a step by ending every process below the step's shell, and
+          # a process the shell started itself goes with it. One that a second shell
+          # started, and that shell has left, does not (Start-LocalPreview.ps1 starts
+          # the server that way), so a second shell starts the validator and exits.
+          $validator = Join-Path $PWD 'server/target/debug/vector-validator.exe'
+          $outLog = Join-Path $preview 'validator.log'
+          $errLog = Join-Path $preview 'validator-error.log'
+          pwsh -NoProfile -Command "Start-Process -FilePath '$validator' -WindowStyle Hidden -RedirectStandardOutput '$outLog' -RedirectStandardError '$errLog'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ready = $false
+          foreach ($attempt in 1..60) {
+            try {
+              $client = New-Object Net.Sockets.TcpClient
+              $client.Connect('127.0.0.1', 8081)
+              $client.Close()
+              $ready = $true
+              break
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $ready) {
+            Get-Content (Join-Path $preview 'validator.log'), (Join-Path $preview 'validator-error.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
+            throw 'The validator did not listen on 127.0.0.1:8081.'
+          }
+          $listener = Get-NetTCPConnection -LocalPort 8081 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($listener) { [IO.File]::WriteAllText((Join-Path $preview 'validator.pid'), [string]$listener.OwningProcess) }
+          'VECTORY_VALIDATION_URL=http://127.0.0.1:8081' | Out-File -FilePath $env:GITHUB_ENV -Append
+          # What the validator answers to the smallest pipeline, printed: the server
+          # only says "unavailable" when the answer is not what it expects.
+          $probe = '{"config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}}'
+          try {
+            $answer = Invoke-RestMethod -Uri 'http://127.0.0.1:8081/validate' -Method Post -ContentType 'application/json' -Body $probe -TimeoutSec 120
+            Write-Host "The validator answers: $($answer | ConvertTo-Json -Depth 6 -Compress)"
+          } catch {
+            Write-Host "The validator did not answer a probe: $($_.Exception.Message)"
+            Get-Content (Join-Path $preview 'validator.log'), (Join-Path $preview 'validator-error.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
+          }
+      - name: Start a fresh instance with Start-LocalPreview.ps1
+        id: instance
+        timeout-minutes: 10
+        run: |
+          pwsh -NoProfile -File packaging/Start-LocalPreview.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The script returns once the server process starts: wait until it answers.
+          $status = $null
+          $deadline = (Get-Date).AddMinutes(2)
+          while (-not $status -and (Get-Date) -lt $deadline) {
+            try { $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v1/status' -TimeoutSec 5 } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $status) {
+            Get-Content .local/preview/server.log, .local/preview/server-error.log -ErrorAction SilentlyContinue | Select-Object -Last 60
+            throw 'The server did not answer within two minutes.'
+          }
+          $status | ConvertTo-Json -Compress
+      - name: Run the clean-install workflow with the downloaded agent
+        id: native
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          VECTORY_NATIVE_WORKFLOW_OUTPUT: artifacts/platforms/windows/native-foreground
+        run: node tests/native-workflow.mjs
+      - name: Stop the foreground agent the workflow leaves running
+        id: foreground
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/service.mjs stop-foreground
+      - name: Install the agent as the Vectory service and enroll it
+        id: install
+        if: ${{ !cancelled() && steps.foreground.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs install
+      - name: Run the clean-install workflow against the service
+        id: apply
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs apply service
+      - name: Ask the validator what it answers to the pipelines the workflow publishes
+        if: ${{ !cancelled() && (steps.native.outcome == 'failure' || steps.apply.outcome == 'failure') }}
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $pidFile = Join-Path $PWD '.local/preview/validator.pid'
+          $validator = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile)) -ErrorAction SilentlyContinue
+          if ($validator) { Write-Host "The validator process (PID $($validator.Id)) is running." } else { Write-Host 'The validator process is no longer running.' }
+          Get-NetTCPConnection -LocalPort 8081 -ErrorAction SilentlyContinue | Format-Table State, LocalAddress, LocalPort, OwningProcess | Out-String | Write-Host
+          $cases = [ordered]@{
+            'the service pipeline' = '{"config":{"sources":{"demo":{"type":"demo_logs","format":"json","interval":1}},"transforms":{"enrich":{"type":"remap","inputs":["demo"],"source":".environment = \"local-verification\"\n.managed_by = \"vectory\""}},"sinks":{"output":{"type":"console","inputs":["enrich"],"encoding":{"codec":"json"},"target":"stderr"}}}}'
+            'the foreground pipeline' = '{"config":{"data_dir":"D:\\a\\Vectory\\Vectory\\.local\\native workflow x\\vector-data","sources":{"demo":{"type":"demo_logs","format":"json","interval":1},"metrics":{"type":"internal_metrics","scrape_interval_secs":1}},"transforms":{"enrich":{"type":"remap","inputs":["demo"],"source":".environment = \"local-verification\"\n.managed_by = \"vectory\""}},"sinks":{"output":{"type":"console","inputs":["enrich"],"encoding":{"codec":"json"},"target":"stderr"},"metrics_out":{"type":"prometheus_exporter","inputs":["metrics"],"address":"127.0.0.1:9999"}}}}'
+          }
+          foreach ($name in $cases.Keys) {
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            try {
+              $response = Invoke-WebRequest -Uri 'http://127.0.0.1:8081/validate' -Method Post -ContentType 'application/json' -Body $cases[$name] -SkipHttpErrorCheck -TimeoutSec 60
+              Write-Host "${name}: HTTP $($response.StatusCode) after $($watch.ElapsedMilliseconds) ms: $($response.Content)"
+            } catch {
+              Write-Host "${name}: no answer after $($watch.ElapsedMilliseconds) ms: $($_.Exception.Message)"
+            }
+          }
+          exit 0
+      - name: Restart the service, kill the agent and stop the service
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        timeout-minutes: 25
+        run: node tests/platform/service.mjs lifecycle
+      - name: Remove the service and keep its state
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs uninstall
+      # Agent updates. The builds are the product's source with a version constant
+      # changed in a copy (two have one more line changed, and every one has the Windows
+      # line of the release gate opened); nothing in the product is a hook. The host is
+      # returned to a clean state first (the services removed, C:\ProgramData\Vectory and
+      # C:\Program Files\Vectory deleted), so these phases don't depend on what the phases
+      # above left, only on the instance and its administrator.
+      - name: Build the agents the update checks roll out, from copies of the source
+        id: update-build
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 45
+        run: node tests/platform/agent-update.mjs build
+      - name: Make a release key and turn agent updates on with offline custody
+        id: update-enable
+        if: ${{ !cancelled() && steps.update-build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs enable
+      - name: Install agent 0.1.0 with the consent flags of Add device, and apply a pipeline
+        id: update-install
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs install
+      - name: Read the update step's service and the registrations of both, and watch the step run
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/agent-update.mjs sandbox
+      - name: Update the agent from 0.1.0 to 0.1.1 through a rollout
+        id: update-update
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs update
+      - name: Roll out a build that never starts, and offer it again
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs start-failure
+      - name: Roll out a build that never checks in
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-check-in
+      - name: Roll out a build whose store file is cut short
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs truncated
+      - name: Kill the update step while it swaps and while it tries a build
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs interrupt
+      # A swap of two renames has one moment with no executable. A program holds the
+      # staged file as a virus scanner does, so that the second rename waits, and the
+      # step is ended in that wait; then the services are started as a boot may.
+      - name: End the update step between the two renames of its swap, and start the services in the order a boot may
+        id: update-boot-gap
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs boot-gap
+      # The volume is nearly filled with a file of allocated space for this one: the
+      # path check refuses a mount point over the step's directory.
+      - name: Roll out a build to a host whose update step has no room
+        if: ${{ !cancelled() && steps.update-boot-gap.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs disk-full
+      # The listener is taken over: the server is ended and a small program answers the
+      # real agent with the instance's own TLS chain and manifest signing key.
+      - name: Offer the host what it must refuse, from a stand-in for the agent listener
+        if: ${{ !cancelled() && steps.update-boot-gap.outcome == 'success' }}
+        timeout-minutes: 60
+        run: node tests/platform/agent-update.mjs hostile
+      - name: Install a host without the consent flags, and offer it a good release
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-consent
+      - name: Collect the service's logs, the instance's logs and stop the instance
+        if: always()
+        timeout-minutes: 10
+        run: |
+          node tests/platform/service.mjs collect
+          node tests/platform/agent-update.mjs collect
+          Write-Host '::group::The update step, as the Service Control Manager has it'
+          sc.exe queryex VectoryUpdate
+          sc.exe qc VectoryUpdate
+          sc.exe qfailure VectoryUpdate
+          Write-Host '::endgroup::'
+          Write-Host '::group::What the update step wrote to its log'
+          $stepLog = Join-Path $env:ProgramData 'Vectory/update-state/private/update-step.log'
+          if (Test-Path -LiteralPath $stepLog) { Get-Content -LiteralPath $stepLog -Tail 150 }
+          Write-Host '::endgroup::'
+          Write-Host '::group::What the update step keeps, with owners and access lists'
+          Get-ChildItem -LiteralPath (Join-Path $env:ProgramData 'Vectory') -Force -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+          icacls.exe (Join-Path $env:ProgramData 'Vectory/update-state') /T
+          Write-Host '::endgroup::'
+          Write-Host '::group::The install directory, with access lists'
+          Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'Vectory') -Force -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime -AutoSize | Out-String -Width 300 | Write-Host
+          icacls.exe (Join-Path $env:ProgramFiles 'Vectory')
+          Write-Host '::endgroup::'
+          $logs = Join-Path $PWD 'artifacts/platforms/windows/logs'
+          New-Item -ItemType Directory -Force $logs | Out-Null
+          Copy-Item '.local/preview/*.log' $logs -ErrorAction SilentlyContinue
+          # The foreground agent's logs only: its state folder holds its private key.
+          foreach ($folder in Get-ChildItem '.local' -Directory -Filter 'native workflow *') {
+            foreach ($name in 'agent.log', 'agent-error.log') {
+              $file = Join-Path $folder.FullName $name
+              if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file (Join-Path $logs "$($folder.Name) $name") }
+            }
+            Get-ChildItem -LiteralPath (Join-Path $folder.FullName 'state') -Filter 'vector.log*' -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item -LiteralPath $_.FullName (Join-Path $logs "$($folder.Name) $($_.Name)") }
+          }
+          # What a failed run needs, in the log itself (the artifact holds the rest).
+          foreach ($name in 'validator.log', 'validator-error.log', 'server.log', 'server-error.log') {
+            $file = Join-Path $PWD ".local/preview/$name"
+            if (Test-Path -LiteralPath $file) {
+              Write-Host "::group::$name"
+              Get-Content -LiteralPath $file -Tail 40
+              Write-Host '::endgroup::'
+            }
+          }
+          Write-Host '::group::The service, if it is still registered'
+          sc.exe query Vectory
+          Write-Host '::endgroup::'
+          foreach ($name in 'server.pid', 'validator.pid') {
+            $file = Join-Path $PWD ".local/preview/$name"
+            if (Test-Path -LiteralPath $file) { Stop-Process -Id ([int](Get-Content -LiteralPath $file)) -Force -ErrorAction SilentlyContinue }
+          }
+          exit 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: platforms-windows
+          path: artifacts/platforms/windows
+          if-no-files-found: warn
+  # macOS 15 on Apple silicon: scripts/preview.sh under the system bash (3.2
+  # and BSD tools), the agent in the foreground, then as the io.vectory.agent
+  # launch daemon under the _vectory account.
+  #
+  # After those phases, the privileged update step on the same instance
+  # (tests/platform/agent-update.mjs), the same phases as on Linux with the host
+  # object of a Mac: the step is the io.vectory.update launch daemon, the install
+  # path is checked for the access lists a Mac has, the step's directory goes on a
+  # size-capped disk image, and launchd's timings are recorded. These phases are
+  # the proof that gates agent updates on macOS: when one fails and is not fixed by
+  # the cut, macosUpdatesInRelease in agent/internal/agent/update_gate.go is set to
+  # false, and macOS hosts update by hand in that release.
+  macos:
+    runs-on: macos-15
+    concurrency:
+      group: platforms-macos-${{ github.ref }}
+      cancel-in-progress: false
+    timeout-minutes: 240
+    env:
+      VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
+      VECTORY_PREVIEW_AGENT_TARGETS: darwin/arm64
+      VECTORY_PLATFORM_OUTPUT: artifacts/platforms/macos
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - name: Check the platform helpers against the text the tools print
+        timeout-minutes: 10
+        run: node --test tests/platform/lib.test.mjs tests/platform/update-lib.test.mjs tests/platform/update-hosts.test.mjs
+      - name: Build the dashboard the instance serves
+        timeout-minutes: 20
+        run: |
+          (cd help-center && npm ci)
+          (cd dashboard && npm ci && npm run build)
+      - name: Build the server, the validator and vectory-admin
+        timeout-minutes: 40
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+      - name: Provide the pinned Vector 0.58.0
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-arm64-apple-darwin.tar.gz
+          VECTOR_SHA256: 9182491597f1bdedb08d84a051616c62deea770a9d905b697712cc6526919449
+          VECTOR_BINARY: vector-arm64-apple-darwin/bin/vector
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | shasum -a 256 -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/$VECTOR_BINARY"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTORY_PREVIEW_VECTOR=$binary" >> "$GITHUB_ENV"
+          echo "VECTORY_VECTOR_BIN=$binary" >> "$GITHUB_ENV"
+      - name: Start a fresh instance with the system bash
+        id: instance
+        timeout-minutes: 15
+        run: |
+          /bin/bash --version | head -n 1
+          /bin/bash scripts/preview.sh start
+      - name: Run the clean-install workflow with the downloaded agent
+        id: native
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          VECTORY_NATIVE_WORKFLOW_OUTPUT: artifacts/platforms/macos/native-foreground
+        run: node tests/native-workflow.mjs
+      - name: Install and enroll a second device with the Add device installer
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          VECTORY_URL: http://127.0.0.1:8080
+          VECTORY_CA_FILE: ${{ github.workspace }}/.local/pki/ca.pem
+          VECTORY_CREDENTIALS: ${{ github.workspace }}/.local/preview/credentials.json
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ github.workspace }}/.local/preview/bootstrap.secret
+          # The agent refuses paths through symbolic links, and macOS's default temporary folder is behind one.
+          TMPDIR: ${{ runner.temp }}
+        run: node scripts/check-installer.mjs --output artifacts/platforms/macos/installer
+      - name: Stop the foreground agent the workflow leaves running
+        id: foreground
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/service.mjs stop-foreground
+      - name: Install the agent as a launchd daemon for an unprivileged account and enroll it
+        id: install
+        if: ${{ !cancelled() && steps.foreground.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs install
+      - name: Run the clean-install workflow against the daemon
+        id: apply
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs apply service
+      - name: Restart the daemon, kill the agent and stop the daemon
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        timeout-minutes: 25
+        run: node tests/platform/service.mjs lifecycle
+      - name: Remove the daemon and keep its state
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/service.mjs uninstall
+      # Agent updates, the phases of the Linux job with a Mac's host object. The builds
+      # are darwin/arm64 from copies of the source. The host is returned to a clean state
+      # first, so these phases depend on the instance and its administrator, not on what
+      # the phases above left. The install phase also puts the access lists a Mac has on
+      # the install path, one by one, and checks that setup refuses --updates for each.
+      - name: Build the agents the update checks roll out, from copies of the source
+        id: update-build
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs build
+      - name: Make a release key and turn agent updates on with offline custody
+        id: update-enable
+        if: ${{ !cancelled() && steps.update-build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/agent-update.mjs enable
+      - name: Check who owns the install path and which access lists it has, install agent 0.1.0 with the consent flags of Add device and apply a pipeline
+        id: update-install
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs install
+      # Includes the 200 seconds in which launchd's StartInterval is measured.
+      - name: Read the update step's launch daemon, run it once under it and measure how often launchd starts it
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node tests/platform/agent-update.mjs sandbox
+      - name: Time the agent's stop and start with Vector draining, then update the agent from 0.1.0 to 0.1.1 through a rollout
+        id: update-update
+        if: ${{ !cancelled() && steps.update-install.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs update
+      - name: Roll out a build that never starts, and offer it again
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs start-failure
+      - name: Roll out a build that never checks in
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-check-in
+      - name: Roll out a build whose store file is cut short
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs truncated
+      - name: Kill the update step while it swaps and while it tries a build
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 40
+        run: node tests/platform/agent-update.mjs interrupt
+      # The step's directory is mounted from a size-capped disk image for this one.
+      - name: Roll out a build to a host whose update step has no room
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs disk-full
+      # The listener is taken over: the instance is stopped and a small program answers
+      # the real agent with the instance's own TLS chain and manifest signing key.
+      - name: Offer the host what it must refuse, from a stand-in for the agent listener
+        if: ${{ !cancelled() && steps.update-update.outcome == 'success' }}
+        timeout-minutes: 60
+        run: node tests/platform/agent-update.mjs hostile
+      - name: Install a host without the consent flags, and offer it a good release
+        if: ${{ !cancelled() && steps.update-enable.outcome == 'success' }}
+        timeout-minutes: 30
+        run: node tests/platform/agent-update.mjs no-consent
+      - name: Collect the daemon's logs and the instance's logs
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set +e
+          node tests/platform/service.mjs collect
+          node tests/platform/agent-update.mjs collect
+          mkdir -p "$VECTORY_PLATFORM_OUTPUT/logs"
+          # What a failed run needs, in the log itself (the artifact holds the rest).
+          echo "::group::The update step's launchd job"
+          sudo launchctl print system/io.vectory.update
+          echo "::endgroup::"
+          echo "::group::What the update step wrote to standard error"
+          sudo tail -n 150 "/Library/Application Support/Vectory/update-state/private/step.log"
+          echo "::endgroup::"
+          echo "::group::What the update step keeps, with owners, flags and access lists"
+          sudo ls -laOeR "/Library/Application Support/Vectory/update-state" "/Library/Application Support/Vectory/updates"
+          echo "::endgroup::"
+          echo "::group::The install path, with owners, flags and access lists"
+          sudo ls -ledO /usr /usr/local /usr/local/bin /usr/local/bin/vectory
+          echo "::endgroup::"
+          /bin/bash scripts/preview.sh stop
+          cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log "$VECTORY_PLATFORM_OUTPUT/logs/"
+          # The foreground agent's logs only: its state folder holds its private key.
+          for dir in "$GITHUB_WORKSPACE"/.local/native\ workflow\ */; do
+            name="$(basename "$dir")"
+            for file in agent.log agent-error.log; do cp "$dir$file" "$VECTORY_PLATFORM_OUTPUT/logs/$name $file"; done
+            for file in "$dir"state/vector.log*; do cp "$file" "$VECTORY_PLATFORM_OUTPUT/logs/$name $(basename "$file")"; done
+          done
+          exit 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: platforms-macos
+          path: artifacts/platforms/macos
+          if-no-files-found: warn
+  # The first things a person does on a new instance (sign-in, the first
+  # administrator, create and publish a pipeline, the Devices page), in the
+  # Firefox and WebKit builds Playwright installs. Each browser gets its own
+  # fresh instance, because the first administrator can be created only once.
+  browsers:
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: platforms-browsers-${{ github.ref }}
+      cancel-in-progress: true
+    timeout-minutes: 60
+    env:
+      VECTORY_PREVIEW_AGENT_TARGETS: linux/amd64
+      VECTORY_UI_URL: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - name: Build the dashboard the instance serves
+        id: dashboard
+        timeout-minutes: 20
+        run: |
+          (cd help-center && npm ci)
+          (cd dashboard && npm ci && npm run build)
+      - name: Build the server, the validator and vectory-admin
+        timeout-minutes: 30
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+      - name: Provide the pinned Vector 0.58.0
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+          VECTOR_SHA256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | sha256sum -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/vector-x86_64-unknown-linux-gnu/bin/vector"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTORY_PREVIEW_VECTOR=$binary" >> "$GITHUB_ENV"
+      - name: Install Firefox and WebKit with their system libraries
+        id: install
+        timeout-minutes: 15
+        working-directory: dashboard
+        run: npx playwright install --with-deps firefox webkit
+      - name: Firefox, on a fresh instance
+        id: firefox
+        if: ${{ !cancelled() && steps.dashboard.outcome == 'success' && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview-firefox
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ github.workspace }}/.local/preview-firefox/bootstrap.secret
+          VECTORY_E2E_BROWSERS: firefox
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/artifacts/platforms/browsers/firefox.json
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/platforms/browsers
+          scripts/preview.sh start
+          trap '"$GITHUB_WORKSPACE/scripts/preview.sh" stop; for log in server validator; do cp "$VECTORY_PREVIEW_DIR/$log.log" "$GITHUB_WORKSPACE/artifacts/platforms/browsers/firefox-$log.log" 2>/dev/null || true; done' EXIT
+          cd dashboard
+          npx playwright test --reporter=list,json
+      - name: WebKit, on a fresh instance
+        id: webkit
+        if: ${{ !cancelled() && steps.dashboard.outcome == 'success' && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview-webkit
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ github.workspace }}/.local/preview-webkit/bootstrap.secret
+          VECTORY_E2E_BROWSERS: webkit
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/artifacts/platforms/browsers/webkit.json
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/platforms/browsers
+          scripts/preview.sh start
+          trap '"$GITHUB_WORKSPACE/scripts/preview.sh" stop; for log in server validator; do cp "$VECTORY_PREVIEW_DIR/$log.log" "$GITHUB_WORKSPACE/artifacts/platforms/browsers/webkit-$log.log" 2>/dev/null || true; done' EXIT
+          cd dashboard
+          npx playwright test --reporter=list,json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: platforms-browsers
+          path: |
+            artifacts/platforms/browsers
+            dashboard/test-results
+          if-no-files-found: warn

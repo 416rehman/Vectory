@@ -54,6 +54,7 @@ async fn fixture() -> (tempfile::TempDir, Router) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Help tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

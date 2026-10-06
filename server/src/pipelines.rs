@@ -52,7 +52,7 @@ pub async fn history(
     .bind(&id)
     .fetch_one(&mut *tx)
     .await?;
-    let rows:Vec<String>=sqlx::query_scalar(&format!("SELECT json_remove(data,'$.config','$.graph','$.artifact','$.validation') FROM records WHERE kind='{kind}' AND json_extract(data,'$.configuration_id')=? ORDER BY CAST(json_extract(data,'$.{sequence}') AS INTEGER) DESC,id LIMIT ? OFFSET ?"))
+    let rows:Vec<String>=sqlx::query_scalar(&format!("SELECT json_remove(data,'$.config','$.graph','$.artifact','$.validation','$.variables') FROM records WHERE kind='{kind}' AND json_extract(data,'$.configuration_id')=? ORDER BY CAST(json_extract(data,'$.{sequence}') AS INTEGER) DESC,id LIMIT ? OFFSET ?"))
         .bind(&id).bind(page_size as i64).bind(offset).fetch_all(&mut *tx).await?;
     let items = rows
         .iter()
@@ -133,7 +133,7 @@ pub(crate) async fn action(
     let source;
     match action {
         "duplicate" => {
-            let name = db::string(input, "name", 120)?;
+            let name = db::name(input, "name", 120, "a pipeline name")?;
             let description = if input.get("description").is_some() {
                 if !input["description"].is_string() {
                     return Err(ApiError::invalid("Description must be text"));
@@ -239,6 +239,7 @@ pub(crate) async fn action(
     }
     configuration["revision"] = json!(current_revision.as_u64().unwrap() + 1);
     configuration["updated_at"] = json!(db::now());
+    api::validate_pipeline_metadata(&configuration)?;
     db::update(conn, "configuration", &configuration).await?;
     api::revision(conn, &configuration, actor, &message, source).await?;
     db::audit(

@@ -1,0 +1,10 @@
+[Unit]
+Description=Vectory agent update step schedule
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

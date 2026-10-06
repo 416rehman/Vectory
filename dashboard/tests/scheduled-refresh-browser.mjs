@@ -1,7 +1,7 @@
 // Actual App with isolated, explicitly synthetic HTTP. No preview or fleet access.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve, dirname, relative } from "node:path";
@@ -220,12 +220,17 @@ function preview() {
   if (state.previewFault === "status") value.source_status = "active";
   return value;
 }
-async function load({ width = 899, theme = "light", role = "admin" } = {}) {
+async function load({
+  width = 899,
+  theme = "light",
+  role = "admin",
+  status = "scheduled",
+} = {}) {
   if (context) await context.close();
   state = {
     actor: id(90),
     role,
-    status: "scheduled",
+    status,
     members: [1, 2],
     savedMembers: [1],
     resource: "configuration",
@@ -315,6 +320,17 @@ async function load({ width = 899, theme = "light", role = "admin" } = {}) {
           page: 1,
           page_size: 12,
           request_history: true,
+        });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
         });
       if (path === `/deployments/${sourceId}/summary`) {
         s.summaryReads++;
@@ -449,7 +465,7 @@ async function load({ width = 899, theme = "light", role = "admin" } = {}) {
   await expect(details()).toBeVisible();
 }
 const details = () =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const review = () =>
   page.getByRole("dialog", { name: "Update scheduled devices", exact: true });
 const confirm = () =>
@@ -469,15 +485,9 @@ async function closeReview() {
   await expect(details()).toBeVisible();
 }
 async function openReview({ ready = true } = {}) {
-  const opener = details().getByRole("button", {
-    name: "Review scheduled devices",
-    exact: true,
-  });
-  if (!(await opener.isVisible()))
-    await details()
-      .getByText("Update scheduled devices", { exact: true })
-      .click();
-  await opener.click();
+  await details()
+    .getByRole("button", { name: "Review scheduled devices", exact: true })
+    .click();
   await expect(review()).toBeVisible();
   if (ready)
     await expect(
@@ -730,7 +740,8 @@ try {
         await expect(checkSelection()).toBeVisible();
         await closeReview();
         await details()
-          .getByRole("button", { name: "Close dialog", exact: true })
+          .getByRole("navigation", { name: "Breadcrumb" })
+          .getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         await page
           .getByRole("button", {
@@ -854,7 +865,10 @@ try {
       async () => {
         await load({ role: "viewer" });
         await expect(
-          details().getByText("Update scheduled devices", { exact: true }),
+          details().getByRole("button", {
+            name: "Review scheduled devices",
+            exact: true,
+          }),
         ).toHaveCount(0);
         expect(state.previews).toHaveLength(0);
         for (const stage of ["preview", "commit", "body"]) {
@@ -881,7 +895,7 @@ try {
               }),
             ),
           );
-          await expect(page.locator(".session-ended")).toContainText(
+          await expect(page.locator(".session-renewal")).toContainText(
             "Your session ended",
           );
           await expect(confirm()).toHaveCount(0);
@@ -927,6 +941,148 @@ try {
         state.holds.shift()();
         await expect(review()).toHaveCount(0);
         expect(state.commits).toHaveLength(0);
+      },
+    );
+    await check(
+      "Cancelling a schedule says nothing was released, and a schedule cancelled before it started offers no rollback",
+      async () => {
+        for (const width of [899, 390])
+          for (const theme of ["light", "dark"]) {
+            await load({ width, theme });
+            await details()
+              .getByRole("button", { name: "Cancel schedule", exact: true })
+              .click();
+            const cancel = page.getByRole("dialog", {
+              name: "Cancel schedule",
+              exact: true,
+            });
+            await expect(cancel).toContainText(
+              "Nothing has been released. The schedule never starts, and no device changes.",
+            );
+            await expect(cancel).not.toContainText("already received it");
+            await expect(cancel).not.toContainText("Rollback");
+            const scan = await new AxeBuilder({ page })
+              .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+              .analyze();
+            expect(scan.violations).toEqual([]);
+            accessibility.push({
+              width,
+              theme,
+              view: "cancel schedule",
+              violations: scan.violations,
+            });
+            expect(
+              await page.evaluate(() => document.documentElement.scrollWidth),
+            ).toBeLessThanOrEqual(width);
+            await page.screenshot({
+              path: resolve(output, `schedule-cancel-${width}-${theme}.png`),
+            });
+            await cancel
+              .getByRole("button", { name: "Keep current state", exact: true })
+              .click();
+            await expect(cancel).toHaveCount(0);
+
+            await load({ width, theme, status: "cancelled" });
+            const remove = details().getByRole("button", {
+              name: "Remove assignment",
+              exact: true,
+            });
+            await expect(remove).toBeVisible();
+            // A short label keeps its one line beside the title; it never
+            // wraps because the heading squeezed it.
+            expect((await remove.boundingBox()).height).toBeLessThan(48);
+            await expect(
+              details().getByRole("button", { name: /^Roll back/ }),
+            ).toHaveCount(0);
+            await expect(
+              details().getByRole("button", {
+                name: /^(Stop rollout|Roll back or remove)$/,
+              }),
+            ).toHaveCount(0);
+            expect(
+              await page.evaluate(() => document.documentElement.scrollWidth),
+            ).toBeLessThanOrEqual(width);
+            await page.screenshot({
+              path: resolve(output, `schedule-cancelled-${width}-${theme}.png`),
+            });
+          }
+      },
+    );
+    await check(
+      "A device the pipeline cannot reach is named by the blocker, in every theme and width, and nothing is sent",
+      async () => {
+        const reason =
+          "This published configuration requires full Vector mode on the selected device. Only its host operator can enable that mode locally.";
+        for (const width of [899, 390])
+          for (const theme of ["light", "dark"]) {
+            await load({ width, theme });
+            state.members = [1, 2, 3];
+            state.blockers = [
+              {
+                code: "FULL_VECTOR_MODE_REQUIRED",
+                reason,
+                resource: "configuration",
+                device_ids: [id(2), id(3)],
+              },
+              {
+                code: "VECTOR_VERSION_INCOMPATIBLE",
+                reason:
+                  "The selected device does not report a Vector 0.58.x version. Review its local Vector installation before deploying.",
+                resource: "configuration",
+                device_ids: [id(3)],
+              },
+            ];
+            await openReview();
+            await expect(review()).toContainText("Selection cannot be updated");
+            await expect(review()).toContainText(reason);
+            await expect(review()).toContainText(
+              "2 affected devices: Synthetic beta, Synthetic gamma.",
+            );
+            await expect(review()).toContainText(
+              "1 affected device: Synthetic gamma.",
+            );
+            await expect(review()).not.toContainText(
+              "does not match this dashboard version",
+            );
+            await expect(review().getByRole("alert")).toHaveCount(0);
+            await expect(confirm()).toBeDisabled();
+            const scan = await new AxeBuilder({ page })
+              .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+              .analyze();
+            expect(scan.violations).toEqual([]);
+            accessibility.push({
+              width,
+              theme,
+              view: "blocked",
+              violations: scan.violations,
+            });
+            const g = await review().evaluate((el) => {
+              const box = el.getBoundingClientRect(),
+                note = el
+                  .querySelector(".scheduled-refresh-blocked")
+                  .getBoundingClientRect();
+              return {
+                x: box.x,
+                right: box.right,
+                noteLeft: note.x,
+                noteRight: note.right,
+                scroll: document.documentElement.scrollWidth,
+                width: innerWidth,
+              };
+            });
+            expect(g.x).toBeGreaterThanOrEqual(0);
+            expect(g.right).toBeLessThanOrEqual(g.width);
+            expect(g.noteLeft).toBeGreaterThanOrEqual(g.x);
+            expect(g.noteRight).toBeLessThanOrEqual(g.right);
+            expect(g.scroll).toBeLessThanOrEqual(g.width);
+            await page.screenshot({
+              path: resolve(
+                output,
+                `scheduled-refresh-blocked-${width}-${theme}.png`,
+              ),
+            });
+            expect(state.commits).toHaveLength(0);
+          }
       },
     );
     await check(

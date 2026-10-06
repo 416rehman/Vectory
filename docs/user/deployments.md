@@ -1,200 +1,310 @@
 # Deploy and roll back
 
-Deployment assigns a published pipeline version or agent settings to devices. Publishing freezes a version; deployment chooses who receives it and when. Operator or Admin access is required.
+A deployment sends one published version, or a set of agent settings, to the devices you choose. Publishing freezes a version; deploying decides who gets it and when. Deploying needs the Operator or Administrator role.
+
+An [agent update](agent-updates.md#roll-out-an-update) is a different thing. It replaces the agent on a host, with its own review, rollout page and gates, and it never touches a deployment, a version or a generation. A pipeline rollout and an update rollout can't gate, replace or roll back each other.
 
 ## Deploy a published version
 
-1. Open the pipeline and choose **Review & publish** for the current draft. If it already matches a published version, choose **Choose devices**.
-2. Select individual devices, groups, or both. Exclude any group members that should not receive it.
-3. Open **Advanced options** if you need a different priority, continuing membership, schedule or canary release.
-4. Preview the concrete device list and its **Priority outcome** column. Resolve conflicts, higher-priority assignments and capability problems before confirming.
-5. Confirm the deployment, then choose **View deployment** in the confirmation to follow that exact rollout. A scheduled change offers **View schedule**. You can also find it under [**Activity → Deployments**](/#/deployments) and on each device's **Pipeline** view.
+<!-- steps -->
+1. Open the pipeline and choose **Review & publish** for the current draft, or **Choose devices** if it's already published.
+2. Select devices, groups or both. Exclude any group members that shouldn't get it.
+3. Choose how to release it: all at once, as a canary, or on a schedule. See [Choose a rollout](#choose-a-rollout).
+4. Choose **Review deployment**. Check the exact device list, what each device runs now and what it will run after.
+5. Choose **Deploy to devices**, then **View deployment** to follow it.
 
-Selecting devices does not publish unfinished field edits. Resolve pending edits and [check the pipeline](#/docs/pipelines#validate-test-publish) first.
+When devices already run a version of this pipeline, the dialog opens with them chosen and says so in one line, for example **Update the 3 devices running v1 (Edge collectors)**, under the title **Deploy Edge syslog processing v2**. The group is named only when it holds all of them. **Change** opens the list with those devices ticked and the cursor in the search; **Clear** empties the choice in one click. Nothing is chosen for you when you open the dialog from a device, for agent settings, or for a pipeline no device runs.
 
-## Save and recover agent settings
+Deploying a new version of a pipeline to devices that run an older version of it replaces the older one there. The review says so, for example "Replace Web access logs v2 → v3 on 3 devices".
 
-In **Agent settings**, choose **New settings**, name the saved settings, and review the check-in interval, configuration sync and metrics options. **Save settings** saves a template. It does not assign it to devices or verify that an agent has applied it. Use **Apply to devices** separately to review a target set and deployment.
+After a rollback, deploying a fix of the same pipeline also replaces the rolled-back rollout and its rollback, at the rollback's priority, so every device takes the fix in one review. If an assignment still outranks some devices, the button reads **Deploy to 2 of 3 devices** and asks you to confirm what stays behind, for example "edge-nyc-02 keeps Edge syslog processing v1 (priority 101 rollback)".
 
-Before sending, the browser saves the exact name, settings and request ID for your signed-in account. If a reply is lost, takes too long or cannot be confirmed, keep that request and use **Review settings requests**. **Check status** looks up its exact identity. A missing result may still be in flight; only **Retry same request** explicitly resends the frozen original contents. Nothing is retried or deployed automatically. Rejected attempts also retain their reminder because another tab may have completed the same request.
+From a device's page (**Deploy a pipeline**), another pipeline that only this device follows is replaced by default, so the review doesn't stop at a priority choice: it says "Replaces edge-syslog v1: only this device follows it, so nothing else changes." **Keep edge-syslog v1 as well** brings the choice back. A pipeline other devices also follow is never replaced this way.
 
-Closing or reloading keeps reminders in this browser. **Your settings requests** finds server-saved requests for your account when local reminders are unavailable or you use another device. That history can confirm a result but cannot reconstruct a missing original request for retry. A matching name or equal settings are not proof of the same request.
+Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
 
-Review unresolved or unreadable reminders before saving new settings. A readable original request ID permits a status lookup even if its local contents are damaged; it does not permit reconstruction or retry. **Dismiss reminder** removes only the reviewed browser reminder, without cancelling server work or deleting saved settings. A repaired or replaced reminder from another tab is preserved. Working browser storage and a server supporting exact request recovery are required before sending new settings.
+### Choose devices in a large fleet
 
-**Agent settings saved** remains a known result if the browser cannot clear its reminder; resolve the separate storage warning before starting a new request. To change the original options after an uncertain attempt, check its status and recent requests first, then deliberately dismiss the reminder and review a new save. A timeout ends browser waiting, not server work already received.
+The device list in the dialog shows a page at a time and searches on the server, so it opens as quickly with thousands of devices as with ten. Search by name, platform, pipeline, version or group, tick devices, and move on to other pages or searches: your choices stay. **Select all 84 matching** adds every device the search finds in one step, up to 10,000, and says so if more match. A pipeline that runs on more than a hundred devices starts with all of them chosen the same way, up to the same limit, and the dialog says how many it took when more run it. Groups are listed by name with their device count; a group's members are counted when you choose it, and the server reads the group again when it reviews and when it sends. **Clear selection** starts over.
+
+Each device you tick one by one can have its own value for a [pipeline variable](resources.md#values-that-differ-by-device). The default you set applies to devices you add in bulk. A device's page lists the values it was offered: see [Read what a device was offered](#read-what-a-device-was-offered).
 
 ## Review the target set
 
-The target set is the union of selected devices and group members, minus exclusions. Re-preview after changing selection. Preview uses concrete device identities, so a name or selected count is not enough to verify the final scope.
+The target set is every device you selected, plus the members of every group you selected, minus exclusions. The review lists the actual devices, so check it rather than the counts.
 
-| Target membership option              | Behavior                         | Useful for                                               |
-| ------------------------------------- | -------------------------------- | -------------------------------------------------------- |
-| **Only the selected devices**         | Snapshot membership at creation. | A controlled release to the reviewed list.               |
-| **Also include future group members** | Persistent membership rules.     | A group whose new members should inherit the assignment. |
+| Membership | Behavior | Use it for |
+| --- | --- | --- |
+| **Only the selected devices** | Fixed when you deploy. | A controlled release to a reviewed list. |
+| **Also include future group members** | Follows group membership. New members get the version too. | Groups whose new devices should inherit it. |
 
-Review persistent target refreshes in Activity. Scheduling uses a snapshot so the waiting deployment's target membership stays fixed.
+Scheduled deployments always use a fixed list. A group needs at least one device when you create the deployment, even with **Also include future group members**: the dashboard doesn't offer an empty selection yet.
 
-A full-mode document needs full-mode target devices. The dashboard cannot grant that permission: a host operator must [change the local mode](#/docs/installation#change-an-existing-devices-mode). A device must also report the pinned Vector 0.58.0 version for this release. Preview names affected devices and marks each blocked device in the review table, including both reasons when a device has both problems. Sending is disabled until they are resolved. The server checks again at creation, scheduled activation, group expansion and each canary wave, so a device that changes after preview is not silently admitted. Even a compatible device still needs the correct OS build, files, credentials, ports and service access.
+The review also blocks devices that can't run the version, and says why:
+
+- **Full mode needed.** The version uses something only full-mode devices allow. Only the host can [switch modes](agents.md#switch-between-restricted-and-full-mode).
+- **Wrong Vector version.** The device doesn't report a Vector 0.58.x release.
+
+A restricted device refuses a destination, listener or file root its host doesn't allow. Vectory can't see what a host allows, so the review names what the version uses and says each restricted device refuses it unless its host already allows those. Each row says what the host must allow. The review stops saying so for a device once **Check on devices** passes on it. Without per-device variables, it can also use a version the device verifiably runs when that version already uses the same destinations, listeners and file roots. It then names the device in the note instead. **Commands for the host** gives the commands for each host, made from what its agent reports: its state directory, and whether a service or `vectory run` keeps the agent running. For a pipeline with variables, each command uses that device's entered values; incomplete bindings show no base-version command. The commands use [`vectory allow`](agents.md#update-restricted-allowances), which adds to what the host already allows. Each value is quoted for the host's shell. When a value can't be carried safely, such as a path with a control character, the block says so instead of giving a command.
+
+The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
+
+## Check on devices
+
+Before you deploy, ask the target devices to check the version on their own hosts. **Check on devices** runs the validation an apply would run, with each device's own values, [secrets](resources.md#keep-credentials-on-the-device) and allowances. It starts and changes nothing. Operators and administrators can use it. Agent settings have nothing to check.
+
+<!-- steps -->
+1. Choose **Review deployment**.
+2. Choose **Check on devices**. Turn on **Also run the pipeline's tests** to run the version's tests on each host too. It takes longer.
+3. Watch the answers arrive. Each device answers at its next check-in, within seconds when it keeps a request open for changes. A check expires after 10 minutes.
+4. Fix what a row reports, then choose **Check again** on it. A device that didn't answer has **Retry**, and **Retry 2 unanswered** asks every device that was offline or didn't answer. Each retry asks only the devices you named.
+
+You should see a summary that is always true, for example **Checked 3 of 4 devices: 2 pass, 1 needs a secret, 1 offline.** It counts the devices that answered, then names every other result.
+
+| Result | What it means | What to do |
+| --- | --- | --- |
+| **Passes here** | Vector on that host found no error, and the tests passed when you asked for them. | Nothing. It isn't evidence that the version is applied or healthy. |
+| **Needs a fix** | Vector or the host's allowances refused something. The row leads with the first finding: its step, its field, what's wrong and the fix. It opens to the other findings and the tests. A restricted host reports the first refusal it finds, so a second can appear once you fix the first. | Fix the pipeline or the host, then check again. A fix that names `vectory allow` includes `--state-dir` when the host keeps its state anywhere but the default. |
+| **Needs a secret** | The version uses a device secret the host hasn't bound: **Secret API_KEY isn't bound on this device**. | Run the commands on the row on that host (**Copy** takes them), then check again. They name the host's state directory when it isn't the default, and stop and start its agent the way it runs: the service, or Ctrl-C for `vectory run`. The value stays on the device. |
+| **Offline: not checked** | The device hasn't checked in for three of its own intervals, so it wasn't asked. | Bring it online, then **Retry**. |
+| **No answer in time** | It didn't answer within 10 minutes, or a newer check for the same device replaced this one. | Check that its agent runs, then **Retry**. |
+| **Older agent: can't check** | Its agent doesn't know checks. | Choose **Upgrade agent** on its device page, then **Retry**. |
+
+The results are advice. A check never blocks **Deploy** and never changes a deployment, a device or an assignment, and the review says so beside them: **Results are advisory.** You can send the deployment while a check runs.
+
+A check belongs to the review it was asked on. When the version or the devices change, the results read **These results are for the previous selection** and wait for **Check on devices** again. Going back to the selection clears them.
+
+A check asks the first 50 devices by name and says so ("Checked the first 50 devices by name. The other 7 weren't checked."). You can ask for six checks a minute, and when you ask too soon the button says when to try again. Only the person who asked, and administrators, can read the results, which Vectory keeps for 24 hours. When something doesn't work, see [A device check fails or doesn't answer](troubleshooting.md#a-device-check-fails-or-doesnt-answer).
+
+## Edit a group
+
+[**Devices → Groups**](/#/groups) lists each group with its description and how many devices it holds. The list doesn't load the members; open a group and choose **Edit members** to see them.
+
+The editor lists **Group devices** a page at a time with a search, so a group of thousands edits as quickly as one of ten.
+
+- Tick a device to add it and untick it to remove it. **Select all 300 matching** adds every device a search finds; **Remove all** empties the group.
+- The editor counts your changes against the saved group, for example **12 added · 3 removed since it was saved**. **Undo device changes** returns to the saved members.
+- A group holds up to 10,000 devices. Saving more is refused, and the editor says how many to remove.
+- Devices you revoke leave every group. A member that is no longer a device the server knows is listed by its ID under **Devices no longer available**; untick it, or choose **Remove all unavailable**, to take it out.
 
 ## Review changes to a group
 
-Group membership can change both pipeline and agent-policy assignments that include future group members. If another operator changes the group while you are editing, **This group changed** keeps your local edits and shows the latest saved name, description, and the devices your selection would add or remove.
+Groups can carry pipeline and agent-settings deployments that include future members, so editing a group can change what devices run.
 
-Choose **Use latest name**, **Use latest description**, or **Use latest members** where appropriate, or deliberately keep your edits. **Continue editing** accepts that reviewed starting point without saving. Check the resulting form, then choose **Save changes** separately. A further concurrent change requires another review. Retired device identities are not replaced automatically by devices with the same name.
-
-If an existing group's save response is lost or takes too long, **Review saved group** reads the current group before another save is allowed. Matching saved values do not prove which request saved them. Stopping the wait does not cancel server work. An older server without group revision support permits viewing but must be updated before existing groups can be edited safely.
-
-New group creation saves the original name, description, device identities and a request ID in this browser before sending. If the response is uncertain, choose **Close and review request**, then **Review group requests** and the saved request. Closing or reloading keeps this reminder. **Check status** reads that exact request; a missing result may still be in flight. Only **Retry same request** resends the saved contents with the same ID. It does not create a second group if the first request already succeeded. No retry happens automatically.
-
-**Group confirmed** shows the current saved group, which another operator may have renamed or edited since creation. **Open group** opens that exact identity. **Your recent group requests** can find server-saved requests for your account after browser reminders are lost or from another device. This list can look up results; it cannot reconstruct missing original contents for a retry. A deleted original group is not recreated by retrying its request.
-
-Review unresolved requests before creating another group. **Dismiss reminder** removes only the browser reminder, without cancelling server work or deleting a group. If a reminder is unreadable, use its status lookup or recent requests before deliberately dismissing it. Recoverable creation requires working browser storage and an updated server; an older server is blocked before sending rather than receiving an unsafe unkeyed request.
-
-Failed checks and rejected attempts also retain the original group request: another tab may have completed it. The form keeps the error visible and offers **Close and review request**. Check its status before retrying or deliberately dismissing the reminder to review a corrected request.
-
-## Check active canaries
-
-If an active canary overlaps the selected devices for the same kind of assignment, the preview links to it and prevents sending. Wait for it to finish or review its pause/cancel controls deliberately. Creation checks again because another operator can start a rollout after your preview.
-
-The same protection applies when adding group members would expand a persistent assignment into another active canary. The group save is rejected without changing its membership or releasing targets. Your local edits remain in the form. **Review active deployments** opens the active list in another tab; it does not pause or cancel anything. After resolving the overlap deliberately, return to the group and choose **Save changes** again. A membership removal or an unrelated resource does not create that overlap.
-
-## Recover a lost deployment response
-
-If a connection drops after you confirm, **Confirm deployment** checks whether the original request was saved. The response must identify that exact request before the dashboard clears its reminder or offers a retry. **Retry same request** resends the frozen reviewed request with the same identity; a supporting server returns the original deployment instead of creating another. A missing result can still be in flight, so do not start a replacement based only on **Check status**.
-
-You can close the dialog or browser tab and reopen recovery from the reminder when you return. Reminders are shared across tabs in this browser and shown only to the account that sent them. If several requests need attention, choose **Review requests** to select one. Confirming or dismissing one reminder leaves the others intact. Browser local storage must be available before sending; it holds target IDs and reviewed options, not login credentials or pipeline content. Clearing browser data removes these reminders, and another browser does not have their original reviewed requests.
-
-If a saved reminder cannot be read, **Review requests → Review unreadable reminder** keeps it visible. When its original request ID is available, **Check status** can confirm the server result. It cannot retry or reconstruct the damaged request. If the ID is unavailable, use deployment history and **Your recent requests**. A missing result, a failed lookup or an incompatible response leaves the reminder unresolved.
-
-Unreadable reminders and unavailable browser storage block new deployments and rollbacks. Resolve the displayed reminders, or deliberately choose **Dismiss reminder** after reviewing history. Dismissal removes only the reminder you reviewed; if another tab has repaired or replaced it, the dashboard preserves that newer record. A confirmed server result remains available even if the browser cannot clear its reminder. **Refresh reminders** checks again when storage becomes available or more reminders remain to be reviewed.
-
-If you no longer have the reminder, open [**Activity → Deployments**](/#/deployments) and choose **Your recent requests** on a supporting server. This lists requests saved for your account across tabs and devices. Filter deployments or rollbacks, then open the exact resulting deployment; a rollback also links to its original rollout. Use **Refresh** to check again. This history confirms that a request was saved, not that devices applied it. Missing entries may still be in flight or may never have reached the server; the list cannot reconstruct the original request for retry.
-
-New deployments and rollbacks require a server that can confirm the original request identity. An older server asks for an update before you send. Existing reminders remain available: update the server and check their status, or use history for requests originally sent without retry support. Missing or mismatched response identity keeps the reminder and prevents another send until a compatible status check succeeds.
-
-Recovery shows the original deployment's current state. Its status or target membership may have changed since creation; that does not turn it into a different request. **Dismiss reminder** only removes the browser reminder; it does not cancel a deployment. Check history before dismissing or creating a replacement. A confirmed deployment still needs device verification.
-
-If a deployment or recovery response takes more than 30 seconds, the dashboard stops waiting and lets you check the original request. This does not cancel work on the server. Use the same recovery flow rather than starting another deployment.
-
-Rejected deployment and rollback attempts keep their saved request too. An error from one tab cannot rule out success from another. Recovery shows the reason and checks the original request. Retry preserves its reviewed targets and options; changing them requires checking history, deliberately dismissing the reminder and reviewing a new request. Nothing is resent automatically.
+- The group editor previews the effect: which devices would get or lose a pipeline. For a large change it describes the devices the edit changes something on first, and counts the rest ("Adding 480 devices changes nothing on them"). A change to more than 500 devices waits for **Preview what changes**, because the server answers with a line for each device; saving checks every device either way.
+- If someone else changed the group while you were editing, **This group changed** shows their version next to yours. Choose **Use latest name**, **Use latest description** or **Use latest members**, or keep your edits, then **Save changes**.
+- A group change that would add devices to a canary that's still running is refused, with a link to that canary.
+- A group change that would give a device two different pipelines, or two different agent settings, at the same priority is refused. The preview names the device, both assignments and the priority: "edge-01 already follows “Fast check-in” (agent settings, priority 100), and “Group defaults” follows Berlin edge at the same priority." **Save changes** stays off while the preview shows it. Give one of them another priority, or remove the device from the targets of the other, then add it to the group.
 
 ## Understand priority
 
-The highest-priority candidate assignment wins for its resource. It must still pass rollout admission before changing the device. Different payloads at equal priority produce a conflict rather than an arbitrary winner. Pipeline and agent-policy assignments are separate.
+When several deployments target the same device, the highest priority wins. Pipelines and agent settings are separate: each has its own winner.
 
-For example, a pipeline assignment at priority 200 takes precedence over one at 100 for a shared device. Creating a different pipeline assignment at the same winning priority 200 produces a conflict. Resolve it by choosing deliberate priorities or unassigning an obsolete assignment; do not repeatedly retry the device.
+- A pipeline deployment at priority 200 beats one at 100.
+- Two different pipelines at the same winning priority conflict. Vectory never picks one arbitrarily; the review shows the conflict and the deployment that holds that priority.
+- Resolve a conflict by choosing a higher priority in **Advanced options**, or by removing the deployment you no longer need.
+- **Current winner** names what each device follows today, such as a rollback one priority up, and **Also bound** lists what else still holds it at your priority. **Replace existing** replaces all of them at once.
 
-The same rule applies to agent settings: a pause request at priority 100 cannot replace a sync-enabled policy at priority 200. The preview shows **Higher priority wins (200)** and links to that assignment. **No current priority conflict** means only that current priorities allow the request; it does not mean the device is compatible or that the agent has received or applied it. A higher-priority canary can take precedence even before that device is released. Schedule previews compare current assignments, which can change before the schedule runs.
-
-Use **Back to selection → Advanced options** to deliberately change priority. The dashboard never raises it automatically. If an older server cannot report priority outcomes, the preview says they are unavailable instead of predicting a change.
+Vectory never raises a priority for you. **No current priority conflict** means only that priorities allow the change; the device still has to accept it.
 
 ## Choose a rollout
 
-**All selected devices** releases the assignment to the entire target set. **Start with a canary, then batches** releases an initial subset, observes its reported result for the configured interval, then releases later batches when the gate permits.
+| Rollout | What happens |
+| --- | --- |
+| **All at once** | Every target gets the version now. |
+| **Canary, then batches** | A few devices first. After an observation period, if they apply cleanly, the rest follow in batches. **Canary size** is how many go first; you choose which when you review. |
+| **Scheduled** | The deployment starts once, at the time you choose. The target list is fixed when you schedule it. If the server is down at that time, it starts when the server is back within [the configured late-start window](server-config.md#server-settings) (one hour by default); later than that, it's marked **Schedule missed** and you create a new deployment. |
 
-For a small trial, select a canary of one device, a batch size appropriate to your fleet, and an observation interval long enough to notice application problems. Inspect the canary's actual pipeline state and destination behavior before relying on rollout progress. A healthy startup does not prove every downstream delivery requirement.
+For a first canary, try one device, a batch size that suits your fleet and a few minutes of observation.
 
-Offline, failed or unverified devices are not successes. [**Activity → Deployments**](/#/deployments) shows release progress, failures and gate decisions. A scheduled deployment is a future release, not an already running staged process. Review a missed schedule before taking further action.
+Only **Applied** counts toward a canary. Offline, failed and unconfirmed devices hold the rollout, and if more devices fail than you allow, the rollout stops before releasing more.
 
-In active or paused canary details, **Recorded progress** preserves past application results. **Canary gate** separately shows how many released devices have current verification for this assignment. A device that previously verified this version cannot satisfy the current gate while another assignment is effective, its heartbeat is stale, configuration sync is paused, or current application cannot be verified.
+### Choose which devices go first
 
-The gate explains what needs review:
+In the review, **Canary devices: edge-nyc-02** names who is released first, and why. With no choice from you, Vectory picks the devices that are online, healthy and reporting metrics (so their delivery can be measured), then online devices without metrics, and last the ones that are failing, paused or not checking in. Among equally ready devices, the order of their IDs decides, as it always has, so the choice is repeatable.
 
-- **Another assignment is effective:** inspect the device's current assignment and priority before changing the rollout.
-- **Waiting for a fresh heartbeat:** check the device connection; a previous success does not replace a fresh report.
-- **Configuration sync is paused:** review local and remote pause settings. A host-owned local pause cannot be cleared remotely.
-- **Current application is not verified:** inspect the current version, agent settings and reported issues on the device.
-- **Device is unavailable:** inspect the original device identity and target membership; a recovered replacement identity is not inferred.
+To pick your own, open the list, choose devices by name among the ones in the review and choose **Apply**. The review runs again with your choice, and its **Stage** column marks each device **Canary** or **Then**. Choose fewer than the canary size and Vectory adds the most ready devices; leave the choice alone and it stays Vectory's. A device you name that isn't checking in, is paused or is failing gets a warning: the rollout waits for it. A scheduled rollout that you didn't name canary devices for chooses again when it starts, from the devices that are ready then.
 
-**Observation in progress** means the server is checking current evidence throughout the configured observation period. It is not a countdown or a promise that the next batch will be released. Pausing the rollout or losing qualifying evidence requires a new observation period once current verification is restored. Policy rollouts use acknowledgement of the current agent settings; a policy that intentionally pauses configuration sync can still be verified.
+### Watch the canary
 
-Use **Refresh** in the gate panel to read current evidence without changing the rollout. Target messages refer to their exact device identities; a target with no gate message may simply be waiting for release. If gate details are unavailable, including on an older server, recorded progress alone does not establish readiness.
+While a canary runs, its lane shows what each canary device delivers now beside the average of the 10 minutes before its release: events in and out per second, errors per minute and buffer fill. A device with nothing recorded before its release, such as a newly enrolled one, reads **No baseline yet**; one that reports no metrics reads **Metrics are off**. Missing numbers are never shown as zero.
 
-When an agent rejects a new version, its failed attempt belongs to that assignment even if an older version remains the last verified configuration. The canary counts the current attempt's failure; a delayed failure from an older assignment cannot count against a new retry. Older agents that do not identify their attempts may leave progress waiting for confirmation. Review device activity and update the agent before relying on detailed failure attribution.
+**Canary gate** says in one line what the rollout is waiting for, naming the devices, from the same evidence as the lanes and the progress bar:
 
-Upgrading does not relabel an old cached failure as a newly observed attempt. If no current attempt is reported afterward, create a new reviewed deployment or have a host operator use `vectory retry` with the daemon stopped, then restart it to observe a fresh attempt.
+| Gate says | What to check |
+| --- | --- |
+| **Measuring delivery on edge-nyc-02 (2 of 3 samples)** | It applied. Vectory checks a few metrics samples to confirm events are delivered before it starts observing. |
+| **Waiting for edge-nyc-02 to apply** | The device doesn't report **Applied** for this version. |
+| **Waiting for edge-nyc-02 to check in** | The device hasn't checked in recently. An earlier success doesn't count. |
+| **Sync is paused on edge-nyc-02** | A pause set on the host or in agent settings. Only the host can clear a host pause. |
+| **Another assignment is effective on edge-nyc-02** | Something with a higher priority now wins on this device. |
+| **edge-nyc-02 was revoked or replaced** | A replacement identity isn't counted. |
+| **edge-nyc-02 applied but isn't delivering** | Its metrics show events aren't getting through. It counts as a failure against your threshold. |
+
+When devices wait for different reasons, the gate leads with what has to happen first and lists the rest with their counts.
+
+**Observation in progress** means Vectory is watching fresh evidence for the whole period. The lane of the stage being observed carries the one countdown. Pausing the rollout, or losing evidence, restarts the observation.
+
+### Release the next stage early
+
+While the released devices have applied and are delivering, and the delivery check or the observation period is still running, the stage being waited on offers **Release next stage now**. It asks first, for example: "Release to the remaining 2 devices now? The delivery check on edge-nyc-02 is still measuring." Operators and administrators can use it.
+
+Vectory never skips a check that failed: a device that hasn't applied, has gone quiet, is paused or isn't delivering holds the rollout, and the server refuses the release. A release that goes ahead is recorded on the rollout (**Released early by Alex**) and in the audit log as **Next stage released early**, with the stage and what the gate showed at that moment (for example, delivery still being measured on one canary device). Later stages still wait for their own checks.
 
 ## Read the apply states
 
-| State                          | What it establishes                                                                             | What to do                                                            |
-| ------------------------------ | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Pending, Downloaded, Validated | Work is queued or preparation has succeeded.                                                    | Wait for activation; these are not proof of a running workload.       |
-| Applying, Starting Vector      | Replacement and startup are in progress.                                                        | Watch for a terminal result and a fresh heartbeat.                    |
-| Applied                        | The agent observed its owned process startup, continued liveness and the expected managed file. | Check version, timestamp and operational behavior.                    |
-| Apply failed                   | A required step failed.                                                                         | Read the device issue and fix the pipeline or host dependency.        |
-| Rolled back                    | Activation failed and the last verified configuration was restored.                             | Investigate the failed version; the desired version may still differ. |
-| Check required                 | The current process state cannot be verified.                                                   | Inspect the host and reported issue before retrying.                  |
+<!-- diagram: apply-states -->
+```mermaid
+flowchart LR
+  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Loading in Vector"] --> OK["Applied"]
+  V --> F["Failed"]
+  A --> F
+  R --> RB["Rolled back"]
+  R --> C["Check required"]
+```
 
-An offline device's last result is historical. Reconnection and fresh reports are needed to establish current state. With [local credential bindings](#/docs/resources#rotate-a-bound-credential), the template and rendered file digests can differ legitimately.
+| State | What it establishes | What to do |
+| --- | --- | --- |
+| **Waiting for agent**, **Downloaded**, **Validated** | Released, or preparation succeeded. | Wait. None of these means Vector runs the version. |
+| **Applying**, **Loading in Vector** | The configuration is written and Vector is loading it: a reload on Linux and macOS, a restart on Windows or if the reload fails. | Wait for a final state. |
+| **Applied** | The agent verified Vector runs this version. | Check that data arrives where you expect. |
+| **Failed** | Rejected or couldn't be applied; the previous configuration keeps running. | Read the device's issue, fix the cause, then retry. |
+| **Rolled back** | The version failed to start, so the agent restored the last working one. | Investigate the version. The device still wants it. |
+| **Check required** | Applied, but the agent couldn't confirm what Vector runs. | Look at the device before retrying. |
+| **Sync paused** | Configuration changes wait until sync resumes. | Resume where it was paused: `vectory resume` on the host, or in agent settings. |
 
-In device **Technical details**, **Assignment progress** and **Current assignment attempt** describe the desired configuration. **Last verified generation** records the last confirmed application; it does not advance when a new attempt fails. **Reported workload state** retains the agent's separate local observation. A file remaining on disk or a successful download does not establish that Vector is running it.
+While a device is **Waiting for agent**, its row says how soon: **connected, usually a few seconds** while its agent keeps a request open for changes, otherwise at its next check-in. See [Turn off wake-ups](agents.md#turn-off-wake-ups).
+
+An offline device's last state is history, not the present. It becomes current again when the device checks in.
+
+### Read a device's health
+
+The Overview's **Fleet health** and the **Status** of the [Devices](/#/devices) page use one word per state:
+
+| State | What it says | What to do |
+| --- | --- | --- |
+| **Applied** | Running its assigned version, verified by the agent. | Nothing. |
+| **Not delivering** | Applied, but its metrics show events aren't getting through. | [Follow the issue](troubleshooting.md#a-pipeline-applies-but-delivers-nothing). |
+| **Held on previous version** | The newest version failed on this device, but it still runs the version before it, checked by the agent, and delivers on it. Nothing is broken on the host; the new version just didn't take effect. | Fix the pipeline and deploy again, or roll the rollout back. |
+| **Updating** | A new version is on its way. | Wait for a final state. |
+| **Check required** | Applied, but the agent couldn't confirm what Vector runs. | Look at the device. |
+| **Failed** | The version was rejected or couldn't be applied, and the device has no working version to fall back on, or the one it runs isn't delivering. | Read the device's issue, fix the cause, then retry. |
+| **Offline**, **Sync paused**, **No pipeline** | No check-in for three intervals, a pause, or nothing assigned. | [Reconnect the device](troubleshooting.md#a-device-is-offline-or-never-connects), resume sync where it was paused, or deploy a pipeline. |
+
+The Devices page's **Needs attention** filter lists the devices that want a look: failed or rolled back, held on their previous version, not delivering, in conflict or waiting for a check. Hover it to see what it holds. A held device also counts as not on its desired version.
+
+## Read what a device was offered
+
+A device's page shows **Effective configuration**: the exact text Vectory offered that device, with its own values applied. Every signed-in role can read it. It's read-only: nothing there applies, restores or verifies anything, and a copy or download is not proof that the device runs it.
+
+- **Configuration** shows the text with line numbers, folding and search. **Download** preserves the exact offered bytes. **Copy** puts the text on the clipboard; the operating system may convert line endings. Secrets stay references such as `vectory-secret:API_TOKEN`, so the text never holds a secret.
+- **Changes** compares it with the previous offer: how many lines were added, removed and changed, then the changed lines, each group named by the components around it. A change longer than 2,000 lines is cut and says so. The counts always cover the whole change.
+- **Variables** lists the values this device was offered and where each came from: **Set for this device** or **Deployment default**. A field that can hold a credential reads **Not shown**.
+- **Generation** opens an earlier offer, with its version and when it was offered. A generation that offered the same text as the one before it says **same as 10**.
+- **Digests** shows the digest of what was offered next to the one the agent reported.
+
+The page reads the generation you chose once, and doesn't poll. It reads again only when the device reports a different file or generation.
+
+### How Vectory compares them
+
+At each check-in, the agent reports the SHA-256 digest of its managed file. Vectory compares it with the digest of what it offered. Equal digests mean identical bytes, but do not prove that Vector activated those bytes. A green match also requires a verified apply of the offered generation. Vectory never sees the file itself, so it never says what a file contains.
+
+| The line says | What it establishes |
+| --- | --- |
+| **Running matches what Vectory offered.** | The agent verified applying this generation, and its last managed-file report matches the offer byte for byte. It's a report from the last check-in, not a check made now. |
+| **The managed file matches this offer, but activation isn't verified.** | The file digest matches, but the latest apply failed or its verification is unknown. Check the device status and Vector log before treating it as running. |
+| **The managed file differs from what Vectory offered at generation 12: it matches generation 11.** | The reported file is an earlier offer. Generation 12 may not be applied yet, or its apply may have failed. Running vs desired above says what the device verified. |
+| **The managed file differs from what Vectory offered at generation 12.** | The reported file isn't any text Vectory offered this device. A local edit does this, and so does the configuration adopted at setup. With sync on, the agent restores the offered configuration at its next check-in. With sync paused, it leaves the file as it is. |
+| **The managed file matches generation 11.** | You're reading an earlier offer whose bytes match the managed file. Generation 12 is offered now; this comparison does not establish that the earlier offer is active, even if the newer verified offer has identical bytes. |
+| **The managed file differs from generation 11.** | You're reading an earlier offer, and the agent reports a different managed file. This alone does not say what Vector loaded. |
+| **Not reported by this agent.** | No digest was reported, so Vectory can't say. |
+| **This device hasn't checked in yet.** | Nothing was reported yet. |
+
+An offline device shows its last report and says so. A revoked device is never compared. A device with nothing assigned says **Nothing is offered to this device now** and, when its file is an earlier offer, which generation.
+
+A pipeline that reads [device secrets](resources.md#keep-credentials-on-the-device) is written to the host with the host's own values, so its file's digest never equals the offered one. For those, Vectory checks that the agent applied this exact template and that the file hasn't changed since the agent verified it. The line says so, and **Digests** adds the template the agent applied. Until the agent reports a template, the line reads **Vectory can't compare this version with the file on the host**.
+
+To check the file yourself, see [Compare the managed file with what was offered](agents.md#compare-the-managed-file-with-what-was-offered).
+
+## Follow a rollout
+
+Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Loaded in Vector** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Loaded in Vector** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. A device that refused the version before Vector saw it says why in the same words as its own page: **Restricted mode refuses any top-level api block, and no allowance can permit it. Remove the api block, or deploy to a full-mode device.**, or **A component ID can't name a path, and devices in both modes refuse one. Rename the component and the inputs that name it.** The page's address is its link: share it with anyone who has an account.
+
+Everywhere that counts a rollout's devices, in the deployment list, the page header, the command palette, the Overview and a group's rollouts, the sentence is the same: **2 of 3 devices applied · 1 not delivering**. It counts the devices the rollout still follows, and a device only once its agent verified that Vector runs the version. What else is true follows, apart: **1 not delivering**, **1 failed**, **1 needs a check**. A rolled-back rollout reads **1 of 3 devices applied before the rollback**. When no device follows a rollout any more it says where they went (**2 devices moved to Edge syslog processing v3**) or **No devices follow this now**.
+
+On a phone, **Device results** is a list of cards: the device's name with its state beside it (under it, when the name is too long to leave room), when it last checked in, its timeline and, when it didn't apply, the reason. Long names and reasons wrap inside the card instead of widening the page.
+
+The page leads with the one action that fits:
+
+| When | First action |
+| --- | --- |
+| It was rolled back | **Open rollback** names what the devices returned to, for example "Open rollback (Edge syslog processing v1)". |
+| A device still runs it but isn't delivering | A banner names the device, the step it can't deliver to and how full that buffer is. **Roll back edge-nyc-02** comes first. |
+| Only the pipeline can fix the failure: a port in use, a VRL error, an invalid option, an `api` block or a component ID that names a path | **Fix in pipeline** opens the pipeline with the step the failure names selected and the setting it names in view. **Retry failed** comes second, since a retry sends the same version. |
+| Devices failed for another reason | **Retry failed**. |
+| It's paused | **Resume**. |
+
+The Overview's **Needs you** lists what still needs a person, most urgent first: devices that aren't delivering, then failed applies, then rollouts that stopped by themselves, then everything else, including devices held on their previous version (amber: they still deliver). A device problem and the rollout it stopped read as one item, with **Roll back** when the server can review that rollback. A rolled-back rollout is resolved: it leaves **Needs you** and stays in **Recent changes**. **Dismiss** hides a stopped rollout for you in this browser; if it fails again, it comes back.
 
 ## Find a deployment or device result
 
-Open [**Activity → Deployments**](/#/deployments) to search by pipeline or deployment name, version, or status. Use the filter beside the **Status** column header to focus on changes that need attention, are still in progress, or have completed. Select a column title to sort the complete result set, and select it again to reverse the order. **Refresh** checks for updates immediately; the page also refreshes automatically.
+[**Activity → Deployments**](/#/deployments) lists every deployment. Search by pipeline, deployment name, version or status, and filter the **Status** column to what needs attention, what's in progress or what finished. [**Scheduled**](/#/schedules) lists upcoming, completed, cancelled and missed schedules, in your browser's time zone.
 
-[**Schedules**](/#/schedules) includes upcoming schedules and their history, including completed, cancelled and missed schedules. Choose **Scheduled** in the **Status** column filter to see only changes still waiting to start. Dates use your browser's local time zone.
+Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 devices applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering**, is named apart (**2 of 3 devices applied · 1 not delivering**) and doesn't count as applied. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
 
-Before a schedule starts, open **Update scheduled devices → Review scheduled devices** to compare its saved selection with the current proposal. Review devices being added, kept and removed. Search, filters and paging only change this view; confirmation includes the complete reviewed proposal. Refreshing the selection does not release devices, change their running workload or verify application.
+Before a schedule starts, **Review scheduled devices** on its page compares its saved device list with current group membership. Review who is added and removed, then choose **Update scheduled devices**. If a device can't take the version, for example a restricted device when the version needs full mode, the review names it and **Update scheduled devices** stays unavailable. If anything changes while you review, refresh the review and confirm again.
 
-**Update scheduled devices** checks that the saved snapshot and proposed membership still match the review. If either changed, choose **Refresh review**, inspect the new selection, then confirm separately. An older confirmation cannot replace a newer saved selection even if group membership later returns to the same devices. An empty proposal or incompatible server cannot enable confirmation. Nothing is resent automatically.
+## Pause, cancel and remove
 
-If confirmation times out or its reply cannot be read, use **Check current selection**. This reads the saved snapshot; matching devices establish only what is saved now, not which request saved them or whether an earlier request can still finish. A changed selection requires a fresh review and separate confirmation. If the schedule has started or become inactive, review its current status instead of refreshing it. Closing and reopening details in the same tab retains the unresolved context; after reloading the page, review again. A timeout does not cancel server work already received.
+A rollout's **Stop rollout** menu (**Roll back or remove** once it finished) holds these actions, each with a line on what it does:
 
-Assignments are checked again when a schedule becomes due. An overlapping active canary for the same resource blocks the entire schedule before any device is released, even if the schedule was created first. Its status becomes **Needs attention**; overlapping devices show **Blocked** with the reason, and remaining devices show **Not released**. Review and deliberately pause or cancel the overlapping canary before creating a new deployment. The failed schedule does not retry automatically.
+| Action | Effect |
+| --- | --- |
+| **Pause** | Stops releasing to more devices; resume later. Devices already updated keep the version. |
+| **Cancel** | Stops releasing for good. Devices already updated keep the version. A schedule cancelled before it starts never starts. |
+| **Roll back** | Returns the devices it released to their previous version. A schedule cancelled before it started released nothing, so it doesn't offer it. See [Roll back deliberately](#roll-back-deliberately). |
+| **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
+| **Pause configuration sync** (agent settings) | Devices keep their current configuration and stop applying new versions. |
+| `vectory pause` on a device | The same, set by the host. Only the host can clear it. |
 
-Open a deployment to see its overall progress, then search **Device results** or use its **Progress** column filter. The overall verified count covers the whole deployment, even when only one page of devices is visible. **No reported error** means no error message was recorded; only **Applied and verified** counts as verified application. Select a device name to inspect its connection, pipeline and issues. Returning to Activity keeps your search, status and page until you reload or sign out.
+The command palette (**Ctrl K**, **⌘ K**) starts **Pause**, **Cancel** and **Roll back** too: type the verb and the rollout's name, such as **pause edge**. The rollout's page opens with the same review its button opens, resting on **Keep current state**, and nothing changes until you confirm there. It offers only what the rollout's state and your role allow.
 
-When a device leaves a current persistent assignment (active, paused or completed), including through revocation or identity recovery, its result shows **No longer targeted**. Its original identity and place in the deployment history remain, but it is excluded from the current verified count. Any **Last reported error** is historical context. A rollout can be **Complete** for its current members while still retaining these removed results; that does not mean every historical target verified the change. Snapshot deployments and stopped assignments keep their recorded target states.
+If you cancel a schedule at the moment it starts, the server applies one action and then the other, never a mix. Cancel first: the schedule never starts. Start first: the devices it released keep the version, and the cancel stops the rest. The deployment's activity shows which came first.
 
-A retired device link opens that exact old identity. Recovery creates a separate identity; review and explicitly target the replacement rather than assuming it inherited the old deployment. Re-adding a device to a persistent assignment requires ordinary admission and fresh verification.
+**Remove assignment** first shows what each device runs afterwards, by name: for example **Keeps Edge syslog processing v1 (no change)** or **Switches to Web access logs v2**. A device with nothing else assigned keeps running its current configuration, unmanaged. If anything changes before you confirm, refresh the review.
 
-Use **Copy link** in deployment details to share or bookmark that exact rollout. The link keeps its Deployments or Schedules origin and the list search, status and page you opened it from. It works after a refresh or sign-in, and opening a deployment name in a new tab works too. Anyone following the link needs their own account and existing permissions. Opening a link never starts or changes a deployment. If clipboard access is unavailable, select and copy the displayed link manually.
+**Resume rollout** checks for overlapping canaries first and stays paused if one is running.
 
-## Pause, cancel and unassign
+## Save and apply agent settings
 
-These actions affect different things:
+Agent settings control check-ins, configuration sync and metrics collection. They deploy like pipelines, with their own priorities.
 
-| Action                   | Effect                                                                                                         |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| Pause rollout            | Stops further release; does not undo devices already updated.                                                  |
-| Pause configuration sync | Keeps the current workload while stopping reconciliation on affected devices.                                  |
-| Local `vectory pause`    | Host-owned pause that remote resume cannot remove.                                                             |
-| Cancel rollout           | Stops further release. Assignments already delivered can remain effective.                                     |
-| Remove assignment        | Removes the assignment binding and re-evaluates the desired configuration. It does not inherently stop Vector. |
+<!-- steps -->
+1. In [**Devices → Agent settings**](/#/policies), choose **New settings** and name them.
+2. Set the check-in interval (10 seconds to 1 hour; 60 seconds by default), whether configuration sync is paused, and whether metrics are collected.
+3. Choose **Save settings**. Nothing changes on devices yet.
+4. Choose **Apply to devices**, review the devices and priority, and confirm.
 
-Open **Remove this assignment → Review assignment removal** to inspect each device's **Current desired state** and **After removal**. The review identifies the next assignment and pipeline version or agent policy. If no configuration assignment remains, the device becomes unmanaged and keeps its established local workload; removing the assignment does not stop Vector. If no policy assignment remains, the default agent policy applies. A host-owned local pause stays in effect. Learn more about [local maintenance](#/docs/installation#local-maintenance-and-recovery).
-
-When the next winning assignment has not been released by its rollout, the review explains that the current desired state remains while that rollout waits. Revoked, missing or no-longer-targeted devices are identified separately, and a device may have no desired-state change. These are projected desired-state effects, not proof that an agent applied or verified them. Search, filters and paging only change the view; they do not remove devices from the reviewed scope.
-
-Choose **Remove assignment** only after reviewing the full effect. The server checks the reviewed membership, assignments and delivered desired state again before committing. If they changed, choose **Refresh review**, inspect the new effects, then confirm separately. A rejected or blocked review does not automatically refresh, change priorities or retry. The dashboard requires a supporting server and will not fall back to an unreviewed removal.
-
-If the removal response is lost or times out, use **Check current status**. Nothing is resent automatically, and closing then reopening the removal dialog keeps this check required. A failed status read leaves the outcome unresolved. **Assignment is currently removed** reports the latest state; it does not prove which request removed it. If the assignment still exists, refresh and review its current effects before a separate confirmation. A timeout does not cancel server work already in progress.
-
-**Resume rollout** checks the current device scope against other active canaries for the same kind of assignment. If there is an overlap, the rollout stays paused and no additional devices are released. **Review active deployments** opens the active list in a new tab without changing any rollout. Wait for the overlapping canary to finish, or deliberately review its pause/cancel controls. Then return and choose **Resume rollout** again. Vectory does not automatically pause the other rollout, raise priority or retry the resume.
-
-If a pause, resume or cancel response cannot be confirmed, choose **Check current status** before trying another action. A timeout does not cancel work already received by the server. The dashboard keeps further actions unavailable until a fresh status read succeeds; a failed read is not proof that the action failed.
+A device confirms new settings at its next check-in. Agent settings can't change a device's mode or its local allowances.
 
 ## Roll back deliberately
 
-1. Open [**Actions → Version history**](/#/configurations?panel=history) on the pipeline.
-2. Select the prior published version and start deployment.
-3. Review its target set, priority and rollout as carefully as a new release.
-4. Confirm the device reports the intended version as **Applied**.
+A rollback deploys an earlier version as a new change. History never changes, and each device checks the older version against today's files and credentials, like any new version.
 
-Rollback creates a newer desired generation; it does not rewrite immutable history. The older version is checked against today's secrets, files and services, so it can still fail validation.
+<!-- steps -->
+1. Open the pipeline's [**Actions → Version history**](/#/configurations?panel=history).
+2. Select the version to go back to and choose **Deploy this version**.
+3. Review the devices, priority and rollout as carefully as for a new release, then confirm.
+4. Wait for **Applied** on each device.
 
-The **Roll back** shortcut opens **Review rollback**. Check the prior pipeline version, then review **Included** and **Excluded** devices. Released, eligible devices share one previously managed version; offline devices remain included. Revoked, missing, removed or never-released devices are listed separately with their reasons. Replacement identities are not added automatically, and the original deployment history stays intact. Search and paging help inspect the full reviewed scope; they do not change it.
+From a deployment, **Roll back** prepares this for you. **Review rollback** says who returns to what and what each device it leaves out runs afterwards, for example "edge-nyc-02 returns to Edge syslog processing v1. edge-fra-01 and edge-nyc-01 never received web-demo v1 and keep Edge syslog processing v1 (no change)." The rollback takes over one priority above the rollout. Only **Roll back N devices** sends it.
 
-Read the effect on the original rollout before confirming. Normally, rollback stops its remaining releases and creates a higher-priority snapshot deployment for the included devices. At the maximum priority of 1,000,000, it removes the original binding and creates the replacement at that same priority; the original is then shown as **Removed**. Only **Roll back N devices** sends the request. Each included agent must still validate and verify the prior version.
+A canary that's still running rolls back in the same step: confirming stops the rollout and returns the devices it reached. If stopping it would switch a device it never reached to another version, or leave one without a pipeline, the review names that device and offers **Cancel rollout, then review rollback**.
 
-If the review is blocked, resolve the stated reason or create a new deployment with a deliberately reviewed target set. Different previously managed versions need separate deployments of the appropriate versions. A competing assignment, or an unsafe effect on excluded devices when stopping the original rollout, can also block the review. Vectory does not silently raise the reviewed priority or substitute a new device identity. If assignments or eligibility change before confirmation, use **Refresh review**, inspect the new scope, then confirm separately. A rejection does not automatically update or resend your request. Older servers must be updated before offering a new reviewed rollback; existing request reminders remain available for recovery.
+Each device returns to the version it ran before this deployment first reached it, even if other deployments held it in between. When devices would return to different versions, the review names each device and its version. Deploy each version to its own devices.
 
-After a failed attempt, fix the cause and use **Retry** where available, or publish and deploy a corrected version. Identical failed attempts are suppressed to avoid endless restarts. On the host, `vectory retry` requires the daemon to be stopped. A retry requests another attempt; it is not evidence of success.
+Devices that ran their own local configuration before this deployment have nothing to roll back to. For them, **Remove assignment** returns them to that configuration.
 
-After using **Roll back**, choose **View rollback deployment** to follow the exact replacement. If its response is lost, **Confirm rollback** checks or retries the original reviewed request on a supporting server, including after closing a tab or reloading in the same browser. Recovery preserves the reviewed version, included devices and exclusions; it does not silently fetch and apply a new scope. The original deployment and its replacement have separate identities. For an older request without retry support, check history before trying again; the dashboard will not blindly resend it.
+A schedule cancelled before it started released nothing, so its page doesn't offer **Roll back**. A review of any deployment that released nothing says **Nothing was released, so there is nothing to roll back.**
 
-**Retry application** on a device applies only to the desired version and generation currently shown. The server rejects the request if that assignment changed, the device no longer has a retryable state, or sync is paused. Refresh, inspect the new state and decide again; Vectory does not automatically retry the replacement assignment or resume paused sync. Older servers without this check require an update before the dashboard offers this action.
-
-Retrying an individual device does not restart a canary that stopped at its failure threshold, or release its waiting devices. Review the failure and create a new deployment with the intended targets and rollout policy, or roll back the released devices.
+After a failed attempt, fix the cause, then use **Retry application** on the device or deploy a corrected version. A device doesn't retry a failed version by itself, so it can't restart Vector in a loop. Retrying one device doesn't restart a canary that stopped; deploy again with the rollout you want.

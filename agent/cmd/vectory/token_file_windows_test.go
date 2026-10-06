@@ -46,7 +46,7 @@ func TestEnrollmentRefusesPublicTokenFileBeforeStateAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code != 1 || !strings.Contains(string(message), "token file must be private") {
+	if code != 1 || !strings.Contains(string(message), "is readable by other accounts") {
 		t.Fatalf("public token file was accepted past input preflight: exit=%d, stderr=%q", code, message)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "uninstalled")); !os.IsNotExist(err) {
@@ -80,7 +80,7 @@ func TestEnrollmentRefusesAlternateStreamTokenFileBeforeStateAccess(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code != 1 || !strings.Contains(string(message), "token file must be private") {
+	if code != 1 || !strings.Contains(string(message), "isn't a plain path on a local disk") {
 		t.Fatalf("alternate stream was accepted past input preflight: exit=%d, stderr=%q", code, message)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "uninstalled")); !os.IsNotExist(err) {

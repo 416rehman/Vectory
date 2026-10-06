@@ -1,13 +1,19 @@
 // Actual AuditLog and App navigation; all HTTP records below are isolated synthetic fixtures.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -23,7 +29,7 @@ const server = await createServer({
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 5201,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -77,7 +83,7 @@ const results = [],
   requests = [],
   unexpected = [],
   accessibility = [];
-const origin = "http://127.0.0.1:5201";
+const origin = `http://127.0.0.1:${port}`;
 const id = (number) =>
   `abcdefab-1234-4000-8000-${String(number).padStart(12, "0")}`;
 const user = {
@@ -99,6 +105,9 @@ const event = (number) => ({
   target_kind: number % 2 ? "configuration" : "issue",
   target_name: `Synthetic ${number < 25 ? "Alpha" : "Beta"} ${number}`,
   device_id: id(number % 2 ? 800 : 801),
+  // The server names a device by its current name; a device that no longer
+  // exists has none.
+  device_name: number % 2 ? "Synthetic edge 800" : null,
   outcome: number % 7 ? "success" : "denied",
   created_at: "2026-09-26T12:00:00Z",
   request_id: `synthetic-request-${number}`,
@@ -395,7 +404,7 @@ try {
           "Synthetic Alpha 13",
         );
         const opener = f.page
-          .getByRole("button", { name: "Details: Pipeline published" })
+          .getByRole("link", { name: "Pipeline published", exact: true })
           .first();
         await opener.click();
         const dialog = f.page.getByRole("dialog", { name: "Event details" });
@@ -436,7 +445,9 @@ try {
           f.page.getByRole("button", { name: "Export results" }),
         ).toBeDisabled();
         f.state.failHistory = false;
-        await f.page.getByRole("button", { name: /Try again/ }).click();
+        await f.page
+          .getByRole("button", { name: "Retry", exact: true })
+          .click();
         await expect(f.page.locator(".audit-table tbody tr")).toHaveCount(12);
         f.state.heldSearch = "Alpha";
         await f.page
@@ -456,13 +467,13 @@ try {
         );
         f.state.heldId = id(25);
         await f.page
-          .getByRole("button", { name: "Details: Pipeline published" })
+          .getByRole("link", { name: "Pipeline published", exact: true })
           .first()
           .click();
         await expect.poll(() => f.state.held.length).toBe(1);
         await f.page.keyboard.press("Escape");
         await f.page
-          .getByRole("button", { name: "Details: Issue acknowledged" })
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
           .first()
           .click();
         await expect(
@@ -536,12 +547,21 @@ try {
         );
         f.state.records = f.state.records.slice(0, 3);
         await f.page
-          .getByRole("button", { name: "Refresh", exact: true })
+          .getByRole("button", { name: "Refresh now", exact: true })
           .click();
         await expect(f.page.locator(".audit-table tbody tr")).toHaveCount(3);
+        // Page 2 clamps to the only page, and a single page needs no pager.
+        await expect
+          .poll(
+            () =>
+              f.state.calls
+                .filter((call) => call.path === "/audit/history")
+                .at(-1).query.page,
+          )
+          .toBe("1");
         await expect(
           f.page.getByRole("button", { name: "Previous", exact: true }),
-        ).toBeDisabled();
+        ).toHaveCount(0);
       } finally {
         await f.close();
       }
@@ -580,24 +600,32 @@ try {
         await expect(f.page.locator(".audit-target").first()).toHaveText(
           "Synthetic Beta 25",
         );
-        for (const [label, column] of [
-          ["By", "actor"],
-          ["Result", "outcome"],
-          ["Time", "created_at"],
+        // Time sorts newest first on its first click; other columns A to Z.
+        for (const [label, column, direction] of [
+          ["By", "actor", "asc"],
+          ["Result", "outcome", "asc"],
+          ["Time", "created_at", "desc"],
         ]) {
           await f.page
             .getByRole("button", { name: new RegExp(`^Sort by ${label}`) })
             .click();
           await expect
             .poll(() => f.state.calls.at(-1).query)
-            .toMatchObject({ page: "1", sort: column, direction: "asc" });
+            .toMatchObject(
+              direction === "asc"
+                ? { page: "1", sort: column, direction }
+                : { page: "1" },
+            );
           await expect(
             f.page.getByRole("columnheader").filter({
               has: f.page.getByRole("button", {
                 name: new RegExp(`^Sort by ${label}`),
               }),
             }),
-          ).toHaveAttribute("aria-sort", "ascending");
+          ).toHaveAttribute(
+            "aria-sort",
+            direction === "asc" ? "ascending" : "descending",
+          );
         }
         await f.page.getByRole("button", { name: "Export results" }).click();
         await f.page.getByRole("button", { name: "Prepare export" }).click();
@@ -605,7 +633,8 @@ try {
           f.page.getByRole("heading", { name: "File ready" }),
         ).toBeVisible();
         const body = f.state.calls.find((call) => call.method === "POST").body;
-        expect(body).toEqual({ search: "Synthetic" });
+        // Exports keep the visible scope: sign-ins stay out by default.
+        expect(body).toEqual({ scope: "changes", search: "Synthetic" });
         await f.page.keyboard.press("Escape");
         await f.page
           .getByPlaceholder("Search activity")
@@ -858,6 +887,114 @@ try {
     },
   );
   await check(
+    "the detail names the device an event is about, and falls back to its ID when the server gives no name",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.render();
+        // Event 3 is about a device the server names; event 2 about one it does not.
+        await f.page
+          .getByRole("link", { name: "Pipeline published", exact: true })
+          .first()
+          .click();
+        const dialog = f.page.getByRole("dialog", { name: "Event details" });
+        const named = dialog.getByRole("link", {
+          name: "Synthetic edge 800",
+          exact: true,
+        });
+        await expect(named).toHaveAttribute("href", `#/devices/${id(800)}`);
+        await expect(dialog).not.toContainText(id(800));
+        await f.page.keyboard.press("Escape");
+        await f.page
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
+          .first()
+          .click();
+        await expect(
+          dialog.getByRole("link", { name: id(801), exact: true }),
+        ).toHaveAttribute("href", `#/devices/${id(801)}`);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "a retired identity's events show the device's own name with a badge, in the list, on a phone and in the detail",
+    async () => {
+      const f = await fixture();
+      try {
+        // What a recovery stores: the old record keeps its name with its own
+        // id appended, so the new identity can take the name.
+        const stored = `edge-nyc-01#retired-${id(60)}`;
+        f.state.records = [
+          {
+            ...event(2),
+            action: "device.revoke",
+            target: stored,
+            target_id: id(60),
+            target_kind: "device",
+            target_name: stored,
+            device_id: id(60),
+          },
+          event(3),
+        ];
+        await f.render();
+        const row = f.page.locator(".audit-table tbody tr").first();
+        await expect(row.locator(".audit-target")).toContainText("edge-nyc-01");
+        await expect(row.locator(".audit-target a")).toHaveText("edge-nyc-01");
+        await expect(row.locator(".audit-target")).toContainText(
+          "Retired identity",
+        );
+        await expect(f.page.locator(".audit-table")).not.toContainText(
+          "#retired-",
+        );
+        for (const [width, theme] of [
+          [1280, "light"],
+          [1280, "dark"],
+          [390, "light"],
+          [390, "dark"],
+        ]) {
+          await f.page.setViewportSize({ width, height: 960 });
+          await f.page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await expect(f.page.locator("body")).not.toContainText("#retired-");
+          await expect(
+            f.page.getByText("Retired identity", { exact: true }).first(),
+          ).toBeVisible();
+          expect(
+            await f.page.evaluate(
+              () => document.documentElement.scrollWidth <= window.innerWidth,
+            ),
+          ).toBe(true);
+          await f.page.screenshot({
+            path: resolve(output, `audit-retired-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+        await f.page.setViewportSize({ width: 1280, height: 960 });
+        await f.page
+          .getByRole("link", { name: "Device access revoked", exact: true })
+          .first()
+          .click();
+        const dialog = f.page.getByRole("dialog", { name: "Event details" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText("edge-nyc-01");
+        await expect(dialog).toContainText("Retired identity");
+        await expect(dialog.getByText("Target", { exact: true })).toBeVisible();
+        const axe = await new AxeBuilder({ page: f.page }).analyze();
+        accessibility.push({
+          width: 1280,
+          theme: "dark",
+          view: "retired detail",
+          violations: axe.violations,
+        });
+        expect(axe.violations).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
     "desktop/mobile light/dark accessibility, readable filters and safe detail layout",
     async () => {
       const f = await fixture();
@@ -888,7 +1025,7 @@ try {
             });
           }
         await f.page
-          .getByRole("button", { name: "Details: Issue acknowledged" })
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
           .first()
           .click();
         await expect(

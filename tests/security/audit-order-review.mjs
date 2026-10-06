@@ -185,10 +185,11 @@ try {
       ?.success,
     1,
   );
-  // Reconstruct only the previous schema in this isolated fixture, preserving
-  // the exact remaining migration history and immutable audit records.
+  // Reconstruct only the schema from before the audit ordinal (migration 10)
+  // and its browsing indexes (migration 12) in this isolated fixture, preserving
+  // the remaining migration history and immutable audit records.
   db.exec(
-    "DROP TRIGGER audit_sequence_insert; DROP TABLE audit_sequence; DELETE FROM _sqlx_migrations WHERE version=10;",
+    "DROP TRIGGER audit_sequence_insert; DROP TABLE audit_sequence; DROP INDEX audit_actor; DROP INDEX audit_target; DROP INDEX audit_device; DROP INDEX audit_action_outcome; DELETE FROM _sqlx_migrations WHERE version IN (10,12);",
   );
   const legacy = [];
   for (let i = 0; i < 30; i++) {

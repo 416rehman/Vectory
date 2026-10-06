@@ -5,9 +5,13 @@ import {
   diagnoseConfigurationSource,
   assertValidPipelineSource,
   detectConfigurationFormat,
+  diagnosticCounts,
+  sourceErrorMessage,
+  sourceLineForPath,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
   ConfigurationSourceError,
+  readConfigurationFiles,
 } from "./configurationSource";
 import { stringifyConfiguration } from "./configurationFormats";
 
@@ -22,6 +26,30 @@ const pipeline = {
 };
 
 describe("lossless configuration source parsing", () => {
+  it("locates a credential field in YAML and JSON without guessing repeated TOML keys", () => {
+    const steps = ["sinks", "out", "request", "headers", "Authorization"];
+    expect(
+      sourceLineForPath(
+        "sinks:\n  out:\n    request:\n      headers:\n        Authorization: Bearer synthetic-value\n",
+        "yaml",
+        steps,
+      ),
+    ).toBe(5);
+    expect(
+      sourceLineForPath(
+        '{\n  "sinks": {"out": {"Authorization": "synthetic-value"}}\n}',
+        "json",
+        ["sinks", "out", "Authorization"],
+      ),
+    ).toBe(2);
+    expect(
+      sourceLineForPath(
+        '[sinks.out]\napi_key = "synthetic-value"\n[sinks.other]\napi_key = "another-value"',
+        "toml",
+        ["sinks", "out", "api_key"],
+      ),
+    ).toBeNull();
+  });
   it.each(["yaml", "json", "toml"])(
     "parses and validates a complete %s pipeline",
     (format) => {
@@ -103,6 +131,57 @@ describe("lossless configuration source parsing", () => {
       ),
     ).toThrow(/alias|expan/i);
   });
+  it("resolves YAML merge aliases into component fields before validation", () => {
+    const source = `sources:
+  base: &base
+    type: demo_logs
+    format: json
+  copy:
+    <<: *base
+sinks:
+  out:
+    type: console
+    inputs: [copy]
+    encoding: { codec: json }
+`;
+    const config = parseSource(source, "yaml");
+    expect(config.sources.copy).toEqual(config.sources.base);
+    expect(Object.hasOwn(config.sources.copy, "<<")).toBe(false);
+    expect(assertValidPipelineSource(source, "yaml")).toEqual(config);
+  });
+  it("honors explicit YAML merge overrides and first-map precedence", () => {
+    const source = `sources:
+  first: &first { type: demo_logs, format: json, interval: 1 }
+  second: &second { type: demo_logs, format: shuffle, interval: 2 }
+  merged:
+    <<: [*first, *second]
+    interval: 3
+`;
+    expect(parseSource(source, "yaml").sources.merged).toEqual({
+      type: "demo_logs",
+      format: "json",
+      interval: 3,
+    });
+  });
+  it.each([
+    "sources: {broken: {<<: *missing}}",
+    "defaults: &defaults [demo_logs]\nsources: {broken: {<<: *defaults}}",
+    "sources: {broken: &broken {<<: *broken}}",
+  ])("rejects malformed or cyclic YAML merge aliases: %s", (source) => {
+    expect(() => parseSource(source, "yaml")).toThrow(ConfigurationSourceError);
+  });
+  it("keeps duplicate explicit keys invalid even when a merge is present", () => {
+    const source = `sources:
+  base: &base { type: demo_logs, format: json }
+  copy: { <<: *base, format: json, format: shuffle }
+`;
+    expect(() => parseSource(source, "yaml")).toThrow(/unique/i);
+  });
+  it("keeps a quoted YAML << key as ordinary data", () => {
+    expect(parseSource('future: { "<<": kept }', "yaml")).toEqual({
+      future: { "<<": "kept" },
+    });
+  });
   it.each([
     "x: !!set {a: null}",
     "x: !!binary SGVsbG8=",
@@ -169,6 +248,58 @@ describe("lossless configuration source parsing", () => {
 });
 
 describe("local source diagnostics and import gate", () => {
+  it("keeps a compact single JSON file even when YAML would exceed the merged-file limit", async () => {
+    const config = {
+      sources: { incoming: { type: "demo_logs", format: "json" } },
+      transforms: {
+        keep: {
+          type: "remap",
+          inputs: ["incoming"],
+          source: ". = .\n" + "#\n".repeat(150_000),
+        },
+      },
+      sinks: { output: { type: "blackhole", inputs: ["keep"] } },
+    };
+    const text = JSON.stringify(config);
+    expect(new TextEncoder().encode(text).length).toBeLessThan(
+      MAX_CONFIGURATION_BYTES,
+    );
+    expect(
+      new TextEncoder().encode(stringifyConfiguration(config, "yaml")).length,
+    ).toBeGreaterThan(MAX_CONFIGURATION_BYTES);
+
+    const file = new File([text], "compact.json", {
+      type: "application/json",
+    });
+    const single = await readConfigurationFiles([file]);
+    expect(single.text).toBe(text);
+    expect(single.format).toBe("json");
+    expect(single.config.transforms.keep.source).toBe(
+      config.transforms.keep.source,
+    );
+    await expect(
+      readConfigurationFiles([
+        file,
+        new File(["api: {enabled: false}\n"], "api.yaml"),
+      ]),
+    ).rejects.toThrow("The combined configuration exceeds the 1 MiB limit.");
+  });
+
+  it("explains when compact source bytes fit but the publish artifact cannot", async () => {
+    const text = JSON.stringify({
+      sources: {
+        incoming: { type: "file", include: Array(100_000).fill("/a") },
+      },
+      sinks: { output: { type: "blackhole", inputs: ["incoming"] } },
+    });
+    expect(new TextEncoder().encode(text).length).toBeLessThan(
+      MAX_CONFIGURATION_BYTES,
+    );
+    await expect(
+      readConfigurationFiles([new File([text], "compact.json")]),
+    ).rejects.toThrow("The rendered pipeline exceeds the 1 MiB publish limit.");
+  });
+
   it("shows a required node field once while retaining its node identity", () => {
     const config = {
       sources: { incoming: { type: "demo_logs", format: "json" } },
@@ -294,7 +425,10 @@ describe("local source diagnostics and import gate", () => {
     expect(result.locallyValid).toBe(true);
     expect(
       result.diagnostics.some(
-        (d) => d.severity === "warning" && /resolved/.test(d.message),
+        (d) =>
+          d.severity === "warning" &&
+          d.code === "deferred" &&
+          /resolves/.test(d.message),
       ),
     ).toBe(true);
     expect(assertValidPipelineSource(JSON.stringify(config), "json")).toEqual(
@@ -358,5 +492,49 @@ describe("local source diagnostics and import gate", () => {
       pipeline,
     ])
       expect(isEmptyPipeline(config)).toBe(false);
+  });
+});
+
+describe("sourceErrorMessage", () => {
+  const failureOf = (text: string, format: string) => {
+    try {
+      parseSource(text, format);
+    } catch (error) {
+      return error;
+    }
+    throw new Error("The text was expected to fail.");
+  };
+
+  it("names the line and column of the first problem", () => {
+    const yaml = "sources:\n  demo:\n    type: demo_logs\n   format: json\n";
+    expect(sourceErrorMessage(yaml, failureOf(yaml, "yaml"))).toMatch(
+      /^Line 4:\d+: \S/,
+    );
+    const json = '{\n  "sources": {\n    "demo": }\n}';
+    expect(sourceErrorMessage(json, failureOf(json, "json"))).toMatch(
+      /^Line 3:\d+: \S/,
+    );
+  });
+
+  it("counts a source's errors and warnings, singular for one", () => {
+    const error = { severity: "error" as const },
+      warning = { severity: "warning" as const };
+    expect(diagnosticCounts([error])).toBe("1 error · 0 warnings");
+    expect(diagnosticCounts([error, error, warning])).toBe(
+      "2 errors · 1 warning",
+    );
+    expect(diagnosticCounts([warning, warning])).toBe("0 errors · 2 warnings");
+  });
+
+  it("never returns an empty message", () => {
+    expect(sourceErrorMessage("a: 1", new Error("Choose a file."))).toBe(
+      "Choose a file.",
+    );
+    expect(sourceErrorMessage("", new Error(""))).toBe(
+      "This configuration could not be read.",
+    );
+    expect(sourceErrorMessage("", "unknown")).toBe(
+      "This configuration could not be read.",
+    );
   });
 });

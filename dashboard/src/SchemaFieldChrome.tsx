@@ -104,10 +104,12 @@ export function SchemaFieldHelpContent({
       </p>
       {model.sensitive ? (
         <p>
-          Use <code>{"${ENV}"}</code>, <code>SECRET[backend.key]</code>, or{" "}
-          <code>vectory-secret:NAME</code>. Plaintext credentials are not saved.{" "}
+          Credentials stay on each device. Name a device secret, saved as{" "}
+          <code>vectory-secret:NAME</code>, or in full mode use a Vector
+          reference such as <code>SECRET[backend.key]</code>. Plain-text
+          credentials are never saved.{" "}
           <DocLink topic="resources" section="keep-credentials-on-the-device">
-            Secret references
+            Device secrets
           </DocLink>
         </p>
       ) : (

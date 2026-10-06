@@ -5,33 +5,115 @@ import {
   type EdgeProps,
   useStoreApi,
 } from "@xyflow/react";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Plus } from "lucide-react";
 import {
   connectionEndpointPositions,
   getConnectionPath,
   normalizeConnectionStyle,
 } from "./connectionStyle";
+import { curvePoint, routedPath, type Lane } from "./connectionRoute";
+import { edgeWidth, formatRate } from "./liveGraph";
 import "./pipeline-edge.css";
+import "./live-graph.css";
 
 function PipelineEdge(props: EdgeProps) {
   const connectionStyle = normalizeConnectionStyle(props.data?.connectionStyle);
-  const [path, x, y] = getConnectionPath(connectionStyle, props);
+  const [plain, plainX, plainY] = getConnectionPath(connectionStyle, props);
+  // A line that would run behind a card is routed around it; the label and
+  // the actions follow the routed line.
+  const lanes = props.data?.lanes as readonly Lane[] | undefined;
+  const routed =
+    lanes?.length && connectionStyle !== "straight"
+      ? routedPath(
+          connectionStyle,
+          { x: props.sourceX, y: props.sourceY },
+          { x: props.targetX, y: props.targetY },
+          lanes,
+        )
+      : null;
+  const path = routed?.d ?? plain;
+  const x = routed?.label.x ?? plainX;
+  const y = routed?.label.y ?? plainY;
+  // A rate sits a little before the middle of a curve, clear of the arrowhead.
+  const chip =
+    routed || connectionStyle !== "curved"
+      ? { x, y }
+      : curvePoint(
+          { x: props.sourceX, y: props.sourceY },
+          { x: props.targetX, y: props.targetY },
+          0.45,
+        );
   const endpoints = connectionEndpointPositions(connectionStyle, props);
   const onHoverChange = props.data?.onHoverChange as
     ((hovered: boolean) => void) | undefined;
   const openMenu = props.data?.openMenu as
     | ((position: { x: number; y: number }, opener: HTMLElement) => void)
     | undefined;
+  const insertStep = props.data?.insertStep as
+    ((position: { x: number; y: number }) => void) | undefined;
+  // Live: undefined when off, null when no device reports this output.
+  const rate = props.data?.liveRate as number | null | undefined;
+  const live = rate !== undefined;
+  // A wildcard input: a dashed, read-only line for each output it matches,
+  // named by the pattern.
+  const pattern = props.data?.pattern as string | undefined;
+  const more = Number(props.data?.patternMore) || 0;
+  if (pattern !== undefined)
+    return (
+      <>
+        <BaseEdge
+          id={props.id}
+          path={path}
+          data-connection-style={connectionStyle}
+          className={`pipeline-edge-pattern${live && rate ? " pipeline-edge-flowing" : ""}`}
+          markerEnd={props.markerEnd}
+          style={props.style}
+          interactionWidth={0}
+        />
+        <EdgeLabelRenderer>
+          <span
+            className="pipeline-edge-pattern-chip"
+            title={`Wildcard input ${pattern}. Vector resolves it on each device.`}
+            style={{
+              transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
+            }}
+          >
+            <code>{pattern}</code>
+            {live && rate !== null && ` · ${formatRate(rate)}`}
+            {more > 0 && ` · +${more} more`}
+          </span>
+        </EdgeLabelRenderer>
+      </>
+    );
   return (
     <>
       <BaseEdge
         id={props.id}
         path={path}
         data-connection-style={connectionStyle}
+        className={
+          live ? (rate ? "pipeline-edge-flowing" : "pipeline-edge-idle") : ""
+        }
         markerEnd={props.markerEnd}
-        style={props.style}
+        style={
+          live ? { ...props.style, strokeWidth: edgeWidth(rate) } : props.style
+        }
         interactionWidth={26}
       />
+      {live && !props.selected && (
+        <EdgeLabelRenderer>
+          <span
+            className="pipeline-edge-rate"
+            data-empty={rate === null || undefined}
+            aria-hidden="true"
+            style={{
+              transform: `translate(-50%, -50%) translate(${chip.x}px, ${chip.y}px) scale(var(--live-scale, 1))`,
+            }}
+          >
+            {rate === null ? "no data" : formatRate(rate)}
+          </span>
+        </EdgeLabelRenderer>
+      )}
       {props.selected && props.data?.editable === true && (
         <g
           className="pipeline-edge-endpoints"
@@ -44,6 +126,23 @@ function PipelineEdge(props: EdgeProps) {
       )}
       {props.selected && openMenu && (
         <EdgeLabelRenderer>
+          {insertStep && (
+            <button
+              type="button"
+              className="pipeline-edge-insert nodrag nopan"
+              style={{
+                transform: `translate(-50%, -50%) translate(${x - 30}px, ${y}px)`,
+              }}
+              aria-label={`Insert a step between ${props.source} and ${props.target}`}
+              title="Insert a step"
+              onClick={(event) => {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                insertStep({ x: bounds.left, y: bounds.bottom + 6 });
+              }}
+            >
+              <Plus size={15} aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             className="pipeline-edge-actions nodrag nopan"

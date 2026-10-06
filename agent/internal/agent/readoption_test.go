@@ -39,8 +39,14 @@ func TestSamePathInstallDoesNotTrustReplacedBinary(t *testing.T) {
 		t.Fatal("ordinary install silently approved new bytes", err)
 	}
 	driver := &VectorDriver{Settings: got}
-	if err = driver.Validate(context.Background(), s.ManagedConfig); err == nil || !strings.Contains(err.Error(), "adopted Vector binary changed") {
-		t.Fatal("driver must reject replacement before executing it", err)
+	for name, run := range map[string]func() error{
+		"validate": func() error { return driver.Validate(context.Background(), s.ManagedConfig) },
+		"activate": func() error { return driver.Activate(context.Background(), s.ManagedConfig) },
+	} {
+		failure := asVectorFailure(run())
+		if failure == nil || len(failure.Diagnostics) != 1 || failure.Diagnostics[0].Code != "VECTOR_BINARY_UNAVAILABLE" {
+			t.Fatalf("driver must reject replacement before executing it (%s): %+v", name, failure)
+		}
 	}
 }
 
@@ -97,6 +103,34 @@ func newReadoptFixture(t *testing.T, full bool) readoptFixture {
 
 func successfulChecks() adoptionChecks {
 	return adoptionChecks{func(context.Context, Settings) (string, error) { return VectorVersion, nil }, func(context.Context, Settings, string) error { return nil }}
+}
+
+func TestReAdoptValidatesWithHostRuntimeWithoutLeavingFiles(t *testing.T) {
+	f := newReadoptFixture(t, false)
+	previousProbe := vectorDefaultDataDirProbe
+	vectorDefaultDataDirProbe = filepath.Join(t.TempDir(), "absent-default")
+	t.Cleanup(func() { vectorDefaultDataDirProbe = previousProbe })
+	calls := filepath.Join(t.TempDir(), "calls.log")
+	binary := standInVector(t, fakeVectorConfig{Calls: calls})
+	digest, err := FileDigest(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReAdopt(context.Background(), f.dir, binary, digest); err != nil {
+		t.Fatal(err)
+	}
+	validations, _ := vectorCalls(t, calls)
+	if len(validations) != 2 {
+		t.Fatalf("expected both retained configurations to be validated: %v", validations)
+	}
+	for _, validation := range validations {
+		if strings.Count(validation, "--config-json") != 2 {
+			t.Fatalf("re-adoption validated a different runtime than apply: %s", validation)
+		}
+	}
+	if _, err := os.Lstat(agentDataDir(f.dir)); !os.IsNotExist(err) {
+		t.Fatalf("validation left a new host data directory: %v", err)
+	}
 }
 
 func TestReAdoptChangesOnlyApprovedIdentityAndValidatesBothSnapshots(t *testing.T) {

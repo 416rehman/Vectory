@@ -1,7 +1,11 @@
 // Actual App/Editor; every HTTP request uses isolated synthetic state.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
+import {
+  isPipelineTelemetry,
+  pipelineTelemetry,
+} from "./telemetry-replies.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -171,6 +175,7 @@ async function start(f = state(), options = {}) {
     ({ theme, seed, failStorage }) => {
       localStorage.setItem("vectory-theme", theme);
       localStorage.setItem("vectory-sidebar-collapsed", "true");
+      localStorage.setItem("vectory.editor.auto-check", "off");
       for (const [key, value] of Object.entries(seed || {}))
         localStorage.setItem(key, value);
       window.fixture = {
@@ -264,6 +269,10 @@ async function start(f = state(), options = {}) {
       if (path === "/settings")
         return reply({ instance_name: "Synthetic publication fixture" });
       if (path === "/mfa") return reply({ enabled: false });
+      // The publish review shows where versions are assigned; no devices here.
+      if (path === "/devices") return reply([]);
+      if (isPipelineTelemetry(path, f.document.id))
+        return reply(pipelineTelemetry(f.document.id));
       if (path === `/configurations/${f.document.id}`) return reply(f.document);
       if (path === `/configurations/${f.document.id}/history`) {
         const page = Number(url.searchParams.get("page") || 1),
@@ -382,6 +391,24 @@ async function start(f = state(), options = {}) {
         updated_at: created,
       });
       return reply(f.document);
+    }
+    // After a validation rejection the editor re-checks the draft to show
+    // Vector's findings; this synthetic draft itself is valid.
+    if (
+      method === "POST" &&
+      path === `/configurations/${f.document.id}/validate`
+    ) {
+      f.validations = (f.validations || 0) + 1;
+      return reply({
+        valid: true,
+        vector_validated: true,
+        static_checked: true,
+        deferred: false,
+        diagnostics: [],
+        errors: [],
+        warnings: [],
+        vector_version: "0.58.0",
+      });
     }
     if (
       method === "POST" &&
@@ -520,7 +547,7 @@ async function publish(page, message = "Synthetic original publication note") {
     .click();
 }
 async function run(name, fn) {
-  const focus = process.env.VECTORY_PUBLISH_RECOVERY_FOCUS;
+  const focus = process.env.VECTORY_PUBLISH_RECOVERY_FOCUS || process.argv[2];
   if (focus && !name.includes(focus)) return;
   const started = Date.now();
   try {
@@ -539,7 +566,9 @@ async function clean(f) {
       (r) =>
         r.method !== "GET" &&
         !r.path.endsWith("/publish") &&
-        !r.path.endsWith("/draft"),
+        !r.path.endsWith("/draft") &&
+        // Read-only re-check after a validation rejection.
+        !r.path.endsWith("/validate"),
     ),
   ).toEqual([]);
 }
@@ -594,6 +623,23 @@ async function recent(page) {
 }
 let failure;
 try {
+  await run(
+    "Credential-shaped publication note never reaches browser storage or POST",
+    async () => {
+      const s = await start(state());
+      try {
+        await publish(s.page, "https://collector.example/?api_key=short");
+        await expect(reviewDialog(s.page).getByRole("alert")).toContainText(
+          "message",
+        );
+        expect(s.f.posts).toHaveLength(0);
+        expect(await storage(s.page)).toEqual({});
+        await noResend(s.f, 0);
+      } finally {
+        await s.close();
+      }
+    },
+  );
   for (const sharedFault of [
     { phase: "preflight", code: "UNAVAILABLE", status: 503 },
     { phase: "preflight", code: "FORBIDDEN", status: 403 },
@@ -747,22 +793,22 @@ try {
       const boot = await start(state({ holdBootHistory: true }));
       try {
         await expect.poll(() => boot.f.bootHolds.length).toBe(1);
-        await publish(boot.page);
-        await expect(reviewDialog(boot.page)).toHaveCount(0);
+        // Until the published version is known, publishing waits.
         await expect(
           boot.page.getByRole("button", {
-            name: "Choose devices",
+            name: "Checking version",
             exact: true,
           }),
-        ).toBeVisible();
+        ).toBeDisabled();
         for (const done of boot.f.bootHolds.splice(0)) done();
         await expect.poll(() => boot.f.bootResponses).toBe(1);
-        await boot.page.evaluate(
-          () =>
-            new Promise((done) =>
-              requestAnimationFrame(() => requestAnimationFrame(done)),
-            ),
-        );
+        await publish(boot.page);
+        await expect(reviewDialog(boot.page)).toHaveCount(0);
+        // The next step offers deployment; the toolbar now matches the version.
+        await boot.page
+          .getByRole("dialog", { name: /^Version \d+ published$/ })
+          .getByRole("button", { name: "Done", exact: true })
+          .click();
         await expect(
           boot.page.getByRole("button", {
             name: "Choose devices",
@@ -1038,18 +1084,25 @@ try {
     },
   );
   await run(
-    "Validation/stale rejection requires explicit review and dismissal before new intent; held publication cannot silently retry after a deadline",
+    "Validation and stale rejections keep the saved intent until reviewed; held publication cannot silently retry after a deadline",
     async () => {
       for (const publishMode of ["invalid", "stale"]) {
         const s = await start(state({ publishMode }));
         try {
           await publish(s.page);
-          await expect(reviewDialog(s.page).getByRole("alert")).toBeVisible();
           await uncertain(s.page);
-          expect(Object.keys(await storage(s.page))).toHaveLength(1);
+          await expect(reviewDialog(s.page).getByRole("alert")).toContainText(
+            publishMode === "invalid"
+              ? "Synthetic native validation rejected this draft"
+              : "Draft changed; review before publishing",
+          );
+          // A negative lookup after this refusal could race an earlier tab's
+          // same-key POST. Only the preflight lookup has run so far.
+          expect(s.f.lookups).toHaveLength(1);
+          const first = s.f.posts[0].body.request_id;
+          expect((await storage(s.page))[storageKey(first)]).toBeTruthy();
           expect(s.f.versions).toHaveLength(0);
           expect(s.f.posts).toHaveLength(1);
-          const first = s.f.posts[0].body.request_id;
           await closePublish(s.page);
           await openRecovery(s.page);
           await expect(
@@ -1058,23 +1111,12 @@ try {
               exact: true,
             }),
           ).toBeEnabled();
-          await s.page
-            .getByRole("button", { name: "Dismiss reminder", exact: true })
-            .click();
-          await expect(s.page.getByRole("dialog")).toContainText(
-            "does not cancel publication or delete a version",
-          );
-          await s.page
-            .getByRole("button", { name: "Dismiss reminder", exact: true })
-            .click();
-          await expect(s.page.getByRole("dialog")).toHaveCount(0);
           s.f.publishMode = "normal";
-          await publish(
-            s.page,
-            "Synthetic explicitly reviewed replacement intent",
-          );
-          await expect(reviewDialog(s.page)).toHaveCount(0);
-          expect(s.f.posts[1].body.request_id).not.toBe(first);
+          await s.page
+            .getByRole("button", { name: "Retry same request", exact: true })
+            .click();
+          await published(s.page);
+          expect(s.f.posts[1].body.request_id).toBe(first);
           expect(s.f.posts[1].body.revision).toBe(1);
           await noResend(s.f, 2);
         } finally {

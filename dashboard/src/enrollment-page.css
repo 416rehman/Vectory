@@ -1,0 +1,379 @@
+.enroll-page {
+  max-width: 960px;
+  min-width: 0;
+}
+.enroll-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+.enroll-step {
+  min-width: 0;
+}
+.control-card.enroll-step + .control-card.enroll-step {
+  margin-top: 0;
+}
+.enroll-step h2 {
+  margin: 0 0 16px;
+  font-size: 17px;
+}
+.enroll-os {
+  display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.enroll-os-option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 14px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.enroll-os-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.enroll-os-option:has(input:checked) {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px #29252214;
+}
+.enroll-os-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.enroll-advanced,
+.enroll-manual {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.enroll-advanced > summary,
+.enroll-manual > summary,
+.enroll-token-management > summary {
+  width: fit-content;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.enroll-advanced-fields {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 0 0;
+  border: 0;
+}
+.enroll-advanced-fields > .control-two-col,
+.enroll-advanced-fields > .control-three-col {
+  align-items: start;
+}
+.enroll-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.enroll-check input {
+  margin-top: 3px;
+}
+.enroll-check-field {
+  margin-top: 30px;
+}
+.enroll-page .field > input[aria-invalid="true"] {
+  border-color: #9b2721;
+}
+.enroll-page .field > input[aria-invalid="true"] ~ small {
+  color: #9b2721;
+}
+[data-theme="dark"] .enroll-page .field > input[aria-invalid="true"] {
+  border-color: #ffc6c2;
+}
+[data-theme="dark"] .enroll-page .field > input[aria-invalid="true"] ~ small {
+  color: #ffc6c2;
+}
+.enroll-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 16px;
+}
+.enroll-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  /* The block scrolls inside itself; it never widens the page. */
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 12px 12px 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.enroll-command pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  /* Keep each command line whole; long lines scroll instead of breaking a flag or path. */
+  white-space: pre;
+  overflow-x: auto;
+}
+.enroll-command pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+}
+.enroll-command pre:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.enroll-command .button {
+  flex-shrink: 0;
+}
+.enroll-download {
+  display: inline-flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.enroll-secret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 14px;
+  padding: 8px 10px 8px 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+.enroll-secret > span {
+  font-size: 13px;
+  font-weight: 550;
+}
+.enroll-secret code {
+  flex: 1;
+  min-width: 14ch;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.enroll-secret-hint {
+  margin: 6px 0 0;
+}
+.enroll-advanced,
+.enroll-manual,
+.enroll-attempts .control-card {
+  min-width: 0;
+}
+.enroll-no-build p {
+  margin: 0;
+  line-height: 1.55;
+}
+.enroll-unused {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.enroll-text-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.enroll-text-button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.enroll-attempts > summary {
+  width: fit-content;
+  padding: 6px 0;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.enroll-attempts > .control-card {
+  margin-top: 12px;
+}
+.enroll-attempts .control-card > p {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+@media (max-width: 639px) {
+  /* A narrow command block stacks Copy under the command. */
+  .enroll-command {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 12px;
+  }
+  .enroll-command pre {
+    font-size: 12px;
+  }
+  .enroll-command .button {
+    align-self: flex-start;
+  }
+}
+.enroll-manual > p {
+  margin: 10px 0;
+}
+.enroll-builds {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.enroll-builds li {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+.enroll-builds small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.enroll-problems {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: #9b2721;
+  font-size: 12.5px;
+}
+[data-theme="dark"] .enroll-problems {
+  color: #ffc6c2;
+}
+.enroll-timeline {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.enroll-timeline li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.enroll-timeline li > svg {
+  margin-top: 2px;
+}
+.enroll-timeline li[data-outcome="success"] > svg {
+  color: var(--green);
+}
+.enroll-timeline li[data-outcome="failure"] > svg {
+  color: #b52d38;
+}
+[data-theme="dark"] .enroll-timeline li[data-outcome="failure"] > svg {
+  color: #f4a5aa;
+}
+.enroll-timeline li[data-outcome="warning"] > svg {
+  color: var(--mark-warning);
+}
+.enroll-timeline small code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.enroll-earlier {
+  margin-bottom: 12px;
+}
+.enroll-timeline strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.enroll-timeline small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.enroll-success {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--green);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--green) 7%, var(--surface));
+}
+.enroll-success h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.enroll-success p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.enroll-success[data-tone="warning"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+.enroll-success[data-tone="warning"] p {
+  color: var(--ink);
+}
+.enroll-success .enroll-command {
+  margin: 10px 0;
+  background: var(--surface);
+}
+.enroll-watch-help {
+  margin: 16px 0 0;
+}
+.enroll-token-management > summary {
+  padding: 6px 0;
+  font-size: 14px;
+}
+.enroll-token-management > .control-card {
+  margin-top: 12px;
+}
+.enroll-inactive {
+  margin: 0 0 12px;
+}
+.enroll-token-management td small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.enroll-token-devices {
+  display: block;
+}
+@media (max-width: 640px) {
+  .enroll-command {
+    flex-direction: column;
+    padding: 12px;
+  }
+  .enroll-secret {
+    padding: 10px 12px;
+  }
+  .enroll-secret code {
+    flex-basis: 100%;
+  }
+  .enroll-check-field {
+    margin-top: 0;
+  }
+}

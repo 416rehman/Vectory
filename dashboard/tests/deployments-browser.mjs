@@ -1,14 +1,20 @@
 // Actual deployment components, isolated synthetic transport; no preview state or credentials.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -21,7 +27,7 @@ const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   cacheDir: resolve(output, "vite-cache"),
-  server: { host: "127.0.0.1", port: 5197, strictPort: true, proxy: {} },
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {} },
   plugins: [
     {
       name: "synthetic-deployments-fixture",
@@ -113,6 +119,8 @@ const targets = (parent) =>
         : null,
     original: true,
   }));
+// Failures to serve for one rollout instead of its generic one.
+let failureOverride = null;
 let delayedSearch = "",
   delayedTargetSearch = "",
   delayedSummary = "",
@@ -182,7 +190,7 @@ await context.route("**/api/v1/**", async (route) => {
     return reply(result);
   }
   const match = path.match(
-    /^\/deployments\/([^/]+)\/(summary|targets|pause|resume|cancel|rollback-preview|rollback|unassign-preview|unassign|refresh-preview|refresh)$/,
+    /^\/deployments\/([^/]+)\/(summary|rollout|targets|pause|resume|cancel|rollback-preview|rollback|unassign-preview|unassign|refresh-preview|refresh)$/,
   );
   if (match) {
     const [, id, action] = match;
@@ -212,6 +220,40 @@ await context.route("**/api/v1/**", async (route) => {
       }
       return reply(result);
     }
+    if (action === "rollout" && method === "GET")
+      return reply({
+        deployment_id: id,
+        status: item.status,
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures:
+          failureOverride?.id === id
+            ? failureOverride.failures
+            : item.state_counts.failed
+              ? [
+                  {
+                    state: "failed",
+                    message: "Vector validation failed",
+                    diagnostic: null,
+                    code: null,
+                    component_id: null,
+                    field: null,
+                    buffer_utilization: null,
+                    count: item.state_counts.failed,
+                    device_ids: [`${id}-failed-device`],
+                    devices: [
+                      {
+                        device_id: `${id}-failed-device`,
+                        device_name: `${id} failed device`,
+                      },
+                    ],
+                  },
+                ]
+              : [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (action === "rollback-preview" && method === "GET")
       return reply({
         source_deployment_id: rollbackSourceId,
@@ -296,15 +338,33 @@ await context.route("**/api/v1/**", async (route) => {
           ready: true,
           review_token: "e".repeat(64),
           blockers: [],
-          devices: [{
-            device_id: "00000000-0000-4000-8000-000000000200",
-            device_name: "Synthetic affected device",
-            effect: "unmanaged",
-            before: { assignment_id: id, assignment_name: item.name, version_id: item.version_id, configuration_name: "Synthetic logs", version_number: 3, generation: 1, policy: null },
-            after: { assignment_id: null, assignment_name: null, version_id: null, configuration_name: null, version_number: null, generation: 2, policy: null },
-            pending_assignment_id: null,
-            pending_assignment_name: null,
-          }],
+          devices: [
+            {
+              device_id: "00000000-0000-4000-8000-000000000200",
+              device_name: "Synthetic affected device",
+              effect: "unmanaged",
+              before: {
+                assignment_id: id,
+                assignment_name: item.name,
+                version_id: item.version_id,
+                configuration_name: "Synthetic logs",
+                version_number: 3,
+                generation: 1,
+                policy: null,
+              },
+              after: {
+                assignment_id: null,
+                assignment_name: null,
+                version_id: null,
+                configuration_name: null,
+                version_number: null,
+                generation: 2,
+                policy: null,
+              },
+              pending_assignment_id: null,
+              pending_assignment_name: null,
+            },
+          ],
         });
       if (action === "refresh-preview")
         return reply({
@@ -332,15 +392,26 @@ await context.route("**/api/v1/**", async (route) => {
         return reply({
           ...item,
           status: "scheduled",
-          selector: { device_ids: body.expected_device_ids, group_ids: [], exclude_ids: [] },
-          targets: body.expected_device_ids.map(device_id => ({ device_id, state: "pending", generation: 0, error: null })),
+          selector: {
+            device_ids: body.expected_device_ids,
+            group_ids: [],
+            exclude_ids: [],
+          },
+          targets: body.expected_device_ids.map((device_id) => ({
+            device_id,
+            state: "pending",
+            generation: 0,
+            error: null,
+          })),
         });
       }
       if (action === "pause") item.status = "paused";
       if (action === "resume") item.status = "active";
       if (action === "cancel") item.status = "cancelled";
       if (action === "unassign") {
-        expect(route.request().postDataJSON()).toEqual({ review_token: "e".repeat(64) });
+        expect(route.request().postDataJSON()).toEqual({
+          review_token: "e".repeat(64),
+        });
         item.status = "unassigned";
       }
       return reply({ ...item, targets: targets(id) });
@@ -358,7 +429,7 @@ await context.route("**/api/v1/**", async (route) => {
   );
 });
 const details = () =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 async function mount(props = {}, count = props.scheduled ? 2 : 12) {
   await page.evaluate((props) => window.renderDeployments(props), props);
   await expect(page.locator(".deployment-table tbody tr")).toHaveCount(count);
@@ -369,21 +440,23 @@ async function check(name, operation) {
   console.log("PASS", name);
 }
 async function open(index) {
+  const name = `Synthetic deployment ${String(index).padStart(3, "0")}`;
+  // Phones list deployments as cards: the change's name opens its rollout.
+  if ((page.viewportSize()?.width ?? 1024) < 640)
+    return page.getByRole("link", { name, exact: true }).click();
   await page
-    .getByRole("button", {
-      name: `View details for Synthetic deployment ${String(index).padStart(3, "0")}`,
-      exact: true,
-    })
+    .getByRole("button", { name: `View details for ${name}`, exact: true })
     .click();
 }
 async function closeDetails() {
   await details()
-    .getByRole("button", { name: "Close dialog", exact: true })
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
 }
 try {
-  await page.goto("http://127.0.0.1:5197/__deployments-fixture");
+  await page.goto(`http://127.0.0.1:${port}/__deployments-fixture`);
   await page.waitForFunction(() => window.ready);
   await check(
     "initial browsing has one bounded summary request and no eager version, device or target hydration",
@@ -408,10 +481,9 @@ try {
       await page
         .getByRole("button", { name: "Filter Status", exact: true })
         .click();
-      await page
-        .getByRole("radio", { name: "Needs attention", exact: true })
-        .click();
-      await expect(page.locator(".pagination")).toContainText("1 / 1");
+      await page.getByRole("radio", { name: "Failed", exact: true }).click();
+      // One page of results needs no pager.
+      await expect(page.locator(".pagination")).toHaveCount(0);
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(9);
       expect(requests.at(-1).query.status).toBe("failed");
       expect(requests.at(-1).query.page).toBe("1");
@@ -423,10 +495,10 @@ try {
       await mount();
       await open(4);
       await expect(details()).toContainText(
-        "Retrying a device does not restart this rollout or release its unreleased devices.",
+        /Retrying a device sends the same version again\. It doesn.t restart the rollout or release waiting devices\./,
       );
       await expect(
-        details().getByRole("button", { name: "Resume rollout", exact: true }),
+        details().getByRole("button", { name: "Resume", exact: true }),
       ).toHaveCount(0);
       await expect(
         details()
@@ -480,9 +552,7 @@ try {
       await page
         .getByRole("button", { name: "Filter Status", exact: true })
         .click();
-      await page
-        .getByRole("radio", { name: "Needs attention", exact: true })
-        .click();
+      await page.getByRole("radio", { name: "Failed", exact: true }).click();
       await expect.poll(() => requests.at(-1).query.status).toBe("failed");
       await expect(
         page.getByRole("button", {
@@ -570,11 +640,9 @@ try {
       ).toContainText("Not released");
       await expect(
         rows.filter({ hasText: "Unreleased synthetic device" }),
-      ).toContainText(
-        "This deployment stopped before this device was released.",
-      );
+      ).toContainText("The rollout stopped before this device was released.");
       await expect(
-        details().getByRole("button", { name: "Resume rollout", exact: true }),
+        details().getByRole("button", { name: "Resume", exact: true }),
       ).toHaveCount(0);
       await closeDetails();
       records[0] = { ...blocked, status: "active" };
@@ -582,7 +650,7 @@ try {
       await open(0);
       await expect(
         rows.filter({ hasText: "Unreleased synthetic device" }),
-      ).toContainText("Waiting");
+      ).toContainText("Queued");
       await closeDetails();
       targetOverrides.clear();
       records = saved;
@@ -626,7 +694,9 @@ try {
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(3);
       const saved = records;
       records = records.slice(0, 48);
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(page.locator(".pagination")).toContainText("4 / 4");
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(12);
       records = saved;
@@ -657,7 +727,7 @@ try {
       delayedSummary = "";
       failTargets = "d-001";
       await details()
-        .getByRole("button", { name: "Try again", exact: true })
+        .getByRole("button", { name: "Retry", exact: true })
         .click();
       await expect(
         details().getByRole("heading", {
@@ -669,7 +739,7 @@ try {
         "Synthetic device results unavailable",
       );
       await details()
-        .getByRole("button", { name: "Try again", exact: true })
+        .getByRole("button", { name: "Retry", exact: true })
         .click();
       await expect(
         details().locator(".deployment-targets tbody tr"),
@@ -705,7 +775,7 @@ try {
       await expect(
         details().locator(".deployment-targets tbody tr"),
       ).toHaveCount(11);
-      await expect(details().locator(".pagination")).toContainText("1 / 1");
+      await expect(details().locator(".pagination")).toHaveCount(0);
       delayedTargetSearch = "synthetic device 0";
       await details()
         .getByLabel("Search deployment devices", { exact: true })
@@ -727,9 +797,13 @@ try {
         "synthetic device 1000",
       );
       const before = requests.filter((r) => r.method === "POST").length;
-      await details()
-        .getByRole("button", { name: "Pause rollout", exact: true })
-        .click();
+      const stop = async (action) => {
+        await details()
+          .getByRole("button", { name: "Stop rollout", exact: true })
+          .click();
+        await page.getByRole("menuitem", { name: action, exact: true }).click();
+      };
+      await stop("Pause");
       let modal = page.getByRole("dialog", {
         name: "Pause rollout",
         exact: true,
@@ -746,7 +820,7 @@ try {
       await page.keyboard.press("Escape");
       await expect(modal).toBeVisible();
       await expect(
-        details().getByRole("button", { name: "Resume rollout", exact: true }),
+        details().getByRole("button", { name: "Resume", exact: true }),
       ).toBeVisible();
       postDelay = 0;
       await expect(
@@ -759,18 +833,16 @@ try {
         details().getByLabel("Search deployment devices", { exact: true }),
       ).toHaveValue("1000");
       await details()
-        .getByRole("button", { name: "Resume rollout", exact: true })
+        .getByRole("button", { name: "Resume", exact: true })
         .click();
       await page
         .getByRole("dialog", { name: "Resume rollout", exact: true })
         .getByRole("button", { name: "Resume rollout", exact: true })
         .click();
       await expect(
-        details().getByRole("button", { name: "Pause rollout", exact: true }),
-      ).toBeVisible();
-      await details()
-        .getByRole("button", { name: "Roll back", exact: true })
-        .click();
+        details().getByRole("button", { name: "Resume", exact: true }),
+      ).toHaveCount(0);
+      await stop("Roll back");
       await expect(
         page.getByRole("dialog", { name: "Review rollback", exact: true }),
       ).toContainText("Included (1001)");
@@ -816,12 +888,7 @@ try {
       await receipt.getByRole("button", { name: "Close", exact: true }).click();
       await expect(receipt).toHaveCount(0);
       await expect(details()).toBeVisible();
-      await details()
-        .getByText("Remove this assignment", { exact: true })
-        .click();
-      await details()
-        .getByRole("button", { name: "Review assignment removal", exact: true })
-        .click();
+      await stop("Remove assignment");
       const removal = page.getByRole("dialog", {
         name: "Remove assignment",
         exact: true,
@@ -836,6 +903,52 @@ try {
         ),
       ).toHaveLength(0);
       await closeDetails();
+    },
+  );
+  await check(
+    "a failure only the pipeline can clear leads to the step and field the agent named, and to the pipeline alone when it named none",
+    async () => {
+      const failure = (code, component_id, field, count = 3) => ({
+        state: "failed",
+        message: "Vector validation failed",
+        diagnostic: "The agent could not apply this version.",
+        code,
+        component_id,
+        field,
+        buffer_utilization: null,
+        count,
+        device_ids: [`d-004-failed-${code}`],
+        devices: [
+          { device_id: `d-004-failed-${code}`, device_name: `edge-${code}` },
+        ],
+      });
+      failureOverride = {
+        id: "d-004",
+        failures: [
+          failure("UNKNOWN_FIELD", "sample", "rate"),
+          failure("ADDRESS_IN_USE", "out", null, 2),
+          failure("INVALID_CONFIGURATION", null, null, 1),
+          failure("PERMISSION_DENIED", "tail", "include", 5),
+        ],
+      };
+      await mount();
+      await open(4);
+      const pipeline = "#/configurations/synthetic-pipeline";
+      const fix = details().getByRole("link", { name: "Fix in pipeline" });
+      // The header link and each fixable card: a step and field, a step, none.
+      // A host problem is not the pipeline's to fix: it gets no link.
+      await expect(fix).toHaveCount(4);
+      const hrefs = await fix.evaluateAll((links) =>
+        links.map((link) => link.getAttribute("href")),
+      );
+      expect(hrefs).toEqual([
+        `${pipeline}?select=sample&field=rate`,
+        `${pipeline}?select=sample&field=rate`,
+        `${pipeline}?select=out`,
+        pipeline,
+      ]);
+      await closeDetails();
+      failureOverride = null;
     },
   );
   await check(
@@ -856,14 +969,23 @@ try {
       ).toHaveCount(0);
       await page.setViewportSize({ width: 390, height: 844 });
       await open(3);
+      // Phones list device results as cards, not a table that scrolls.
       await expect(
-        details().locator(".deployment-targets tbody tr"),
+        details()
+          .getByRole("list", { name: "Device results", exact: true })
+          .locator("li.data-list-item"),
       ).toHaveCount(12);
       await expect(
-        details().getByRole("button", { name: "Pause rollout", exact: true }),
+        details().getByRole("button", { name: "Stop rollout", exact: true }),
       ).toHaveCount(0);
       await expect(
-        details().getByText("Remove this assignment", { exact: true }),
+        details().getByRole("button", { name: "Pause", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        details().getByRole("button", {
+          name: "Remove assignment",
+          exact: true,
+        }),
       ).toHaveCount(0);
       for (const theme of ["light", "dark"]) {
         await page.evaluate((theme) => {
@@ -908,14 +1030,264 @@ try {
           );
         expect(audit.violations.map((v) => v.id)).toEqual([]);
       }
-      await page.keyboard.press("Escape");
-      await expect(details()).toHaveCount(0);
+      await closeDetails();
+      // Returning from the page puts focus back on the row that opened it.
       await expect(
-        page.getByRole("button", {
-          name: "View details for Synthetic deployment 003",
-          exact: true,
-        }),
+        page.locator('[data-deployment-link="d-003"]'),
       ).toBeFocused();
+    },
+  );
+  await check(
+    "phone rollout cards fit from 320 to 430 px in every state, with a long device name and the longest step labels",
+    async () => {
+      const stamp = (seconds) =>
+        new Date(Date.UTC(2026, 8, 28, 12, 0, seconds)).toISOString();
+      const events = (...states) =>
+        states.map((state, index) => ({ state, at: stamp(index * 7) }));
+      const released = { released_at: stamp(0) };
+      const longName = `ingest-gateway-frankfurt-primary-${"0123456789".repeat(4)}`;
+      const diagnostic =
+        "Unhandled error: expression can result in runtime error; handle the error case to ensure runtime success (by_severity.errors, line 1, column 1).";
+      const variants = [
+        [
+          "applied",
+          {
+            ...released,
+            state: "verified_applied",
+            verified_at: stamp(40),
+            last_seen: stamp(55),
+            timeline: events(
+              "desired",
+              "downloaded",
+              "validated",
+              "written",
+              "reload_requested",
+              "verified_applied",
+            ),
+          },
+        ],
+        [
+          "applying",
+          {
+            ...released,
+            state: "written",
+            last_seen: stamp(30),
+            timeline: events("desired", "downloaded", "validated", "written"),
+          },
+        ],
+        [
+          "failed",
+          {
+            ...released,
+            state: "failed",
+            error: "VALIDATION_FAILED",
+            diagnostic,
+            failure_stage: "validation",
+            last_seen: stamp(30),
+            timeline: events("desired", "downloaded"),
+          },
+        ],
+        [
+          "rolled-back",
+          {
+            ...released,
+            state: "rolled_back",
+            error: "APPLY_ROLLED_BACK (reload)",
+            diagnostic:
+              "Another process is already listening on this component's address.",
+            failure_stage: "reload",
+            last_seen: stamp(30),
+            timeline: events(
+              "desired",
+              "downloaded",
+              "validated",
+              "written",
+              "reload_requested",
+              "rolled_back",
+            ),
+          },
+        ],
+        ["waiting", { ...released, state: "desired", last_seen: null }],
+        [
+          "offline",
+          {
+            ...released,
+            state: "desired",
+            last_seen: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+          },
+        ],
+        ["held-back", { state: "pending", last_seen: stamp(30) }],
+        [
+          "replaced",
+          {
+            state: "removed",
+            replaced_by: "00000000-0000-4000-8000-0000000000aa",
+            last_seen: stamp(30),
+          },
+        ],
+        [
+          "not-delivering",
+          {
+            ...released,
+            state: "verified_applied",
+            verified_at: stamp(40),
+            last_seen: stamp(55),
+            timeline: events("desired", "verified_applied"),
+            delivery: {
+              code: "DATA_PLANE_SINK_ERRORS",
+              title: "out can't deliver events",
+              message:
+                "Every request to https://logs.example.test:8443/ads/ingest failed in the last 5 minutes.",
+              hint: "Check that the destination accepts connections from this host.",
+            },
+          },
+        ],
+      ];
+      targetOverrides.set(
+        "d-003",
+        variants.map(([tag, target], index) => ({
+          device_id: `00000000-0000-4000-8000-${String(index + 500).padStart(12, "0")}`,
+          device_name: `${String(index).padStart(2, "0")}-${tag}-${longName}`,
+          generation: 2,
+          error: null,
+          original: true,
+          ...target,
+        })),
+      );
+      await page.setViewportSize({ width: 1280, height: 960 });
+      await mount();
+      await page.setViewportSize({ width: 320, height: 900 });
+      await open(3);
+      const cards = details()
+        .getByRole("list", { name: "Device results", exact: true })
+        .locator("li.data-list-item");
+      await expect(cards).toHaveCount(variants.length);
+      // A badge under the pointer opens its tooltip, which sits outside the
+      // page's landmarks until the pointer leaves.
+      await page.mouse.move(1, 1);
+      await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
+      for (const width of [320, 360, 390, 430]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const theme of ["light", "dark"]) {
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          const fit = await page.evaluate(() => {
+            const problems = [];
+            const surfaces = document.querySelectorAll(
+              ".rollout-card, .rollout-lane, .rollout-summary, .rollout-failures li, li.data-list-item",
+            );
+            for (const surface of surfaces) {
+              const box = surface.getBoundingClientRect();
+              const name = `${surface.className}`.slice(0, 40);
+              if (surface.scrollWidth > surface.clientWidth + 1)
+                problems.push(
+                  `${name}: scrollWidth ${surface.scrollWidth} > clientWidth ${surface.clientWidth}`,
+                );
+              for (const inner of surface.querySelectorAll("*")) {
+                if (inner.closest(".sr-only")) continue;
+                const at = inner.getBoundingClientRect();
+                if (
+                  at.width &&
+                  (at.right > box.right + 1 || at.left < box.left - 1)
+                )
+                  problems.push(
+                    `${name}: ${inner.tagName}.${`${inner.className}`.slice(0, 30)} spans ${Math.round(at.left)}-${Math.round(at.right)} outside ${Math.round(box.left)}-${Math.round(box.right)}`,
+                  );
+              }
+            }
+            if (document.documentElement.scrollWidth > innerWidth)
+              problems.push(
+                `page scrolls sideways: ${document.documentElement.scrollWidth} > ${innerWidth}`,
+              );
+            return problems.slice(0, 12);
+          });
+          expect(fit, `${width}px ${theme}`).toEqual([]);
+          const audit = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            theme,
+            width,
+            violations: audit.violations.map((v) => v.id),
+          });
+          expect(
+            audit.violations.map(
+              (v) =>
+                `${v.id}: ${v.nodes.map((node) => `${node.target.join(" ")} ${node.html.slice(0, 160)}`).join(" | ")}`,
+            ),
+            `${width}px ${theme}`,
+          ).toEqual([]);
+        }
+      }
+      await page.setViewportSize({ width: 320, height: 900 });
+      // The state stays inside the title block, clear of the name: beside it,
+      // or under it when the name is too long to leave room.
+      for (let index = 0; index < variants.length; index++) {
+        const title = cards.nth(index).locator(".rollout-card-title");
+        const [box, link, badge] = await Promise.all([
+          title.boundingBox(),
+          title.locator("a").boundingBox(),
+          title.locator(".status-badge").boundingBox(),
+        ]);
+        const tag = variants[index][0];
+        expect(badge.y, tag).toBeGreaterThanOrEqual(box.y - 1);
+        expect(badge.y + badge.height, tag).toBeLessThanOrEqual(
+          box.y + box.height + 1,
+        );
+        expect(
+          badge.x >= link.x + link.width - 1 ||
+            badge.y >= link.y + link.height - 1,
+          `${tag}: the state overlaps the name`,
+        ).toBe(true);
+      }
+      await page.screenshot({
+        path: resolve(output, "phone-cards-long-320.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
+      // With an ordinary name the state sits beside it, in every state.
+      await closeDetails();
+      targetOverrides.set(
+        "d-003",
+        variants.map(([tag, target], index) => ({
+          device_id: `00000000-0000-4000-8000-${String(index + 500).padStart(12, "0")}`,
+          device_name: `edge-${tag}`,
+          generation: 2,
+          error: null,
+          original: true,
+          ...target,
+        })),
+      );
+      await open(3);
+      await expect(cards).toHaveCount(variants.length);
+      await page.mouse.move(1, 1);
+      await page.screenshot({
+        path: resolve(output, "phone-cards-320.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
+      // From 390 px the widest state still fits beside a short name.
+      await page.setViewportSize({ width: 390, height: 900 });
+      for (let index = 0; index < variants.length; index++) {
+        const title = cards.nth(index).locator(".rollout-card-title");
+        const [link, badge] = await Promise.all([
+          title.locator("a").boundingBox(),
+          title.locator(".status-badge").boundingBox(),
+        ]);
+        expect(badge.y, variants[index][0]).toBeLessThan(link.y + link.height);
+        expect(badge.x, variants[index][0]).toBeGreaterThanOrEqual(
+          link.x + link.width - 1,
+        );
+      }
+      await page.screenshot({
+        path: resolve(output, "phone-cards-390.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
+      await page.evaluate(() => {
+        document.documentElement.dataset.theme = "light";
+      });
+      targetOverrides.clear();
+      await closeDetails();
     },
   );
   expect(unexpected).toEqual([]);
@@ -924,6 +1296,8 @@ try {
   for (const file of [
     "dashboard/tests/deployments-browser.mjs",
     "dashboard/src/Deployments.tsx",
+    "dashboard/src/DeploymentRollout.tsx",
+    "dashboard/src/deploymentStatus.ts",
     "dashboard/src/DeploymentRecovery.tsx",
     "dashboard/src/deploymentRequests.ts",
     "dashboard/src/deploymentReceipt.ts",

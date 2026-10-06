@@ -60,6 +60,7 @@ async fn state() -> (tempfile::TempDir, State) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Isolated deployment requests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -157,7 +158,7 @@ async fn user(
         s,
         "POST",
         "/api/v1/users",
-        json!({"name":role,"email":email,"password":"isolated-user-password","role":role}),
+        json!({"name":role,"email":email,"password":"isolated-user-password","role":role,"current_password":"isolated-long-admin-password"}),
         admin_cookie,
         admin_csrf,
     )
@@ -1838,7 +1839,9 @@ async fn upgrading_existing_create_registry_preserves_key_and_digest() {
         .execute(&s.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version>=15")
+    // Rewind exactly the migrations reconstructed above; later, unrelated
+    // migrations stay applied and must not run twice.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version BETWEEN 15 AND 27")
         .execute(&s.pool)
         .await
         .unwrap();

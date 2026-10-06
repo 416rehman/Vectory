@@ -35,7 +35,11 @@ type adoptionChecks struct {
 // failed-candidate suppression remain untouched; validation is not activation.
 func ReAdopt(ctx context.Context, dir, binary, expected string) (ReAdoptionReport, error) {
 	return reAdopt(ctx, dir, binary, expected, adoptionChecks{ProbeVector, func(ctx context.Context, s Settings, path string) error {
-		return (&VectorDriver{Settings: s}).Validate(ctx, path)
+		// Re-adoption must validate with the same host runtime overlay as an
+		// ordinary apply. A candidate check removes any directory or overlay it
+		// had to create; approving a binary does not start Vector.
+		_, err := (&VectorDriver{Settings: s, Dir: dir}).CheckCandidate(ctx, path, true)
+		return err
 	}})
 }
 
@@ -143,8 +147,11 @@ func validAdoptionState(data []byte) (State, error) {
 func reAdopt(ctx context.Context, dir, binary, expected string, checks adoptionChecks) (ReAdoptionReport, error) {
 	var report ReAdoptionReport
 	expected = strings.ToLower(expected)
-	if !approvedDigest.MatchString(expected) {
-		return report, errors.New("provide the trusted candidate's exact SHA256 with --expected-sha256")
+	switch {
+	case expected == "":
+		return report, inputError("--expected-sha256 is required: pass the SHA-256 of the Vector binary you trust, 64 hexadecimal characters (sha256sum shows it)")
+	case !approvedDigest.MatchString(expected):
+		return report, inputError(fmt.Sprintf("--expected-sha256 needs the whole SHA-256: 64 hexadecimal characters, and %s has %d", safeText(expected, 80), len(expected)))
 	}
 	if err := adoptionLocalPath(dir); err != nil {
 		return report, err
@@ -207,8 +214,11 @@ func reAdopt(ctx context.Context, dir, binary, expected string, checks adoptionC
 			return err
 		}
 		digest, err := FileDigest(binary)
-		if err != nil || digest != expected {
-			return errors.New("candidate does not match the explicitly approved SHA256; no binary was approved")
+		if err != nil {
+			return fmt.Errorf("can't read %s to check its SHA-256: %w; no binary was approved", binary, err)
+		}
+		if digest != expected {
+			return fmt.Errorf("the SHA-256 of %s is %s, not the %s you passed; no binary was approved", binary, digest, expected)
 		}
 		return nil
 	}
@@ -224,8 +234,8 @@ func reAdopt(ctx context.Context, dir, binary, expected string, checks adoptionC
 	if err = checkCandidate(); err != nil {
 		return report, err
 	}
-	if version != VectorVersion {
-		return report, errors.New("candidate is not the supported Vector version")
+	if !SupportedVectorVersion(version) {
+		return report, errors.New("candidate is not a supported Vector version (" + VectorSeries + ")")
 	}
 	artifacts := []struct {
 		label, path string
@@ -318,6 +328,7 @@ func reAdopt(ctx context.Context, dir, binary, expected string, checks adoptionC
 	}
 	fields["vector_binary"], _ = json.Marshal(binary)
 	fields["vector_binary_sha256"], _ = json.Marshal(expected)
+	fields["vector_version"], _ = json.Marshal(version)
 	updated, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return report, err

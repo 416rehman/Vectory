@@ -1,0 +1,11 @@
+{"timestamp":"2026-09-29T15:48:34.759861Z","level":"INFO","message":"Log level is enabled.","level":"\"info\"","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.760403Z","level":"INFO","message":"Loading configs.","paths":"[\"http.json\"]","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.823204Z","level":"INFO","message":"Running healthchecks.","target":"vector::topology::running"}
+{"timestamp":"2026-09-29T15:48:34.823414Z","level":"INFO","message":"Vector has started.","debug":"false","version":"0.58.0","arch":"x86_64","revision":"2bcad9b 2026-08-26 13:37:07.557544670","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.823441Z","level":"INFO","message":"API is disabled, enable by setting `api.enabled` to `true` and use commands like `vector top`.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.823444Z","level":"INFO","message":"Healthcheck passed.","target":"vector::topology::builder"}
+{"timestamp":"2026-09-29T15:48:34.823567Z","level":"INFO","message":"Building HTTP server.","address":"0.0.0.0:80","target":"vector::sources::util::http::prelude","span":{"component_id":"web","component_kind":"source","component_type":"http_server","name":"source"},"spans":[{"component_id":"web","component_kind":"source","component_type":"http_server","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.823669Z","level":"ERROR","message":"An error occurred: TcpBind { source: Os { code: 13, kind: PermissionDenied, message: \"Permission denied\" } }.","target":"vector::sources::util::http::prelude","span":{"component_id":"web","component_kind":"source","component_type":"http_server","name":"source"},"spans":[{"component_id":"web","component_kind":"source","component_type":"http_server","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.823721Z","level":"ERROR","message":"An error occurred that Vector couldn't handle: the task completed with an error.","target":"vector::topology","span":{"component_id":"web","component_kind":"source","component_type":"http_server","name":"source"},"spans":[{"component_id":"web","component_kind":"source","component_type":"http_server","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.823774Z","level":"INFO","message":"Vector is stopping.","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.823987Z","level":"INFO","message":"Vector has stopped.","target":"vector"}

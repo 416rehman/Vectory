@@ -77,7 +77,9 @@ test("MFA setup, staged authenticator verification and one-use recovery login th
     await readFile(
       path.resolve(
         import.meta.dirname,
-        "../../.local/preview/credentials.json",
+        "../..",
+        process.env.VECTORY_PREVIEW_DIR || ".local/preview",
+        "credentials.json",
       ),
       "utf8",
     ),
@@ -102,7 +104,7 @@ test("MFA setup, staged authenticator verification and one-use recovery login th
   try {
     const created = await administrator.post("/api/v1/users", {
       headers: { "X-CSRF-Token": admin.csrf_token },
-      data: account,
+      data: { ...account, current_password: cleanupCredential.password },
     });
     expect(created.status()).toBe(200);
     syntheticId = (await created.json()).id;

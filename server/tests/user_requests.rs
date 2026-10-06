@@ -10,6 +10,7 @@ use vectory_server::{Settings, State, api, initialize};
 
 const KEY: &str = "a1111111-1111-4111-8111-111111111111";
 const PASSWORD: &str = "synthetic-user-password";
+const NEW_PASSWORD: &str = "separate-created-user-password";
 
 #[tokio::test]
 async fn migration_preserves_existing_user_and_session_without_inventing_a_request() {
@@ -127,6 +128,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Session) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -151,7 +153,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Session) {
 }
 
 fn create_body(key: &str, email: &str) -> Value {
-    json!({"request_id":key,"name":"Synthetic colleague","email":email,"password":PASSWORD,"role":"viewer"})
+    json!({"request_id":key,"name":"Synthetic colleague","email":email,"password":PASSWORD,"role":"viewer","current_password":PASSWORD})
 }
 
 fn path(key: &str) -> String {
@@ -210,8 +212,9 @@ async fn keyed_create_is_one_shot_and_lost_reply_recovers_only_current_user() {
         create_body(KEY, "another@example.invalid"),
         json!({"request_id":KEY}),
     ] {
-        let (status, _) = request(&app, "POST", "/api/v1/users", body, Some(&admin)).await;
+        let (status, reply) = request(&app, "POST", "/api/v1/users", body, Some(&admin)).await;
         assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(reply["error"]["code"], "REQUEST_ALREADY_USED");
     }
     assert_eq!(audit_count(&state, "user.create").await, 1);
     let ledger: String = sqlx::query_scalar("SELECT json_object('actor_id',actor_id,'request_id',request_id,'state',state,'user_id',user_id,'created_at',created_at) FROM user_requests WHERE actor_id=? AND request_id=?")
@@ -420,7 +423,7 @@ async fn audit_failure_rolls_back_created_user_and_request_mapping() {
 #[tokio::test]
 async fn legacy_create_retains_plain_user_receipt_and_uniqueness() {
     let (_temp, state, app, admin) = fixture().await;
-    let body = json!({"name":"Legacy","email":"  LEGACY@example.invalid  ","password":PASSWORD,"role":"viewer"});
+    let body = json!({"name":"Legacy","email":"  LEGACY@example.invalid  ","password":PASSWORD,"role":"viewer","current_password":PASSWORD});
     let (status, created) =
         request(&app, "POST", "/api/v1/users", body.clone(), Some(&admin)).await;
     assert_eq!(status, StatusCode::OK);
@@ -436,9 +439,104 @@ async fn legacy_create_retains_plain_user_receipt_and_uniqueness() {
 }
 
 #[tokio::test]
+async fn every_legacy_target_role_requires_the_calling_administrators_password() {
+    let (_temp, state, app, admin) = fixture().await;
+    for role in ["viewer", "editor", "operator", "admin"] {
+        let email = format!("legacy-{role}@example.invalid");
+        let mut body =
+            json!({"name":"New colleague","email":email,"password":NEW_PASSWORD,"role":role});
+        let (status, missing) =
+            request(&app, "POST", "/api/v1/users", body.clone(), Some(&admin)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{role}: {missing}");
+        assert_eq!(missing["error"]["code"], "INVALID_INPUT");
+        body["current_password"] = json!("incorrect-admin-password");
+        let (status, wrong) =
+            request(&app, "POST", "/api/v1/users", body.clone(), Some(&admin)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{role}: {wrong}");
+        assert_eq!(wrong["error"]["code"], "WRONG_PASSWORD");
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
+            .bind(&email)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(users, 0);
+        body["current_password"] = json!(PASSWORD);
+        let (status, created) = request(&app, "POST", "/api/v1/users", body, Some(&admin)).await;
+        assert_eq!(status, StatusCode::OK, "{role}: {created}");
+        assert_eq!(created["role"], role);
+        assert_eq!(created["email"], email);
+        assert!(!created.to_string().contains(PASSWORD));
+        assert!(!created.to_string().contains(NEW_PASSWORD));
+    }
+    assert_eq!(audit_count(&state, "user.create").await, 4);
+}
+
+#[tokio::test]
+async fn keyed_password_and_invite_creations_require_reauth_without_storing_it() {
+    let (_temp, state, app, admin) = fixture().await;
+    for (role, invite) in [("viewer", false), ("admin", true)] {
+        let key = uuid::Uuid::new_v4().to_string();
+        let email = format!("keyed-{role}@example.invalid");
+        let mut body = json!({"request_id":key,"name":"New colleague","email":email,"role":role});
+        if invite {
+            body["invite"] = json!(true);
+        } else {
+            body["password"] = json!(NEW_PASSWORD);
+        }
+        let (status, missing) =
+            request(&app, "POST", "/api/v1/users", body.clone(), Some(&admin)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{role}: {missing}");
+        assert_eq!(missing["error"]["code"], "INVALID_INPUT");
+        body["current_password"] = json!("incorrect-admin-password");
+        let (status, wrong) =
+            request(&app, "POST", "/api/v1/users", body.clone(), Some(&admin)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{role}: {wrong}");
+        assert_eq!(wrong["error"]["code"], "WRONG_PASSWORD");
+        assert_eq!(
+            request(&app, "GET", &path(&key), Value::Null, Some(&admin))
+                .await
+                .1["status"],
+            "not_found"
+        );
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
+            .bind(&email)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(users, 0);
+        body["current_password"] = json!(PASSWORD);
+        let (status, created) = request(&app, "POST", "/api/v1/users", body, Some(&admin)).await;
+        assert_eq!(status, StatusCode::OK, "{role}: {created}");
+        assert_eq!(created["request_id"], key);
+        assert_eq!(created["user"]["role"], role);
+        assert_eq!(created["user"]["email"], email);
+        assert_eq!(created.get("invite").is_some(), invite);
+        let (_, status_body) = request(&app, "GET", &path(&key), Value::Null, Some(&admin)).await;
+        assert_eq!(status_body["status"], "created");
+        for value in [created.to_string(), status_body.to_string()] {
+            assert!(!value.contains(PASSWORD));
+            assert!(!value.contains(NEW_PASSWORD));
+        }
+    }
+    assert_eq!(audit_count(&state, "user.create").await, 2);
+    let ledger: String = sqlx::query_scalar("SELECT group_concat(json_object('actor_id',actor_id,'request_id',request_id,'state',state,'user_id',user_id,'created_at',created_at)) FROM user_requests")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let audit: String = sqlx::query_scalar("SELECT group_concat(data) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='user.create'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    for data in [ledger, audit] {
+        assert!(!data.contains(PASSWORD));
+        assert!(!data.contains(NEW_PASSWORD));
+    }
+}
+
+#[tokio::test]
 async fn identical_request_ids_are_private_to_each_administrator() {
     let (_temp, state, app, admin) = fixture().await;
-    let (status, _) = request(&app,"POST","/api/v1/users",json!({"name":"Second admin","email":"second-admin@example.invalid","password":PASSWORD,"role":"admin"}),Some(&admin)).await;
+    let (status, _) = request(&app,"POST","/api/v1/users",json!({"name":"Second admin","email":"second-admin@example.invalid","password":PASSWORD,"role":"admin","current_password":PASSWORD}),Some(&admin)).await;
     assert_eq!(status, StatusCode::OK);
     let second = login(&app, "second-admin@example.invalid").await;
     let (status, first) = request(
@@ -517,6 +615,66 @@ async fn queued_creation_rechecks_admin_role_and_session_before_commit() {
             .unwrap();
         assert_eq!(count, 0);
         assert_eq!(audit_count(&state, "user.create").await, 0);
+    }
+}
+
+#[tokio::test]
+async fn queued_legacy_and_keyed_creation_recheck_the_administrators_password_verifier() {
+    for keyed in [false, true] {
+        let (_temp, state, app, admin) = fixture().await;
+        let email = if keyed {
+            "queued-keyed@example.invalid"
+        } else {
+            "queued-legacy@example.invalid"
+        };
+        let body = if keyed {
+            create_body(KEY, email)
+        } else {
+            json!({"name":"Queued colleague","email":email,"password":NEW_PASSWORD,"role":"viewer","current_password":PASSWORD})
+        };
+        let held = state.writer.lock().await;
+        let request_app = app.clone();
+        let request_admin = admin.clone();
+        let task = tokio::spawn(async move {
+            request(
+                &request_app,
+                "POST",
+                "/api/v1/users",
+                body,
+                Some(&request_admin),
+            )
+            .await
+        });
+        // Rotate while the request is pending. Either the initial verification
+        // or the writer-time verifier check must reject the stale credential.
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        sqlx::query("UPDATE users SET password_hash='replacement-verifier' WHERE id=?")
+            .bind(&admin.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        drop(held);
+        let (status, response) = task.await.unwrap();
+        assert!(
+            status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN,
+            "keyed={keyed}: {status} {response}"
+        );
+        if status == StatusCode::FORBIDDEN {
+            assert_eq!(response["error"]["code"], "WRONG_PASSWORD");
+        }
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
+            .bind(email)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        let mappings: i64 = sqlx::query_scalar("SELECT count(*) FROM user_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            (users, mappings, audit_count(&state, "user.create").await),
+            (0, 0, 0)
+        );
     }
 }
 

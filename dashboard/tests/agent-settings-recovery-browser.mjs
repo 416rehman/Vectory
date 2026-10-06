@@ -1,7 +1,8 @@
 // Actual App, private Vite/browser, entirely intercepted and explicitly synthetic HTTP.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve, dirname } from "node:path";
@@ -260,6 +261,11 @@ async function start(f = fixture(), options = {}) {
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic saved settings recovery" });
+      // Agent updates are off here, so the page is what it was without them.
+      if (path === "/agent-updates") return reply(updatesOff());
+      // The page looks for settings applied without saving in the history.
+      if (path === "/deployments/history")
+        return reply({ items: [], total: 0, page: 1, page_size: 50 });
       if (path === "/policies")
         return reply(
           f.records.map(
@@ -825,7 +831,7 @@ try {
             ),
           );
           if (different)
-            await expect(a.page.locator(".session-ended")).toBeVisible();
+            await expect(a.page.locator(".session-renewal")).toBeVisible();
           await expect(
             a.page.getByRole("button", { name: "New settings", exact: true }),
           ).toHaveCount(0);

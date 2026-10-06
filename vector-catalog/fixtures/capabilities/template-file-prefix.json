@@ -1,0 +1,40 @@
+{
+  "description": "A templated file path is confined to its literal directory, which is the root it needs.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "encoding": {
+          "codec": "json"
+        },
+        "path": "/var/log/vector/{{ host }}.log"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/log/vector"
+    ],
+    "writes": [
+      "/var/log/vector"
+    ],
+    "assets": []
+  }
+}

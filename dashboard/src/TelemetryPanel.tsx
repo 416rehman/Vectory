@@ -1,222 +1,241 @@
-import { useState } from "react";
-import { ago, when, type Device } from "./api";
-import { ErrorBox, RefreshButton, SearchBox, Spinner, useResource } from "./ui";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, X } from "lucide-react";
+import { when, type AuditHistoryPage, type Device } from "./api";
+import { relativeTime } from "./time";
+import {
+  ErrorBox,
+  RefreshButton,
+  SegmentedControl,
+  Spinner,
+  useResource,
+} from "./ui";
 import DocLink, { HelpLink } from "./DocLink";
 import { DataTable, type TableColumn } from "./DataTable";
+import VectorLogSummaryView from "./VectorLogSummary";
+import MetricChart, {
+  ChangeList,
+  reading,
+  type ChartSpec,
+} from "./MetricChart";
+import ComponentMetrics from "./ComponentMetrics";
+import type {
+  TelemetryHistory,
+  TelemetryRange,
+  TelemetrySample,
+} from "./runtimeModel";
+import {
+  applyMarkers,
+  counterNote,
+  counterSince,
+  lastVersionChange,
+  markedSince,
+  type ApplyMarker,
+  type ChangeEvent,
+} from "./deviceChanges";
+import {
+  bridgeSlots,
+  chartRanges,
+  defaultRange,
+  formatBytes,
+  formatDuration,
+  formatNumber,
+  formatPercent,
+  lastSlots,
+  present,
+  telemetryPollMs,
+  timeline,
+  type TimelinePoint,
+} from "./telemetryChart";
+import "./telemetry-panel.css";
 
-type ComponentMetric = {
-  id: string;
-  type?: string;
-  events_per_second?: number | null;
-  errors?: number | null;
-  discarded_events?: number | null;
-  buffer_bytes?: number | null;
-};
-export type TelemetrySample = {
-  bucket?: number;
-  sampled_at: string;
-  events_per_second?: number | null;
-  errors?: number | null;
-  uptime_seconds?: number | null;
-  memory_bytes?: number | null;
-  cpu_seconds?: number | null;
-  discarded_events?: number | null;
-  buffer_bytes?: number | null;
-  components?: ComponentMetric[];
-};
-const present = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
-const number = (value?: number | null) =>
-  present(value)
-    ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
-    : "—";
-const bytes = (value: number) =>
-  value < 1024
-    ? `${number(value)} B`
-    : value < 1024 * 1024
-      ? `${number(value / 1024)} KB`
-      : `${number(value / (1024 * 1024))} MB`;
-function duration(seconds: number) {
-  const minutes = Math.floor(seconds / 60);
-  return seconds < 60
-    ? `${Math.floor(seconds)}s`
-    : minutes < 60
-      ? `${minutes}m`
-      : minutes < 1440
-        ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-        : `${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`;
-}
-const bucket = (sample: TelemetrySample) =>
-  sample.bucket ?? Math.floor(new Date(sample.sampled_at).getTime() / 60000);
+export type { TelemetrySample } from "./runtimeModel";
 
-export default function TelemetryPanel({ device }: { device: Device }) {
-  const { data, loading, error, reload } = useResource<{
-    device_id: string;
-    samples: TelemetrySample[];
-  }>(`/devices/${device.id}/telemetry`, { device_id: device.id, samples: [] });
-  const [selectedBucket, setSelectedBucket] = useState<number | null>(null),
-    [search, setSearch] = useState("");
-  const history = (data.device_id === device.id ? data.samples : [])
-    .filter((sample) => Number.isFinite(bucket(sample)))
-    .sort((a, b) => bucket(a) - bucket(b));
-  const latest = [device.telemetry as TelemetrySample | undefined, ...history]
-      .filter(
-        (sample): sample is TelemetrySample =>
-          !!sample && Number.isFinite(Date.parse(sample.sampled_at)),
-      )
-      .sort((a, b) => Date.parse(b.sampled_at) - Date.parse(a.sampled_at))[0],
-    end = history.length ? bucket(history.at(-1)!) : 0,
-    start = history.length ? Math.max(bucket(history[0]), end - 119) : 0;
-  const byMinute = new Map(history.map((sample) => [bucket(sample), sample]));
-  const samples: TelemetrySample[] = history.length
-    ? Array.from(
-        { length: Math.max(0, Math.min(120, end - start + 1)) },
-        (_, index) =>
-          byMinute.get(start + index) || {
-            bucket: start + index,
-            sampled_at: new Date((start + index) * 60000).toISOString(),
-          },
-      )
-    : [];
-  const hasThroughput = samples.some((sample) =>
-      present(sample.events_per_second),
-    ),
-    peak = Math.max(
-      1,
-      ...samples.map((sample) => sample.events_per_second ?? 0),
-    );
-  const selectedIndex = Math.max(
-      0,
-      samples.findIndex((sample) => bucket(sample) === selectedBucket),
-    ),
-    selected =
-      selectedBucket === null ? samples.at(-1) : samples[selectedIndex];
-  const x = (index: number) =>
-      samples.length <= 1 ? 400 : (index / (samples.length - 1)) * 800,
-    y = (value: number) => 154 - (value / peak) * 132;
-  let drawing = false;
-  const line = samples
-    .map((sample, index) => {
-      if (!present(sample.events_per_second)) {
-        drawing = false;
-        return "";
-      }
-      const command = `${drawing ? "L" : "M"}${x(index)},${y(sample.events_per_second)}`;
-      drawing = true;
-      return command;
-    })
-    .join(" ");
-  const summary = [
-    {
-      label: "Events / second",
-      value: latest?.events_per_second,
-      format: number,
-    },
-    { label: "Errors (total)", value: latest?.errors, format: number },
-    {
-      label: "Discarded (total)",
-      value: latest?.discarded_events,
-      format: number,
-    },
-    { label: "Buffered", value: latest?.buffer_bytes, format: bytes },
-  ].filter((metric) => present(metric.value));
-  const process = [
-    { label: "Vector uptime", value: latest?.uptime_seconds, format: duration },
-    { label: "Memory", value: latest?.memory_bytes, format: bytes },
-    {
-      label: "CPU time",
-      value: latest?.cpu_seconds,
-      format: (value: number) => `${number(value)}s`,
-    },
-  ].filter((metric) => present(metric.value));
-  const components = latest?.components || [],
-    filtered = components.filter((component) =>
-      `${component.id} ${component.type || ""}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-    );
-  const columns: {
-    key: "events_per_second" | "errors" | "discarded_events" | "buffer_bytes";
-    title: string;
-    format: (value: number) => string;
-  }[] = [
-    { key: "events_per_second", title: "Events / s", format: number },
-    { key: "errors", title: "Errors", format: number },
-    { key: "discarded_events", title: "Discarded", format: number },
-    { key: "buffer_bytes", title: "Buffered", format: bytes },
-  ];
-  const visibleColumns = columns.filter((column) =>
-    components.some((component) => present(component[column.key])),
+const charts: ChartSpec[] = [
+  {
+    id: "throughput",
+    title: "Throughput",
+    unit: "events / second",
+    format: formatNumber,
+    series: [
+      { key: "events_per_second", label: "In (sources)", tone: "in" },
+      { key: "events_out_per_second", label: "Out (sinks)", tone: "out" },
+    ],
+  },
+  {
+    id: "errors",
+    title: "Errors",
+    unit: "per minute",
+    format: formatNumber,
+    series: [{ key: "errors_per_minute", label: "Errors", tone: "critical" }],
+  },
+  {
+    id: "discarded",
+    title: "Discarded events",
+    unit: "per minute",
+    format: formatNumber,
+    series: [
+      {
+        key: "dropped_per_minute",
+        label: "Dropped due to errors",
+        tone: "critical",
+      },
+      {
+        key: "filtered_per_minute",
+        label: "Filtered out (expected)",
+        tone: "muted",
+      },
+    ],
+  },
+  {
+    id: "buffer",
+    title: "Buffer fill",
+    unit: "fullest buffer",
+    format: formatPercent,
+    max: 1,
+    series: [{ key: "buffer_utilization", label: "Buffer fill", tone: "in" }],
+  },
+];
+
+const FIFTEEN_MINUTES = 15 * 60_000;
+
+/** Operational metrics for one device, shown on its page. */
+export default function TelemetryPanel({
+  device,
+  logs = true,
+  components: withComponents = true,
+}: {
+  device: Device;
+  /** Show the device's recent Vector warnings and errors below the metrics. */
+  logs?: boolean;
+  /**
+   * Show the Components table here. The device page lifts it out to its own
+   * full-width card on wide screens, where it needs the room.
+   */
+  components?: boolean;
+}) {
+  // Until a range is chosen the charts open on the shortest one that holds all
+  // of the device's history (15 minutes, then an hour). The hour is read
+  // either way: its minutes are the same ones.
+  const [chosen, setChosen] = useState<TelemetryRange | null>(null),
+    [hover, setHover] = useState<number | null>(null);
+  const readRange: TelemetryRange = chosen ?? "1h";
+  const resource = useResource<TelemetryHistory>(
+    `/devices/${encodeURIComponent(device.id)}/telemetry?range=${readRange}`,
+    { device_id: device.id, samples: [] },
+    0,
+    { interval: telemetryPollMs[readRange] },
   );
-  const componentColumns: TableColumn<ComponentMetric>[] = [
-    {
-      id: "component",
-      header: "Component",
-      value: (component) => `${component.id} ${component.type || ""}`,
-      sortValue: (component) => component.id,
-      filter: { placeholder: "Name or type" },
-      cell: (component) => (
-        <>
-          <strong>{component.id}</strong>
-          {component.type && (
-            <small className="fleet-cell-note">
-              {component.type.replaceAll("_", " ")}
-            </small>
-          )}
-        </>
+  // Keep the previous render while a new range loads: no flash, no jump.
+  const [shown, setShown] = useState<TelemetryHistory | null>(null);
+  const settled = !resource.loading && !resource.error;
+  useEffect(() => {
+    if (settled && resource.data.device_id === device.id)
+      setShown(resource.data);
+  }, [settled, resource.data, device.id]);
+  useEffect(() => setHover(null), [chosen, device.id]);
+
+  // What the device did, from its audit trail: the markers on the charts and
+  // the baseline of the counters under the tiles. A read that fails leaves the
+  // charts as they are.
+  const changeKey = [
+    device.apply_state,
+    device.reported_generation,
+    device.desired_generation,
+    device.desired_version_id ?? "",
+  ].join("|");
+  const lastChangeKey = useRef(changeKey);
+  const [changeReads, setChangeReads] = useState(0);
+  useEffect(() => {
+    if (lastChangeKey.current === changeKey) return;
+    lastChangeKey.current = changeKey;
+    setChangeReads((count) => count + 1);
+  }, [changeKey]);
+  const changes = useResource<AuditHistoryPage>(
+    `/audit/history?device_id=${encodeURIComponent(device.id)}&page_size=50`,
+    { items: [], total: 0, page: 1, page_size: 50 },
+    changeReads,
+    { interval: 60_000 },
+  );
+  const markers = useMemo(
+    () =>
+      applyMarkers(
+        (changes.data.items as ChangeEvent[]).filter(
+          (item) =>
+            (item as { device_id?: string | null }).device_id?.toLowerCase() ===
+            device.id.toLowerCase(),
+        ),
       ),
-    },
-    ...visibleColumns.map((column): TableColumn<ComponentMetric> => ({
-      id: column.key,
-      header: column.title,
-      value: (component) =>
-        present(component[column.key]) ? component[column.key] : null,
-      filter: { placeholder: "Filter reported value" },
-      cell: (component) => (
-        <span
-          title={present(component[column.key]) ? undefined : "Not reported"}
-        >
-          {present(component[column.key])
-            ? column.format(component[column.key]!)
-            : "—"}
-        </span>
-      ),
-    })),
-  ];
-  const sampleColumns: TableColumn<TelemetrySample>[] = [
-    {
-      id: "sampled_at",
-      header: "Sample time",
-      value: (sample) => sample.sampled_at,
-      sortValue: (sample) => Date.parse(sample.sampled_at),
-      filter: { placeholder: "Date or time (ISO)" },
-      cell: (sample) => when(sample.sampled_at),
-    },
-    {
-      id: "events_per_second",
-      header: "Events / second",
-      value: (sample) => sample.events_per_second,
-      filter: { placeholder: "Filter reported value" },
-      cell: (sample) => number(sample.events_per_second),
-    },
-    {
-      id: "errors",
-      header: "Errors (total)",
-      value: (sample) => sample.errors,
-      filter: { placeholder: "Filter reported value" },
-      cell: (sample) => number(sample.errors),
-    },
-  ];
+    [changes.data, device.id],
+  );
+
+  const history =
+    shown && shown.device_id === device.id
+      ? shown
+      : { device_id: device.id, samples: [] };
+  const now = Date.now();
+  const createdAt = Date.parse(device.created_at);
+  // Slots from before the device existed are no gap in its reports; the slot
+  // still collecting is no value yet.
+  const all = timeline(history, 120, {
+    now,
+    notBefore: Number.isFinite(createdAt) ? createdAt : null,
+  });
+  const range: TelemetryRange =
+    chosen ??
+    (shown && shown.device_id === device.id
+      ? defaultRange(all, now)
+      : now - createdAt <= FIFTEEN_MINUTES
+        ? "15m"
+        : "1h");
+  const windowMinutes = chartRanges.find((r) => r.value === range)!.minutes;
+  const stepMinutes = history.step_seconds
+    ? Math.max(1, Math.round(history.step_seconds / 60))
+    : 1;
+  const points = lastSlots(
+    all,
+    Math.max(1, Math.ceil(windowMinutes / stepMinutes)),
+  );
+  const heartbeat = device.effective_policy?.heartbeat_seconds ?? 60;
+  const freshSeconds = Math.max(180, heartbeat * 3);
+  const candidates = [
+    device.telemetry ?? undefined,
+    ...[...history.samples].reverse(),
+  ].filter(
+    (sample): sample is TelemetrySample =>
+      !!sample && Number.isFinite(Date.parse(sample.sampled_at)),
+  );
+  const latest = candidates.sort(
+    (a, b) => Date.parse(b.sampled_at) - Date.parse(a.sampled_at),
+  )[0];
+  const stale =
+    !!latest &&
+    Date.now() - Date.parse(latest.sampled_at) > freshSeconds * 1000;
+  const components = device.telemetry?.components ?? [];
+  const visibleCharts = charts.filter((chart) =>
+    points.some((point) =>
+      chart.series.some((series) => present(reading(point.sample, series.key))),
+    ),
+  );
   const hasValues =
-      summary.length > 0 ||
-      process.length > 0 ||
-      components.length > 0 ||
-      hasThroughput,
-    stale =
-      latest && Date.now() - new Date(latest.sampled_at).getTime() > 180000;
+    !!latest || visibleCharts.length > 0 || components.length > 0;
+  // Lines cross empty slots shorter than one check-in: not a missed report.
+  const bridge = bridgeSlots(heartbeat, history.step_seconds ?? 60);
+  const runtime = device.host_runtime;
+  const disabled = device.effective_policy?.telemetry_enabled === false;
+  const slotMs = stepMinutes * 60_000;
+  const windowStart = points[0] ? Date.parse(points[0].at) : 0;
+  const windowEnd = points.at(-1) ? Date.parse(points.at(-1)!.at) + slotMs : 0;
+  const inRange = markers.filter((marker) => {
+    const time = Date.parse(marker.at);
+    return time >= windowStart && time < windowEnd;
+  });
+  // Only the newest events are read: say so when the range reaches back past them.
+  const readSince = markedSince(changes.data);
+  const unmarkedBefore =
+    readSince && Date.parse(readSince) > windowStart ? readSince : null;
   return (
-    <section className="metrics-workspace">
-      <div className="metrics-heading">
+    <section className="metrics-workspace telemetry-panel">
+      <div className="telemetry-heading">
         <div>
           <div className="page-title-row">
             <h2>Operational metrics</h2>
@@ -226,227 +245,587 @@ export default function TelemetryPanel({ device }: { device: Device }) {
               label="Help for operational metrics"
             />
           </div>
-          {latest && (
+          {(latest ||
+            runtime?.metrics_source === "discovered" ||
+            runtime?.metrics_source === "explicit") && (
             <p>
-              {stale ? "Last available sample" : "Last sample"}{" "}
-              {ago(latest.sampled_at).toLowerCase()}
-              {stale ? ". These values may be out of date." : "."}
+              {latest ? (
+                <>
+                  {stale ? "Last available sample" : "Last sample"}{" "}
+                  {relativeTime(latest.sampled_at)}
+                  {stale ? ". These values may be out of date." : "."}{" "}
+                </>
+              ) : null}
+              <MetricsSource device={device} />
             </p>
           )}
         </div>
-        <RefreshButton onClick={reload}>Refresh metrics</RefreshButton>
+        <div className="telemetry-controls">
+          <SegmentedControl
+            label="Time range"
+            options={chartRanges}
+            value={range}
+            onChange={setChosen}
+          />
+          <RefreshButton
+            onClick={() => {
+              void resource.reload();
+              void changes.reload();
+            }}
+            busy={resource.loading}
+          >
+            Refresh
+          </RefreshButton>
+        </div>
       </div>
-      {error && <ErrorBox message={error} retry={reload} />}
-      {loading && !hasValues ? (
+      {resource.error && (
+        <ErrorBox message={resource.error} retry={resource.reload} />
+      )}
+      {disabled && (
+        <p className="telemetry-notice" role="status">
+          Metrics collection is turned off in this device's agent settings.
+          Values below were reported before it was turned off.
+        </p>
+      )}
+      {!hasValues && resource.loading && !shown ? (
         <div className="fleet-loading">
           <Spinner />
           Loading metrics
         </div>
-      ) : !hasValues && !error ? (
-        <div className="metrics-empty">
-          <h3>No metrics reported yet</h3>
-          <p>
-            The agent needs an explicitly configured local metrics endpoint.
-            Device connection and pipeline status are still available above.
-          </p>
-          <details>
-            <summary>Telemetry setup</summary>
-            <p>
-              Add an <code>internal_metrics</code> source and a loopback{" "}
-              <code>prometheus_exporter</code> sink to the pipeline. Configure
-              the agent’s local <code>--metrics-url</code> and enable telemetry
-              in its agent policy.
-            </p>
-            <DocLink topic="telemetry" section="enable-real-metrics">
-              Set up metrics and understand missing samples
-            </DocLink>
-          </details>
-        </div>
+      ) : !hasValues ? (
+        <MetricsDiagnosis device={device} />
       ) : (
-        <>
-          {summary.length > 0 && (
-            <dl className="metrics-summary">
-              {summary.map((metric) => (
-                <div key={metric.label}>
-                  <dt>{metric.label}</dt>
-                  <dd>{metric.format(metric.value!)}</dd>
-                </div>
-              ))}
-            </dl>
+        <div
+          className={`telemetry-body${resource.loading ? " refreshing" : ""}`}
+          aria-busy={resource.loading || undefined}
+        >
+          {latest && (
+            <StatTiles
+              sample={latest}
+              history={history.samples}
+              change={lastVersionChange(markers)}
+            />
           )}
-          {hasThroughput && (
-            <div className="metrics-history">
-              <div className="metrics-chart-heading">
-                <h3>Source throughput</h3>
-                <span>Events / second</span>
-              </div>
-              <div className="metrics-chart">
-                <span className="metrics-chart-peak">{number(peak)}</span>
-                <svg
-                  viewBox="0 0 800 174"
-                  preserveAspectRatio="none"
-                  role="img"
-                  aria-label="Source events per second over reported history. Gaps indicate missing samples."
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "ArrowLeft" ||
-                      event.key === "ArrowRight"
-                    ) {
-                      event.preventDefault();
-                      const index =
-                        selectedBucket === null
-                          ? samples.length - 1
-                          : selectedIndex;
-                      setSelectedBucket(
-                        bucket(
-                          samples[
-                            Math.max(
-                              0,
-                              Math.min(
-                                samples.length - 1,
-                                index + (event.key === "ArrowRight" ? 1 : -1),
-                              ),
-                            )
-                          ],
-                        ),
-                      );
-                    }
-                  }}
-                  onMouseMove={(event) => {
-                    const bounds = event.currentTarget.getBoundingClientRect(),
-                      index = Math.max(
-                        0,
-                        Math.min(
-                          samples.length - 1,
-                          Math.round(
-                            ((event.clientX - bounds.left) / bounds.width) *
-                              (samples.length - 1),
-                          ),
-                        ),
-                      );
-                    setSelectedBucket(bucket(samples[index]));
-                  }}
-                >
-                  <line
-                    x1="0"
-                    y1="154"
-                    x2="800"
-                    y2="154"
-                    className="metrics-baseline"
+          {visibleCharts.length > 0 ? (
+            <>
+              <ChangeList
+                markers={inRange}
+                deviceId={device.id}
+                unmarkedBefore={unmarkedBefore}
+              />
+              <div className="telemetry-charts">
+                {visibleCharts.map((chart) => (
+                  <MetricChart
+                    key={chart.id}
+                    chart={chart}
+                    points={points}
+                    stepMinutes={stepMinutes}
+                    windowMinutes={windowMinutes}
+                    bridge={bridge}
+                    hover={hover}
+                    onHover={setHover}
+                    markers={inRange}
                   />
-                  <path d={line} className="metrics-series" />
-                  {samples.length > 1 &&
-                    samples.map((sample, index) =>
-                      present(sample.events_per_second) &&
-                      !present(samples[index - 1]?.events_per_second) &&
-                      !present(samples[index + 1]?.events_per_second) ? (
-                        <line
-                          key={bucket(sample)}
-                          x1={Math.max(0, x(index) - 3)}
-                          x2={Math.min(800, x(index) + 3)}
-                          y1={y(sample.events_per_second)}
-                          y2={y(sample.events_per_second)}
-                          className="metrics-series"
-                        />
-                      ) : null,
-                    )}
-                  {samples.length === 1 &&
-                    present(samples[0].events_per_second) && (
-                      <line
-                        x1="390"
-                        x2="410"
-                        y1={y(samples[0].events_per_second)}
-                        y2={y(samples[0].events_per_second)}
-                        className="metrics-series"
-                      />
-                    )}
-                  {selectedBucket !== null && (
-                    <line
-                      x1={x(selectedIndex)}
-                      x2={x(selectedIndex)}
-                      y1="10"
-                      y2="154"
-                      className="metrics-cursor"
-                    />
-                  )}
-                </svg>
+                ))}
               </div>
-              <div className="metrics-chart-axis">
-                <time>{when(samples[0]?.sampled_at)}</time>
-                <time>{when(samples.at(-1)?.sampled_at)}</time>
-              </div>
-              <p className="metrics-chart-readout" aria-live="polite">
-                {selected
-                  ? `${when(selected.sampled_at)} — ${present(selected.events_per_second) ? `${number(selected.events_per_second)} events / second` : "No sample reported"}`
-                  : ""}
-              </p>
-              <p className="metrics-note">
-                Move over the chart or use arrow keys to inspect samples. Gaps
-                mean no report.
-              </p>
-            </div>
-          )}
-          {!hasThroughput && summary.length > 0 && (
-            <p className="metrics-note">
-              Throughput history will appear when the agent reports successive
-              source counters.
+            </>
+          ) : (
+            <p className="telemetry-note">
+              No history in this range yet. Charts appear once the agent has
+              reported successive samples.
             </p>
           )}
-          {process.length > 0 && (
-            <dl className="metrics-process">
-              {process.map((metric) => (
-                <div key={metric.label}>
-                  <dt>{metric.label}</dt>
-                  <dd>{metric.format(metric.value!)}</dd>
-                </div>
-              ))}
-            </dl>
+          {visibleCharts.length > 0 && (
+            <p className="telemetry-note">
+              A gap means the device sent no metrics for longer than one
+              check-in. A dot marks a change on the device. Move over a chart or
+              focus it and use the arrow keys to read values.
+            </p>
           )}
-          {components.length > 0 && (
-            <div className="metrics-components">
-              <div className="metrics-chart-heading">
-                <h3>Components</h3>
-                <span>{components.length} reporting</span>
-              </div>
-              {components.length > 8 && (
-                <SearchBox
-                  value={search}
-                  onChange={setSearch}
-                  placeholder="Find a component"
-                />
-              )}
-              <DataTable
-                data={filtered}
-                columns={componentColumns}
-                rowKey={(component) => component.id}
-                label="Component metrics"
-                className="fleet-table"
-                empty="No matching components."
+          <ProcessStats sample={latest} runtime={runtime} />
+          {withComponents && components.length > 0 && (
+            <div className="telemetry-components">
+              <ComponentMetrics
+                components={components}
+                sampledAt={device.telemetry?.sampled_at}
               />
-              <p className="metrics-note">
-                Errors and discarded events are cumulative counters. A dash
-                means the component did not report that value.
-              </p>
             </div>
           )}
-          {samples.length > 0 && (
-            <details className="metrics-history-details">
-              <summary>View sample history</summary>
-              <DataTable
-                data={samples}
-                columns={sampleColumns}
-                rowKey={(sample) => String(bucket(sample))}
-                label="Metric sample history"
-                className="fleet-table"
-                scrollClassName="metrics-history-table"
-                defaultSort={{ column: "sampled_at", direction: "desc" }}
-                empty="No matching samples."
-              />
-            </details>
+          {(points.some((point) => point.sample) || inRange.length > 0) && (
+            <SampleTable points={points} markers={inRange} />
           )}
-        </>
+        </div>
+      )}
+      {logs && (
+        <div className="telemetry-logs">
+          <VectorLogSummaryView summary={device.vector_log_summary} />
+        </div>
       )}
     </section>
+  );
+}
+
+function MetricsSource({ device }: { device: Device }) {
+  const runtime = device.host_runtime;
+  if (!runtime?.metrics_source || runtime.metrics_source === "none")
+    return null;
+  return runtime.metrics_source === "discovered" ? (
+    <>
+      Read from <code>{runtime.metrics_address}</code>, the Prometheus exporter
+      in the running pipeline.
+    </>
+  ) : (
+    <>
+      Read from the metrics URL configured on the device
+      {runtime.metrics_address ? (
+        <>
+          {" "}
+          (<code>{runtime.metrics_address}</code>)
+        </>
+      ) : null}
+      .
+    </>
+  );
+}
+
+const exporterFragment = `"sources": {
+  "vectory_internal_metrics": { "type": "internal_metrics" }
+},
+"sinks": {
+  "vectory_metrics_exporter": {
+    "type": "prometheus_exporter",
+    "inputs": ["vectory_internal_metrics"],
+    "address": "127.0.0.1:9598"
+  }
+}`;
+
+/**
+ * Whether an agent of this version finds the running pipeline's exporter by
+ * itself and reports how it reads metrics: every agent from 0.1 on does.
+ * Null when the version doesn't say (not reported, or not a release number).
+ */
+export function agentFindsExporter(version?: string | null): boolean | null {
+  const match = /^v?(\d+)\.(\d+)\.\d+/.exec(version || "");
+  if (!match) return null;
+  return Number(match[1]) > 0 || Number(match[2]) >= 1;
+}
+
+/** Why a device reports no metrics, one check per line, with the fix. */
+export function MetricsDiagnosis({ device }: { device: Device }) {
+  const runtime = device.host_runtime;
+  const allowed = device.effective_policy?.telemetry_enabled !== false;
+  const source = runtime?.metrics_source;
+  const heartbeat = device.effective_policy?.heartbeat_seconds ?? 60;
+  const checks: { ok: boolean | null; label: string; detail: string }[] = [
+    {
+      ok: allowed,
+      label: allowed
+        ? "Metrics collection is allowed by the agent settings"
+        : "Metrics collection is turned off in the agent settings",
+      detail: allowed
+        ? ""
+        : "Turn on metrics in an agent settings deployment for this device.",
+    },
+  ];
+  // A missing report is not an old agent: only its version says that.
+  if (!runtime)
+    checks.push(
+      agentFindsExporter(device.agent_version) === false
+        ? {
+            ok: null,
+            label:
+              "This agent version reads metrics only from a URL configured on the host",
+            detail:
+              "Update the agent so it finds the pipeline's exporter automatically, or run vectory configure-metrics on the device.",
+          }
+        : {
+            ok: null,
+            label: "The agent hasn't reported how it reads metrics yet",
+            detail: `It reports that with its next check-in while it runs (every ${heartbeat} seconds).`,
+          },
+    );
+  else if (source === "none")
+    checks.push({
+      ok: false,
+      label: "The running pipeline has no loopback Prometheus exporter",
+      detail:
+        "Add an internal_metrics source connected to a prometheus_exporter sink on a loopback address, then deploy it. The agent finds it automatically; nothing needs to change on the host.",
+    });
+  else
+    checks.push({
+      ok: true,
+      label:
+        source === "discovered"
+          ? `Found the exporter at ${runtime.metrics_address} in the running pipeline`
+          : "A metrics URL is configured on the device",
+      detail: "",
+    });
+  const waiting = allowed && !!runtime && source !== "none";
+  return (
+    <div className="telemetry-empty">
+      <h3>
+        {waiting ? "Waiting for the first sample" : "No metrics reported"}
+      </h3>
+      <ul className="telemetry-checks">
+        {checks.map((check) => (
+          <li key={check.label}>
+            {check.ok === null ? (
+              <span className="telemetry-check-mark unknown" aria-hidden="true">
+                –
+              </span>
+            ) : check.ok ? (
+              <Check
+                className="telemetry-check-mark ok"
+                size={16}
+                aria-hidden="true"
+              />
+            ) : (
+              <X
+                className="telemetry-check-mark missing"
+                size={16}
+                aria-hidden="true"
+              />
+            )}
+            <div>
+              <p>
+                <span className="sr-only">
+                  {check.ok === null
+                    ? "Unknown: "
+                    : check.ok
+                      ? "Done: "
+                      : "Missing: "}
+                </span>
+                {check.label}
+              </p>
+              {check.detail && (
+                <p className="telemetry-check-detail">{check.detail}</p>
+              )}
+            </div>
+          </li>
+        ))}
+        {waiting && (
+          <li>
+            <span className="telemetry-check-mark unknown" aria-hidden="true">
+              –
+            </span>
+            <p>
+              A sample arrives with each check-in (every {heartbeat} seconds).
+              Connection and pipeline status are still available above.
+            </p>
+          </li>
+        )}
+      </ul>
+      <details className="telemetry-fragment">
+        <summary>Pipeline fragment for metrics</summary>
+        <pre>
+          <code>{exporterFragment}</code>
+        </pre>
+        <DocLink topic="telemetry" section="enable-real-metrics">
+          Set up metrics and understand missing samples
+        </DocLink>
+      </details>
+    </div>
+  );
+}
+
+function StatTiles({
+  sample,
+  history,
+  change,
+}: {
+  sample: TelemetrySample;
+  /** Readings of the cumulative counters, oldest first. */
+  history: TelemetrySample[];
+  /** The newest version change: the counters count from just after it. */
+  change: ApplyMarker | null;
+}) {
+  // Vector keeps its counters across a reload, so a total after a pipeline
+  // switch holds the previous pipeline's events: count from the change.
+  const note = (key: "errors" | "discarded_error" | "discarded_intentional") =>
+    counterNote(
+      counterSince({
+        total: sample[key],
+        latestAt: sample.sampled_at,
+        uptimeSeconds: sample.uptime_seconds,
+        changedAt: change?.at ?? null,
+        readings: history.map((item) => ({
+          at: item.sampled_at,
+          value: item[key],
+        })),
+      }),
+      change,
+      formatNumber,
+    );
+  const tiles = [
+    {
+      label: "Events in",
+      unit: "/ s",
+      value: sample.events_per_second,
+      format: formatNumber,
+    },
+    {
+      label: "Events out",
+      unit: "/ s",
+      value: sample.events_out_per_second,
+      format: formatNumber,
+    },
+    {
+      label: "Errors",
+      unit: "/ min",
+      value: sample.errors_per_minute,
+      format: formatNumber,
+      note: note("errors"),
+    },
+    {
+      label: "Dropped due to errors",
+      unit: "/ min",
+      value: sample.dropped_per_minute,
+      format: formatNumber,
+      note: note("discarded_error"),
+    },
+    {
+      label: "Filtered out (expected)",
+      unit: "/ min",
+      value: sample.filtered_per_minute,
+      format: formatNumber,
+      note: note("discarded_intentional"),
+    },
+    {
+      label: "Buffer fill",
+      unit: "",
+      value: sample.buffer_utilization,
+      format: formatPercent,
+      note: present(sample.buffer_bytes)
+        ? {
+            text: `${formatBytes(sample.buffer_bytes)} buffered`,
+            title: undefined,
+          }
+        : null,
+    },
+  ];
+  // Older agents report only cumulative totals; show them rather than nothing.
+  const legacy = [
+    { label: "Errors (total)", value: sample.errors, format: formatNumber },
+    {
+      label: "Discarded (total)",
+      value: sample.discarded_events,
+      format: formatNumber,
+    },
+    { label: "Buffered", value: sample.buffer_bytes, format: formatBytes },
+  ];
+  const shown = tiles.filter((tile) => present(tile.value));
+  const fallback = shown.length
+    ? []
+    : legacy.filter((tile) => present(tile.value));
+  if (!shown.length && !fallback.length) return null;
+  return (
+    <dl className="telemetry-tiles">
+      {shown.map((tile) => (
+        <div key={tile.label}>
+          <dt>{tile.label}</dt>
+          <dd>
+            {tile.format(tile.value!)}
+            {tile.unit && <small> {tile.unit}</small>}
+          </dd>
+          {tile.note && (
+            <dd className="telemetry-tile-note" title={tile.note.title}>
+              {tile.note.text}
+            </dd>
+          )}
+        </div>
+      ))}
+      {fallback.map((tile) => (
+        <div key={tile.label}>
+          <dt>{tile.label}</dt>
+          <dd>{tile.format(tile.value!)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ProcessStats({
+  sample,
+  runtime,
+}: {
+  sample?: TelemetrySample;
+  runtime?: Device["host_runtime"];
+}) {
+  const stats = [
+    {
+      label: "Vector uptime",
+      value: sample?.uptime_seconds,
+      format: formatDuration,
+    },
+    { label: "Memory", value: sample?.memory_bytes, format: formatBytes },
+    {
+      label: "CPU time",
+      value: sample?.cpu_seconds,
+      format: (seconds: number) => `${formatNumber(seconds)}s`,
+    },
+  ].filter((stat) => present(stat.value));
+  const data = runtime?.data_dir;
+  if (!stats.length && !data) return null;
+  return (
+    <dl className="telemetry-process">
+      {stats.map((stat) => (
+        <div key={stat.label}>
+          <dt>{stat.label}</dt>
+          <dd>{stat.format(stat.value!)}</dd>
+        </div>
+      ))}
+      {data && (
+        <div>
+          <dt>Data directory</dt>
+          <dd>
+            <code>{data}</code>
+          </dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+const sampleColumns: {
+  id: string;
+  title: string;
+  read: (sample: TelemetrySample) => number | null | undefined;
+  format: (value: number) => string;
+}[] = [
+  {
+    id: "in",
+    title: "In / s",
+    read: (sample) => sample.events_per_second,
+    format: formatNumber,
+  },
+  {
+    id: "out",
+    title: "Out / s",
+    read: (sample) => sample.events_out_per_second,
+    format: formatNumber,
+  },
+  {
+    id: "errors",
+    title: "Errors / min",
+    read: (sample) => sample.errors_per_minute,
+    format: formatNumber,
+  },
+  {
+    id: "dropped",
+    title: "Dropped / min",
+    read: (sample) => sample.dropped_per_minute,
+    format: formatNumber,
+  },
+  {
+    id: "filtered",
+    title: "Filtered / min",
+    read: (sample) => sample.filtered_per_minute,
+    format: formatNumber,
+  },
+  {
+    id: "buffer",
+    title: "Buffer fill",
+    read: (sample) => sample.buffer_utilization,
+    format: formatPercent,
+  },
+];
+
+/**
+ * The charts as tables: every sample in the range and every change marked on
+ * them, so what a line shows and a marker names is readable without a pointer.
+ */
+function SampleTable({
+  points,
+  markers,
+}: {
+  points: TimelinePoint[];
+  markers: ApplyMarker[];
+}) {
+  const rows = points.filter(
+    (point): point is TimelinePoint & { sample: TelemetrySample } =>
+      !!point.sample,
+  );
+  // Only what the device reported: no column of dashes.
+  const visible = sampleColumns.filter((column) =>
+    rows.some((point) => present(column.read(point.sample))),
+  );
+  const columns: TableColumn<(typeof rows)[number]>[] = [
+    {
+      id: "at",
+      header: "Time",
+      value: (point) => point.at,
+      sortValue: (point) => point.bucket,
+      filter: { placeholder: "Date or time (ISO)" },
+      cell: (point) => when(point.at),
+    },
+    ...visible.map((column): TableColumn<(typeof rows)[number]> => ({
+      id: column.id,
+      header: column.title,
+      value: (point) => column.read(point.sample) ?? null,
+      filter: { placeholder: "Filter reported value" },
+      cell: (point) => {
+        const reading = column.read(point.sample);
+        return present(reading) ? (
+          column.format(reading)
+        ) : (
+          <span title="Not reported">—</span>
+        );
+      },
+    })),
+  ];
+  const changeColumns: TableColumn<ApplyMarker>[] = [
+    {
+      id: "at",
+      header: "Time",
+      value: (marker) => marker.at,
+      cell: (marker) => when(marker.at),
+    },
+    {
+      id: "change",
+      header: "Change",
+      value: (marker) => marker.stateLabel,
+      cell: (marker) => marker.stateLabel,
+    },
+    {
+      id: "version",
+      header: "Version",
+      value: (marker) => marker.version ?? "",
+      cell: (marker) =>
+        marker.version ?? <span className="device-muted">Not recorded</span>,
+    },
+  ];
+  return (
+    <details className="telemetry-samples">
+      <summary>
+        {markers.length
+          ? "View samples and changes as tables"
+          : "View samples as a table"}
+      </summary>
+      {markers.length > 0 && (
+        <div className="telemetry-change-table">
+          <DataTable
+            data={[...markers].reverse()}
+            columns={changeColumns}
+            rowKey={(marker) => marker.id}
+            label="Changes on this device"
+            className="fleet-table"
+            defaultSort={{ column: "at", direction: "desc" }}
+            empty="No changes in this range."
+          />
+        </div>
+      )}
+      {rows.length > 0 && (
+        <DataTable
+          data={rows}
+          columns={columns}
+          rowKey={(point) => String(point.bucket)}
+          label="Metric samples"
+          className="fleet-table"
+          scrollClassName="telemetry-sample-table"
+          defaultSort={{ column: "at", direction: "desc" }}
+          empty="No samples in this range."
+        />
+      )}
+    </details>
   );
 }

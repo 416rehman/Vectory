@@ -1,0 +1,101 @@
+{
+  "description": "The harmless global settings and unit tests need nothing from the host.",
+  "vector": "valid",
+  "config": {
+    "acknowledgements": {
+      "enabled": false
+    },
+    "buffer_utilization_ewma_half_life_seconds": 5,
+    "expire_metrics_secs": 300,
+    "expire_metrics_per_metric_set": [
+      {
+        "name": {
+          "type": "exact",
+          "value": "lines"
+        },
+        "expire_secs": 60
+      }
+    ],
+    "healthchecks": {
+      "enabled": true,
+      "require_healthy": false
+    },
+    "latency_ewma_alpha": 0.9,
+    "log_schema": {
+      "message_key": "msg",
+      "host_key": "hostname"
+    },
+    "metrics_storage_refresh_period": 30,
+    "schema": {
+      "enabled": false
+    },
+    "telemetry": {
+      "tags": {
+        "emit_service": true,
+        "emit_source": true
+      }
+    },
+    "timezone": "Europe/Berlin",
+    "wildcard_matching": "relaxed",
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "r": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ".ok = true"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "r"
+        ]
+      }
+    },
+    "tests": [
+      {
+        "name": "ok",
+        "inputs": [
+          {
+            "insert_at": "r",
+            "type": "log",
+            "log_fields": {
+              "msg": "x"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "extract_from": "r",
+            "conditions": [
+              {
+                "type": "vrl",
+                "source": "assert!(.ok)"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

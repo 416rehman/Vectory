@@ -1,12 +1,13 @@
 // Actual fleet/settings/review components; all HTTP is intercepted synthetic data.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -116,9 +117,16 @@ const config = {
   sources: { seed: { type: "demo_logs", format: "json" } },
   sinks: { discard: { type: "blackhole", inputs: ["seed"] } },
 };
+// The capability note names the required setting. An enabled API has its own
+// exposure warning and acknowledgement in the deploy review.
+const apiReason = "Global setting: api";
+// What it says about an AWS sink with a credentials file and no keys (the
+// sentences the unit test pins).
+const awsReasons =
+  "Native capability: credentials_file, AWS credentials from the host (without both keys, or with assume_role, imds or profile)";
 const pipeline = {
   id: id(10),
-  name: "Synthetic deployment handoff",
+  name: "Synthetic deployment",
   description: "Never sent to a real device",
   revision: 1,
   archived: false,
@@ -217,8 +225,19 @@ async function load({
     legacyPreview: false,
     correlationSupported: true,
     outcomeOverride: null,
+    standing: null,
+    validationDevices: [],
   };
   const current = state;
+  const groups = () => [
+    {
+      id: id(20),
+      name: "Synthetic group",
+      description: "Fixture only",
+      device_ids: current.devices.map((d) => d.id),
+    },
+  ];
+  const replies = fleetReplies({ devices: () => current.devices, groups });
   context = await browser.newContext({
     viewport: { width, height: 920 },
     reducedMotion: "reduce",
@@ -248,6 +267,25 @@ async function load({
     requests.push({ method, path, query: url.search });
     const reply = (json, status = 200) => route.fulfill({ status, json });
     if (method === "GET") {
+      if (path === `/device-validations/${id(70)}`)
+        return reply({
+          id: id(70),
+          state: "complete",
+          created_at: created,
+          expires_at: created,
+          truncated: false,
+          run_tests: false,
+          devices: current.validationDevices.map((device) => ({
+            id: device.id,
+            name: device.name,
+            state: "passed",
+            valid: true,
+            diagnostics: [],
+            tests: [],
+            secrets_missing: [],
+            updated_at: created,
+          })),
+        });
       if (path.startsWith("/deployments/requests/")) {
         const requestId = path.split("/").pop();
         current.lookups.push({ actor: current.actor, requestId });
@@ -300,21 +338,12 @@ async function load({
           csrf_token: "synthetic",
         });
       if (path === "/settings")
-        return reply({ instance_name: "Synthetic handoff" });
+        return reply({ instance_name: "Synthetic instance" });
+      if (path === `/devices/${id(1)}`) current.detailReads++;
+      // A page of devices, one device, and the groups without their members.
+      if (await fulfillFleetRead(replies, route)) return;
       if (path === "/devices") return reply(current.devices);
-      if (path === `/devices/${id(1)}`) {
-        current.detailReads++;
-        return reply(current.devices[0]);
-      }
-      if (path === "/groups")
-        return reply([
-          {
-            id: id(20),
-            name: "Synthetic group",
-            description: "Fixture only",
-            device_ids: current.devices.map((d) => d.id),
-          },
-        ]);
+      if (path === "/groups") return reply(groups());
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/policies")
         return reply([
@@ -340,6 +369,8 @@ async function load({
           page_size: Number(url.searchParams.get("page_size")),
           kind: "versions",
         });
+      if (path === `/versions/${id(71)}` && current.heldVersion)
+        return reply(current.heldVersion);
       if (path === `/versions/${version.id}`) return reply(version);
       if (path === "/deployments/history")
         return reply({
@@ -347,6 +378,17 @@ async function load({
           total: 0,
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
+        });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
         });
       if (path === `/deployments/${id(40)}/summary`)
         return reply({
@@ -372,6 +414,8 @@ async function load({
       if (path === `/deployments/${id(40)}/targets`)
         return reply({ items: [], total: 0, page: 1, page_size: 12 });
     }
+    if (method === "POST" && path === "/deployments/binding-suggestions")
+      return reply({ devices: {} });
     if (method === "POST" && path === "/deployments/preview") {
       const body = req.postDataJSON();
       current.previews.push(body);
@@ -385,8 +429,85 @@ async function load({
             : []),
         ].filter((key) => !body.selector.exclude_ids.includes(key)),
       );
+      if (body.device_validation)
+        current.validationDevices = current.devices.filter((device) =>
+          selected.has(device.id),
+        );
+      // Another pipeline the first device follows at the same priority: a
+      // conflict, unless the request replaces it.
+      if (current.standing) {
+        const target = current.devices.find((d) => selected.has(d.id));
+        const replacing = (body.replaces || []).includes(
+          current.standing.assignment.id,
+        );
+        return reply({
+          devices: current.devices.filter((d) => selected.has(d.id)),
+          create_idempotency: true,
+          request_correlation: true,
+          blockers: [],
+          warnings: [],
+          conflicts: replacing
+            ? []
+            : [
+                {
+                  device_id: target.id,
+                  assignment_ids: [current.standing.assignment.id],
+                  priority: body.priority,
+                  resource: "configuration",
+                  assignments: [current.standing.assignment],
+                },
+              ],
+          outcomes: [
+            replacing
+              ? {
+                  device_id: target.id,
+                  resource: "configuration",
+                  outcome: "replace",
+                  replaces: current.standing.assignment,
+                }
+              : {
+                  device_id: target.id,
+                  resource: "configuration",
+                  outcome: "conflict",
+                },
+          ],
+          ...(replacing
+            ? {
+                replacements: [
+                  {
+                    assignment: current.standing.assignment,
+                    device_ids: [target.id],
+                    retires_assignment: current.standing.retires,
+                  },
+                ],
+              }
+            : {}),
+        });
+      }
       return reply({
         devices: current.devices.filter((d) => selected.has(d.id)),
+        // Synthetic rendered-artifact receipts for the selected fixture values.
+        ...(body.variable_bindings
+          ? {
+              artifact_previews: current.devices
+                .filter((device) => selected.has(device.id))
+                .map((device) => {
+                  const bytes = JSON.stringify({
+                    version_id: body.version_id,
+                    variable_bindings: body.variable_bindings,
+                    device_id: device.id,
+                  });
+                  return {
+                    device_id: device.id,
+                    sha256: createHash("sha256").update(bytes).digest("hex"),
+                    size: Buffer.byteLength(bytes),
+                  };
+                }),
+            }
+          : {}),
+        ...(body.device_validation
+          ? { validation_id: id(70), validation_truncated: false }
+          : {}),
         ...(!current.legacyPreview
           ? {
               create_idempotency: true,
@@ -577,10 +698,8 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
-    await page
-      .getByLabel("Schedule (optional)", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
@@ -605,8 +724,20 @@ const operation = () =>
       .filter(([key]) => key.startsWith("vectory:deployment-operation:"))
       .map(([key, value]) => ({ key, value: JSON.parse(value) })),
   );
+// When an assignment outranks some reviewed devices, the dialog names the
+// devices it changes ("Apply to 1 of 2 devices") and asks first what stays.
 async function send(name = "Apply settings") {
-  await page.getByRole("button", { name, exact: true }).click();
+  const kept = page.locator(".target-left-behind input[type=checkbox]");
+  if (await kept.count()) {
+    await kept.check();
+    if (name !== "Schedule deployment")
+      name = new RegExp(
+        `^${name === "Apply settings" ? "Apply" : "Deploy"} to \\d+ of \\d+ devices$`,
+      );
+  }
+  await page
+    .getByRole("button", { name, exact: typeof name === "string" })
+    .click();
 }
 async function lost({
   kind = "policy",
@@ -1162,8 +1293,11 @@ try {
         await expect(page.getByRole("dialog")).toContainText(
           "Update the server",
         );
+        // Synthetic alpha's own settings outrank these when outcomes exist.
         await expect(
-          page.getByRole("button", { name: "Apply settings", exact: true }),
+          page.getByRole("button", {
+            name: /^Apply (settings|to 1 of 2 devices)$/,
+          }),
         ).toBeDisabled();
         expect(state.creates).toHaveLength(0);
         expect(state.lookups).toHaveLength(0);
@@ -1292,7 +1426,7 @@ try {
     },
   );
   await check(
-    "Full-mode capability note explains non-loopback API without asking already-full devices to change modes",
+    "Full-mode capability note gives the reason for an api block, even a loopback one, without asking already-full devices to change modes",
     async () => {
       await load({
         kind: "version",
@@ -1301,20 +1435,101 @@ try {
             ...version,
             config: {
               ...config,
-              api: { enabled: true, address: "0.0.0.0:8686" },
+              // A loopback address no longer makes it harmless: the API has
+              // no authentication, so any api block needs a full-mode device.
+              api: { enabled: true, address: "127.0.0.1:8686" },
             },
           },
         },
       });
+      // Before anyone is chosen the note says what the version needs.
       await expect(
-        dialog().getByText("This pipeline uses full Vector capabilities", { exact: true }),
+        dialog().getByText("This version needs Full Vector mode", {
+          exact: true,
+        }),
       ).toBeVisible();
-      await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
-      await expect(dialog().getByText(/All selected devices currently report full Vector mode/)).toBeVisible();
-      await expect(dialog().getByText(/must be enabled locally by the host operator/)).toHaveCount(0);
+      await expect(
+        dialog().getByText(apiReason, { exact: false }),
+      ).toBeVisible();
+      await expect(
+        dialog().getByRole("alert").filter({ hasText: "Vector API exposure" }),
+      ).toContainText(
+        "Vector's API is enabled at 127.0.0.1:8686 without authentication",
+      );
+      await expect(dialog().getByText(/All selected devices/)).toHaveCount(0);
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await expect(
+        dialog().getByText("This pipeline uses full Vector capabilities", {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(apiReason, { exact: false }),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(
+          /All selected devices currently report full Vector mode/,
+        ),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(/have the host operator enable it/),
+      ).toHaveCount(0);
       await preview();
-      await expect(dialog().getByRole("button", { name: "Deploy to devices" })).toBeEnabled();
+      const deploy = dialog().getByRole("button", {
+        name: "Deploy to devices",
+      });
+      await expect(deploy).toBeDisabled();
+      await dialog()
+        .getByRole("checkbox", { name: "Confirm Vector API exposure" })
+        .check();
+      await expect(deploy).toBeEnabled();
       expect(state.creates).toHaveLength(0);
+    },
+  );
+  await check(
+    "Full-mode capability note names an AWS credentials file and the host's own AWS identity for a restricted device",
+    async () => {
+      await load({
+        kind: "version",
+        width: 390,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              ...config,
+              sinks: {
+                ...config.sinks,
+                ship: {
+                  type: "http",
+                  inputs: ["seed"],
+                  uri: "https://ingest.example.net/events",
+                  encoding: { codec: "json" },
+                  auth: {
+                    strategy: "aws",
+                    auth: { credentials_file: "/srv/aws/credentials" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        devices: [device(1, { configuration_mode: "restricted" }), device(2)],
+      });
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await expect(
+        dialog().getByText(
+          "Synthetic alpha runs in restricted mode and will refuse this version",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(dialog().getByText(awsReasons)).toBeVisible();
+      await expect(
+        dialog().getByText(/have the host operator enable it/),
+      ).toBeVisible();
     },
   );
   await check(
@@ -1333,7 +1548,10 @@ try {
           },
         },
         devices: [
-          device(1, { configuration_mode: "restricted", vector_version: "0.57.0" }),
+          device(1, {
+            configuration_mode: "restricted",
+            vector_version: "0.57.0",
+          }),
           device(2, { vector_version: "0.57.0" }),
         ],
       });
@@ -1356,29 +1574,56 @@ try {
         },
       ];
       await preview();
-      await expect(dialog().getByText("Some selected devices use restricted mode", { exact: true })).toBeVisible();
-      await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
-      await expect(dialog().getByText(/must be enabled locally by the host operator/)).toBeVisible();
       await expect(
-        dialog().getByText("Full Vector mode is required on these devices", { exact: true }),
+        dialog().getByText(
+          "Synthetic alpha runs in restricted mode and will refuse this version",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(apiReason, { exact: false }),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(/have the host operator enable it/),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText("Full Vector mode is required on these devices", {
+          exact: true,
+        }),
       ).toBeVisible();
       await expect(dialog().getByText(fullModeReason)).toBeVisible();
       await expect(
         dialog().getByText("1 affected device: Synthetic alpha."),
       ).toBeVisible();
       await expect(
-        dialog().getByText("These devices have an incompatible Vector version", { exact: true }),
+        dialog().getByText(
+          "These devices have an incompatible Vector version",
+          { exact: true },
+        ),
       ).toBeVisible();
       await expect(dialog().getByText(versionReason)).toBeVisible();
       await expect(
-        dialog().getByText("2 affected devices: Synthetic alpha, Synthetic beta."),
+        dialog().getByText(
+          "2 affected devices: Synthetic alpha, Synthetic beta.",
+        ),
       ).toBeVisible();
-      const alpha = table().locator("tbody tr").filter({ hasText: "Synthetic alpha" });
-      const beta = table().locator("tbody tr").filter({ hasText: "Synthetic beta" });
-      await expect(alpha).toContainText("Blocked: Full Vector mode required; Vector version incompatible");
+      const alpha = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic alpha" });
+      const beta = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic beta" });
+      await expect(alpha).toContainText(
+        "Blocked: Full Vector mode required; Vector version incompatible",
+      );
       await expect(beta).toContainText("Blocked: Vector version incompatible");
-      await expect(alpha).toContainText("No current priority conflict");
-      await expect(beta).toContainText("No current priority conflict");
+      // A device the server won't release to is "Blocked", never a green "New".
+      await expect(alpha.locator(".target-outcome")).toContainText("Blocked");
+      await expect(alpha.locator(".target-outcome")).not.toContainText("New");
+      await expect(beta.locator(".target-outcome")).toContainText("Blocked");
+      await expect(beta.locator(".target-outcome")).toContainText(
+        "Vector version incompatible",
+      );
       await expect(
         dialog().getByRole("link", { name: "View active canary" }),
       ).toHaveCount(0);
@@ -1413,14 +1658,632 @@ try {
     },
   );
   await check(
+    "Restricted hosts get commands made for them: their state directory, what keeps them running, and vectory allow",
+    async () => {
+      await load({
+        kind: "version",
+        width: 375,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: { seed: { type: "demo_logs", format: "json" } },
+              sinks: {
+                out: {
+                  type: "http",
+                  inputs: ["seed"],
+                  uri: "http://127.0.0.1:8239/",
+                  encoding: { codec: "json" },
+                },
+              },
+            },
+          },
+        },
+        devices: [
+          device(1, {
+            configuration_mode: "restricted",
+            state_dir: "/srv/vectory state",
+            service_manager: "none",
+          }),
+          device(2, {
+            configuration_mode: "restricted",
+            state_dir: "/var/lib/vectory-agent",
+            service_manager: "systemd",
+          }),
+        ],
+      });
+      await preview();
+      await expect(
+        dialog().getByText(
+          "2 selected devices run in restricted mode and need their hosts to allow what this version uses",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      // Nothing here sees a host's allowances: a condition, never a fact.
+      await expect(dialog()).toContainText(
+        "It uses destination 127.0.0.1:8239. They refuse this version unless their hosts already allow these.",
+      );
+      await expect(dialog()).toContainText(
+        "Vectory can't see a host's allowances; Check on devices in the review shows whether they have them.",
+      );
+      await expect(dialog()).not.toContainText("until their hosts approve");
+      // Each row says what the host must allow, instead of a plain "New".
+      const alpha = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic alpha" });
+      await expect(alpha.locator(".target-outcome")).toContainText(
+        "No pipeline assigned; refuses it unless its host allows destination 127.0.0.1:8239",
+      );
+      await expect(alpha.locator(".target-outcome")).not.toContainText(
+        "approves it",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      const block = (name) =>
+        dialog().getByLabel(`Host approval commands, On ${name}`, {
+          exact: true,
+        });
+      const text = (name) => block(name).evaluate((el) => el.textContent);
+      expect(await text("Synthetic alpha")).toBe(
+        [
+          "# First stop the agent: Ctrl-C where `vectory run` runs (`vectory status` shows its pid).",
+          "sudo vectory allow \\",
+          "  --state-dir '/srv/vectory state' \\",
+          "  --network 127.0.0.1:8239",
+          "# Then start the agent again the way you started it.",
+        ].join("\n"),
+      );
+      expect(await text("Synthetic beta")).toBe(
+        [
+          "sudo vectory service-stop",
+          "sudo vectory allow \\",
+          "  --network 127.0.0.1:8239",
+          "sudo vectory service-start",
+        ].join("\n"),
+      );
+      await expect(dialog()).not.toContainText("allowances.json");
+      await expect(dialog()).toContainText(
+        "adds these to what the host already allows and removes nothing",
+      );
+      await page.evaluate(() =>
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: {
+            writeText: async (value) => {
+              window.syntheticCopied = value;
+            },
+          },
+        }),
+      );
+      await dialog()
+        .getByRole("button", {
+          name: "Copy commands on synthetic beta",
+          exact: true,
+        })
+        .click();
+      expect(await page.evaluate(() => window.syntheticCopied)).toBe(
+        await text("Synthetic beta"),
+      );
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(375);
+      const scan = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze();
+      accessibility.push({
+        label: "host approval commands at 375px",
+        violations: scan.violations.map(({ id, nodes }) => ({
+          id,
+          targets: nodes.map((node) => node.target),
+        })),
+      });
+      expect(scan.violations).toEqual([]);
+      await block("Synthetic alpha").scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: resolve(output, "host-approval-commands-375.png"),
+        animations: "disabled",
+      });
+    },
+  );
+  await check(
+    "Per-device listener values produce distinct host commands and never the base listener",
+    async () => {
+      await load({
+        kind: "version",
+        width: 700,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: {
+                incoming: { type: "http_server", address: "0.0.0.0:8000" },
+              },
+              sinks: {
+                out: {
+                  type: "console",
+                  inputs: ["incoming"],
+                  target: "stderr",
+                },
+              },
+            },
+            variables: [
+              {
+                name: "listener",
+                path: "/sources/incoming/address",
+                type: "string",
+              },
+            ],
+          },
+        },
+        devices: [
+          device(1, { configuration_mode: "restricted" }),
+          device(2, { configuration_mode: "restricted" }),
+        ],
+      });
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await expect(dialog()).toContainText(
+        "Enter valid values for every declared variable before host approval commands can be calculated.",
+      );
+      await expect(
+        dialog().getByText("Commands for the host", { exact: true }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("textbox", { name: "listener for Synthetic alpha" })
+        .fill("0.0.0.0:1514");
+      await page
+        .getByRole("textbox", { name: "listener for Synthetic beta" })
+        .fill("0.0.0.0:2514");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(table()).toBeVisible();
+      await expect(dialog()).toContainText(
+        "Each device's destinations, listeners and paths below reflect the version rendered for that host.",
+      );
+      const alpha = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic alpha" });
+      const beta = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic beta" });
+      await expect(alpha.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:1514",
+      );
+      await expect(beta.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:2514",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      const command = (name) =>
+        dialog().getByLabel(`Host approval commands, On ${name}`, {
+          exact: true,
+        });
+      await expect(command("Synthetic alpha")).toContainText(
+        "--listener 0.0.0.0:1514",
+      );
+      await expect(command("Synthetic beta")).toContainText(
+        "--listener 0.0.0.0:2514",
+      );
+      await expect(dialog()).not.toContainText("0.0.0.0:8000");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (value) => (document.documentElement.dataset.theme = value),
+          theme,
+        );
+        for (const width of [700, 390]) {
+          await page.setViewportSize({ width, height: 920 });
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+          ).toBeLessThanOrEqual(width);
+          expect(
+            await alpha
+              .locator(".target-outcome")
+              .evaluate(
+                (element) => element.scrollWidth <= element.clientWidth + 1,
+              ),
+          ).toBe(true);
+          await alpha.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(
+              output,
+              `per-device-approval-rows-${width}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+          await command("Synthetic alpha").scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(
+              output,
+              `per-device-approval-commands-${width}-${theme}.png`,
+            ),
+            animations: "disabled",
+          });
+        }
+      }
+      await dialog()
+        .getByRole("button", { name: "Check on devices", exact: true })
+        .click();
+      await expect(dialog().getByText("Passes here")).toHaveCount(2);
+      await expect(
+        dialog().getByText("Commands for the host", { exact: true }),
+      ).toHaveCount(0);
+      await dialog()
+        .getByRole("button", { name: "Back to selection", exact: true })
+        .click();
+      await page
+        .getByRole("textbox", { name: "listener for Synthetic alpha" })
+        .fill("0.0.0.0:3514");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(alpha.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:3514",
+      );
+      await expect(beta.locator(".target-outcome")).toContainText(
+        "listener 0.0.0.0:2514",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      await expect(command("Synthetic alpha")).toContainText(
+        "--listener 0.0.0.0:3514",
+      );
+    },
+  );
+  await check(
+    "Windows and Unix devices get their own rendered file-root commands",
+    async () => {
+      await load({
+        kind: "version",
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: { logs: { type: "file", data_dir: "/var/log/base" } },
+              sinks: {
+                out: {
+                  type: "console",
+                  inputs: ["logs"],
+                  target: "stderr",
+                },
+              },
+            },
+            variables: [
+              {
+                name: "log_dir",
+                path: "/sources/logs/data_dir",
+                type: "string",
+              },
+            ],
+          },
+        },
+        devices: [
+          device(1, {
+            os: "windows",
+            configuration_mode: "restricted",
+            state_dir: "C:\\ProgramData\\Vectory\\agent",
+            service_manager: "windows",
+          }),
+          device(2, {
+            os: "linux",
+            configuration_mode: "restricted",
+            state_dir: "/var/lib/vectory-agent",
+            service_manager: "systemd",
+          }),
+        ],
+      });
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await page
+        .getByRole("textbox", { name: "log_dir for Synthetic alpha" })
+        .fill("C:\\VectorData\\logs\\");
+      await page
+        .getByRole("textbox", { name: "log_dir for Synthetic beta" })
+        .fill("/var/log/app");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      const windows = dialog().getByLabel(
+        "Host approval commands, On Synthetic alpha",
+      );
+      const unix = dialog().getByLabel(
+        "Host approval commands, On Synthetic beta",
+      );
+      await expect(windows).toContainText("--file-root 'C:\\VectorData\\logs'");
+      await expect(windows).not.toContainText("/var/log/");
+      await expect(unix).toContainText("--file-root /var/log/app");
+      await expect(unix).not.toContainText("C:\\VectorData");
+      await expect(dialog()).not.toContainText("/var/log/base");
+    },
+  );
+  await check(
+    "Mixed-OS file roots never use a Unix running-version proof for Windows",
+    async () => {
+      const mixedConfig = {
+        sources: {
+          linux_logs: { type: "file", data_dir: "/var/log/app" },
+          windows_logs: { type: "file", data_dir: "C:\\VectorData\\logs" },
+        },
+        sinks: {
+          out: {
+            type: "console",
+            inputs: ["linux_logs", "windows_logs"],
+            target: "stderr",
+          },
+        },
+      };
+      const running_version = {
+        id: id(71),
+        number: 1,
+        configuration_id: pipeline.id,
+        configuration_name: pipeline.name,
+      };
+      await load({
+        kind: "version",
+        extra: { version: { ...version, config: mixedConfig } },
+        devices: [
+          device(1, {
+            os: "linux",
+            configuration_mode: "restricted",
+            running_version,
+          }),
+          device(2, {
+            os: "windows",
+            configuration_mode: "restricted",
+            running_version,
+            state_dir: "C:\\ProgramData\\Vectory\\agent",
+            service_manager: "windows",
+          }),
+        ],
+      });
+      state.heldVersion = {
+        ...version,
+        ...running_version,
+        config: mixedConfig,
+      };
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(dialog()).toContainText(
+        "Each device's destinations, listeners and paths below reflect the version rendered for that host.",
+      );
+      await expect(dialog()).not.toContainText("already runs a version");
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic alpha" }),
+      ).toContainText("files under /var/log/app");
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic beta" }),
+      ).toContainText("files under C:\\VectorData\\logs");
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      await expect(
+        dialog().getByLabel("Host approval commands, On Synthetic beta"),
+      ).toContainText("--file-root 'C:\\VectorData\\logs'");
+    },
+  );
+  await check(
+    "Rendered Full mode blockers suppress host allowance commands for blocked devices",
+    async () => {
+      await load({
+        kind: "version",
+        width: 390,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: {
+                incoming: { type: "http_server", address: "0.0.0.0:8000" },
+              },
+              sinks: {
+                out: {
+                  type: "console",
+                  inputs: ["incoming"],
+                  target: "stderr",
+                },
+              },
+            },
+            variables: [
+              { name: "target", path: "/sinks/out/target", type: "string" },
+            ],
+          },
+        },
+        devices: [
+          device(1, { configuration_mode: "restricted" }),
+          device(2, { configuration_mode: "restricted" }),
+        ],
+      });
+      state.blockers = [
+        {
+          code: "FULL_VECTOR_MODE_REQUIRED",
+          reason:
+            "The rendered console target requires Full Vector mode on Synthetic alpha.",
+          resource: "configuration",
+          device_ids: [id(1)],
+        },
+      ];
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+        .check();
+      await page
+        .getByRole("textbox", { name: "target for Synthetic alpha" })
+        .fill("stdout");
+      await page
+        .getByRole("textbox", { name: "target for Synthetic beta" })
+        .fill("stderr");
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic alpha" }),
+      ).toContainText("Blocked: Full Vector mode required");
+      await expect(dialog()).toContainText(
+        "The rendered console target requires Full Vector mode on Synthetic alpha.",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      await expect(
+        dialog().getByLabel("Host approval commands, On Synthetic alpha"),
+      ).toHaveCount(0);
+      await expect(
+        dialog().getByLabel("Host approval commands, On Synthetic beta"),
+      ).toContainText("--listener 0.0.0.0:8000");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (value) => (document.documentElement.dataset.theme = value),
+          theme,
+        );
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBeLessThanOrEqual(390);
+        await dialog()
+          .getByLabel("Host approval commands, On Synthetic beta")
+          .scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: resolve(output, `rendered-full-blocker-390-${theme}.png`),
+          animations: "disabled",
+        });
+        await dialog()
+          .getByText(
+            "The rendered console target requires Full Vector mode on Synthetic alpha.",
+          )
+          .scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: resolve(
+            output,
+            `rendered-full-blocker-detail-390-${theme}.png`,
+          ),
+          animations: "disabled",
+        });
+      }
+    },
+  );
+  await check(
+    "From a device page, a pipeline only that device follows is replaced by default",
+    async () => {
+      const first = {
+        id: id(70),
+        name: "First pipeline",
+        resource: "configuration",
+        priority: 100,
+        target_mode: "snapshot",
+        status: "active",
+        created_at: created,
+        version_id: id(71),
+        version_number: 1,
+        configuration_id: id(72),
+        configuration_name: "edge-syslog",
+        policy: null,
+        policy_id: null,
+        policy_name: null,
+      };
+      const open = async (extra, retires) => {
+        await load({
+          kind: "version",
+          extra: { initialDeviceIds: [id(1)], ...extra },
+          devices: [device(1), device(2)],
+        });
+        state.standing = { assignment: first, retires };
+        await page
+          .getByRole("button", { name: "Review deployment", exact: true })
+          .click();
+        await expect(table()).toBeVisible();
+      };
+      await open({ fromDevicePage: true }, true);
+      await expect(
+        dialog().getByText(
+          "Replaces edge-syslog v1: only this device follows it, so nothing else changes.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      expect(state.previews.map((body) => body.replaces || [])).toEqual([
+        [],
+        [id(70)],
+      ]);
+      await page.screenshot({
+        path: resolve(output, "device-page-replaces-899.png"),
+        animations: "disabled",
+      });
+      await expect(
+        dialog().getByRole("button", {
+          name: "Deploy to devices",
+          exact: true,
+        }),
+      ).toBeEnabled();
+      // Keeping it brings back the choice, and nothing is replaced.
+      await dialog()
+        .getByRole("button", {
+          name: "Keep edge-syslog v1 as well",
+          exact: true,
+        })
+        .click();
+      await expect(
+        dialog().getByText(/only this device follows it/),
+      ).toHaveCount(0);
+      await expect(
+        dialog().getByRole("button", {
+          name: "Deploy to devices",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      expect(state.previews.at(-1).replaces || []).toEqual([]);
+      // An assignment other devices follow too is never replaced this way.
+      await open({ fromDevicePage: true }, false);
+      await expect(dialog().getByText(/only this device follows/)).toHaveCount(
+        0,
+      );
+      await expect(
+        dialog().getByRole("button", {
+          name: "Deploy to devices",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      // Nor when the dialog wasn't opened from the device's page.
+      await open({}, true);
+      expect(state.previews).toHaveLength(1);
+      await expect(dialog().getByText(/only this device follows/)).toHaveCount(
+        0,
+      );
+      expect(state.creates).toHaveLength(0);
+    },
+  );
+  await check(
     "Unavailable durable browser storage blocks sending before any create",
     async () => {
       await load({ storageBlocked: true });
       await expect(
         page.getByRole("dialog", { name: "Review saved deployment reminder" }),
       ).toBeVisible();
-      await expect(page.getByText(/Browser storage is unavailable/)).toBeVisible();
-      await expect(page.getByRole("button", { name: "Review deployment" })).toHaveCount(0);
+      await expect(
+        page.getByText(/Browser storage is unavailable/),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Review deployment" }),
+      ).toHaveCount(0);
       expect(state.creates).toHaveLength(0);
     },
   );

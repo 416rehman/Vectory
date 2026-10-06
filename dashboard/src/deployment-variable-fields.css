@@ -57,33 +57,91 @@
 }
 .deployment-variable-overrides {
   display: grid;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
 }
-.deployment-variable-overrides[open] {
-  padding-bottom: 12px;
+.deployment-variable-overrides-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
 }
-.deployment-variable-device-search,
-.deployment-variable-device-select {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 550;
+.deployment-variable-overrides-head h4 {
+  margin: 0;
+  font-size: 13px;
 }
-.deployment-variable-device-values {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
+.deployment-variable-device-search input {
+  width: min(240px, 100%);
+}
+.deployment-variable-table-scroll {
+  max-height: 360px;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface);
 }
-.deployment-variable-device-values h4 {
-  margin: 0;
-  font-size: 13px;
+.deployment-variable-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
 }
-.deployment-variable-device-values > div {
-  display: grid;
-  gap: 7px;
+.deployment-variable-table th,
+.deployment-variable-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+.deployment-variable-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.deployment-variable-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.deployment-variable-table tbody th {
+  font-weight: 550;
+  white-space: nowrap;
+}
+.deployment-variable-table td input,
+.deployment-variable-table td select {
+  width: 100%;
+  min-width: 120px;
+}
+.deployment-variable-table td[data-own] input,
+.deployment-variable-table td[data-own] select {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.deployment-variable-paste > summary {
+  width: fit-content;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.deployment-variable-paste > p {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.deployment-variable-paste textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.deployment-variable-paste-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 8px;
+  font-size: 12px;
 }
 .deployment-variable-warning {
   margin: 0;

@@ -40,8 +40,18 @@ const bundle = await build({
         fixture.setPath=setResource;fixture.reload=result.reload;fixture.refresh=()=>setRefresh(n=>n+1);
         return React.createElement('output',{},JSON.stringify({data:result.data,error:result.error,loading:result.loading}));
       }
+      // Two components reading one path, as a page and the dialog it opens do.
+      function Reader({name}){
+        const result=useResource('/test/shared','empty',0);
+        return React.createElement('output',{'data-reader':name},JSON.stringify({data:result.data,error:result.error,loading:result.loading}));
+      }
+      function Shared(){
+        const [dialog,setDialog]=useState(false);
+        fixture.showDialog=setDialog;
+        return React.createElement('div',{},React.createElement(Reader,{name:'page'}),dialog&&React.createElement(Reader,{name:'dialog'}));
+      }
       const app=createRoot(document.getElementById('app'));fixture.unmount=()=>app.unmount();
-      app.render(location.search.includes('strict')?React.createElement(React.StrictMode,{},React.createElement(App)):React.createElement(App));
+      app.render(location.search.includes('shared')?React.createElement(Shared):location.search.includes('strict')?React.createElement(React.StrictMode,{},React.createElement(App)):React.createElement(App));
     `,
     resolveDir: path.join(root, 'dashboard'), sourcefile: 'isolated-resource-polling.tsx', loader: 'tsx',
   },
@@ -56,11 +66,11 @@ const results=[],errors=[];
 let browser;
 try {
   browser=await chromium.launch();
-  async function check(name,run,strict=false){
+  async function check(name,run,variant=''){
     const page=await browser.newPage();
     page.on('pageerror',e=>errors.push(e.message));
     try {
-      await page.goto(`http://127.0.0.1:${server.address().port}/${strict?'?strict':''}`);
+      await page.goto(`http://127.0.0.1:${server.address().port}/${variant===true?'?strict':variant?`?${variant}`:''}`);
       await page.waitForFunction(()=>window.fixture?.pending.length>0);
       await run(page);
       results.push({name,passed:true});
@@ -135,6 +145,21 @@ try {
     assert.equal((await view(page)).data,'strict current');
     assert.deepEqual(await page.evaluate(()=>fixture.timers()),{polls:1,deadlines:0});
   },true);
+  await check('Two readers of one path share one request, one deadline and one poll cadence',async page=>{
+    const views=()=>page.evaluate(()=>[...document.querySelectorAll('output')].map(node=>JSON.parse(node.textContent)));
+    await page.evaluate(()=>fixture.showDialog(true));await flush(page);
+    assert.equal(await count(page),1,'the dialog takes the read the page already started');
+    assert.deepEqual(await page.evaluate(()=>fixture.timers()),{polls:2,deadlines:1},'two readers wait on one deadline');
+    await page.evaluate(()=>fixture.respond(0,'shared answer'));await flush(page);
+    assert.deepEqual(await views(),[{data:'shared answer',loading:false,error:''},{data:'shared answer',loading:false,error:''}]);
+    assert.deepEqual(await page.evaluate(()=>fixture.timers()),{polls:2,deadlines:0});
+    await page.evaluate(()=>fixture.poll());assert.equal(await count(page),2,'both readers polling in one tick read once');
+    await page.evaluate(()=>fixture.expire());await flush(page);
+    const [first,second]=await views();
+    assert.match(first.error,/taking too long/);assert.match(second.error,/taking too long/);
+    assert.equal(first.data,'shared answer','a timed-out read keeps what both readers showed');
+    assert.equal(await page.evaluate(()=>fixture.pending[1].signal?.aborted),true);
+  },'shared');
   const source_sha256={};
   for(const file of ['dashboard/src/ui.tsx','dashboard/src/api.ts','tests/security/resource-polling.mjs'])source_sha256[file]=createHash('sha256').update(await fs.readFile(path.join(root,file))).digest('hex');
   const evidence={recorded_at:new Date().toISOString(),scope:'Actual React hook in Chromium, synthetic fetch and deterministic 15-second poll/30-second deadline scheduling; no live API calls.',passed:results.every(r=>r.passed)&&!errors.length,results,errors,source_sha256};

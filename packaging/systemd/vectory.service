@@ -1,7 +1,7 @@
 [Unit]
 Description=Vectory outbound configuration agent
-Wants=network-online.target
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -9,13 +9,27 @@ User=vectory
 Group=vectory
 ExecStart=/usr/bin/vectory run --state-dir /var/lib/vectory-agent
 Restart=on-failure
-RestartSec=15s
+RestartSec=5s
+# 78: not installed or not enrolled yet. Run `sudo vectory setup` first.
+RestartPreventExitStatus=78
+# Stop signals only the agent; it asks Vector for one graceful drain and waits.
+# Processes still left at the timeout are killed. (control-group would signal
+# Vector directly as well, and Vector treats a second signal as "quit now".)
+KillMode=mixed
+# Longer than Vector's longest graceful drain (--graceful-shutdown-seconds, at most 300).
+TimeoutStopSec=330s
 NoNewPrivileges=true
 PrivateTmp=true
+# The agent and the Vector it runs see the whole file system read-only, and no
+# home directory, except the paths below. A pipeline that writes anywhere else
+# (a file sink, a data_dir of its own) needs that directory added: run
+# `sudo systemctl edit vectory.service` and put ReadWritePaths=/srv/logs under [Service].
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/vectory-agent /etc/vector/vectory-managed
-KillMode=control-group
+# The agent's state (identity, settings, Vector's log and default data
+# directory), the managed configuration, and Vector's own default data
+# directory. A leading "-" skips a path that doesn't exist.
+ReadWritePaths=-/var/lib/vectory-agent -/etc/vectory/managed -/var/lib/vector
 UMask=0077
 
 [Install]

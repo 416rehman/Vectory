@@ -5,7 +5,41 @@ const name = z.string().refine((s) => [...s].length <= 240);
 const device = z
   .object({ device_id: uuid, device_name: name.nullable() })
   .strict();
-const eligibleDevice = device.extend({ artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+// A device that ran its local config before this deployment has no earlier
+// managed artifact: the server reports null and blocks the review.
+const eligibleDevice = device
+  .extend({
+    artifact_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+  })
+  .strict();
+const versionLabel = z
+  .object({
+    configuration_name: name.nullable(),
+    version_number: z
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .nullable(),
+  })
+  .strict();
+export type RollbackVersion = z.infer<typeof versionLabel>;
+/**
+ * What a device the rollback leaves out runs once the rollout stops:
+ * unchanged, retained_pending (until another rollout releases it), fallback
+ * (it would switch; blocks) or unmanaged (it would lose its pipeline;
+ * blocks). Older servers omit it.
+ */
+const effect = z.enum([
+  "unchanged",
+  "retained_pending",
+  "fallback",
+  "unmanaged",
+]);
+export type ExcludedEffect = z.infer<typeof effect>;
 export const rollbackToken = z.string().regex(/^[a-f0-9]{64}$/);
 export const RollbackPreviewSchema = z
   .object({
@@ -29,6 +63,9 @@ export const RollbackPreviewSchema = z
         device
           .extend({
             reason: z.enum(["revoked", "removed", "not_released", "missing"]),
+            effect: effect.nullable().optional(),
+            current: versionLabel.nullable().optional(),
+            next: versionLabel.nullable().optional(),
           })
           .strict(),
       )
@@ -60,7 +97,8 @@ export const RollbackPreviewSchema = z
       v.ready !==
       (v.blockers.length === 0 &&
         v.eligible_devices.length > 0 &&
-        v.previous_version_id !== null)
+        v.previous_version_id !== null &&
+        v.eligible_devices.every((d) => d.artifact_sha256 !== null))
     )
       ctx.addIssue({
         code: "custom",
@@ -68,6 +106,142 @@ export const RollbackPreviewSchema = z
       });
   });
 export type RollbackPreview = z.infer<typeof RollbackPreviewSchema>;
+/** No included device has an earlier managed version to return to. */
+export function nothingToRollBackTo(preview: RollbackPreview) {
+  return preview.blockers.some(
+    (blocker) => blocker.code === "PRIOR_VERSION_UNKNOWN",
+  );
+}
+/**
+ * The rollout released no device, so there is nothing to return: the blocker
+ * with the server's sentence, or null.
+ */
+export function nothingReleased(preview: RollbackPreview) {
+  return (
+    preview.blockers.find((blocker) => blocker.code === "NOTHING_RELEASED") ??
+    null
+  );
+}
+/** Devices that ran their local config before this deployment. */
+export function locallyConfigured(preview: RollbackPreview) {
+  return preview.eligible_devices.filter(
+    (device) => device.artifact_sha256 === null,
+  );
+}
+
+/** "Edge syslog processing v1" for a version label. */
+export function versionName(
+  version: RollbackVersion | null | undefined,
+  fallback = "the version it runs now",
+) {
+  const name = version?.configuration_name;
+  const number = version?.version_number;
+  if (name) return number ? `${name} v${number}` : name;
+  return number ? `version ${number}` : fallback;
+}
+/** The version the rollback restores. */
+export function restoredName(preview: RollbackPreview) {
+  return versionName(
+    {
+      configuration_name: preview.previous_configuration_name,
+      version_number: preview.previous_version_number,
+    },
+    "its previous version",
+  );
+}
+function deviceNames(names: (string | null)[]) {
+  const shown = names.map((name) => name || "An unnamed device");
+  if (shown.length <= 2) return shown.join(" and ");
+  return `${shown.slice(0, 2).join(", ")} and ${shown.length - 2} more`;
+}
+/** A live rollout (active or paused) stops as part of the rollback. */
+export const stopsRollout = (preview: RollbackPreview) =>
+  preview.source_status === "active" || preview.source_status === "paused";
+
+export type ExcludedDevice = RollbackPreview["excluded_devices"][number];
+/** What one excluded device does, in the review's words. */
+export function excludedDetail(device: ExcludedDevice, source: string) {
+  if (device.reason === "revoked") return "Device revoked";
+  if (device.reason === "missing") return "Device unavailable";
+  const why =
+    device.reason === "removed"
+      ? "No longer follows it"
+      : `Never received ${source}`;
+  const current = versionName(device.current);
+  switch (device.effect) {
+    case "unchanged":
+      return `${why} · keeps ${current} (no change)`;
+    case "retained_pending":
+      return `${why} · keeps ${current} until ${versionName(device.next, "another rollout")} reaches it`;
+    case "fallback":
+      return `${why} · would switch to ${versionName(device.next, "another version")}`;
+    case "unmanaged":
+      return `${why} · would lose its pipeline`;
+    default:
+      return why;
+  }
+}
+/**
+ * The review in sentences: who returns to what, who keeps what, and whether
+ * the rollout stops. Devices are named (two, then a count).
+ */
+export function rollbackStory(preview: RollbackPreview, source: string) {
+  const lines: { text: string; tone: "neutral" | "danger" }[] = [];
+  const restored = restoredName(preview);
+  const eligible = preview.eligible_devices.map((d) => d.device_name);
+  if (eligible.length)
+    lines.push({
+      text: `${deviceNames(eligible)} ${eligible.length === 1 ? "returns" : "return"} to ${restored}.`,
+      tone: "neutral",
+    });
+  const groups = new Map<string, ExcludedDevice[]>();
+  for (const device of preview.excluded_devices) {
+    const key =
+      device.reason === "revoked" || device.reason === "missing"
+        ? "gone"
+        : `${device.reason === "removed" ? "left" : "never"}|${device.effect ?? ""}|${versionName(device.current)}|${versionName(device.next, "")}`;
+    groups.set(key, [...(groups.get(key) || []), device]);
+  }
+  for (const [key, devices] of groups) {
+    const names = deviceNames(devices.map((d) => d.device_name));
+    const one = devices.length === 1;
+    if (key === "gone") {
+      lines.push({
+        text: `${devices.length} revoked or unavailable ${one ? "device is" : "devices are"} left out.`,
+        tone: "neutral",
+      });
+      continue;
+    }
+    const [how] = key.split("|");
+    const first = devices[0];
+    const never =
+      how === "left"
+        ? `${one ? "no longer follows" : "no longer follow"} ${source}`
+        : `never received ${source}`;
+    const current = versionName(first.current);
+    const next = versionName(first.next, "another version");
+    const text =
+      first.effect === "unchanged"
+        ? `${names} ${never} and ${one ? "keeps" : "keep"} ${current} (no change).`
+        : first.effect === "retained_pending"
+          ? `${names} ${never} and ${one ? "keeps" : "keep"} ${current} until ${next} reaches ${one ? "it" : "them"}.`
+          : first.effect === "fallback"
+            ? `${names} ${never} but would switch to ${next} once the rollout stops.`
+            : first.effect === "unmanaged"
+              ? `${names} ${never} but would lose ${one ? "its" : "their"} pipeline once the rollout stops.`
+              : `${names} ${never} and ${one ? "isn't" : "aren't"} part of this rollback.`;
+    lines.push({
+      text,
+      tone:
+        first.effect === "fallback" || first.effect === "unmanaged"
+          ? "danger"
+          : "neutral",
+    });
+  }
+  if (stopsRollout(preview))
+    lines.push({ text: "The rollout stops here.", tone: "neutral" });
+  return lines;
+}
 export const RollbackReviewContextSchema = z
   .object({
     version_id: uuid,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Device, VariableDeclaration } from "./api";
-import type { BindingInputs } from "./deploymentVariables";
+import DocLink from "./DocLink";
+import { pastedValues, type BindingInputs } from "./deploymentVariables";
 import "./deployment-variable-fields.css";
 
 function ValueInput({
@@ -8,15 +9,21 @@ function ValueInput({
   value,
   onChange,
   label,
+  placeholder,
 }: {
   declaration: VariableDeclaration;
   value: string;
   onChange(value: string): void;
   label: string;
+  placeholder?: string;
 }) {
   return declaration.type === "boolean" ? (
-    <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)}>
-      <option value="">Choose true or false</option>
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{placeholder || "Choose true or false"}</option>
       <option value="true">True</option>
       <option value="false">False</option>
     </select>
@@ -27,10 +34,15 @@ function ValueInput({
       inputMode={declaration.type === "integer" ? "numeric" : "text"}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      placeholder={declaration.type === "integer" ? "Whole number" : "Nonsecret value"}
+      placeholder={
+        placeholder ||
+        (declaration.type === "integer" ? "Whole number" : "Nonsecret value")
+      }
     />
   );
 }
+
+const PAGE = 50;
 
 export default function DeploymentVariableFields({
   declarations,
@@ -46,19 +58,19 @@ export default function DeploymentVariableFields({
   onChange(next: BindingInputs): void;
 }) {
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState("");
-  const current = devices.find((device) => device.id === selectedId);
+  const [pasted, setPasted] = useState("");
+  const [pasteResult, setPasteResult] = useState("");
   const matching = devices.filter((device) =>
     `${device.name} ${device.id}`.toLowerCase().includes(search.toLowerCase()),
   );
-  const choices = matching.slice(0, 100);
-  if (current && !choices.some((device) => device.id === current.id))
-    choices.unshift(current);
+  const shown = matching.slice(0, PAGE);
   const overridden = devices.filter((device) =>
     Object.keys(inputs.devices[device.id] || {}).some((name) =>
       declarations.some((declaration) => declaration.name === name),
     ),
   );
+  const hasDefault = (name: string) =>
+    Object.prototype.hasOwnProperty.call(inputs.defaults, name);
 
   function changeDefault(name: string, value: string | null) {
     const defaults = { ...inputs.defaults };
@@ -66,28 +78,63 @@ export default function DeploymentVariableFields({
     else defaults[name] = value;
     onChange({ ...inputs, defaults });
   }
-  function changeOverride(deviceId: string, name: string, value: string | null) {
+  /** An empty cell means "use the default" for that device. */
+  function changeOverride(deviceId: string, name: string, value: string) {
     const devicesInput = { ...inputs.devices };
     const deviceValues = { ...(devicesInput[deviceId] || {}) };
-    if (value === null) delete deviceValues[name];
+    if (value === "") delete deviceValues[name];
     else deviceValues[name] = value;
     if (Object.keys(deviceValues).length) devicesInput[deviceId] = deviceValues;
     else delete devicesInput[deviceId];
     onChange({ ...inputs, devices: devicesInput });
   }
+  function applyPaste() {
+    const result = pastedValues(pasted, declarations, devices);
+    if (result.applied) {
+      const devicesInput = { ...inputs.devices };
+      for (const [deviceId, values] of Object.entries(result.values))
+        devicesInput[deviceId] = {
+          ...(devicesInput[deviceId] || {}),
+          ...values,
+        };
+      onChange({ ...inputs, devices: devicesInput });
+      setPasted("");
+    }
+    setPasteResult(
+      [
+        result.applied
+          ? `Filled values for ${result.applied} ${result.applied === 1 ? "device" : "devices"}.`
+          : "Nothing was filled.",
+        result.unknown.length
+          ? `No selected device is named ${result.unknown
+              .slice(0, 3)
+              .map((name) => `"${name}"`)
+              .join(
+                ", ",
+              )}${result.unknown.length > 3 ? ` and ${result.unknown.length - 3} more` : ""}.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+  }
 
   return (
-    <section className="deployment-variable-fields" aria-label="Values by device">
+    <section
+      className="deployment-variable-fields"
+      aria-label="Values by device"
+    >
       <div className="deployment-variable-heading">
         <h3>Values by device</h3>
         <p>
-          Set each value for all selected devices, then customize individual
-          devices where needed. {persistent && "Future group members use the defaults."}
+          Set a default for all selected devices, then give individual devices
+          their own value where they differ.{" "}
+          {persistent && "Future group members use the defaults."}
         </p>
       </div>
       <div className="deployment-variable-defaults">
         {declarations.map((declaration) => {
-          const enabled = Object.prototype.hasOwnProperty.call(inputs.defaults, declaration.name);
+          const enabled = hasDefault(declaration.name);
           return (
             <div className="deployment-variable-card" key={declaration.name}>
               <div className="deployment-variable-card-heading">
@@ -100,10 +147,15 @@ export default function DeploymentVariableFields({
                   type="checkbox"
                   checked={enabled}
                   onChange={(event) =>
-                    changeDefault(declaration.name, event.target.checked ? "" : null)
+                    changeDefault(
+                      declaration.name,
+                      event.target.checked ? "" : null,
+                    )
                   }
                 />
-                {persistent ? "Set required default" : "Set default for selected devices"}
+                {persistent
+                  ? "Set required default"
+                  : "Set default for selected devices"}
               </label>
               {enabled && (
                 <ValueInput
@@ -117,67 +169,147 @@ export default function DeploymentVariableFields({
           );
         })}
       </div>
-      <details className="control-disclosure deployment-variable-overrides">
-        <summary>Device overrides{overridden.length ? ` (${overridden.length})` : ""}</summary>
-        <p>Only selected devices appear here. Overrides replace the default for that device.</p>
-        <label className="deployment-variable-device-search">
-          Find a selected device
-          <input value={search} onChange={(event) => setSearch(event.target.value)} />
-        </label>
-        <label className="deployment-variable-device-select">
-          Device to customize
-          <select value={current?.id || ""} onChange={(event) => setSelectedId(event.target.value)}>
-            <option value="">Choose a device</option>
-            {choices.map((device) => (
-              <option key={device.id} value={device.id}>{device.name}</option>
-            ))}
-          </select>
-        </label>
-        {matching.length > 100 && (
-          <p className="control-muted">Showing 100 matches. Search by name or device ID to narrow the list.</p>
-        )}
-        {current && (
-          <div className="deployment-variable-device-values">
-            <h4>{current.name}</h4>
-            {declarations.map((declaration) => {
-              const values = inputs.devices[current.id] || {};
-              const enabled = Object.prototype.hasOwnProperty.call(values, declaration.name);
-              return (
-                <div key={declaration.name}>
-                  <label className="deployment-variable-toggle">
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={(event) =>
-                        changeOverride(current.id, declaration.name, event.target.checked ? "" : null)
-                      }
-                    />
-                    Override {declaration.name}
-                  </label>
-                  {enabled && (
-                    <ValueInput
-                      declaration={declaration}
-                      label={`${declaration.name} for ${current.name}`}
-                      value={values[declaration.name]}
-                      onChange={(value) => changeOverride(current.id, declaration.name, value)}
-                    />
-                  )}
-                </div>
-              );
-            })}
+      {devices.length > 0 && (
+        <div className="deployment-variable-overrides">
+          <div className="deployment-variable-overrides-head">
+            <h4>
+              Each device
+              {overridden.length
+                ? ` · ${overridden.length} with ${overridden.length === 1 ? "its own value" : "their own values"}`
+                : ""}
+            </h4>
+            {devices.length > 10 && (
+              <label className="deployment-variable-device-search">
+                <span className="sr-only">Find a selected device</span>
+                <input
+                  value={search}
+                  placeholder="Find a selected device"
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </label>
+            )}
           </div>
-        )}
-        {overridden.length > 0 && (
-          <p className="control-muted">
-            Customized: {overridden.slice(0, 5).map((device) => device.name).join(", ")}
-            {overridden.length > 5 ? ` and ${overridden.length - 5} more` : ""}
-          </p>
-        )}
-      </details>
+          <div className="deployment-variable-table-scroll">
+            <table className="deployment-variable-table">
+              <thead>
+                <tr>
+                  <th scope="col">Device</th>
+                  {declarations.map((declaration) => (
+                    <th scope="col" key={declaration.name}>
+                      {declaration.name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((device) => {
+                  const values = inputs.devices[device.id] || {};
+                  return (
+                    <tr key={device.id}>
+                      <th scope="row">{device.name}</th>
+                      {declarations.map((declaration) => {
+                        const own = Object.prototype.hasOwnProperty.call(
+                          values,
+                          declaration.name,
+                        );
+                        const fallback = hasDefault(declaration.name)
+                          ? inputs.defaults[declaration.name]
+                          : "";
+                        return (
+                          <td
+                            key={declaration.name}
+                            data-own={own || undefined}
+                          >
+                            <ValueInput
+                              declaration={declaration}
+                              label={`${declaration.name} for ${device.name}`}
+                              value={own ? values[declaration.name] : ""}
+                              placeholder={
+                                fallback !== ""
+                                  ? `Default: ${fallback}`
+                                  : hasDefault(declaration.name)
+                                    ? "Default"
+                                    : "Needs a value"
+                              }
+                              onChange={(value) =>
+                                changeOverride(
+                                  device.id,
+                                  declaration.name,
+                                  value,
+                                )
+                              }
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {matching.length > shown.length && (
+            <p className="control-muted">
+              Showing {shown.length} of {matching.length}. Search by name to
+              find the others, or paste their values below.
+            </p>
+          )}
+          {!matching.length && (
+            <p className="control-muted">No selected device matches.</p>
+          )}
+          <details className="deployment-variable-paste">
+            <summary>Paste values for many devices</summary>
+            <p>
+              One device per line: its name, then{" "}
+              {declarations.length === 1
+                ? `its ${declarations[0].name}`
+                : `${declarations.map((declaration) => declaration.name).join(", ")} in that order`}
+              , separated by commas or tabs. A spreadsheet copy works.
+            </p>
+            <textarea
+              aria-label="Values to paste"
+              rows={4}
+              value={pasted}
+              spellCheck={false}
+              placeholder={`${devices[0]?.name || "edge-01"},${declarations
+                .map((declaration) =>
+                  declaration.type === "integer"
+                    ? "9101"
+                    : declaration.type === "boolean"
+                      ? "true"
+                      : "value",
+                )
+                .join(",")}`}
+              onChange={(event) => {
+                setPasted(event.target.value);
+                setPasteResult("");
+              }}
+            />
+            <div className="deployment-variable-paste-actions">
+              <button
+                type="button"
+                className="button secondary compact"
+                disabled={!pasted.trim()}
+                onClick={applyPaste}
+              >
+                Fill these values
+              </button>
+              {pasteResult && (
+                <span className="control-muted" role="status">
+                  {pasteResult}
+                </span>
+              )}
+            </div>
+          </details>
+        </div>
+      )}
       <p className="deployment-variable-warning">
         Values entered here are stored with the deployment and visible to
-        authorized users. For credentials, use a device-local Vector secret
-        provider instead.
+        authorized users. For credentials, use a device secret instead:{" "}
+        <code>vectory-secret:NAME</code>{" "}
+        <DocLink topic="resources" section="keep-credentials-on-the-device">
+          How device secrets work
+        </DocLink>
       </p>
     </section>
   );

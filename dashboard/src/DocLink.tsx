@@ -5,9 +5,11 @@ import "./help-link.css";
 export type DocTopic =
   | "getting-started"
   | "installation"
+  | "agent-updates"
   | "pipelines"
   | "deployments"
   | "telemetry"
+  | "notifications"
   | "resources"
   | "glossary"
   | "troubleshooting"

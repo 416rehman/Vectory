@@ -1,0 +1,86 @@
+{
+  "description": "Built-in components that touch nothing outside Vector need no host action at all.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      },
+      "gauges": {
+        "type": "static_metrics",
+        "metrics": [
+          {
+            "name": "up",
+            "kind": "absolute",
+            "tags": {},
+            "value": {
+              "gauge": {
+                "value": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    "transforms": {
+      "dedupe": {
+        "type": "dedupe",
+        "inputs": [
+          "in"
+        ],
+        "fields": {
+          "match": [
+            "message"
+          ]
+        }
+      },
+      "shape": {
+        "type": "remap",
+        "inputs": [
+          "dedupe"
+        ],
+        "source": ".seen = true"
+      },
+      "slow": {
+        "type": "throttle",
+        "inputs": [
+          "shape"
+        ],
+        "threshold": 100,
+        "window_secs": 1,
+        "key_field": "{{ host }}"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "console",
+        "inputs": [
+          "slow"
+        ],
+        "target": "stderr",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "drop": {
+        "type": "blackhole",
+        "inputs": [
+          "gauges"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

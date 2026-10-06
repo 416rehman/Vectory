@@ -13,12 +13,17 @@ import {
 import {
   beginPipelineCreationOperation,
   finishPipelineCreationOperation,
+  isDefinitivePipelineCreationRejection,
   pipelineCreationOperationAvailable,
   usePipelineCreationOperations,
   type PipelineCreationOperation,
   pipelineCopyName,
 } from "./pipelineCreationRequests";
 import { Button, ErrorBox, Field, Modal } from "./ui";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 
 export type PipelineAction = "duplicate" | "archive" | "unarchive";
 
@@ -141,6 +146,13 @@ export default function PipelineActions({
     try {
       let result: Configuration;
       if (action === "duplicate") {
+        const credential =
+          findPlainCredential(name.trim(), ["name"]) ||
+          findPlainCredential(description, ["description"]);
+        if (credential) {
+          setError(credentialPreflightMessage(credential));
+          return;
+        }
         operation = beginPipelineCreationOperation(user.id, {
           operation: "duplicate",
           source_configuration_id: configuration.id,
@@ -226,6 +238,19 @@ export default function PipelineActions({
       onSaved(result);
     } catch (failure) {
       if (!current()) return;
+      if (operation && isDefinitivePipelineCreationRejection(failure, sent)) {
+        try {
+          finishPipelineCreationOperation(operation);
+          setError(failure.message);
+          return;
+        } catch {
+          setNotice("uncertain");
+          setError(
+            "The server rejected this request, but this browser could not clear its reminder. Review the saved request before trying again.",
+          );
+          return;
+        }
+      }
       // This guard is emitted only after keyed replay inside the writer.
       // Source revisions are monotonic, so this exact rejected copy cannot
       // subsequently succeed. Other errors do not establish that boundary.

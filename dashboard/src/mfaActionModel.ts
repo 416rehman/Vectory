@@ -9,12 +9,27 @@ export type MfaContext = AccountActionContext & {
   role: "viewer" | "editor" | "operator" | "admin";
 };
 
-export const MfaStatusSchema = z.object({ enabled: z.boolean() }).strict();
+export const MfaStatusSchema = z
+  .object({
+    enabled: z.boolean(),
+    /** Unused recovery codes while two-factor is on; absent from older servers. */
+    recovery_codes_remaining: z
+      .number()
+      .int()
+      .min(0)
+      .max(8)
+      .nullable()
+      .optional(),
+  })
+  .strict();
+export type MfaStatus = z.infer<typeof MfaStatusSchema>;
 
 const setupShape = z
   .object({
     secret: z.string().regex(/^[A-Z2-7]{16,128}$/),
     otpauth_url: z.string().min(1).max(2048),
+    /** When this pending setup stops accepting codes; absent from older servers. */
+    expires_at: z.string().optional(),
   })
   .strict();
 
@@ -85,25 +100,79 @@ export const MfaConfirmSchema = z
     "Recovery codes must be distinct.",
   );
 
+/** `POST /mfa/recovery-codes` replaces every code and returns the new set. */
+export const MfaRecoveryCodesSchema = MfaConfirmSchema;
+
 export const MfaDisableSchema = z
   .object({ enabled: z.literal(false) })
   .strict();
 
-export type MfaFlow = "setup" | "confirm" | "disable";
+export type MfaFlow = "setup" | "confirm" | "disable" | "codes";
 
-/** /mfa describes current state, never which earlier request committed. */
-export function mfaStatusMeaning(flow: MfaFlow, enabled: boolean): string {
-  if (flow === "setup")
-    return enabled
-      ? "An authenticator is enabled now. This does not identify which setup enabled it."
-      : "An authenticator is not enabled now. This does not reveal whether a setup key is pending. A new setup can invalidate an earlier QR code.";
-  if (flow === "confirm")
-    return enabled
-      ? "An authenticator is enabled now. Recovery codes from an unread response cannot be recovered. If you did not save them, use a working authenticator to disable and set up again."
-      : "An authenticator is not enabled now. This does not prove the earlier confirmation failed or cannot still finish.";
-  return enabled
-    ? "An authenticator is enabled now. This does not prove the earlier disable request failed or cannot still finish."
-    : "An authenticator is not enabled now. This does not identify which request disabled it.";
+/**
+ * What a fresh `/mfa` read lets the page say after a request whose response
+ * never arrived. The read describes current state only; it never proves which
+ * request changed it, so nothing is resent automatically.
+ * - `restart`: a setup key from a lost response can't be shown again.
+ * - `codes-lost`: two-factor is on, but these recovery codes were never shown.
+ * - `retry-code`: the pending setup can take the next code from the app.
+ * - `off`: two-factor is off now, which is what the person asked for.
+ * - `still-on`: two-factor is still on; turning it off needs a new request.
+ * - `codes-unknown`: the old recovery codes may already be replaced.
+ */
+export type MfaOutcome =
+  | "restart"
+  | "codes-lost"
+  | "retry-code"
+  | "off"
+  | "still-on"
+  | "codes-unknown";
+export function mfaOutcome(flow: MfaFlow, enabled: boolean): MfaOutcome {
+  if (flow === "setup") return enabled ? "codes-lost" : "restart";
+  if (flow === "confirm") return enabled ? "codes-lost" : "retry-code";
+  if (flow === "disable") return enabled ? "still-on" : "off";
+  return enabled ? "codes-unknown" : "off";
+}
+
+/** "ABCD EFGH IJKL …" so a setup key can be typed without losing place. */
+export function groupSetupKey(secret: string) {
+  return secret.match(/.{1,4}/g)?.join(" ") ?? secret;
+}
+
+/**
+ * "0f3a 91c2 …": a recovery code in groups of four, to type from paper
+ * without losing place. Sign-in ignores the spaces (and dashes), so the
+ * grouped form works as typed; anything unexpected is shown as it came.
+ */
+export function groupRecoveryCode(code: string) {
+  const plain = code.replace(/[\s-]/g, "");
+  return /^[0-9a-f]{32}$/i.test(plain) ? plain.match(/.{4}/g)!.join(" ") : code;
+}
+
+/** The recovery-code file: what the codes are for, then one code per line. */
+export function recoveryCodesText({
+  codes,
+  email,
+  workspace,
+  generatedAt,
+}: {
+  codes: string[];
+  email: string;
+  workspace: string;
+  generatedAt: Date;
+}) {
+  const date = generatedAt.toISOString().slice(0, 10);
+  return [
+    `Vectory recovery codes for ${email} on ${workspace}, generated ${date}.`,
+    "Each code works once. Generating new codes replaces all of these.",
+    "Type a code with or without its spaces.",
+    "",
+    ...codes.map(
+      (code, index) =>
+        `${String(index + 1).padStart(2, " ")}. ${groupRecoveryCode(code)}`,
+    ),
+    "",
+  ].join("\n");
 }
 
 export function mfaSameContext(original: MfaContext, current: MfaContext) {

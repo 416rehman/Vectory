@@ -1,18 +1,24 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   BookOpen,
-  ChevronUp,
+  ChevronsUpDown,
   ExternalLink,
+  Keyboard,
   LogOut,
   Monitor,
   Moon,
+  RefreshCw,
   Settings,
+  ShieldCheck,
   Sun,
 } from "lucide-react";
 import type { User } from "./api";
 import { helpHref } from "./DocLink";
 import SignOutDialog from "./SignOutDialog";
+import { Kbd } from "./ui";
+import { roles } from "./roles";
+import { useSingleKeyShortcuts } from "./shortcutPreference";
 import "./account-menu.css";
 
 type Appearance = "light" | "dark" | "auto";
@@ -27,6 +33,7 @@ export type AccountMenuProps = {
   onBeforeSignOut: () => boolean;
   onSignedOut: () => void;
   onReload: () => void;
+  onShowShortcuts?: () => void;
   mobile?: boolean;
   currentPage?: string;
 };
@@ -47,10 +54,13 @@ export default function AccountMenu({
   onBeforeSignOut,
   onSignedOut,
   onReload,
+  onShowShortcuts,
   mobile = false,
   currentPage,
 }: AccountMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const shortcutsId = useId();
+  const [singleKeys, setSingleKeys] = useSingleKeyShortcuts();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [signOutReview, setSignOutReview] = useState(false);
   const initials = (user.name.trim() || user.email)
@@ -59,6 +69,7 @@ export default function AccountMenu({
     .map((part) => Array.from(part)[0])
     .join("")
     .toLocaleUpperCase();
+  const role = roles[user.role]?.[0] ?? user.role;
 
   function closeConfirmation() {
     setConfirmingSignOut(false);
@@ -88,8 +99,11 @@ export default function AccountMenu({
             <span className="account-initial" aria-hidden="true">
               {initials}
             </span>
-            <span className="account-name">{user.name || user.email}</span>
-            <ChevronUp size={16} aria-hidden="true" />
+            <span className="account-text">
+              <span className="account-name">{user.name || user.email}</span>
+              <span className="account-button-role">{role}</span>
+            </span>
+            <ChevronsUpDown size={15} aria-hidden="true" />
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -109,8 +123,14 @@ export default function AccountMenu({
             }}
           >
             <div className="account-menu-identity">
-              <strong>{user.name || user.email}</strong>
-              <span>{user.email}</span>
+              <span className="account-initial" aria-hidden="true">
+                {initials}
+              </span>
+              <span>
+                <strong>{user.name || user.email}</strong>
+                <span>{user.email}</span>
+              </span>
+              <span className="account-menu-role">{role}</span>
             </div>
             <DropdownMenu.Label className="account-menu-label">
               Appearance
@@ -156,11 +176,28 @@ export default function AccountMenu({
                     value === "auto" ? "Use your system appearance" : undefined
                   }
                 >
-                  <Icon size={17} aria-hidden="true" />
+                  <Icon size={15} aria-hidden="true" />
                   <span>{label}</span>
                 </DropdownMenu.RadioItem>
               ))}
             </DropdownMenu.RadioGroup>
+            <DropdownMenu.CheckboxItem
+              className="account-menu-toggle"
+              checked={singleKeys}
+              onCheckedChange={(checked) => setSingleKeys(checked === true)}
+              onSelect={(event) => event.preventDefault()}
+              aria-labelledby={`${shortcutsId}-label`}
+              aria-describedby={`${shortcutsId}-hint`}
+            >
+              <span className="account-menu-toggle-copy">
+                <span id={`${shortcutsId}-label`}>Single-key shortcuts</span>
+                <small id={`${shortcutsId}-hint`}>
+                  R, /, ?, [ and G then a letter. Turn off if you use speech
+                  input.
+                </small>
+              </span>
+              <span className="account-menu-switch" aria-hidden="true" />
+            </DropdownMenu.CheckboxItem>
             <DropdownMenu.Separator className="account-menu-separator" />
             <DropdownMenu.Item
               className="account-menu-item"
@@ -170,29 +207,57 @@ export default function AccountMenu({
                 onNavigate("settings");
               }}
             >
-              <Settings size={17} aria-hidden="true" />
+              <Settings size={16} aria-hidden="true" />
               <span>Settings</span>
             </DropdownMenu.Item>
-            <DropdownMenu.Separator className="account-menu-separator" />
+            <DropdownMenu.Item
+              className="account-menu-item"
+              aria-current={currentPage === "users" ? "page" : undefined}
+              onSelect={(event) => {
+                event.preventDefault();
+                onNavigate("users");
+              }}
+            >
+              <ShieldCheck size={16} aria-hidden="true" />
+              <span>People &amp; security</span>
+            </DropdownMenu.Item>
+            {onShowShortcuts && (
+              <DropdownMenu.Item
+                className="account-menu-item"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onOpenChange(false);
+                  onShowShortcuts();
+                }}
+              >
+                <Keyboard size={16} aria-hidden="true" />
+                <span>Keyboard shortcuts</span>
+                {singleKeys && <Kbd keys="?" />}
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Item asChild className="account-menu-item">
               <a
                 href={helpHref()}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="Vectory documentation (opens in a new tab)"
+                aria-label="Help center (opens in a new tab)"
               >
-                <BookOpen size={17} aria-hidden="true" />
-                <span>Vectory documentation</span>
+                <BookOpen size={16} aria-hidden="true" />
+                <span>Help center</span>
                 <ExternalLink
                   className="account-menu-external"
-                  size={14}
+                  size={13}
                   aria-hidden="true"
                 />
               </a>
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="account-menu-separator" />
             <DropdownMenu.Item
-              className="account-menu-item account-menu-signout"
+              className={
+                signOutReview
+                  ? "account-menu-item"
+                  : "account-menu-item account-menu-signout"
+              }
               onSelect={(event) => {
                 event.preventDefault();
                 // Keep the parent account overlay open so the mobile navigation
@@ -200,7 +265,11 @@ export default function AccountMenu({
                 setConfirmingSignOut(true);
               }}
             >
-              <LogOut size={17} aria-hidden="true" />
+              {signOutReview ? (
+                <RefreshCw size={16} aria-hidden="true" />
+              ) : (
+                <LogOut size={16} aria-hidden="true" />
+              )}
               <span>
                 {signOutReview ? "Check sign-out status" : "Sign out"}
               </span>

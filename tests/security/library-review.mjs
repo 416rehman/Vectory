@@ -166,6 +166,7 @@ try {
         email: `${role}@example.test`,
         password,
         role,
+        current_password: password,
       },
       admin,
     );
@@ -209,7 +210,9 @@ try {
     fixtures.push(item);
   }
   const selected = fixtures[7];
-  for (const number of [2, 11, 3]) {
+  const versionIds = new Map();
+  // The last version's number is text, so it can only ever project as 0.
+  for (const number of [2, 11, 3, marker]) {
     const version = {
       id: randomUUID(),
       configuration_id: selected.id,
@@ -227,7 +230,48 @@ try {
       version.created_at,
     );
     if (number === 11) selected.expectedLatest = version.id;
+    versionIds.set(number, version.id);
   }
+  // Devices report the version they last verified. Only live devices whose
+  // verified version belongs to this pipeline count, once per version.
+  const insertDevice = db.prepare(
+    "INSERT INTO devices(id,name,data,revoked) VALUES(?,?,?,?)",
+  );
+  const device = (index, verified, revoked = 0) => {
+    const id = randomUUID();
+    insertDevice.run(
+      id,
+      `Synthetic library device ${index}`,
+      JSON.stringify({
+        id,
+        name: `Synthetic library device ${index}`,
+        status: "online",
+        verified_configuration_attempt: verified,
+        private: marker,
+      }),
+      revoked,
+    );
+  };
+  const verified = (version_id) => ({
+    version_id,
+    generation: 1,
+    state: "verified_applied",
+    private: marker,
+  });
+  device(1, verified(versionIds.get(2)));
+  device(2, verified(versionIds.get(2)));
+  device(3, verified(versionIds.get(11)));
+  device(4, verified(versionIds.get(marker)));
+  // Not counted: a revoked device, an unknown version, a wrong type, no report.
+  device(5, verified(versionIds.get(3)), 1);
+  device(6, verified(randomUUID()));
+  device(7, verified({ private: marker }));
+  device(8, undefined);
+  const expectedRunning = [
+    { id: versionIds.get(11), number: 11, devices: 1 },
+    { id: versionIds.get(2), number: 2, devices: 2 },
+    { id: versionIds.get(marker), number: 0, devices: 1 },
+  ];
   const projectionKeys = [
     "id",
     "name",
@@ -239,7 +283,28 @@ try {
     "archived_at",
     "component_counts",
     "latest_version",
+    "assigned_devices",
+    "running_versions",
   ].sort();
+  const uuidShape =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  // The versions of a pipeline that live devices verified: an id, a number and
+  // a device count each, newest first, and nothing about the devices.
+  function running(items) {
+    assert(Array.isArray(items));
+    for (const entry of items) {
+      assert.deepEqual(Object.keys(entry).sort(), ["devices", "id", "number"]);
+      assert(uuidShape.test(entry.id));
+      assert(Number.isSafeInteger(entry.number) && entry.number >= 0);
+      assert(Number.isSafeInteger(entry.devices) && entry.devices >= 1);
+    }
+    assert.deepEqual(
+      items.map((entry) => [entry.number, entry.id]),
+      [...items]
+        .sort((a, b) => b.number - a.number || (a.id < b.id ? -1 : 1))
+        .map((entry) => [entry.number, entry.id]),
+    );
+  }
   function projection(page) {
     assert(page.items.length <= 50);
     assert(!JSON.stringify(page).includes(marker));
@@ -250,12 +315,23 @@ try {
         transforms: 0,
         sinks: 1,
       });
-      if (item.latest_version)
+      assert(Number.isSafeInteger(item.assigned_devices));
+      assert(item.assigned_devices >= 0);
+      running(item.running_versions);
+      if (item.latest_version) {
         assert.deepEqual(Object.keys(item.latest_version).sort(), [
+          "author",
           "created_at",
+          "draft_changed",
           "id",
           "number",
         ]);
+        assert.equal(typeof item.latest_version.draft_changed, "boolean");
+        assert(
+          item.latest_version.author === null ||
+            item.latest_version.author.length <= 240,
+        );
+      }
     }
   }
   const route = (values) =>
@@ -363,6 +439,11 @@ try {
         )
       ).body;
       assert.equal(other.items[0].latest_version, null);
+      // Running versions come only from live devices' verified versions of
+      // this pipeline; a pipeline nothing runs reports none.
+      assert.deepEqual(result.items[0].running_versions, expectedRunning);
+      assert.deepEqual(other.items[0].running_versions, []);
+      assert.equal(result.items[0].assigned_devices, 0);
       const detail = (
         await call("GET", `/configurations/${selected.id}`, undefined, admin)
       ).body;

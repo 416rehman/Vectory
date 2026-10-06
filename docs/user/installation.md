@@ -1,316 +1,301 @@
-# Install an agent
+# Connect a device
 
-An agent manages one explicitly adopted Vector 0.58.0 process and one JSON configuration on a device. Vector must already be installed. Start in [**Devices → Add device**](/#/enrollment) and copy the instructions for your OS; the commands below use example paths and server names.
+Install the Vectory agent on a host that runs Vector 0.58 (any patch release, such as 0.58.0 or 0.58.1). The agent connects out to your server, runs the pipelines you deploy and reports what Vector is doing. It takes about five minutes per host.
 
-## Prepare the host
+> [!TIP]
+> **Fastest path**
+> [**Devices → Add device**](/#/enrollment) builds the exact command for your server, operating system and token. This page explains what that command does and how to do each step by hand.
 
-Check the agent download's checksum through a trusted release channel. Development builds are unsigned. Review the download's native evidence; a cross-compiled binary is not proof of tested operation on that OS. Install Vector 0.58.0 and locate its absolute executable path.
+## Before you start
 
-In the wizard's **Install** step, choose the **Starting workload** and review the **Managed configuration file** path. This is the sole JSON document the agent will start. Installation does not discover the old service's arguments, copy its configuration or stop its supervisor.
+- **Vector 0.58.x** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
+- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**, where you can also list the device names it may enroll and labels for the devices it enrolls. **Start over**, next to **Copy token**, revokes it when you don't need it; one you leave unused is listed with **Revoke it** when you come back. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
+- **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
+- **Administrator rights** on the host (`sudo`, or an elevated PowerShell on Windows) to install the agent and register its service.
 
-Create separate dedicated locations for agent state, managed configuration and Vector data. Grant the intended agent identity the required access.
+## Choose a starting workload
 
-The managed configuration's directory becomes private. Do not use a directory containing unrelated configurations or secrets. State and managed paths must be absolute and have no symlink ancestors. On macOS, use concrete paths such as `/Library/Application Support/Vectory`; `/var` commonly resolves through a symlink.
-
-Set your pipeline's `data_dir` to an existing writable device directory. On Windows, Vector's default `/var/lib/vector` normally does not exist. The browser does not create the directory for you.
-
-### Keep an existing workload
-
-Prepare the replacement configuration **while the old Vector instance is still running**:
-
-1. Inventory its startup arguments, configuration files, configuration-directory contents and service settings. Back up that complete configuration and service definition outside the new managed directory.
-2. Copy or combine the intended configuration into the wizard's managed JSON file. Convert YAML or TOML to JSON if needed; do not merely rename a file. Preserve all sources, transforms, destinations and global settings from the files the old instance used. The default managed path is a new location, not an automatically discovered copy of the old workload.
-3. Check the selected [configuration mode](#/docs/installation#choose-configuration-capabilities), local permissions and dependencies. Preserve the intended `data_dir`; provision credentials, environment values, external VRL files and enrichment data under the account that will run the agent. Relative paths and old service-specific environment settings need particular review. In restricted mode, approve the required [local allowances](#/docs/installation#configure-restricted-allowances) before handing over.
-4. Only when the managed file and dependencies are ready, stop and disable the old supervisor for this Vector instance. Then run the wizard's install, enroll and run commands under the intended account.
-
-`install --adopt` records ownership and backs up the selected managed file if it exists. That backup does not include other old configuration files or the service definition. `run` checks local capability policy, validates the managed file with Vector and starts the owned process. If the file is missing, no Vector process starts; if startup fails, inspect the local error and correct the prepared configuration before continuing.
-
-Confirm the existing workload's outputs after the handover. The device can run this adopted local configuration while its dashboard state is **Unmanaged**: no published version has been assigned yet. Enrollment alone is not a deployment.
+| Option | Choose it when | What happens |
+| --- | --- | --- |
+| **Start without a workload** (recommended) | The host should wait for its first pipeline. | Vector doesn't run until you deploy a version. |
+| **Keep an existing workload** | Vector already ships data that must not stop. | You hand its configuration to the agent first, and setup copies the old files. |
 
 ### Start without a workload
 
-Choose **Start without a workload** if this device should wait for its first pipeline. Keep Vector installed and select a new managed path that does not contain an existing configuration. The file may be absent; do not create an empty placeholder configuration.
+The agent checks in and waits. Vector starts only after you [deploy a published version](deployments.md#deploy-a-published-version) to the device. Enrollment never assigns a pipeline or joins a group.
 
-Install, enroll and keep the agent running. With no managed file, it checks in without starting a Vector process. Once you explicitly [deploy a published version](#/docs/deployments#deploy-a-published-version), the agent can download, validate and activate that configuration. No pipeline or group is assigned automatically.
+### Keep an existing workload
 
-If the selected file already exists, `run` attempts to validate and start it. The wizard's choice changes the instructions, not agent behavior. Use **Keep an existing Vector workload** when you need to preserve one.
+Prepare the handover while the old Vector is still running:
 
-## Choose configuration capabilities
+<!-- steps -->
+1. In Vectory, open **Pipelines → Create pipeline**, choose **Import a Vector config**, then **Choose files** and select the running configuration files (YAML, TOML or JSON; up to 32 files and 1 MiB combined). Choose the files individually rather than a directory, fix anything the import flags, then name and create the pipeline.
+2. In **Code** view, choose **JSON**, then **Actions → Export configuration**.
+3. Copy the exported file to the host as the agent's managed configuration, for example `/etc/vectory/managed/vector.json`. Provision everything it reads: files, credentials, `data_dir`, and in restricted mode the [allowances](#configure-restricted-allowances) it needs.
+4. With the old Vector still running, run the install command from [Install and enroll](#install-and-enroll). Setup never takes over a running Vector: it records how it was started, copies every configuration file it loads and stops, telling you what to do next. If it names files the agent won't manage, see [Adopt a Vector that already runs](agents.md#adopt-a-vector-that-already-runs).
+5. Stop and disable the old Vector service, then run the same command again to install and enroll the agent. Add `--adopt-existing` if setup asked for it.
+6. Confirm your outputs still flow. The device shows no assignment until you deploy a version; its adopted configuration keeps running meanwhile.
 
-| Mode                          | Choose it when                                                                      | Local responsibility                                                                                |
-| ----------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **Restricted** — default      | Publishers should use the reviewed subset of components and resources.              | Approve file roots, exact destination host:port pairs and listener addresses.                       |
-| **Full Vector configuration** | You need native providers, enrichment, external VRL files or other Vector features. | Explicitly trust publishers with Vector's process capabilities and provision its host dependencies. |
+> [!CAUTION]
+> Don't convert the configuration with `vector convert-config`. In Vector 0.58 its JSON output expands every default and fails `vector validate`.
 
-Full mode supports features available in the adopted Vector build. It cannot add a missing platform component, executable, credential, file or external service. It also enables native environment interpolation. Restricted allowances do not constrain full mode.
+The agent backs up the managed file it adopts and, when the old Vector runs as setup starts, every configuration file that Vector loads (in `adoption-inventory` in the state directory). It doesn't copy the files those configurations refer to, such as certificates, lookup tables and secret files, or the old service definition, so keep your own backup of those.
 
-The dashboard displays the device's reported mode and checks it when planning deployment. It cannot enable full mode remotely. For field-specific dependencies, read the [resource guide](#/docs/resources#choose-the-right-reference).
+## Choose restricted or full mode
+
+| Mode | Pipelines can use | The host operator |
+| --- | --- | --- |
+| **Restricted** (default) | A reviewed set of components, plus only the files, destinations and listeners approved on the host. | Approves each file root, `host:port` destination and listener in a local allowance file. |
+| **Full Vector** | Everything the host's Vector can do: every component, secret providers, environment variables, external VRL files and any file or network. | Trusts everyone who can publish pipelines with Vector's permissions on this host. |
+
+> [!IMPORTANT]
+> **Only the host can turn on full mode**
+> Full mode is chosen with a local flag when you install the agent. The dashboard shows each device's mode and blocks deployments that need full mode on restricted devices, but it can never grant full mode or widen local allowances.
+
+Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`, `http_server`, `syslog` and `opentelemetry` sources; `remap`, `filter`, `route`, `sample`, `reduce` and `log_to_metric` transforms; `console` (to stderr), `blackhole`, `http`, `loki`, `elasticsearch` and `prometheus_exporter` sinks. It also blocks environment variables, `{{ }}` templates, secret providers, the `api` block (Vector's local API has no authentication) and anything that runs a program. [Security model](security.md#restricted-and-full-mode) has the complete rules.
 
 ## Install and enroll
 
-### Save the enrollment token
+<!-- tabs:os -->
+#### Linux
 
-After **Create enrollment token**, keep a private copy and choose **I've saved the token**. Closing that dialog keeps **Show token** available on the current page. Navigation asks you to save or deliberately **Discard token copy** first. Discarding, reloading or signing out removes that copy; the server cannot show the secret again. Discarding the copy leaves the request reminder and does not revoke the token.
-
-If the response is interrupted, the wizard keeps a **Token requests** reminder for this account in this browser. Choose **Check request** to see the exact outcome. A token may have been created even when the browser timed out. Cancel the request before creating a replacement: cancellation revokes any token it created and prevents a late request from creating one. Existing devices stay connected. Only after **Request cancelled** is confirmed should you choose **Continue setup** and create another token.
-
-These recovery controls require a server and dashboard that support token request correlation. The wizard does not send an untracked request to an older server. The reminder contains setup metadata, never the token secret. Do not clear browser storage to resolve an uncertain request; use its check and cancellation actions. See [interrupted token requests](#/docs/troubleshooting#a-token-request-is-interrupted) for failed cancellation or revocation.
-
-### Run enrollment commands
-
-Run installation and ordinary foreground operation under the intended account. Service registration may require separate administrative privileges and account permissions.
-
-Linux example with full mode explicitly enabled:
+On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result on the host. With a private CA (the usual case) it looks like this:
 
 ```sh
-vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vectory-managed/vector.json --adopt --allow-full-vector-config
-vectory enroll --state-dir /var/lib/vectory-agent --server https://vectory.example.com:8443 --ca-file /protected/server-ca.pem --id edge-01 --token-file /protected/enrollment-token.txt
-vectory doctor --state-dir /var/lib/vectory-agent
-vectory run --state-dir /var/lib/vectory-agent
+(
+  set -e
+  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)
+  trap 'rm -rf "$dir"' EXIT
+  printf '%s\n' '-----BEGIN CERTIFICATE-----
+<your server's CA certificate, as Add device shows it>
+-----END CERTIFICATE-----' > "$dir/vectory-ca.pem"
+  curl -fsSL --proto '=https' --proto-redir '=https' \
+    --cacert "$dir/vectory-ca.pem" \
+    -o "$dir/vectory-install.sh" \
+    https://vectory.example.com:8443/agent/v1/install.sh
+  echo '<sha256 shown on Add device>  vectory-install.sh' \
+    | (cd "$dir" && sha256sum -c -)
+  sudo sh "$dir/vectory-install.sh" \
+    --mode restricted \
+    --create-user
+)
 ```
 
-Use the agent endpoint shown by **Add device**, which may differ from the dashboard address. Save the enrollment token in a private file at the path named by the command. The file must be regular, local and single-link. On Linux/macOS, its owner must be the enrolling account or root, with no group or other permissions (for example, mode `0600`). On Windows, its owner must be the enrolling account, SYSTEM or Administrators, and its access list must grant access only to those principals; alternate data streams are not accepted. A browser download may have broader access, so move it to a protected location and set its permissions before using `--token-file`. Alternatively, omit the token option for hidden interactive entry, or use `--token-stdin`. Avoid tokens in command history or service definitions.
+Every step checks what it receives, and nothing turns certificate verification off. The command works in a directory only you can enter, so no one else on the host can swap a file between the check and the run. It stops at the first step that fails and removes the directory when it ends. It saves your server's CA certificate (public, like its fingerprint) there as `vectory-ca.pem`, and curl verifies the server against it; `--proto` and `--proto-redir` keep every request, a redirect included, on https. The SHA-256 from your dashboard then proves the installer is the one the page describes, and the installer checks the agent and pins the CA for setup. The command works in any POSIX shell: sh, dash, bash and zsh. With another choice under [**How the host checks this server**](#trust-the-server-certificate), curl uses that CA file or the host's own certificate store instead.
 
-Windows uses the same flags:
+#### macOS
+
+On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result in Terminal. It is the Linux command with `shasum -a 256 -c -` in place of `sha256sum -c -`.
+
+The installer finds Vector through your `PATH` and Homebrew, and adopts the real binary behind Homebrew's link.
+
+#### Windows
+
+On **Add device**, choose **Windows**, download `vectory.exe` from the page, and run the command it shows in an elevated PowerShell in the same folder. The command checks the file's SHA-256 before it runs setup. It makes no web request of its own, so there is no certificate check to skip; the agent then verifies the server itself, the way you chose. The command quotes what you type under **Advanced** for PowerShell, and **Advanced** refuses curly quotes (‘ ’ ‚ ‛), double quotes and control characters in a path, because PowerShell reads a curly quote as a quote. For configuration management, use the [manual steps](#install-manually).
+<!-- /tabs -->
+
+The installer and `vectory setup` then:
+
+<!-- steps -->
+1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. On Linux and macOS, it stages the checked agent in the install directory and tests the setup options and service-account access before replacing an existing agent. If that check refuses the host or an option, the staged file is removed and the existing executable stays in place. If final setup fails after replacement, the installer restores the old executable or removes a new installation, but setup may already have changed host state or service status; check `vectory status` and the service before retrying. It installs to `/usr/local/bin/vectory` (or the **Agent install directory** under **Advanced**, `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
+2. Find Vector 0.58.x and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
+3. Install in the mode you chose on **Add device**.
+4. Ask for the enrollment token (typing stays hidden) and enroll, checking the server the way you chose on **Add device** (the pinned CA unless you changed it). See [Trust the server certificate](#trust-the-server-certificate).
+5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one. A host without a service manager, such as most containers, WSL and Alpine with OpenRC, has nothing to register: setup checks in once, prints `[!!] Service` with the exact command that starts the agent, and exits with code 3, because the agent isn't running yet. See [Keep the agent running](#keep-the-agent-running).
+
+The token is never part of the URL, the command or the installer script. The command and the installer contain only public values: your server's address, its CA certificate and fingerprint, and the checksums.
+
+While [agent updates](agent-updates.md) are on, **Add device** has an **Agent updates** step before the command. Choose **Automatic (recommended)**, **Ask on the host** or **Off**. Nothing is chosen for you, and the command carries your choice, and the fingerprint of the release key the host will pin, to `vectory setup`. With updates off the step isn't there, and the command is the one shown above. See [What a host agrees to](agent-updates.md#what-a-host-agrees-to).
+
+If you type a device name on **Add device**, the command's token enrolls only that name: a copied command can't enroll a host under another one. The token list shows it as **Only** followed by the name. A token pasted short or mangled is refused on the host before anything is sent.
+
+Once the command is created, its host settings stay fixed so the displayed command matches the issued token. To change the name, mode, certificate choice or service setup, choose **Start over** beside the token. That revokes the old token before you create a new command.
+
+### Keep tokens out of shell history
+
+| Method | Use it for |
+| --- | --- |
+| Hidden prompt (default) | Interactive setup. Nothing lands in history. |
+| `--token-stdin` | Scripts: `vectory enroll ... --token-stdin < token.txt` |
+| `--token-file PATH` | Configuration management. The file must be a regular, local file owned by you or root, with mode `0600` (on Windows, an access list limited to you, SYSTEM and Administrators). |
+
+Avoid `--token VALUE`: other users can read it from the process list and your shell keeps it in history. A leaked token can enroll new devices until it expires, is used up or is revoked in **Add device**. It can never sign in to the dashboard.
+
+## Install manually
+
+Use these steps for air-gapped hosts, configuration management or Windows. Download the agent for the host's OS and CPU from **Add device** and check its SHA-256 against the value shown there.
+
+<!-- tabs:os -->
+#### Linux
+
+```sh
+sudo install -m 0755 vectory /usr/local/bin/vectory
+sudo vectory install \
+  --vector-binary /usr/bin/vector \
+  --managed-config /etc/vectory/managed/vector.json \
+  --adopt
+sudo vectory enroll \
+  --server https://vectory.example.com:8443 \
+  --ca-file /etc/vectory/trust/server-ca.pem \
+  --name web-01
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin vectory
+sudo vectory service-install --service-user vectory
+sudo vectory service-start
+```
+
+#### macOS
+
+```sh
+sudo install -m 0755 vectory /usr/local/bin/vectory
+sudo vectory install \
+  --vector-binary "$(realpath "$(which vector)")" \
+  --managed-config "/Library/Application Support/Vectory/managed/vector.json" \
+  --adopt
+sudo vectory enroll \
+  --server https://vectory.example.com:8443 \
+  --ca-file "/Library/Application Support/VectoryTrust/server-ca.pem" \
+  --name mac-01
+sudo vectory service-install --service-user "$SERVICE_USER"
+sudo vectory service-start
+```
+
+Set `SERVICE_USER` to an existing unprivileged account first; the service runs as that account. `realpath` resolves Homebrew's link, because the agent refuses symlinked paths.
+
+#### Windows
 
 ```powershell
-vectory install --state-dir C:\ProgramData\Vectory --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\VectoryConfig\managed.json --adopt --allow-full-vector-config
-vectory enroll --state-dir C:\ProgramData\Vectory --server https://vectory.example.com:8443 --ca-file C:\secure\server-ca.pem --id edge-01 --token-file C:\secure\enrollment-token.txt
-vectory doctor --state-dir C:\ProgramData\Vectory
-vectory run --state-dir C:\ProgramData\Vectory
-```
-
-Use `--ca-file PATH` when the device needs additional trust for the server certificate. The wizard explains both choices under **Server certificate trust** and puts that choice explicitly in the command.
-
-### Trust the server certificate
-
-The agent checks the server's HTTPS certificate before sending its enrollment token. A **certificate authority (CA)** is the issuer trusted to identify that server. The certificate is public; its private key must stay with the issuer.
-
-- **Use system trust** when the device's operating system already trusts the agent listener's certificate, whether through a public CA or your organization's installed certificates. No extra file is needed; the generated command uses `--ca-file=` to explicitly select system trust.
-- **Provide a certificate file** when the device needs a private CA certificate it does not already trust. The file adds trust for agent connections without changing the operating system's trust store.
-
-If you manage the server yourself:
-
-1. Find the certificate authority that issued the HTTPS certificate for the **agent listener**. This may differ from the certificate used for the dashboard. The server deployment selects the listener certificate through `VECTORY_TLS_CERT`, or `VECTORY_TLS_CERT_FILE` in the supplied Compose setup.
-2. Obtain the public root or required CA chain in **PEM format** from that authority. If you used Vectory's development certificate script, use `ca.pem` in the script's output folder; its default is `.local/pki/ca.pem`. A deliberately self-signed listener can use its independently verified public certificate as the trust certificate.
-3. Transfer the public certificate to the device through your trusted server access or provisioning tool. Compare its certificate fingerprint with the issuer's trusted copy. For example, `openssl x509 -in ca.pem -noout -fingerprint -sha256` displays the first certificate's fingerprint; a hash of the PEM file itself is a different value.
-4. Save it at a stable full path the agent's account can read, such as `C:\ProgramData\VectoryTrust\server-ca.pem` on Windows or `/etc/vectory/trust/server-ca.pem` on Linux. These are example locations you create. Enter the **device's path**, not the server's path, in the wizard.
-
-On Windows, use a local drive path rather than a UNC share or mapped network drive. A service account may not have access to a network mount when the agent reconnects.
-
-Keep that file available for future connections and protect it from changes by untrusted users. The wizard does not upload, fetch or validate a certificate just because a path was entered. The separate `device-ca.pem` in server state is for enrolled device identities, not for trusting the HTTPS server. Copy only public certificates, never private key files.
-
-Use the listener's correct hostname and port. A bare IP address must match the certificate's IP identity. Successful access in your browser does not establish trust on a different device; the agent always verifies its own connection.
-
-On agents with enrollment preflight protection, omitting `--ca-file` preserves the saved trust path when retrying enrollment or recovery. Supply `--ca-file PATH` to deliberately repair that path, or the single argument `--ca-file=` to use system trust instead. A local refusal, such as an unreadable certificate or an already-enrolled identity, leaves the existing connection settings unchanged. See [enrollment troubleshooting](#/docs/troubleshooting#an-enrollment-command-fails) before retrying an interrupted request. Older development builds may share the same version label; use the verified artifact from your trusted release channel.
-
-### Configure restricted allowances
-
-A fresh restricted installation starts with no approved file roots, network destinations or listeners. If the workload needs any of them, prepare a protected policy file **on the device before running the install command**. In **Add device**, choose restricted mode and enter the file's device-local path under **Local allowance file**. The wizard adds `--capability-policy PATH` to the generated install command; it does not create, upload or verify the file. Leave the field empty for a new installation only if the workload needs no such allowances. On an existing agent, omitting the file preserves its current allowances. A local operator must approve the contents; the dashboard cannot grant or widen them.
-
-Supply a protected local JSON file through `--capability-policy`. Save it as **UTF-8 without a byte-order mark (BOM)**, with unique property names and no comments or trailing document:
-
-```json
-{
-  "allowed_file_roots": ["/var/lib/vectory-data", "/var/log/my-service"],
-  "allowed_network_hosts": ["logs.example.net:443"],
-  "allowed_listen_addresses": ["127.0.0.1:9598"]
-}
-```
-
-These are example resources to replace with those you approve. Do not allow the agent state directory as a pipeline file root. The policy is a configuration boundary, not a complete OS sandbox; use host permissions and network controls where stronger isolation is needed.
-
-On Windows, escape each backslash inside JSON strings. For example, a device-specific policy file could contain:
-
-```json
-{
-  "allowed_file_roots": ["C:\\ProgramData\\VectoryData"],
-  "allowed_network_hosts": ["logs.example.net:443"],
-  "allowed_listen_addresses": ["127.0.0.1:9598"]
-}
-```
-
-Use absolute file roots and exact `host:port` destinations and listeners. Valid Unicode resource names are supported. The file is an explicit replacement of all three allowance lists, so keep every resource the device still needs. An omitted list, `null` list or empty array supplies no entries for that list; `{}` removes all three. Saving allowances does not create the listed resource directories, grant operating-system permissions or enable full mode. For a rejected file, follow [capability-policy troubleshooting](#/docs/troubleshooting#a-capability-policy-file-is-rejected).
-
-### Update a device's local allowances
-
-When a restricted pipeline needs a new destination, file root or listener, a host operator must approve it locally. Stop the agent, edit the protected policy file, then run:
-
-```sh
-vectory install \
-  --state-dir /var/lib/vectory-agent \
-  --capability-policy /protected/capabilities.json
-```
-
-Check that the command succeeded before restarting through the same supervisor. This replaces all three allowance lists; it does not merge them with the previous file. Include every resource the device should still allow. An empty object removes all restricted allowances. Omitting `--capability-policy` preserves the existing lists.
-
-The update retains enrollment, adopted paths, pause state, verified recovery files and generation counters. A changed policy permits another attempt at a previously rejected configuration; success still requires validation and verified activation. It does not resume a paused device. The full/restricted mode stays unchanged unless you separately supply `--allow-full-vector-config`. In full mode, these restricted allowances do not constrain Vector.
-
-Before removing an allowance, prepare a compatible workload: the agent rechecks the existing managed configuration on startup and can refuse to start it when its resources are no longer allowed. The dashboard cannot grant local permissions or provision the referenced files and services.
-
-## Verify the first connection
-
-The **Add device** wizard watches for a new device identity with the name you entered. If you reopen the wizard after enrollment, use **Open existing device** to inspect that device instead of creating another token. A revoked identity needs the recovery flow on its device page. If the initial device check fails, use **Retry** before continuing.
-
-Keep `vectory run` running, then open the device in [**Devices**](/#/devices). Confirm its name, reported mode and recent heartbeat. A newly enrolled device is unmanaged until explicitly assigned a version; enrollment does not join groups or deploy a pipeline.
-
-On the host, inspect:
-
-```sh
-vectory status --state-dir /var/lib/vectory-agent --json
-vectory doctor --state-dir /var/lib/vectory-agent
-```
-
-`status` reports local state. `doctor` checks local adoption/runtime settings, including the Vector binary, managed path and configured metrics. It does not test the server connection or establish credential validity. If the device stays offline, separately check the agent endpoint, certificate trust, clock, network and daemon errors.
-
-After assigning a version, wait for **Applied** and check the reported version. **Downloaded** or **Validated** is not verified activation. See [apply states](#/docs/deployments#read-the-apply-states).
-
-## Keep the agent running
-
-The wizard offers **In this terminal** for setup and testing or **As an OS service** for unattended operation. The terminal command runs only while that terminal stays open. Closing it stops the agent and its supervised Vector process. `run --once` is diagnostic: it stops the owned Vector child when it exits. A control-plane outage does not stop an already running workload.
-
-For an unattended device, install and enroll first, then choose **As an OS service** and copy the platform-specific commands from the wizard. On Linux with an existing unprivileged `vectory` account, for example:
-
-```sh
-sudo ./vectory service-install --state-dir '/var/lib/vectory-agent' --service-user 'vectory'
-sudo ./vectory service-start
-```
-
-Linux's native service command requires systemd; if the host lacks it, run the agent under your existing supervisor. On macOS, the same flags register a launchd service using an existing unprivileged account. On Windows, use an elevated PowerShell and omit `--service-user`; the service uses `NT SERVICE\Vectory`:
-
-```powershell
-.\vectory.exe service-install --state-dir 'C:\ProgramData\Vectory'
+New-Item -ItemType Directory -Force 'C:\Program Files\Vectory' | Out-Null
+Copy-Item .\vectory.exe 'C:\Program Files\Vectory\vectory.exe'
+Set-Location 'C:\Program Files\Vectory'
+.\vectory.exe install `
+  --vector-binary 'C:\Program Files\Vector\bin\vector.exe' `
+  --managed-config 'C:\ProgramData\Vectory\managed\vector.json' `
+  --adopt
+.\vectory.exe enroll `
+  --server https://vectory.example.com:8443 `
+  --ca-file 'C:\ProgramData\VectoryTrust\server-ca.pem' `
+  --name win-01
+.\vectory.exe service-install
 .\vectory.exe service-start
 ```
 
-Keep the agent executable at a stable path the service can reach before registration; the service records that path. Provision the service identity's access to Vector, state, managed configuration, data and required credentials. Unix registration updates ownership of the agent state and managed file, so inspect existing permissions and account dependencies first. Use the same supervisor for later restarts. The CLI also provides `service-stop` and `service-uninstall`; they target the fixed Vectory service and do not accept `--state-dir` as a selector. Lifecycle commands accept flags only and reject unexpected positional arguments before changing local state. Use `vectory help` to inspect options.
+The Windows service runs as the virtual account `NT SERVICE\Vectory`.
+<!-- /tabs -->
 
-Service registration is not proof that the service started, that Vector is running or that a configuration applied. Check local service status, a fresh device heartbeat and the reported apply state. If either service command fails, inspect that host's service-manager diagnostics and preserve the current workload instead of assuming enrollment completed deployment.
+- Add `--allow-full-vector-config` to `install` only when you have [chosen full mode](#choose-restricted-or-full-mode).
+- Add `--capability-policy PATH` to `install` for [restricted allowances](#configure-restricted-allowances).
+- Pass `--ca-sha256` with the fingerprint from **Add device** instead of `--ca-file` to pin the CA, or `--ca-file=` when the operating system already trusts your server's certificate. See [Trust the server certificate](#trust-the-server-certificate).
+- Paths must be absolute and must not pass through a symlink. On macOS, avoid `/var` and `/tmp`, which are symlinks.
 
-Service installation, reboot, upgrade and recovery remain platform acceptance checks. Verify them on your actual hosts before relying on unattended operation; native Windows foreground evidence does not establish systemd, launchd or SCM behavior everywhere.
+The agent makes the managed configuration's folder private. Don't point it at a folder that holds unrelated configuration or secrets.
 
-## Update local agent settings
+## Trust the server certificate
 
-Local settings include the metrics URL, approved secret-file bindings, restricted resource allowances and full/restricted mode. They belong to the host operator; changing a dashboard policy does not grant them.
+The token proves the host may enroll; the certificate proves it is talking to your server. So the agent checks the server's certificate before it sends the enrollment token, and on every connection after that. No option in the commands, the installer or the agent turns the check off.
 
-1. Plan a maintenance window, then stop the agent through its existing supervisor. This also stops its supervised Vector process. A configuration-sync pause alone does not release the agent's operation lock.
-2. Use the installed agent's absolute state directory and an account authorized to maintain it. Keep the existing service identity and its access to the state, managed configuration and local resources. Follow the specific procedure for [metrics](#/docs/telemetry#enable-real-metrics), [secret bindings](#/docs/resources#keep-credentials-on-the-device), [restricted allowances](#/docs/installation#update-a-devices-local-allowances) or [configuration mode](#/docs/installation#change-an-existing-devices-mode).
-3. Check each command's result before restarting. A successful settings update preserves unrelated settings and existing access permissions. Repeating the same values leaves the settings file unchanged. It does not deploy a pipeline, grant access to a referenced resource or prove that the service can use it. Combined `install` options are validated together before settings are saved: an invalid metrics URL, policy or secret binding rejects the request without applying the other options.
-4. Restart through the same supervisor. Check fresh device reports and the affected behavior: successive metrics samples, a successful configuration attempt or the expected mode. Local and remote pause settings remain in effect.
+Choose how under **Advanced → How the host checks this server** on **Add device**. The commands carry exactly the matching option:
 
-If the agent reports that another operation is running, wait for the existing process to stop; do not delete the lock file. If it cannot preserve access permissions, keep the existing files and have the host administrator check the intended maintenance and service accounts. Do not remove access controls, delete state or re-enroll to force a local settings update. See [local settings troubleshooting](#/docs/troubleshooting#a-local-settings-update-is-refused).
+| Choice | Use it when | The commands get |
+| --- | --- | --- |
+| **Pin this server's CA** (the default for a private CA) | Typical self-hosting: the agent listener's certificate comes from your own CA. | `--ca-sha256` with the CA's fingerprint for setup. The install command writes the CA certificate to `vectory-ca.pem` in its private directory, and curl checks the download against it. Nothing to copy first. |
+| **A CA certificate file on the host** | Your team already distributes the CA. Put its certificate (PEM) on the host first. | `--ca-file PATH` for setup, and `curl --cacert PATH` for the download. |
+| **The host's trusted certificates** (the default for a publicly trusted certificate) | A public certificate, or a private CA the host's trust store already contains. | `--ca-file=` (empty: the host's store) for setup; curl uses the same store. |
 
-Omit options you want to preserve. A supplied policy file replaces all three allowance lists; it cannot enable full mode. Use `--allow-full-vector-config` or `--allow-full-vector-config=false` to deliberately choose mode. A supplied secret map replaces all bindings, and `{}` removes them all. Policy and binding files must be JSON objects with unique keys. An explicitly empty path or metrics URL is rejected. To deliberately remove the local scrape URL, use `configure-metrics --clear-metrics-url` or `install --clear-metrics-url`; do not combine it with `--metrics-url`. See [changing or removing a metrics endpoint](#/docs/telemetry#change-or-remove-a-metrics-endpoint) for examples and the difference from disabling collection remotely.
+If the server's private CA changes after you copy an install command, get a fresh command from **Add device**. An older installer still uses its embedded CA certificate for the download; passing a new `--ca-sha256` fingerprint alone does not replace that download certificate. If you already have the new CA certificate on the host, pass `--ca-file PATH` so both the download and setup use it.
 
-This validation behavior requires an agent build containing the combined-options fix. Older development builds can save an earlier option before rejecting a later one; a shared version label alone does not establish which build is installed. Verify the artifact through your trusted release channel. Even with the fix, a later disk or permission failure can leave settings saved while the separate retry-state update fails; the error identifies that outcome.
+On a manual install, pass the same options to `vectory setup` or `vectory enroll`: `--ca-sha256 HEX`, `--ca-file PATH`, or `--ca-file=`. Leaving them out keeps the trust an existing installation already saved.
 
-## Upgrade an existing agent
+A pinned fingerprint is checked before anything is sent. The agent accepts the server only if its chain contains a certificate with exactly that fingerprint, then verifies the host name and validity with that certificate as the only trusted root. It saves the certificate, so later connections are ordinary verified TLS. It never trusts a certificate on first use and never falls back to an unverified connection.
 
-Open the device in [**Devices**](/#/devices), then choose **Upgrade agent** beneath its reported agent version. The guide offers the release catalog's download for that device's exact OS and architecture. **Available download** does not mean a newer build or a verified upgrade: development builds can reuse the same version label, and the dashboard does not receive the running executable's checksum. Check the artifact identity and release notes through your trusted release channel.
+Add device shows the whole fingerprint, in rows of eight pairs, with **Copy**. If setup finds a different certificate, it prints both fingerprints in full and marks the first byte that differs, so you can compare them with the page. Without a pin, if the host doesn't trust the server's CA, setup prints the fingerprint of the certificate it was sent in the same rows of eight pairs, to compare; use the command from **Add device** rather than pinning what the host was sent.
 
-An agent upgrade is a host operation. It does not upgrade Vector, change configuration mode or restore revoked device access. Plan a maintenance window: stopping the agent also stops its supervised Vector workload.
+For `--ca-file`:
 
-1. Download the intended agent to a separate staging directory. Compare its SHA-256 checksum with a trusted release inventory before executing it. For signed releases, verify the signature with the independently established signing key. Do not replace the live executable yet.
-2. Record the existing executable path, absolute state directory, managed configuration path, Vector data directory and service account. Keep the existing service definition and environment. Stop the agent through its current supervisor; wait for both the agent and its owned Vector process to exit.
-3. Make a protected, consistent backup of the stopped agent's state, managed configuration, local credentials and Vector data. These files can contain private keys and resolved credentials. Retain the previous executable separately. An older executable is not a guarantee that newer state can be downgraded.
-4. Replace only the agent executable at the path already used by the supervisor. Preserve its ownership, execution permissions and service-account access. Keep the state directory, managed configuration, adopted Vector executable and local secret files in place. Do not re-enroll, purge state, reset counters or register a second service.
-5. With the new executable, inspect local state and diagnostics under the same account and with the same absolute state path. For example:
+- Use the CA that issued the **agent listener's** certificate. It can differ from the dashboard's. Ask whoever runs the server for it; with the development PKI (`scripts/preview.sh`), it is `.local/pki/ca.pem` on the server.
+- Copy only the public certificate, never a private key, over a channel you trust. Compare its fingerprint with **Add device** before you use it: `openssl x509 -in ca.pem -noout -fingerprint -sha256`.
+- Store it at a stable, absolute path the agent's service account can read. The agent reads it again on every connection. On Windows, use a local drive, not a network share.
+- The server's `device-ca.pem` signs device identities. It is not the certificate that proves the server's identity.
 
-   ```sh
-   /opt/vectory/vectory status --state-dir /var/lib/vectory-agent --json
-   /opt/vectory/vectory doctor --state-dir /var/lib/vectory-agent
-   ```
+Opening the dashboard in your browser doesn't make the device trust the server; each device verifies its own connection.
 
-   On Windows, use the existing paths, for example:
+## Configure restricted allowances
 
-   ```powershell
-   & 'C:\Program Files\Vectory\vectory.exe' status --state-dir C:\ProgramData\Vectory --json
-   & 'C:\Program Files\Vectory\vectory.exe' doctor --state-dir C:\ProgramData\Vectory
-   ```
+A new restricted installation can't read files, reach destinations or open listeners. List the ones your pipelines need in a JSON file, save it on the host, and pass it to `install` with `--capability-policy`:
 
-6. Restart through the existing service or continuous `run` command. Confirm the same device identity, a fresh heartbeat, the expected configuration mode and workload, and the reported pipeline generation. `doctor` checks local setup; it does not verify the server connection. Downloading a binary or seeing a version label does not establish activation.
-
-Local and remote pause settings remain in effect. Resume only the pause you intentionally set for maintenance. A previously rejected candidate may remain suppressed after the upgrade; after addressing its cause, use the documented stopped-agent `vectory retry --state-dir PATH` procedure to request a fresh attempt. Do not clear state to force it.
-
-If startup fails, keep the agent stopped and inspect local diagnostics. Follow that release's recovery or downgrade procedure before reverting its executable or data. Restoring an older state backup can roll back security and generation counters; do not do it as a routine upgrade shortcut. Native service, reboot and platform qualification remain separate from foreground upgrade checks.
-
-## Replace the adopted Vector binary
-
-Use this procedure when a host operator deliberately replaces the Vector executable or moves it to a new path. The agent pins the executable's SHA-256 and refuses changed bytes until they are explicitly approved. Repeating `install --adopt` does not approve a replacement. This release still requires **Vector 0.58.0**; replacing the executable does not enable another Vector version.
-
-Confirm that `vectory help` lists `re-adopt`. If it does not, first [upgrade the agent](#/docs/installation#upgrade-an-existing-agent) to a verified package that includes the command. A reused development version label alone does not establish support.
-
-1. Obtain the replacement through your trusted release channel. Verify the package or signature, then establish the exact SHA-256 of the verified **executable**, not its archive. Uppercase and lowercase hexadecimal are accepted. A checksum calculated from an unexplained replacement is not a trust decision.
-2. Stop the existing agent supervisor and wait for its owned Vector process to exit. Record the existing paths and service identity, retain the previously approved executable, and make a protected backup of the stopped state and workload. Use the same state directory throughout.
-3. Install the verified executable, retaining the service account's access. Run approval under the intended service identity and environment, or with equivalent provisioned resource permissions. An administrator's successful validation does not prove that the service account can run the workload:
-
-   ```sh
-   approved_vector_sha256='REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-   vectory re-adopt --state-dir /var/lib/vectory-agent --expected-sha256 "$approved_vector_sha256"
-   ```
-
-   Windows uses the same command:
-
-   ```powershell
-   $approvedVectorSha256 = 'REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-   vectory re-adopt --state-dir C:\ProgramData\Vectory --expected-sha256 $approvedVectorSha256
-   ```
-
-   The default is the existing Vector path. If you deliberately moved the executable, also pass `--vector-binary` with its new absolute path. Keep the managed configuration path unchanged. Add `--json` to inspect the approved path, digest, version and which existing configurations were validated.
-
-4. Inspect `doctor` and `status`, then restart through the existing supervisor. Confirm fresh device reports and actual workload health. Approval validates the replacement; it does not start Vector or verify event delivery.
-
-The command holds the agent's operation lock, checks the expected digest before executing the candidate, and validates the managed configuration and any last verified configuration with the existing capability policy. Native validation can access host resources or providers, so use the intended environment and resource permissions. A never-started installation with no managed file or recovery configuration can approve the binary, but explicitly reports that no existing workload was validated.
-
-Only the adopted binary path and digest change in settings. Existing identity, credentials, configuration mode, local allowances, secret bindings, managed content, recovery files, generation counters, pause settings and failed-attempt suppression remain intact. Settings ownership and access permissions are preserved. If a prior candidate remains suppressed after its cause is fixed, run the separate stopped-agent `vectory retry --state-dir PATH` command before restarting. Re-adoption does not resume a paused device.
-
-If validation fails, correct the reported host dependency or restore the previously approved executable before restarting. An unfinished apply or identity-recovery journal must complete using the previously approved binary first; preserve that journal. Do not hand-edit the stored digest, delete recovery state, re-enroll or reset counters to bypass a refusal. The command coordinates with agent operations; separately stop package managers or other supervisors that could replace or run the executable during maintenance.
-
-## Change an existing device's mode
-
-Stop the agent and retain its state directory. To enable full mode locally:
-
-```sh
-vectory install --state-dir /var/lib/vectory-agent --allow-full-vector-config
+```json
+{
+  "allowed_file_roots": ["/var/log/nginx", "/var/lib/vectory-data"],
+  "allowed_network_hosts": ["logs.example.net:443"],
+  "allowed_listen_addresses": ["0.0.0.0:1514"]
+}
 ```
 
-Restart afterward. Existing adoption paths, identity, generation counters and local pause remain intact; no re-enrollment is needed. Omitting the flag preserves the existing mode. Use `--allow-full-vector-config=false` to return to restricted mode, after preparing a restricted-compatible workload. Otherwise the current full-mode configuration can fail startup policy.
+- File roots are absolute paths. Destinations and listeners are exact `host:port` pairs.
+- The monitoring exporter that **Add monitoring** adds needs no entry. See [Enable real metrics](telemetry.md#enable-real-metrics).
+- Save the file as UTF-8 without a byte-order mark, with no comments and no duplicate names. On Windows, double each backslash: `"C:\\ProgramData\\VectoryData"`.
+- The file replaces all three lists. Keep every entry the device still needs; `{}` removes them all.
+- Allowances don't create folders, grant operating-system permissions or turn on full mode.
+- A file root can't be `/` or the root of a drive or share. It can't be, hold or lie inside the agent's state directory, the managed configuration directory or a file bound to a device secret either. `install`, `setup` and `vectory allow` refuse such a root, name what it overlaps and change nothing. See [A file root is refused](troubleshooting.md#a-file-root-is-refused).
 
-## Local maintenance and recovery
+**Add device** can put the file's path into the generated command, but it never uploads or checks the file. Only someone with access to the host can approve these resources. To add one later and keep the rest, run `sudo vectory allow` with the agent stopped, for example `sudo vectory allow --network logs.example.net:443`. See [Update restricted allowances](agents.md#update-restricted-allowances).
 
-Pause reconciliation before editing the managed file:
+> [!NOTE]
+> Allowances limit what a pipeline can ask Vector to do. They are not an operating-system sandbox, so keep using host permissions and network controls where you need stronger isolation.
 
-```sh
-vectory pause --state-dir /var/lib/vectory-agent
+## Keep the agent running
+
+The installer registers a service: systemd on Linux, launchd on macOS, and the Service Control Manager on Windows. The service starts at boot and restarts the agent if it stops.
+
+To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages, after Vector finishes its in-flight events. Closing the terminal does the same. Stopping or restarting the service drains Vector the same way.
+
+### What the systemd service can write
+
+`vectory setup` and `vectory service-install` register a unit with `ProtectSystem=full` and `ProtectHome=read-only`. The agent and the Vector it runs can't write to `/usr`, `/boot`, `/etc` or home directories, except the state directory and the managed configuration directory. Everywhere else they write wherever the service account's permissions allow. Tying the sandbox to the host's allowances and mode is planned work.
+
+The unit in the `.deb` and `.rpm` packages (`/usr/lib/systemd/system/vectory.service`) is stricter. `ProtectSystem=strict` makes the whole file system read-only and `ProtectHome=true` hides home directories, except `/var/lib/vectory-agent`, `/etc/vectory/managed` and `/var/lib/vector`. A unit that `vectory setup` registered in `/etc/systemd/system` takes precedence over it.
+
+Under the packaged unit, a pipeline that writes anywhere else fails with `Read-only file system (os error 30)`. That includes full mode and a restricted-mode file root from `vectory allow --file-root`. Add the folder to the service: run `sudo systemctl edit vectory.service`, add the lines below, then `sudo systemctl restart vectory.service`.
+
+```ini
+[Service]
+ReadWritePaths=/srv/logs
 ```
 
-The running workload continues. Work already committing may finish before the pause is acknowledged. When maintenance is complete:
+### Hosts without a service manager
 
-```sh
-vectory resume --state-dir /var/lib/vectory-agent
+Containers, WSL and Alpine (OpenRC) usually have no systemd for the agent. There, setup still installs and enrolls the agent and checks in once, then stops and says so:
+
+```text
+[!!] Service      No supported service manager here (systemd isn't running in this container), so the agent stopped after its first check-in.
+                  Keep it running with your own supervisor: /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent
 ```
 
-Resume clears only local pause. If remote pause is also set, it still applies. Once authorized sync resumes, local edits may be replaced by the assigned configuration. A dashboard resume cannot clear a host-owned pause.
+It exits with code 3, and **Add device** reads "*name* checked in once, but nothing keeps its agent running". Run that exact command under whatever keeps processes running on the host: the container's entrypoint, supervisord, or a service you write for OpenRC. The device shows as connected when it checks in again. Until then it goes offline after three check-in intervals.
 
-## Recover a device identity
+`--service none` says you'll run the agent yourself: setup registers nothing, prints the same command, and exits with code 0. `--create-user` has no effect without a service, and setup says so: the agent runs as whoever starts it.
 
-Use identity recovery when existing credentials cannot be renewed or are lost. A pipeline failure or an offline device alone does not require a replacement identity; first [diagnose the connection](#/docs/troubleshooting#a-device-is-offline-or-never-connects).
+- The service records the agent's path when you register it, so keep the binary at a stable location.
+- On Linux and macOS the service runs as an unprivileged account. Registration hands the state and managed-configuration folders to that account. Make sure it can also read your CA file and everything your pipelines use.
+- A running Vector keeps working when the server is unreachable. Stopping the agent stops its Vector.
+- On Linux the agent's own messages go to the journal: `journalctl -u vectory.service`. On macOS and Windows the service keeps no log of its own: `vectory status` shows the last check-in error, and `vectory logs` shows Vector's log.
 
-1. As an administrator, open the device, expand **Device recovery**, and choose **Authorize device recovery**. Review the machine name and replacement effects before creating a token.
-2. Save the one-time token privately. It expires in one hour. **Copy token** and **Download token file** keep the dialog open; **I've saved the token** removes its in-page copy and browser reminder. Closing the dialog keeps **Show token** available on the same page. Reloading, leaving or signing out erases that copy; the server cannot retrieve it.
-3. On that device, stop the installed agent and run the following command with the existing state directory. Enter the token at the hidden prompt:
+Registering a service doesn't prove it started. [Verify the first connection](#verify-the-first-connection) next.
+
+## Verify the first connection
+
+Open [**Devices**](/#/devices). The host appears with its name, mode and a recent check-in. It has no pipeline yet.
+
+On the host:
 
 ```sh
-vectory recover-enrollment --state-dir /var/lib/vectory-agent
+sudo vectory status
+sudo vectory doctor
 ```
 
-4. Restart the installed agent. Find the replacement identity in **Devices**, restore its groups and assign its pipeline deliberately. Check a fresh heartbeat and the actual applied configuration. Delete the private token file after recovery finishes.
+`status` shows the device's identity, server, last check-in, the pipeline and version it runs, and when its next check-in is due. `doctor` checks the local setup and the connection to your server, and prints a fix for each problem. If the device stays offline, see [A device is offline](troubleshooting.md#a-device-is-offline-or-never-connects).
 
-Creating a token does not disconnect the device. Using it revokes the old identity and creates a new device UUID; local workload files are retained, while groups and pipeline assignments must be restored. Stopping the agent also stops its supervised Vector process, so schedule the recovery accordingly.
+## Next steps
 
-If token creation is interrupted before the token reaches the host, use **Check request** on that same device page. It reads the exact authorization request. If the secret is unavailable, cancel the request, wait for **Recovery request cancelled**, then choose **Continue** before creating another token. A timeout or a result saying no token exists yet does not prove that the original request cannot arrive later. See [interrupted recovery authorization](#/docs/troubleshooting#a-device-recovery-request-is-interrupted).
-
-**Discard token copy** clears only the in-page secret and retains its request reminder. It does not revoke the token. Reminders contain no secret and stay scoped to the same account, device and browser profile. The flow requires a server with recovery-request support; an older server receives no new untracked creation request.
-
-If someone already started recovery on the host, inspect that outcome before cancelling or issuing another token. The agent retains the original token identity and pending recovery files. Cancellation can prevent an unfinished recovery from completing; it does not undo a completed replacement or restore the old identity. Do not substitute a new token, delete pending files or reset generation counters to bypass a refusal.
-
+- [Deploy your first pipeline](first-pipeline.md) to this device.
+- [Run and maintain agents](agents.md): upgrades, local settings, identity recovery and removal.
+- [Update agents from the dashboard](agent-updates.md): roll out a signed build to hosts that agreed to updates.

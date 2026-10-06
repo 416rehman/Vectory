@@ -44,6 +44,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Identity) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Pipeline request fixture".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

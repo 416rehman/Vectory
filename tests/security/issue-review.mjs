@@ -168,6 +168,7 @@ try {
         email: `${role}@example.test`,
         password,
         role,
+        current_password: password,
       },
       admin,
     );
@@ -184,11 +185,74 @@ try {
   const insert = db.prepare(
     "INSERT INTO records(kind,id,data,created_at) VALUES('issue',?,?,?)",
   );
+  const insertRecord = db.prepare(
+    "INSERT INTO records(kind,id,data,created_at) VALUES(?,?,?,?)",
+  );
+  // Pipeline and version records an issue can point at. The long name puts the
+  // marker beyond the projection's 240 character bound; the odd version numbers
+  // (a string, a number no client can represent) must never appear.
+  const longName = "N".repeat(260) + marker;
+  const contexts = [
+    ["Synthetic pipeline A", 1],
+    [longName, 2],
+    ["Synthetic pipeline C", "7"],
+    ["Synthetic pipeline D", 2 ** 60],
+  ].map(([name, number]) => {
+    const configuration = {
+      id: randomUUID(),
+      name,
+      description: marker,
+      revision: 1,
+      created_at: "2026-01-01T00:00:00Z",
+      config: { private: marker },
+      graph: { nodes: [{ id: marker }], edges: [] },
+    };
+    const version = {
+      id: randomUUID(),
+      configuration_id: configuration.id,
+      number,
+      created_at: "2026-01-01T00:00:00Z",
+      config: { private: marker },
+      artifact: marker,
+    };
+    insertRecord.run(
+      "configuration",
+      configuration.id,
+      JSON.stringify(configuration),
+      configuration.created_at,
+    );
+    insertRecord.run(
+      "version",
+      version.id,
+      JSON.stringify(version),
+      version.created_at,
+    );
+    return { configuration, version };
+  });
+  // Stored diagnostics come from agents. The first is well formed; each of the
+  // others breaks one rule, so the rendered projection must drop it whole.
+  const diagnostic = {
+    severity: "error",
+    code: "VALIDATION_FAILED",
+    message: "Unknown component type",
+    component_kind: "sink",
+    component_id: "out",
+    line: 12,
+    column: 3,
+    hint: "Check the sink type.",
+  };
+  const hostileDiagnostics = [
+    [{ ...diagnostic, private: marker }],
+    Array.from({ length: 11 }, () => diagnostic),
+    [{ ...diagnostic, message: "m".repeat(301) }],
+    [{ ...diagnostic, severity: marker }],
+    { private: marker },
+  ];
   const fixtures = [];
   function seed(
     index,
     disposition,
-    { revoked = true, missing = false, legacy = false, name } = {},
+    { revoked = true, missing = false, legacy = false, name, extra = {} } = {},
   ) {
     const deviceId = randomUUID();
     const deviceName =
@@ -220,8 +284,8 @@ try {
       device_id: deviceId,
       code: "APPLY_FAILED",
       stage: "apply",
-      message:
-        "Device reported an operational failure. Inspect the local agent status for sanitized diagnostics.",
+      // Older servers stored free text; it must never be shown.
+      message: marker + " stored free text",
       count: index + 1,
       first_seen: time,
       last_seen: time,
@@ -237,6 +301,7 @@ try {
       acknowledgement_reason:
         disposition === "acknowledged" ? reasonMarker : null,
       private_extension: marker + "x".repeat(32768),
+      ...extra,
     };
     if (legacy)
       for (const key of [
@@ -257,10 +322,58 @@ try {
     });
     return issue;
   }
-  for (let index = 0; index < 123; index++)
-    seed(index, ["open", "acknowledged", "resolved"][index % 3], {
+  const stamp = (index) =>
+    new Date(Date.UTC(2026, 0, 1, 0, Math.floor(index / 2))).toISOString();
+  // Inputs for the rendered and contextual fields. Every hostile value carries
+  // the marker, an oversized string or the wrong type, so a projection that
+  // echoed stored data would show it.
+  function extrasFor(index, disposition) {
+    const extra = {};
+    const bucket = index % 16;
+    if (bucket === 1) extra.diagnostics = [diagnostic];
+    if (bucket >= 2 && bucket <= 6)
+      extra.diagnostics = hostileDiagnostics[bucket - 2];
+    if (bucket === 7) {
+      extra.code = "VALIDATION_FAILED";
+      if (Math.floor(index / 16) % 2 === 1) extra.diagnostics = [diagnostic];
+    }
+    if (bucket === 8) extra.code = "C".repeat(300);
+    if (bucket === 9) extra.stage = "s".repeat(200);
+    if (bucket === 10) extra.reports = -3;
+    if (bucket === 11) extra.reports = 2 ** 60;
+    if (bucket === 12) extra.reports = index + 40;
+    if (bucket === 13) extra.deployment_id = "d".repeat(300);
+    if (bucket === 14) extra.deployment_id = { private: marker };
+    if (bucket === 15) extra.deployment_id = randomUUID();
+    if (index % 5 >= 1)
+      extra.desired_version_id = contexts[(index % 5) - 1].version.id;
+    if (index % 25 === 5) extra.desired_version_id = { private: marker };
+    if (index % 25 === 10) extra.desired_version_id = "v".repeat(200);
+    if (disposition === "resolved") {
+      const variant = Math.floor(index / 3) % 5;
+      extra.resolved_reason = [
+        "verified",
+        "unassigned",
+        marker,
+        undefined,
+        "unassigned",
+      ][variant];
+      extra.resolved_at =
+        variant === 4 ? "x".repeat(65536) + marker : stamp(index);
+    } else if (index % 4 === 0) {
+      // A stale resolution on an unresolved issue must not read as one.
+      extra.resolved_reason = "unassigned";
+      extra.resolved_at = stamp(index);
+    }
+    return extra;
+  }
+  for (let index = 0; index < 123; index++) {
+    const disposition = ["open", "acknowledged", "resolved"][index % 3];
+    seed(index, disposition, {
       legacy: index === 0,
+      extra: extrasFor(index, disposition),
     });
+  }
   const literal = seed(123, "open", { name: "Literal %_[]' Caf\u00e9" });
   const old = seed(124, "open", { name: "Same-name device#retired-synthetic" });
   const replacement = seed(125, "open", {
@@ -313,6 +426,9 @@ try {
         "SELECT id,revoked,desired_generation,policy_generation,desired_version_id,assignment_id,policy_assignment_id,policy FROM devices ORDER BY id",
       )
       .all();
+  // Every field an issue may expose. `title`, `message` and `diagnostics` are
+  // rendered from the failure code and validated diagnostics, never from stored
+  // text; the rest are bounded copies of stored fields or joined context.
   const issueKeys = [
     "id",
     "device_id",
@@ -320,12 +436,21 @@ try {
     "device_revoked",
     "code",
     "stage",
+    "title",
     "message",
+    "diagnostics",
     "count",
+    "reports",
     "first_seen",
     "last_seen",
     "desired_version_id",
+    "version_number",
+    "configuration_id",
+    "configuration_name",
+    "deployment_id",
     "resolved",
+    "resolved_reason",
+    "resolved_at",
     "revision",
     "acknowledged",
     "acknowledged_at",
@@ -336,6 +461,23 @@ try {
   ].sort();
   writeStored(fixtures[3].issue, { first_seen: { private: marker } });
   writeStored(fixtures[4].issue, { first_seen: "x".repeat(65536) + marker });
+  const characters = (value) => [...value].length;
+  const bounded = (value, max) =>
+    value === null || (typeof value === "string" && characters(value) <= max);
+  const timestampShape = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+  const diagnosticKeys = new Set([
+    "severity",
+    "code",
+    "component_kind",
+    "component_id",
+    "route_output",
+    "field",
+    "line",
+    "column",
+    "reason",
+    "message",
+    "hint",
+  ]);
   function projection(issue) {
     assert.deepEqual(Object.keys(issue).sort(), issueKeys);
     assert(!JSON.stringify(issue).includes(marker));
@@ -345,9 +487,57 @@ try {
       assert(issue[field] === null || typeof issue[field] === "string");
       if (issue[field] !== null) assert(issue[field].length <= 64);
     }
-    assert.equal(
-      issue.message,
-      "Device reported an operational failure. Inspect the local agent status for sanitized diagnostics.",
+    // Identity and context copy bounded text or null, never another type.
+    assert(typeof issue.code === "string" && characters(issue.code) <= 128);
+    assert(typeof issue.stage === "string" && characters(issue.stage) <= 64);
+    for (const [field, max] of [
+      ["desired_version_id", 128],
+      ["configuration_id", 128],
+      ["configuration_name", 240],
+      ["deployment_id", 128],
+    ])
+      assert(bounded(issue[field], max), field);
+    assert(
+      issue.version_number === null ||
+        (Number.isSafeInteger(issue.version_number) &&
+          issue.version_number >= 1),
+    );
+    assert(Number.isSafeInteger(issue.count) && issue.count >= 0);
+    assert(Number.isSafeInteger(issue.reports) && issue.reports >= 0);
+    // The plain-language reason is rendered, short and never stored text.
+    assert(
+      typeof issue.title === "string" &&
+        issue.title.length > 0 &&
+        characters(issue.title) <= 80,
+    );
+    assert(
+      typeof issue.message === "string" &&
+        issue.message.length > 0 &&
+        characters(issue.message) <= 500,
+    );
+    assert(Array.isArray(issue.diagnostics) && issue.diagnostics.length <= 10);
+    assert(Buffer.byteLength(JSON.stringify(issue.diagnostics)) <= 6000);
+    for (const item of issue.diagnostics) {
+      assert(item && typeof item === "object" && !Array.isArray(item));
+      assert(Buffer.byteLength(JSON.stringify(item)) <= 512);
+      assert(Object.keys(item).every((key) => diagnosticKeys.has(key)));
+      assert(["error", "warning"].includes(item.severity));
+      assert(typeof item.code === "string" && characters(item.code) <= 48);
+      assert(
+        typeof item.message === "string" &&
+          characters(item.message) >= 1 &&
+          characters(item.message) <= 300,
+      );
+      if ("hint" in item) assert(characters(item.hint) <= 200);
+    }
+    // A resolution names a verified recovery or a removed assignment, nothing else.
+    if (issue.resolved)
+      assert(["verified", "unassigned"].includes(issue.resolved_reason));
+    else assert.equal(issue.resolved_reason, null);
+    assert(
+      issue.resolved_at === null ||
+        (timestampShape.test(issue.resolved_at) &&
+          issue.resolved_at.length <= 64),
     );
   }
   await check(
@@ -380,6 +570,131 @@ try {
       assert.equal((await detail(missing)).device_revoked, null);
       assert.equal((await detail(missing)).device_name, null);
       await call("GET", `/issues/${"0".repeat(64)}`, undefined, admin, 404);
+    },
+  );
+  const firstCharacters = (value, max) => [...value].slice(0, max).join("");
+  await check(
+    "titles, reasons and context are rendered from validated inputs and bounded, whatever an older server stored",
+    async () => {
+      const seen = new Map();
+      for (let page = 1; page <= 3; page++) {
+        const body = (
+          await call(
+            "GET",
+            route({ state: "all", page, page_size: 50 }),
+            undefined,
+            admin,
+          )
+        ).body;
+        for (const item of body.items) seen.set(item.id, item);
+      }
+      assert.equal(seen.size, fixtures.length);
+      const rendered = new Map();
+      let joined = 0,
+        oversized = 0,
+        dropped = 0,
+        fallbacks = 0;
+      for (const { issue: stored } of fixtures) {
+        const item = seen.get(stored.id);
+        projection(item);
+        assert.equal(item.code, firstCharacters(stored.code, 128));
+        assert.equal(item.stage, firstCharacters(stored.stage, 64));
+        const version =
+          typeof stored.desired_version_id === "string"
+            ? firstCharacters(stored.desired_version_id, 128)
+            : null;
+        assert.equal(item.desired_version_id, version);
+        const context = contexts.find((entry) => entry.version.id === version);
+        // Only a real version record resolves to a number, pipeline and name.
+        assert.equal(
+          item.version_number,
+          context &&
+            Number.isSafeInteger(context.version.number) &&
+            context.version.number >= 1
+            ? context.version.number
+            : null,
+        );
+        assert.equal(
+          item.configuration_id,
+          context ? context.configuration.id : null,
+        );
+        assert.equal(
+          item.configuration_name,
+          context ? firstCharacters(context.configuration.name, 240) : null,
+        );
+        if (context) joined++;
+        if (context?.configuration.name === longName) {
+          assert.equal(characters(item.configuration_name), 240);
+          oversized++;
+        }
+        assert.equal(
+          item.deployment_id,
+          typeof stored.deployment_id === "string"
+            ? firstCharacters(stored.deployment_id, 128)
+            : null,
+        );
+        const count =
+          Number.isSafeInteger(stored.count) && stored.count >= 0
+            ? stored.count
+            : 0;
+        assert.equal(item.count, count);
+        // A report count that cannot be trusted falls back to the attempts.
+        assert.equal(
+          item.reports,
+          Number.isSafeInteger(stored.reports) && stored.reports >= 0
+            ? stored.reports
+            : count,
+        );
+        assert.equal(
+          item.resolved_reason,
+          stored.resolved
+            ? ["verified", "unassigned"].includes(stored.resolved_reason)
+              ? stored.resolved_reason
+              : "verified"
+            : null,
+        );
+        assert.equal(
+          item.resolved_at,
+          typeof stored.resolved_at === "string" &&
+            stored.resolved_at.length <= 64
+            ? stored.resolved_at
+            : null,
+        );
+        // Diagnostics survive only when every field passes validation.
+        const valid =
+          JSON.stringify(stored.diagnostics) === JSON.stringify([diagnostic]);
+        assert.deepEqual(item.diagnostics, valid ? [diagnostic] : []);
+        if (!valid && stored.diagnostics !== undefined) dropped++;
+        // Title and message are a function of the code and diagnostics alone.
+        const known = stored.code === "VALIDATION_FAILED";
+        const key = `${known ? "known" : "default"}:${valid ? "diagnostic" : "fallback"}`;
+        const seenBefore = rendered.get(key);
+        if (!seenBefore) rendered.set(key, [item.title, item.message]);
+        else assert.deepEqual([item.title, item.message], seenBefore, key);
+        if (valid) {
+          assert(item.message.startsWith(diagnostic.message));
+          assert(item.message.includes("line 12, column 3"));
+        } else fallbacks++;
+      }
+      // The fixtures really exercised each path, not just their absence.
+      assert(joined > 50 && oversized > 10 && dropped > 20 && fallbacks > 60);
+      // Rendering never depends on which older server wrote the record.
+      assert.notEqual(
+        rendered.get("known:fallback")[0],
+        rendered.get("default:fallback")[0],
+      );
+      assert.equal(
+        rendered.get("known:diagnostic")[0],
+        rendered.get("known:fallback")[0],
+      );
+      assert.equal(
+        rendered.get("default:diagnostic")[0],
+        rendered.get("default:fallback")[0],
+      );
+      assert.notEqual(
+        rendered.get("default:diagnostic")[1],
+        rendered.get("default:fallback")[1],
+      );
     },
   );
   await check(
@@ -436,6 +751,154 @@ try {
         overview.issues_open,
         fixtures.filter((x) => x.disposition === "open").length,
       );
+    },
+  );
+  await check(
+    "grouped issues bound each device list and expose only validated, rendered fields",
+    async () => {
+      // Sixty more open issues on live devices with no version push one group
+      // past the 50-device list bound.
+      for (let index = 300; index < 360; index++)
+        seed(index, "open", { revoked: false });
+      const groupKeys = [
+        "key",
+        "code",
+        "title",
+        "message",
+        "diagnostics",
+        "version_id",
+        "version_number",
+        "configuration_id",
+        "configuration_name",
+        "deployment_ids",
+        "device_count",
+        "issue_count",
+        "attempts",
+        "reports",
+        "first_seen",
+        "last_seen",
+        "devices",
+      ].sort();
+      const query = (extra) => "/issues/groups?" + new URLSearchParams(extra);
+      await call("GET", "/issues/groups", undefined, undefined, 401);
+      for (const session of Object.values(roles))
+        await call("GET", query({ state: "all" }), undefined, session);
+      const groups = [];
+      let total = 0;
+      for (let page = 1; page <= 4; page++) {
+        const body = (
+          await call(
+            "GET",
+            query({ state: "all", page, page_size: 50 }),
+            undefined,
+            admin,
+          )
+        ).body;
+        assert.deepEqual(Object.keys(body).sort(), [
+          "items",
+          "page",
+          "page_size",
+          "total",
+        ]);
+        assert.equal(body.page, page);
+        assert.equal(body.page_size, 50);
+        assert(body.items.length <= 50);
+        total = body.total;
+        groups.push(...body.items);
+        evidence.largest_50_group_page_bytes = Math.max(
+          evidence.largest_50_group_page_bytes || 0,
+          Buffer.byteLength(JSON.stringify(body)),
+        );
+        if (groups.length >= total) break;
+      }
+      assert.equal(groups.length, total);
+      const expected = new Map();
+      for (const { issue: stored } of fixtures) {
+        const version =
+          typeof stored.desired_version_id === "string"
+            ? firstCharacters(stored.desired_version_id, 128)
+            : "";
+        const key = `${version}\0${firstCharacters(stored.code, 128)}`;
+        expected.set(key, [...(expected.get(key) || []), stored]);
+      }
+      assert.equal(total, expected.size);
+      const counted = (value) =>
+        Number.isSafeInteger(value) && value >= 0 ? value : 0;
+      let capped = 0;
+      for (const group of groups) {
+        assert.deepEqual(Object.keys(group).sort(), groupKeys);
+        assert(!JSON.stringify(group).includes(marker));
+        assert(/^[0-9a-f]{64}$/.test(group.key));
+        assert(typeof group.code === "string" && characters(group.code) <= 128);
+        assert(bounded(group.version_id, 128) && group.version_id !== "");
+        const members = expected.get(
+          `${group.version_id || ""}\0${group.code}`,
+        );
+        assert(members, "Every group must come from stored issues");
+        // Counts describe the whole group even when the device list is capped.
+        assert.equal(group.issue_count, members.length);
+        assert.equal(
+          group.device_count,
+          new Set(members.map((member) => member.device_id)).size,
+        );
+        assert.equal(
+          group.attempts,
+          members.reduce((sum, member) => sum + counted(member.count), 0),
+        );
+        assert.equal(
+          group.reports,
+          members.reduce(
+            (sum, member) =>
+              sum +
+              (Number.isSafeInteger(member.reports) && member.reports >= 0
+                ? member.reports
+                : counted(member.count)),
+            0,
+          ),
+        );
+        assert.equal(group.devices.length, Math.min(50, members.length));
+        if (members.length > 50) capped++;
+        for (const device of group.devices) {
+          projection(device);
+          assert.equal(device.code, group.code);
+          assert.equal(device.desired_version_id || "", group.version_id || "");
+        }
+        assert(
+          group.deployment_ids.length <= 50 &&
+            group.deployment_ids.every(
+              (id) => typeof id === "string" && characters(id) <= 128,
+            ),
+        );
+        assert.deepEqual(
+          group.deployment_ids,
+          [...new Set(group.deployment_ids)].sort(),
+        );
+        // The group reads like its newest device: same rendered reason.
+        const first = group.devices[0];
+        assert.equal(group.title, first.title);
+        assert.equal(group.message, first.message);
+        assert.deepEqual(group.diagnostics, first.diagnostics);
+        assert.equal(group.version_number, first.version_number);
+        assert.equal(group.configuration_id, first.configuration_id);
+        assert.equal(group.configuration_name, first.configuration_name);
+        for (const field of ["first_seen", "last_seen"])
+          assert(
+            group[field] === null ||
+              (timestampShape.test(group[field]) && group[field].length <= 64),
+          );
+      }
+      assert.equal(capped, 1, "One group must exceed the device list bound");
+      for (const bad of [
+        "page=0",
+        "page_size=51",
+        "state=OPEN",
+        "device_id=" + literal.device_id,
+        "include=private",
+        "page=1&page=2",
+        "search=%GG",
+        "search=" + "x".repeat(201),
+      ])
+        await call("GET", "/issues/groups?" + bad, undefined, admin, 400);
     },
   );
   await check(
@@ -511,7 +974,7 @@ try {
     },
   );
   await check(
-    "only live operators or administrators with CSRF can act on unresolved revoked identities",
+    "only live operators or administrators with CSRF can act on unresolved issues whose device record exists",
     async () => {
       for (const verb of ["acknowledge", "reopen"]) {
         await action(old, verb, 1, "Reviewed", undefined, 401, {
@@ -524,19 +987,22 @@ try {
           "x-csrf-token": "invalid",
         });
       }
-      for (const issue of [active, replacement, missing, resolved])
+      // A device record that is gone or an issue that recovered cannot be acted on.
+      for (const issue of [missing, resolved])
         await action(issue, "acknowledge", 1, "Reviewed", admin, 409);
       await action(old, "reopen", 1, "Reviewed", admin, 409);
-      for (const reason of [
-        "",
-        " \t\r\n",
+      const badNotes = [
         "bad\u0000reason",
         "x".repeat(1001),
         "\u{1f600}".repeat(1001),
         false,
         {},
-      ])
+      ];
+      for (const reason of badNotes)
         await action(old, "acknowledge", 1, reason, admin, 400);
+      // Reopening must say why; an acknowledgement note is optional.
+      for (const reason of ["", " \t\r\n", null, ...badNotes])
+        await action(old, "reopen", 1, reason, admin, 400);
       for (const revision of [
         0,
         -1,
@@ -568,6 +1034,57 @@ try {
       const same = await detail(old);
       assert.equal(same.acknowledged, false);
       assert.equal(same.revision, 1);
+    },
+  );
+  await check(
+    "an issue on a live device is acknowledged without a note and reopened only with one",
+    async () => {
+      const before = await detail(active);
+      assert.equal(before.device_revoked, false);
+      const audits = auditSnapshot();
+      const acknowledged = (
+        await action(
+          active,
+          "acknowledge",
+          before.revision,
+          null,
+          roles.operator,
+        )
+      ).body;
+      projection(acknowledged);
+      assert.equal(acknowledged.disposition, "acknowledged");
+      assert.equal(acknowledged.acknowledgement_reason, null);
+      assert.equal(acknowledged.revision, before.revision + 1);
+      assert.equal(auditSnapshot().length, audits.length + 1);
+      const event = JSON.parse(auditSnapshot().at(-1).data);
+      assert.equal(event.target, active.id);
+      assert.equal(event.reason, null);
+      // Reopening states why; the note is trimmed like any other.
+      await action(
+        active,
+        "reopen",
+        acknowledged.revision,
+        "  ",
+        roles.operator,
+        400,
+      );
+      assert.equal(auditSnapshot().length, audits.length + 1);
+      const reopened = (
+        await action(
+          active,
+          "reopen",
+          acknowledged.revision,
+          "  Needs another look  ",
+          roles.operator,
+        )
+      ).body;
+      projection(reopened);
+      assert.equal(reopened.disposition, "open");
+      assert.equal(reopened.acknowledgement_reason, null);
+      assert.equal(
+        JSON.parse(auditSnapshot().at(-1).data).reason,
+        "Needs another look",
+      );
     },
   );
   await check(

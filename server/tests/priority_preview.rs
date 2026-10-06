@@ -22,6 +22,7 @@ async fn fixture(count: usize) -> (tempfile::TempDir, State, Vec<String>) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Isolated priority preview".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -233,7 +234,7 @@ async fn preview_reports_pending_canary_winner_instead_of_current_policy_binding
     assert!(preview["warnings"].as_array().unwrap().iter().any(|w| {
         w.as_str()
             .unwrap()
-            .contains("may change before scheduled activation")
+            .contains("checked again when the schedule starts")
     }));
     assert_eq!(snapshot(&mut tx).await, before);
     rollout::resolve(&mut tx).await.unwrap();
@@ -389,4 +390,30 @@ async fn preview_http_exposes_policy_outcome_only_after_authentication_and_csrf(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fleet[0]["policy_assignment"]["id"], existing["id"]);
     assert!(fleet[0].get("assignment").is_none());
+}
+
+#[tokio::test]
+async fn a_preview_names_the_pipeline_it_deploys() {
+    let (_temp, s, ids) = fixture(1).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    let preview = rollout::preview(&mut tx, &configuration(&ids, 100, VERSION_A))
+        .await
+        .unwrap();
+    // The fixture's version has no pipeline record: nothing is invented.
+    assert_eq!(preview["configuration_name"], Value::Null);
+    db::insert(
+        &mut tx,
+        "configuration",
+        &json!({"id":"00000000-0000-4000-8000-000000000200","name":"eu-edge-syslog","created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    let preview = rollout::preview(&mut tx, &configuration(&ids, 100, VERSION_A))
+        .await
+        .unwrap();
+    assert_eq!(preview["configuration_name"], "eu-edge-syslog");
+    let settings = rollout::preview(&mut tx, &policy(&ids, 100, false))
+        .await
+        .unwrap();
+    assert_eq!(settings["configuration_name"], Value::Null);
 }

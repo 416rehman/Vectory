@@ -44,17 +44,9 @@ function StateDetail({
               state.version_number === null) && (
               <code>Version {state.version_id}</code>
             )}
-          {resource === "configuration" && state.assignment_id && (
-            <span>
-              {state.assignment_name || "Assignment"}
-              {!state.assignment_name && <code>{state.assignment_id}</code>}
-            </span>
+          {resource === "configuration" && state.assignment_name && (
+            <span>{state.assignment_name}</span>
           )}
-          {resource === "policy" &&
-            state.assignment_id &&
-            !state.assignment_name && (
-              <code>Assignment {state.assignment_id}</code>
-            )}
           {resource === "policy" && state.policy && (
             <span>
               Heartbeat every {state.policy.heartbeat_seconds}s · Telemetry{" "}
@@ -407,8 +399,10 @@ export default function AssignmentRemoval({
                   filter: { placeholder: "Find a reviewed device" },
                   cell: (device) => (
                     <span className="assignment-removal-device">
-                      <strong>{device.device_name || "Unnamed device"}</strong>
-                      <code>{device.device_id}</code>
+                      <strong title={device.device_id}>
+                        {device.device_name ||
+                          `Unnamed device ${device.device_id.slice(0, 8)}`}
+                      </strong>
                     </span>
                   ),
                 },
@@ -426,7 +420,8 @@ export default function AssignmentRemoval({
                 {
                   id: "after",
                   header: "After removal",
-                  value: removalEffectLabel,
+                  value: (device) =>
+                    removalEffectLabel(device, preview.resource),
                   cell: (device) => (
                     <div className="assignment-removal-effect">
                       <div className="assignment-removal-mobile-current">
@@ -439,21 +434,39 @@ export default function AssignmentRemoval({
                       <span className="assignment-removal-mobile-after">
                         After removal
                       </span>
-                      <strong>{removalEffectLabel(device)}</strong>
-                      <StateDetail
-                        state={device.after}
-                        resource={preview.resource}
-                      />
+                      <strong>
+                        {removalEffectLabel(device, preview.resource)}
+                      </strong>
+                      {/* The label names a pipeline version; settings and
+                          an unnamed version say more, and a switch names the
+                          assignment it switches to. */}
+                      {preview.resource === "policy" ||
+                      (device.after?.version_id &&
+                        (device.after.configuration_name === null ||
+                          device.after.version_number === null)) ? (
+                        <StateDetail
+                          state={device.after}
+                          resource={preview.resource}
+                        />
+                      ) : (
+                        device.effect === "fallback" &&
+                        device.after?.assignment_name && (
+                          <div className="assignment-removal-state">
+                            <span>{device.after.assignment_name}</span>
+                          </div>
+                        )
+                      )}
+                      {device.effect === "not_targeted" && (
+                        <p>No longer targeted by this assignment.</p>
+                      )}
                       {device.effect === "retained_pending" &&
                         device.pending_assignment_id && (
                           <p>
-                            Waiting for rollout:{" "}
-                            {device.pending_assignment_name || "Assignment"}
-                            {!device.pending_assignment_name && (
-                              <code>{device.pending_assignment_id}</code>
-                            )}
-                            . The next assignment has not been released to this
-                            device.
+                            {device.pending_assignment_name
+                              ? `Waiting for ${device.pending_assignment_name}. `
+                              : ""}
+                            The next assignment hasn't been released to this
+                            device yet.
                           </p>
                         )}
                     </div>

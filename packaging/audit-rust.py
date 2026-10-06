@@ -35,7 +35,8 @@ def main():
                 inactive.append({**finding, 'reason': 'Optional SQLx dependency is present in Cargo.lock but absent from the selected feature dependency graph for all targets.', 'proof_command': 'cargo tree --locked --manifest-path server/Cargo.toml --target all --invert rsa --prefix none', 'proof_stdout': tree.stdout, 'proof_stderr': tree.stderr})
                 continue
         active.append(finding)
-    warnings = [{'kind': kind, 'id': item['advisory']['id'], 'package': item['package']['name']} for kind, items in audit.get('warnings', {}).items() for item in items]
+    # A yanked release carries no advisory: name it by package and version.
+    warnings = [{'kind': kind, 'id': (item.get('advisory') or {}).get('id') or f"{kind} {item['package']['name']} {item['package']['version']}", 'package': item['package']['name']} for kind, items in audit.get('warnings', {}).items() for item in items]
     result = {'raw_audit': audit, 'active_or_unresolved_findings': active, 'proven_inactive_lockfile_findings': inactive, 'warnings_requiring_review': warnings, 'gate_passed': not active and not warnings}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')

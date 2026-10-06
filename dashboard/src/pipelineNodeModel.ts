@@ -1,5 +1,5 @@
 import type { Config } from "./api";
-import { catalog, outputPorts, type Kind } from "./catalog";
+import { catalog, displayLabel, outputPorts, type Kind } from "./catalog";
 
 export const PIPELINE_NODE_WIDTH = 300;
 // Heights include the outer border; primary handles align with the header divider.
@@ -21,37 +21,6 @@ export type ComponentContext = {
 const labels = new Map(
   catalog.map((entry) => [`${entry.kind}:${entry.type}`, entry.label]),
 );
-const titles: Record<string, string> = {
-  aws_s3: "Amazon S3",
-  aws_cloudwatch_logs: "CloudWatch Logs",
-  aws_cloudwatch_metrics: "CloudWatch Metrics",
-  aws_kinesis_firehose: "Amazon Data Firehose",
-  aws_kinesis_streams: "Amazon Kinesis",
-  datadog_agent: "Datadog Agent",
-  datadog_logs: "Datadog Logs",
-  datadog_metrics: "Datadog Metrics",
-  datadog_traces: "Datadog Traces",
-  datadog_events: "Datadog Events",
-  gcp_cloud_storage: "Google Cloud Storage",
-  gcp_pubsub: "Google Cloud Pub/Sub",
-  kafka: "Apache Kafka",
-  opentelemetry: "OpenTelemetry",
-  kubernetes_logs: "Kubernetes Logs",
-  docker_logs: "Docker Logs",
-  remap: "Remap",
-  route: "Route",
-  exclusive_route: "Exclusive route",
-  sample: "Sample",
-  filter: "Filter",
-  http_server: "HTTP Server",
-  http_client: "HTTP Client",
-  splunk_hec_logs: "Splunk HEC Logs",
-  splunk_hec_metrics: "Splunk HEC Metrics",
-  file: "Log files",
-  demo_logs: "Demo logs",
-  console: "Console",
-  blackhole: "Discard events",
-};
 export function componentTitle(
   type: string,
   kind: Kind,
@@ -59,13 +28,7 @@ export function componentTitle(
 ): string {
   if (type === "memory" && context.enrichmentTable)
     return context.implicitSource ? "Memory table export" : "Memory table";
-  if (type === "file" && kind === "sinks") return "File output";
-  return (
-    (Object.hasOwn(titles, type) ? titles[type] : undefined) ||
-    labels.get(`${kind}:${type}`) ||
-    type ||
-    "Component"
-  );
+  return labels.get(`${kind}:${type}`) || displayLabel(type, kind);
 }
 function text(value: unknown): string | undefined {
   if (typeof value !== "string") return;
@@ -133,13 +96,17 @@ function firstCode(value: unknown): string | undefined {
     .find((line) => line.trim() && !line.trim().startsWith("#"));
   return line?.trim();
 }
-function codec(c: Config): string | undefined {
-  const value =
-    text(object(c.encoding).codec) ||
-    (typeof c.encoding === "string" ? text(c.encoding) : undefined) ||
-    text(object(c.decoding).codec);
+/**
+ * The format a step reads or writes, as the option that holds it: a source
+ * decodes (`decoding.codec`), a sink encodes (`encoding.codec`). Vector 0.58
+ * has no plain-string `encoding` on either, and ignores an `encoding` on a
+ * source, so a card never reads one as a format.
+ */
+function codec(c: Config, kind: Kind): string | undefined {
+  const reads = kind === "sources";
+  const value = text(object(reads ? c.decoding : c.encoding).codec);
   return value
-    ? `${value.replaceAll("_", " ").toUpperCase()} encoding`
+    ? `${value.replaceAll("_", " ").toUpperCase()} ${reads ? "decoding" : "encoding"}`
     : undefined;
 }
 function interval(value: unknown, suffix = "s"): string | undefined {
@@ -162,7 +129,7 @@ export function componentSummary(
   const address = endpointSummary(c.address) || text(c.path);
   const mode = text(c.mode)?.toUpperCase();
   const region = text(c.region);
-  const format = codec(c);
+  const format = codec(c, kind);
   if (type === "memory" && context.enrichmentTable)
     return {
       primary: context.implicitSource
@@ -300,17 +267,27 @@ export function componentSummary(
         primary: text(c.dataset) || "Set a dataset",
         secondary: endpoint,
       };
-    case "opentelemetry":
-      return kind === "sources"
-        ? {
-            primary: text(object(c.grpc).address)
-              ? `gRPC ${text(object(c.grpc).address)}`
-              : "Configure the gRPC listener",
-            secondary: text(object(c.http).address)
-              ? `HTTP ${text(object(c.http).address)}`
-              : undefined,
-          }
-        : { primary: endpoint || "Set an OTLP endpoint", secondary: format };
+    case "opentelemetry": {
+      if (kind === "sources")
+        return {
+          primary: text(object(c.grpc).address)
+            ? `gRPC ${text(object(c.grpc).address)}`
+            : "Configure the gRPC listener",
+          secondary: text(object(c.http).address)
+            ? `HTTP ${text(object(c.http).address)}`
+            : undefined,
+        };
+      // The sink's settings are its protocol's: an HTTP sink, so the URL and
+      // the encoding sit under `protocol`.
+      const protocol = object(c.protocol);
+      return {
+        primary: endpointSummary(protocol.uri) || "Set an OTLP endpoint",
+        secondary: join(
+          text(protocol.method)?.toUpperCase(),
+          codec(protocol, kind),
+        ),
+      };
+    }
     case "datadog_agent":
       return {
         primary: address

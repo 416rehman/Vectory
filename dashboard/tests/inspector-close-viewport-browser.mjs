@@ -137,6 +137,7 @@ async function load({
   await context.addInitScript((collapsed) => {
     localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
     localStorage.setItem("vectory-theme", "light");
+    localStorage.setItem("vectory.editor.auto-check", "off");
   }, collapsed);
   await context.route("**/*", async (route) => {
     const request = route.request(),
@@ -402,8 +403,28 @@ try {
         reducedMotion: "no-preference",
       });
       await page.waitForTimeout(400);
+      // The canvas only re-centers on a step that is out of view, so zoom in
+      // until "sample" is partly off screen, then open it from the keyboard.
+      const zoomIn = page.getByRole("button", { name: "Zoom in", exact: true });
+      for (let step = 0; step < 4; step++) {
+        await zoomIn.click();
+        await page.waitForTimeout(220);
+      }
+      await expect
+        .poll(async () => {
+          const box = await node().boundingBox();
+          const pane = await page.locator(".react-flow").boundingBox();
+          return (
+            box.x < pane.x ||
+            box.y < pane.y ||
+            box.x + box.width > pane.x + pane.width ||
+            box.y + box.height > pane.y + pane.height
+          );
+        })
+        .toBe(true);
       const initial = await viewport();
-      await node().click();
+      await node().focus();
+      await page.keyboard.press("Enter");
       await expect(closeButton()).toBeVisible();
       await expect
         .poll(async () => {

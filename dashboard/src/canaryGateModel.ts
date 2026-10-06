@@ -8,26 +8,32 @@ export const gateReasons = [
   "paused",
   "unverified",
   "unavailable",
+  "measuring",
+  "degraded",
 ] as const;
 export type GateReason = (typeof gateReasons)[number];
 export const gateReasonLabels: Record<GateReason, string> = {
   superseded: "Another assignment is effective",
-  stale: "Waiting for a fresh heartbeat",
+  stale: "Waiting for a check-in",
   paused: "Configuration sync is paused",
-  unverified: "Current application is not verified",
+  unverified: "Waiting for the device to confirm",
   unavailable: "Device is unavailable",
+  measuring: "Measuring delivery",
+  degraded: "Not delivering",
 };
 export const gateReasonHelp: Record<GateReason, string> = {
   superseded:
-    "Review the device’s current assignment and priority before changing this rollout.",
+    "Another assignment now wins on this device. Review its assignment and priority.",
   stale:
-    "Check the device connection. A previous success cannot replace a fresh report.",
-  paused:
-    "Review the device’s local and remote pause settings before continuing.",
+    "The device hasn't checked in recently. An earlier success doesn't count.",
+  paused: "Sync is paused on this device, locally or by its agent settings.",
   unverified:
-    "Open the device to review the current version, agent settings and reported issues.",
-  unavailable:
-    "Review the original device identity and this deployment’s target membership.",
+    "Devices confirm on their next check-in. The rollout waits until they do.",
+  unavailable: "The device was revoked or replaced.",
+  measuring:
+    "Applied. Vectory checks a few telemetry samples to confirm events are delivered before it starts observing.",
+  degraded:
+    "Applied, but its telemetry shows it isn't delivering. It counts as a failure against the threshold.",
 };
 export const CanaryGateSchema = z
   .object({
@@ -42,6 +48,9 @@ export const CanaryGateSchema = z
         paused: count,
         unverified: count,
         unavailable: count,
+        // Servers without data-plane health omit these.
+        measuring: count.default(0),
+        degraded: count.default(0),
       })
       .strict(),
     observation_started_at: z.string().datetime({ offset: true }).nullable(),

@@ -16,7 +16,7 @@ pub struct Artifact {
     pub size: usize,
 }
 
-fn pointer_tokens(path: &str) -> Option<Vec<String>> {
+pub(crate) fn pointer_tokens(path: &str) -> Option<Vec<String>> {
     if !path.starts_with('/') || path.len() > 512 {
         return None;
     }
@@ -57,7 +57,7 @@ fn scalar_type(value: &Value) -> Option<&'static str> {
     }
 }
 
-fn safe_path(tokens: &[String]) -> bool {
+pub(crate) fn safe_path(tokens: &[String]) -> bool {
     // Public values only. Secret references belong in the existing device-local
     // secret system, and structural Vector selectors cannot be parametrized.
     if [
@@ -180,12 +180,15 @@ pub fn declarations(config: &Value, input: &Value) -> Result<Value> {
     Ok(input.clone())
 }
 
-fn safe_value(value: &Value, typ: &str) -> bool {
+pub(crate) fn safe_value(value: &Value, typ: &str) -> bool {
     if scalar_type(value) != Some(typ) {
         return false;
     }
     if let Some(text) = value.as_str() {
         if text.len() > 4096 || text.chars().any(char::is_control) {
+            return false;
+        }
+        if validation::strong_credential_shape(text) {
             return false;
         }
         let lower = text.to_ascii_lowercase();
@@ -364,6 +367,58 @@ pub fn render(version: &Value, bindings: &Value, device: &str) -> Result<Artifac
         sha256: db::hash(&bytes),
         bytes,
     })
+}
+
+/// A declared variable as the artifact offered to a device carries it.
+pub struct OfferedVariable {
+    pub name: String,
+    pub path: String,
+    pub typ: String,
+    /// What `artifact` holds at the declared path. Nothing when the path is
+    /// structural or can carry a credential, or the value is not one a
+    /// binding may hold: a secret or a reference to one is never shown.
+    pub value: Option<Value>,
+}
+
+/// What each declaration holds in `artifact`, the JSON a device was offered.
+/// Read-only: nothing is rendered, resolved or checked against bindings.
+pub fn offered(declarations: &[Value], artifact: &Value) -> Vec<OfferedVariable> {
+    declarations
+        .iter()
+        .filter_map(|declaration| {
+            let name = declaration["name"].as_str()?;
+            let path = declaration["path"].as_str()?;
+            let typ = declaration["type"].as_str()?;
+            let value = pointer_tokens(path)
+                .filter(|tokens| safe_path(tokens))
+                .and_then(|_| artifact.pointer(path))
+                .filter(|value| safe_value(value, typ))
+                .cloned();
+            Some(OfferedVariable {
+                name: name.to_owned(),
+                path: path.to_owned(),
+                typ: typ.to_owned(),
+                value,
+            })
+        })
+        .collect()
+}
+
+/// Where a deployment's bindings take `name` from for `device`: a value set
+/// for that device, or the deployment's default. Nothing when its bindings
+/// hold neither, as a rollback's do not.
+pub fn binding_source<'a>(
+    bindings: &'a Value,
+    device: &str,
+    name: &str,
+) -> Option<(&'static str, &'a Value)> {
+    let (defaults, devices) = binding_maps(bindings).ok()?;
+    devices
+        .get(device)
+        .and_then(Value::as_object)
+        .and_then(|values| values.get(name))
+        .map(|value| ("device", value))
+        .or_else(|| defaults.get(name).map(|value| ("default", value)))
 }
 
 pub async fn target_artifact(
@@ -556,6 +611,31 @@ mod tests {
                 true
             )
             .is_err()
+        );
+        for candidate in [
+            "ghp_syntheticvariabletoken123",
+            "https://synthetic-user:synthetic-password@example.test/path",
+            "https://example.test/path?api_key=x",
+        ] {
+            assert!(
+                validate_bindings(
+                    &version,
+                    &json!({"defaults":{"format":candidate},"devices":{}}),
+                    &ids,
+                    true,
+                )
+                .is_err(),
+                "{candidate}"
+            );
+        }
+        assert!(
+            validate_bindings(
+                &version,
+                &json!({"defaults":{"format":"json"},"devices":{}}),
+                &ids,
+                true,
+            )
+            .is_ok()
         );
     }
 }

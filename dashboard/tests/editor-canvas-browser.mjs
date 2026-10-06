@@ -1,7 +1,11 @@
 // Actual App/editor, isolated synthetic API. Never contacts preview or devices.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
+import {
+  isPipelineTelemetry,
+  pipelineTelemetry,
+} from "./telemetry-replies.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -25,13 +29,20 @@ const editorHeaderLayoutOnly =
   editorHeaderOnly && process.env.VECTORY_EDITOR_HEADER_LAYOUT_ONLY === "true";
 const splitSaveFollowup =
   splitSaveOnly && process.env.VECTORY_EDITOR_SPLIT_SAVE_FOLLOWUP === "true";
+const splitRecoveryOnly =
+  splitSaveOnly &&
+  process.env.VECTORY_EDITOR_SPLIT_SAVE_RECOVERY_ONLY === "true";
 const nodeActionsOnly =
   process.env.VECTORY_EDITOR_CANVAS_FOCUS === "node-actions";
-const variablesOnly =
-  process.env.VECTORY_EDITOR_CANVAS_FOCUS === "variables";
+const variablesOnly = process.env.VECTORY_EDITOR_CANVAS_FOCUS === "variables";
+const dragUndoOnly = process.env.VECTORY_EDITOR_CANVAS_FOCUS === "drag-undo";
+const graphFitOnly = process.env.VECTORY_EDITOR_CANVAS_FOCUS === "graph-fit";
+const dragUndoOutput = dragUndoOnly ? ".local/editor-drag-undo" : null;
 const output = resolve(
   repository,
   process.env.VECTORY_EDITOR_CANVAS_OUTPUT ||
+    (graphFitOnly ? ".local/editor-graph-fit" : null) ||
+    dragUndoOutput ||
     (editorHeaderOnly
       ? ".local/editor-header"
       : connectionStyleOnly
@@ -44,11 +55,11 @@ const output = resolve(
               ? ".local/inspector-node-actions"
               : variablesOnly
                 ? ".local/editor-variables"
-              : checksLayoutOnly
-                ? ".local/editor-canvas-check-results"
-                : menuLayoutOnly
-                  ? ".local/editor-canvas-menu-layout"
-                  : ".local/editor-canvas-component"),
+                : checksLayoutOnly
+                  ? ".local/editor-canvas-check-results"
+                  : menuLayoutOnly
+                    ? ".local/editor-canvas-menu-layout"
+                    : ".local/editor-canvas-component"),
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:editor-canvas-fixture";
@@ -145,6 +156,7 @@ async function load({
   height = 1000,
   published = false,
   collapsed = true,
+  autoCheck = false,
   document = baseDocument(),
 } = {}) {
   // Closing an old isolated context cannot affect the synthetic persisted fixture.
@@ -154,12 +166,16 @@ async function load({
     mutations: [],
     validations: [],
     validationValid: true,
+    // Findings the synthetic checker answers with, as the server words them.
+    validationDiagnostics: null,
     validationNative: false,
     validationError: false,
     holdValidation: false,
     pendingValidations: [],
     holdSave: false,
     failSave: false,
+    // The server refuses to store the draft: { status, code, message }.
+    refuseSave: null,
     readsUnavailable: false,
     holdReads: false,
     pendingReads: [],
@@ -182,10 +198,16 @@ async function load({
     reducedMotion: "reduce",
   });
   contexts.push(context);
-  await context.addInitScript((collapsed) => {
-    localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
-    localStorage.setItem("vectory-theme", "light");
-  }, collapsed);
+  await context.addInitScript(
+    ({ collapsed, autoCheck }) => {
+      localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
+      localStorage.setItem("vectory-theme", "light");
+      // Checks run only when a case asks, so request counts stay exact.
+      if (!localStorage.getItem("vectory.editor.auto-check"))
+        localStorage.setItem("vectory.editor.auto-check", autoCheck);
+    },
+    { collapsed, autoCheck: autoCheck ? "on" : "off" },
+  );
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -215,6 +237,11 @@ async function load({
           },
           csrf_token: "synthetic-canvas-csrf",
         });
+      // The publish review shows where versions are assigned.
+      if (path === "/devices") return reply([]);
+      // The editor reads whether a device runs a published pipeline.
+      if (isPipelineTelemetry(path, pipelineId))
+        return reply(pipelineTelemetry(pipelineId));
       if (path === "/settings")
         return reply({ instance_name: "Synthetic isolated editor" });
       if (path === `/configurations/${pipelineId}`) {
@@ -279,7 +306,17 @@ async function load({
           size: JSON.stringify(document.config).length,
           created_at: created,
           message: "Synthetic published version",
-          validation: { valid: true },
+          // What the server stores with a version that Vector accepted.
+          validation: {
+            valid: true,
+            vector_validated: true,
+            static_checked: true,
+            deferred: false,
+            vector_version: "0.58.0",
+            errors: [],
+            warnings: [],
+            diagnostics: [],
+          },
         });
       }
       if (path === "/mfa") return reply({ enabled: false });
@@ -302,6 +339,12 @@ async function load({
         );
       if (saveFailure)
         return reject("SAVE_FAILED", "Synthetic draft save failed", 503);
+      if (current.refuseSave)
+        return reject(
+          current.refuseSave.code,
+          current.refuseSave.message,
+          current.refuseSave.status,
+        );
       if (body.revision !== current.document.revision)
         return reject("STALE_REVISION", "Synthetic draft changed", 409);
       current.mutations.push(structuredClone(body));
@@ -322,7 +365,8 @@ async function load({
       path === `/configurations/${pipelineId}/validate`
     ) {
       current.validations.push(request.postDataJSON());
-      const valid = current.validationValid;
+      const given = current.validationDiagnostics;
+      const valid = given ? false : current.validationValid;
       const native = current.validationNative;
       const failed = current.validationError;
       if (current.holdValidation)
@@ -337,10 +381,32 @@ async function load({
         );
       return reply({
         valid,
-        errors: valid ? [] : ["Synthetic configuration rejected"],
-        warnings: [],
         vector_validated: valid && native,
-        deferred: true,
+        static_checked: true,
+        deferred: !native,
+        deferred_reasons: native ? [] : ["environment variables"],
+        placeholders: [],
+        diagnostics:
+          given ??
+          (valid
+            ? []
+            : [
+                {
+                  severity: "error",
+                  section: "transforms",
+                  component: "sample",
+                  field: "rate",
+                  code: "invalid_value",
+                  message: "Synthetic configuration rejected",
+                },
+              ]),
+        errors: given
+          ? given.map((item) => `${item.component}: ${item.message}`)
+          : valid
+            ? []
+            : ["sample: Synthetic configuration rejected"],
+        warnings: [],
+        vector_version: "0.58.0",
       });
     }
     unexpected.push(`${method} ${path}`);
@@ -373,6 +439,7 @@ async function check(name, run) {
     !name.startsWith("split controls")
   )
     return;
+  if (splitRecoveryOnly && !name.startsWith("unsaved edits survive")) return;
   const started = Date.now();
   await run();
   results.push({ name, passed: true, milliseconds: Date.now() - started });
@@ -400,6 +467,45 @@ async function noOverflow(label) {
   measurements.push({ label, ...dimensions });
   expect(dimensions.scroll, label).toBeLessThanOrEqual(dimensions.viewport + 1);
 }
+async function graphFit() {
+  return page.locator(".react-flow").evaluate((canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const transform = new DOMMatrix(
+      getComputedStyle(canvas.querySelector(".react-flow__viewport")).transform,
+    );
+    const nodes = Array.from(canvas.querySelectorAll(".react-flow__node"));
+    return {
+      canvas: {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+      },
+      zoom: transform.a,
+      nodes: nodes.map((node) => {
+        const bounds = node.getBoundingClientRect();
+        return {
+          id: node.dataset.id,
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom,
+        };
+      }),
+      contained:
+        nodes.length === 5 &&
+        nodes.every((node) => {
+          const bounds = node.getBoundingClientRect();
+          return (
+            bounds.left >= rect.left - 1 &&
+            bounds.right <= rect.right + 1 &&
+            bounds.top >= rect.top - 1 &&
+            bounds.bottom <= rect.bottom + 1
+          );
+        }),
+    };
+  });
+}
 async function axe(label) {
   const scan = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
@@ -416,8 +522,9 @@ async function axe(label) {
 async function blankPoint() {
   return page.locator(".react-flow").evaluate((element) => {
     const r = element.getBoundingClientRect();
-    for (const dy of [0.75, 0.65, 0.55, 0.35, 0.25])
-      for (const dx of [0.72, 0.84, 0.55, 0.4, 0.2]) {
+    // On a phone an open menu spans the width; the strips at the edges stay canvas.
+    for (const dy of [0.75, 0.65, 0.55, 0.35, 0.25, 0.85])
+      for (const dx of [0.72, 0.84, 0.55, 0.4, 0.2, 0.008, 0.99]) {
         const x = r.x + r.width * dx,
           y = r.y + r.height * dy;
         if (
@@ -454,6 +561,13 @@ async function saved(predicate) {
 const menu = () =>
   page.getByRole("dialog", { name: "Add component", exact: true });
 const button = (name) => page.getByRole("button", { name, exact: true });
+// Its name states the action and result: "Open Problems: 3 problems" after a check.
+const checkButton = () =>
+  page
+    .locator('.editor-toolbar[aria-label="Pipeline toolbar"]')
+    .getByRole("button", { name: /^(?:Check pipeline|Open Problems): / });
+const problemsPanel = () =>
+  page.getByRole("region", { name: "Problems", exact: true });
 async function choose(type, category) {
   if (category)
     await menu().getByRole("button", { name: category, exact: true }).click();
@@ -513,7 +627,179 @@ async function dismissConfirmation(action) {
 }
 
 try {
-  if (editorHeaderOnly) {
+  if (graphFitOnly) {
+    await check(
+      "the loaded graph fits all five nodes at phone widths without a manual Fit action",
+      async () => {
+        for (const width of [375, 390]) {
+          for (const theme of ["light", "dark"]) {
+            await load({ width, height: 900 });
+            await page.evaluate((theme) => {
+              document.documentElement.dataset.theme = theme;
+            }, theme);
+            await expect
+              .poll(async () => (await graphFit()).contained)
+              .toBe(true);
+            const fit = await graphFit();
+            expect(fit.zoom).toBeLessThan(0.65);
+            measurements.push({
+              label: `initial graph fit ${width} ${theme}`,
+              ...fit,
+            });
+            await noOverflow(`initial graph fit ${width} ${theme}`);
+            await page.screenshot({
+              path: resolve(output, `initial-graph-${width}-${theme}.png`),
+              animations: "disabled",
+            });
+            expect(fixture.mutations).toEqual([]);
+          }
+        }
+      },
+    );
+    await check(
+      "the desktop graph remains readable and a selected phone node stays visible",
+      async () => {
+        await load({ width: 1440, height: 900 });
+        await expect.poll(async () => (await graphFit()).contained).toBe(true);
+        const desktop = await graphFit();
+        expect(desktop.zoom).toBeGreaterThanOrEqual(0.65);
+        measurements.push({
+          label: "initial graph fit 1440 light",
+          ...desktop,
+        });
+        await load({ width: 375, height: 900 });
+        await expect.poll(async () => (await graphFit()).contained).toBe(true);
+        await page.locator('.react-flow__node[data-id="sample"]').click();
+        await expect(page.locator(".editor-inspector")).toBeVisible();
+        await expect
+          .poll(async () => {
+            const fit = await graphFit();
+            const node = fit.nodes.find((node) => node.id === "sample");
+            return (
+              node.left >= fit.canvas.left - 1 &&
+              node.right <= fit.canvas.right + 1
+            );
+          })
+          .toBe(true);
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    expect(results).toHaveLength(2);
+  } else if (dragUndoOnly) {
+    await check(
+      "dragging a node then Undo restores the acknowledged saved state",
+      async () => {
+        await load();
+        const node = page.locator('.react-flow__node[data-id="sample"]');
+        const before = await node.getAttribute("style");
+        const bounds = await node
+          .locator(".pipeline-node-summary")
+          .boundingBox();
+        expect(bounds).not.toBeNull();
+        const start = { x: bounds.x + bounds.width / 2, y: bounds.y + 10 };
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(start.x + 70, start.y + 50, { steps: 10 });
+        await page.mouse.up();
+        await expect(node).not.toHaveAttribute("style", before);
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        await button("Undo").click();
+        await expect(node).toHaveAttribute("style", before);
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "saved",
+        );
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    await check(
+      "Undo during a held save blocks departure and keeps the acknowledged server edit distinct from the local undo",
+      async () => {
+        await load();
+        await page.locator('.react-flow__node[data-id="sample"]').click();
+        const rate = page
+          .locator(".editor-inspector")
+          .getByLabel("One in every", { exact: true });
+        await rate.fill("20");
+        fixture.holdSave = true;
+        await button("Save options").click();
+        await page
+          .getByRole("menuitem", { name: "Save draft", exact: true })
+          .click();
+        await expect.poll(() => fixture.pendingSaves.length).toBe(1);
+        await button("Undo").click();
+        await expect(rate).toHaveValue("10");
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        const unloadBlocked = await page.evaluate(() => {
+          const event = new Event("beforeunload", { cancelable: true });
+          window.dispatchEvent(event);
+          return event.defaultPrevented;
+        });
+        expect(unloadBlocked).toBe(true);
+        await page.locator(".editor-back").click();
+        await expect(page).toHaveURL(
+          new RegExp(`/configurations/${pipelineId}$`),
+        );
+        await expect(
+          page.getByText("Wait for the draft save to finish before leaving."),
+        ).toBeVisible();
+        expect(fixture.document.config.transforms.sample.rate).toBe(10);
+
+        fixture.pendingSaves.shift()(false);
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect
+          .poll(() => fixture.document.config.transforms.sample.rate)
+          .toBe(20);
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        await expect(rate).toHaveValue("10");
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              Object.keys(localStorage)
+                .filter((key) => key.startsWith("vectory.draft.v2:"))
+                .map((key) => JSON.parse(localStorage.getItem(key)))
+                .some(
+                  (copy) =>
+                    copy.revision === 2 &&
+                    copy.config.transforms.sample.rate === 10 &&
+                    copy.base.config.transforms.sample.rate === 20,
+                ),
+            ),
+          )
+          .toBe(true);
+        await button("Redo").click();
+        await expect(rate).toHaveValue("20");
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "saved",
+        );
+        await button("Undo").click();
+        await expect(rate).toHaveValue("10");
+        await expect(page.locator(".pipeline-save-status")).toHaveAttribute(
+          "data-save-state",
+          "unsaved",
+        );
+        fixture.holdSave = false;
+        await saved(
+          (document) =>
+            document.revision === 3 &&
+            document.config.transforms.sample.rate === 10,
+        );
+        expect(fixture.saveAttempts).toHaveLength(2);
+        expect(fixture.saveAttempts[1].revision).toBe(2);
+      },
+    );
+    expect(results).toHaveLength(2);
+  } else if (editorHeaderOnly) {
     const details = () =>
       page.getByRole("dialog", { name: "Pipeline details", exact: true });
     const nameButton = () =>
@@ -553,6 +839,10 @@ try {
       async () => {
         await load();
         const original = structuredClone(fixture.document);
+        // The tab names the pipeline, as a device's page names the device.
+        await expect(page).toHaveTitle(
+          `${original.name} · Pipelines · Vectory`,
+        );
         await nameButton().focus();
         await page.keyboard.press("Enter");
         await expect(details()).toBeVisible();
@@ -894,10 +1184,10 @@ try {
           "data-connection-style",
           "curved",
         );
-        await button("Check pipeline").click();
-        await expect(button("Check pipeline")).toHaveAttribute(
+        await checkButton().click();
+        await expect(checkButton()).toHaveAttribute(
           "data-check-state",
-          "partial",
+          "device",
         );
         const shapeSets = [];
         for (const style of styles) {
@@ -912,9 +1202,9 @@ try {
               localStorage.getItem("vectory-connection-style"),
             ),
           ).toBe(style.value);
-          await expect(button("Check pipeline")).toHaveAttribute(
+          await expect(checkButton()).toHaveAttribute(
             "data-check-state",
-            "partial",
+            "device",
           );
           await expect(button("Discard changes")).toHaveCount(0);
           await expect(button("Undo")).toBeDisabled();
@@ -1089,20 +1379,51 @@ try {
     );
     expect(results).toHaveLength(4);
   } else if (variablesOnly) {
-    const settings = () => page.getByRole("dialog", { name: "Pipeline settings" });
+    const settings = () =>
+      page.getByRole("dialog", { name: "Pipeline settings" });
     const openVariables = async () => {
       await button("Pipeline settings").click();
-      await settings().getByRole("button", { name: "Variables", exact: true }).click();
+      await settings()
+        .getByRole("button", { name: "Variables", exact: true })
+        .click();
     };
     await check(
       "variable declarations join explicit draft save, discard, and read-only boundaries",
       async () => {
         await load();
         await openVariables();
-        await settings().getByRole("combobox", { name: "Pipeline field" }).selectOption("/sources/seed/format");
-        await settings().getByRole("textbox", { name: "Variable name" }).fill("LOG_FORMAT");
+        // Credentials belong in a device secret, which restricted devices
+        // run too; a provider only full mode runs is never what this offers.
+        await expect(settings()).toContainText(
+          "Do not enter credentials here. Use a device secret, which works in restricted and full mode: vectory-secret:NAME",
+        );
+        await expect(settings()).not.toContainText("device-local");
+        await expect(
+          settings().getByRole("link", { name: /How device secrets work/ }),
+        ).toHaveAttribute(
+          "href",
+          /\/help\/resources\/.*#keep-credentials-on-the-device$/,
+        );
+        await expect(
+          settings().getByRole("link", { name: /How this works/ }),
+        ).toHaveAttribute(
+          "href",
+          /\/help\/resources\/.*#values-that-differ-by-device$/,
+        );
+        await page.screenshot({
+          path: resolve(output, "variables-settings-1440-light.png"),
+          animations: "disabled",
+        });
+        await settings()
+          .getByRole("combobox", { name: "Pipeline field" })
+          .selectOption("/sources/seed/format");
+        await settings()
+          .getByRole("textbox", { name: "Variable name" })
+          .fill("LOG_FORMAT");
         await settings().getByRole("button", { name: "Add variable" }).click();
-        await expect(settings().getByRole("list", { name: "Pipeline variables" })).toContainText("LOG_FORMAT");
+        await expect(
+          settings().getByRole("list", { name: "Pipeline variables" }),
+        ).toContainText("LOG_FORMAT");
         await settings().getByRole("button", { name: "Done" }).click();
         await expect(button("Discard changes")).toBeVisible();
         await saved((doc) => doc.variables?.[0]?.name === "LOG_FORMAT");
@@ -1110,13 +1431,19 @@ try {
           { name: "LOG_FORMAT", path: "/sources/seed/format", type: "string" },
         ]);
         await openVariables();
-        await settings().getByRole("button", { name: "Remove variable LOG_FORMAT" }).click();
+        await settings()
+          .getByRole("button", { name: "Remove variable LOG_FORMAT" })
+          .click();
         await settings().getByRole("button", { name: "Done" }).click();
         await button("Discard changes").click();
-        await page.getByRole("dialog", { name: "Discard unsaved changes?" })
-          .getByRole("button", { name: "Discard changes" }).click();
+        await page
+          .getByRole("dialog", { name: "Discard unsaved changes?" })
+          .getByRole("button", { name: "Discard changes" })
+          .click();
         await openVariables();
-        await expect(settings().getByRole("list", { name: "Pipeline variables" })).toContainText("LOG_FORMAT");
+        await expect(
+          settings().getByRole("list", { name: "Pipeline variables" }),
+        ).toContainText("LOG_FORMAT");
         await axe("variable declarations light");
         await settings().getByRole("button", { name: "Done" }).click();
         expect(fixture.saveAttempts).toHaveLength(1);
@@ -1126,32 +1453,71 @@ try {
       "viewers can inspect declarations without changing them",
       async () => {
         const document = baseDocument();
-        document.variables = [{ name: "LOG_FORMAT", path: "/sources/seed/format", type: "string" }];
+        document.variables = [
+          { name: "LOG_FORMAT", path: "/sources/seed/format", type: "string" },
+        ];
         await load({ role: "viewer", document, width: 899 });
         await openVariables();
-        await expect(settings().getByRole("list", { name: "Pipeline variables" })).toContainText("LOG_FORMAT");
-        await expect(settings().getByRole("button", { name: "Add variable" })).toHaveCount(0);
-        await expect(settings().getByRole("button", { name: "Remove variable LOG_FORMAT" })).toHaveCount(0);
-        await page.evaluate(() => document.documentElement.dataset.theme = "dark");
+        await expect(
+          settings().getByRole("list", { name: "Pipeline variables" }),
+        ).toContainText("LOG_FORMAT");
+        await expect(
+          settings().getByRole("button", { name: "Add variable" }),
+        ).toHaveCount(0);
+        await expect(
+          settings().getByRole("button", {
+            name: "Remove variable LOG_FORMAT",
+          }),
+        ).toHaveCount(0);
+        await page.evaluate(
+          () => (document.documentElement.dataset.theme = "dark"),
+        );
         await axe("variable declarations viewer dark");
         expect(fixture.saveAttempts).toEqual([]);
       },
     );
-    expect(results).toHaveLength(2);
+    await check(
+      "the credentials hint and its links fit a phone in both themes",
+      async () => {
+        for (const theme of ["light", "dark"]) {
+          await load({ width: 390, height: 900 });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await openVariables();
+          await expect(
+            settings().getByRole("link", { name: /How device secrets work/ }),
+          ).toBeVisible();
+          await noOverflow(`variables settings 390 ${theme}`);
+          await axe(`variables settings 390 ${theme}`);
+          await settings()
+            .getByRole("link", { name: /How device secrets work/ })
+            .scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(output, `variables-settings-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    expect(results).toHaveLength(3);
   } else if (splitSaveOnly) {
+    // While saving, the button shows a loading indicator in its name.
+    const saveButton = () =>
+      page.locator(".editor-toolbar .editor-save-button");
     const trigger = () => button("Save options");
     const saveMenu = () =>
       page.getByRole("menu", { name: "Save options", exact: true });
     const saveItem = () =>
       saveMenu().getByRole("menuitem", { name: "Save draft", exact: true });
+    const noteItem = () =>
+      saveMenu().getByRole("menuitem", {
+        name: "Save with note…",
+        exact: true,
+      });
     const openSave = async () => {
       await trigger().click();
       await expect(saveMenu()).toBeVisible();
-    };
-    const save = async () => {
-      await openSave();
-      await saveItem().click();
-      await expect(saveMenu()).toHaveCount(0);
     };
     const sample = async () => {
       await page.locator('.react-flow__node[data-id="sample"]').click();
@@ -1168,55 +1534,116 @@ try {
     const assertSaveOnly = () => {
       expect(fixture.validations).toEqual([]);
       expect(requests.filter((r) => r.method === "POST")).toEqual([]);
-      for (const attempt of fixture.saveAttempts)
-        expect(attempt.message).toBe("Saved from pipeline editor");
     };
     await check(
-      "split save opens with keyboard, closes on Escape/outside and saves without publishing or choosing targets",
+      "Save is visible beside publication, disabled until an edit, and Ctrl/Cmd+S saves with a summary note",
       async () => {
         for (const published of [false, true]) {
           await load({ published });
           await expect(
             button(published ? "Choose devices" : "Review & publish"),
           ).toBeVisible();
-          await openSave();
-          await expect(saveItem()).toBeDisabled();
-          await page.keyboard.press("Escape");
+          await expect(saveButton()).toBeDisabled();
+          await expect(saveButton()).toHaveAccessibleName("Save");
+          await expect(saveButton()).toHaveAttribute(
+            "aria-keyshortcuts",
+            "Control+S Meta+S",
+          );
+          // Nothing to save: the shortcut is swallowed and sends nothing.
+          await page.keyboard.press("ControlOrMeta+s");
           await sample();
           await rate().fill("11");
-          await trigger().focus();
-          await page.keyboard.press("ArrowDown");
-          await expect(saveMenu()).toBeVisible();
-          await expect(saveItem()).toBeFocused();
-          await page.keyboard.press("Escape");
-          await expect(saveMenu()).toHaveCount(0);
-          await expect(trigger()).toBeFocused();
-          await openSave();
-          const heading = await page.locator(".editor-title").boundingBox();
-          await page.mouse.click(heading.x + 8, heading.y + 8);
-          await expect(saveMenu()).toHaveCount(0);
-          expect(fixture.saveAttempts).toEqual([]);
-          await page.locator(".editor-tools-menu summary").click();
-          await expect(
-            page
-              .locator(".editor-tools-menu")
-              .getByRole("button", { name: /^Save draft/ }),
-          ).toHaveCount(0);
-          await page.keyboard.press("Escape");
-          await trigger().focus();
-          await page.keyboard.press("ArrowDown");
-          await page.keyboard.press("Enter");
+          await expect(saveButton()).toBeEnabled();
+          await rate().press("ControlOrMeta+s");
           await expect.poll(() => fixture.document.revision).toBe(2);
-          await expect(saveMenu()).toHaveCount(0);
+          await expect(page.locator(".pipeline-save-status")).toContainText(
+            "All changes saved",
+          );
+          await expect(saveButton()).toBeDisabled();
           expect(fixture.saveAttempts).toHaveLength(1);
-          expect(fixture.mutations).toHaveLength(1);
+          expect(fixture.saveAttempts[0].message).toBe("sample: rate changed");
           expect(fixture.document.config.transforms.sample.rate).toBe(11);
           assertSaveOnly();
         }
       },
     );
     await check(
-      "pending code, typed fields and field JSON disable saving without discarding or applying their text",
+      "Save options open with the keyboard, close on Escape or outside, and save with an edited note",
+      async () => {
+        await load();
+        await openSave();
+        await expect(saveItem()).toBeDisabled();
+        await expect(noteItem()).toBeDisabled();
+        await page.keyboard.press("Escape");
+        await sample();
+        await rate().fill("12");
+        await trigger().focus();
+        await page.keyboard.press("ArrowDown");
+        await expect(saveMenu()).toBeVisible();
+        await expect(saveItem()).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(saveMenu()).toHaveCount(0);
+        await expect(trigger()).toBeFocused();
+        await openSave();
+        const heading = await page.locator(".editor-title").boundingBox();
+        await page.mouse.click(heading.x + 8, heading.y + 8);
+        await expect(saveMenu()).toHaveCount(0);
+        expect(fixture.saveAttempts).toEqual([]);
+        await openSave();
+        await noteItem().click();
+        const dialog = page.getByRole("dialog", {
+          name: "Save draft",
+          exact: true,
+        });
+        const note = dialog.getByLabel("Note", { exact: true });
+        await expect(note).toHaveValue("sample: rate changed");
+        await note.fill("Sample one in twelve during the launch");
+        await dialog
+          .getByRole("button", { name: "Save draft", exact: true })
+          .click();
+        await expect(dialog).toHaveCount(0);
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        expect(fixture.saveAttempts).toHaveLength(1);
+        expect(fixture.saveAttempts[0].message).toBe(
+          "Sample one in twelve during the launch",
+        );
+        assertSaveOnly();
+      },
+    );
+    await check(
+      "undoing back to the saved draft leaves nothing unsaved; redo brings the change back, and undoing a save stays unsaved",
+      async () => {
+        await load();
+        const status = page.locator(".pipeline-save-status");
+        await sample();
+        await rate().fill("13");
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await closeInspector();
+        await button("Undo").click();
+        await expect(status).toContainText("All changes saved");
+        await expect(button("Discard changes")).toHaveCount(0);
+        await expect(saveButton()).toBeDisabled();
+        await button("Redo").click();
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await expect(saveButton()).toBeEnabled();
+        // After a save the draft is what was saved: undoing it is a change.
+        await saveButton().click();
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect(status).toContainText("All changes saved");
+        await button("Undo").click();
+        await expect(status).toContainText("Unsaved changes");
+        await expect(button("Discard changes")).toBeVisible();
+        await button("Redo").click();
+        await expect(status).toContainText("All changes saved");
+        await expect(button("Discard changes")).toHaveCount(0);
+        expect(fixture.saveAttempts).toHaveLength(1);
+        assertSaveOnly();
+      },
+    );
+    await check(
+      "typed fields and field JSON disable saving, and code that does not parse is refused with its place, without discarding or applying the text",
       async () => {
         for (const kind of ["code", "scalar", "raw"]) {
           await load();
@@ -1238,13 +1665,38 @@ try {
               await input.fill("{pending");
             }
           }
+          // Code is applied by saving; a field draft must be applied first.
+          if (kind === "code") {
+            await expect(saveButton()).toBeEnabled();
+            await expect(page.locator(".pipeline-save-status")).toContainText(
+              "Unapplied code changes",
+            );
+          } else {
+            await expect(saveButton()).toBeDisabled();
+            await expect(page.locator(".pipeline-save-status")).toContainText(
+              "Unapplied field changes",
+            );
+          }
+          await input.press("ControlOrMeta+s");
+          await expect(
+            kind === "code"
+              ? page.getByText(/Not saved\. Line 1:\d+: /).first()
+              : page
+                  .getByText(
+                    "Apply or discard unfinished code and field edits before saving the draft.",
+                    { exact: true },
+                  )
+                  .first(),
+          ).toBeVisible();
           await openSave();
-          await expect(saveItem()).toBeDisabled();
+          if (kind === "code") await expect(saveItem()).toBeEnabled();
+          else await expect(saveItem()).toBeDisabled();
+          await expect(noteItem()).toBeDisabled();
           await page.keyboard.press("Escape");
           await expect(trigger()).toBeFocused();
           if (kind === "scalar") await expect(input).toHaveValue("-");
           else await expect(input).toHaveText("{pending");
-          await page.waitForTimeout(2150);
+          await page.waitForTimeout(1200);
           expect(fixture.saveAttempts).toEqual([]);
           expect(fixture.document.config).toEqual(baseDocument().config);
         }
@@ -1257,50 +1709,226 @@ try {
         await sample();
         fixture.holdSave = true;
         await rate().fill("20");
-        await save();
+        await saveButton().click();
         await expect.poll(() => fixture.pendingSaves.length).toBe(1);
+        await expect(saveButton()).toBeDisabled();
         await expect(trigger()).toBeDisabled();
-        await trigger().evaluate((element) => element.click());
+        await saveButton().evaluate((element) => element.click());
+        await rate().press("ControlOrMeta+s");
         expect(fixture.saveAttempts).toHaveLength(1);
         expect(fixture.saveAttempts[0].revision).toBe(1);
         expect(fixture.saveAttempts[0].config.transforms.sample.rate).toBe(20);
         fixture.pendingSaves.shift()(true);
-        await expect(trigger()).toBeEnabled();
+        await expect(saveButton()).toBeEnabled();
         await expect(page.locator(".pipeline-save-status")).toContainText(
           "Save failed",
         );
         await expect(rate()).toHaveValue("20");
         expect(fixture.document.revision).toBe(1);
         fixture.holdSave = false;
-        await save();
+        await saveButton().click();
         await expect.poll(() => fixture.document.revision).toBe(2);
         await expect(page.locator(".pipeline-save-status")).toContainText(
           "All changes saved",
         );
         await expect(rate()).toHaveValue("20");
         expect(fixture.saveAttempts).toHaveLength(2);
-        await expect(
-          page.getByText("Synthetic draft save failed", { exact: true }),
-        ).toHaveCount(0);
+        await expect(page.getByText(/Synthetic draft save failed/)).toHaveCount(
+          0,
+        );
         expect(fixture.mutations).toHaveLength(1);
         assertSaveOnly();
       },
     );
     await check(
-      "editors retain direct Save draft while operators, viewers and archived pipelines have no draft-save affordance",
+      "a refused save keeps the edits, names the setting and goes to it; a reload is offered only when the draft changed elsewhere",
+      async () => {
+        const document = baseDocument();
+        document.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer", token: "plain-text-token" },
+        };
+        await load({ document });
+        // The refusal never asks to throw the work away with a native prompt.
+        const prompts = [];
+        page.on("dialog", (dialog) => {
+          prompts.push(dialog.message());
+          void dialog.dismiss();
+        });
+        fixture.refuseSave = {
+          status: 400,
+          code: "INVALID_INPUT",
+          message: "Plaintext credentials cannot be stored in draft history",
+        };
+        await sample();
+        await rate().fill("21");
+        await rate().press("ControlOrMeta+s");
+        await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "Save failed",
+        );
+        await closeInspector();
+        const banner = page.locator(".editor-message");
+        await expect(banner).toContainText(
+          "Not saved. Replace the plaintext credential in auth.token on out_http with a device secret, such as vectory-secret:NAME. A draft never stores one. Your edits are still here.",
+        );
+        await expect(
+          banner.getByRole("button", { name: "Go to field", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", {
+            name: "Reload server draft",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await page.screenshot({
+          path: resolve(output, "refused-save-1440-light.png"),
+          animations: "disabled",
+        });
+        // The way there is the setting itself.
+        await banner
+          .getByRole("button", { name: "Go to field", exact: true })
+          .click();
+        await expect(page.locator(".editor-inspector")).toContainText(
+          "out_http",
+        );
+        // The form nests the token one level deeper than the config writes it
+        // (auth.auth.token for auth.token): focus is on that control.
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.activeElement?.closest("[data-field-path]")?.dataset
+                  .fieldPath,
+            ),
+          )
+          .toBe("auth.auth.token");
+        // The edit that was being saved is still there.
+        await sample();
+        await expect(rate()).toHaveValue("21");
+        await closeInspector();
+        // Saving again after the fix clears it, with no prompt in between.
+        fixture.refuseSave = null;
+        await saveButton().click();
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "All changes saved",
+        );
+        await expect(banner).toHaveCount(0);
+        // A draft that changed elsewhere is the one case that offers a reload.
+        await sample();
+        await rate().fill("22");
+        fixture.document = {
+          ...fixture.document,
+          revision: fixture.document.revision + 1,
+        };
+        await rate().press("ControlOrMeta+s");
+        await expect(page.locator(".pipeline-save-status")).toContainText(
+          "Save conflict",
+        );
+        await closeInspector();
+        await expect(banner).toContainText(
+          "The server draft changed. Your edits are still here. Compare or download them before choosing whether to discard them.",
+        );
+        await expect(
+          banner.getByRole("button", { name: "Compare drafts" }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", { name: "Download my draft" }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", {
+            name: "Discard my edits and load server draft",
+          }),
+        ).toBeVisible();
+        await expect(
+          banner.getByRole("button", { name: "Go to field" }),
+        ).toHaveCount(0);
+        await sample();
+        await expect(rate()).toHaveValue("22");
+        expect(prompts).toEqual([]);
+        assertSaveOnly();
+      },
+    );
+    await check(
+      "a refused save fits a phone in both themes, with its action reachable",
+      async () => {
+        const document = baseDocument();
+        document.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          auth: { strategy: "bearer", token: "plain-text-token" },
+        };
+        for (const theme of ["light", "dark"]) {
+          await load({ document, width: 390, height: 900 });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          fixture.refuseSave = {
+            status: 400,
+            code: "INVALID_INPUT",
+            message: "Plaintext credentials cannot be stored in draft history",
+          };
+          await sample();
+          await rate().fill("24");
+          await rate().press("ControlOrMeta+s");
+          await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+          await closeInspector();
+          const goTo = page
+            .locator(".editor-message")
+            .getByRole("button", { name: "Go to field", exact: true });
+          await expect(goTo).toBeVisible();
+          await noOverflow(`refused save 390 ${theme}`);
+          await axe(`refused save 390 ${theme}`);
+          await page.screenshot({
+            path: resolve(output, `refused-save-390-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    await check(
+      "a refusal of the whole draft shows the server's reason, keeps the edits and offers no reload",
+      async () => {
+        await load();
+        fixture.refuseSave = {
+          status: 400,
+          code: "INVALID_INPUT",
+          message: "Graph exceeds 1000 nodes or 5000 edges",
+        };
+        await sample();
+        await rate().fill("23");
+        await rate().press("ControlOrMeta+s");
+        await expect.poll(() => fixture.saveAttempts.length).toBe(1);
+        await closeInspector();
+        const banner = page.locator(".editor-message");
+        await expect(banner).toContainText(
+          "Not saved. Graph exceeds 1000 nodes or 5000 edges. Your edits are still here.",
+        );
+        await expect(banner.getByRole("button")).toHaveCount(0);
+        await sample();
+        await expect(rate()).toHaveValue("23");
+      },
+    );
+    await check(
+      "editors save without publication while operators, viewers and archived pipelines have no draft-save affordance",
       async () => {
         await load({ role: "editor" });
-        await expect(trigger()).toHaveCount(0);
         await expect(button("Review & publish")).toHaveCount(0);
-        await expect(button("Save draft")).toBeDisabled();
+        await expect(saveButton()).toBeDisabled();
         await sample();
         await rate().fill("20");
-        await button("Save draft").click();
+        await saveButton().click();
         await expect.poll(() => fixture.document.revision).toBe(2);
         expect(fixture.document.config.transforms.sample.rate).toBe(20);
         assertSaveOnly();
         await rate().fill("-");
-        await expect(button("Save draft")).toBeDisabled();
+        await expect(saveButton()).toBeDisabled();
         for (const options of [
           { role: "operator" },
           { role: "viewer" },
@@ -1309,7 +1937,8 @@ try {
         ]) {
           await load(options);
           await expect(trigger()).toHaveCount(0);
-          await expect(button("Save draft")).toHaveCount(0);
+          await expect(saveButton()).toHaveCount(0);
+          await page.keyboard.press("ControlOrMeta+s");
           await page.locator(".editor-tools-menu summary").click();
           await expect(
             page
@@ -1334,13 +1963,15 @@ try {
           await page.evaluate((theme) => {
             document.documentElement.dataset.theme = theme;
           }, theme);
-          const primary = button("Review & publish");
           await expect(trigger()).toBeVisible();
-          const a = await primary.boundingBox(),
-            b = await trigger().boundingBox();
+          const a = await saveButton().boundingBox(),
+            b = await trigger().boundingBox(),
+            primary = await button("Review & publish").boundingBox();
+          // Save and its options read as one control beside publication.
           expect(Math.abs(a.y - b.y)).toBeLessThanOrEqual(1);
           expect(Math.abs(a.x + a.width - b.x)).toBeLessThanOrEqual(1);
           expect(b.x + b.width).toBeLessThanOrEqual(width);
+          expect(primary.x + primary.width).toBeLessThanOrEqual(width);
           await noOverflow("split toolbar " + width + " " + theme);
           await openSave();
           const bounds = await saveMenu().boundingBox();
@@ -1348,8 +1979,9 @@ try {
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
           measurements.push({
             label: "split save " + width + " " + theme,
-            primary: a,
+            save: a,
             trigger: b,
+            primary,
             menu: bounds,
           });
           await axe("split save " + width + " " + theme);
@@ -1363,11 +1995,112 @@ try {
         }
       },
     );
-    expect(results).toHaveLength(splitSaveFollowup ? 2 : 5);
+    await check(
+      "unsaved edits survive a reload in this browser and can be restored or discarded",
+      async () => {
+        const recoveryKeys = () =>
+          page.evaluate(() =>
+            Object.keys(localStorage).filter((key) =>
+              key.startsWith("vectory.draft.v2:"),
+            ),
+          );
+        const leaseFor = (key) =>
+          key.replace("vectory.draft.v2:", "vectory.draft.lease:");
+        await load();
+        page.on("dialog", (dialog) => dialog.accept());
+        await sample();
+        await rate().fill("33");
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              Object.keys(localStorage).some((key) =>
+                key.startsWith("vectory.draft.v2:"),
+              ),
+            ),
+          )
+          .toBe(true);
+        const firstCopy = (await recoveryKeys())[0];
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => localStorage.getItem(key),
+              leaseFor(firstCopy),
+            ),
+          )
+          .not.toBeNull();
+        await page.reload();
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => localStorage.getItem(key),
+              leaseFor(firstCopy),
+            ),
+          )
+          .toBeNull();
+        const banner = page.locator(".editor-recovery");
+        await expect(banner).toContainText(
+          "are still in this browser. Restore them to keep editing, or discard them.",
+        );
+        await axe("draft recovery offer");
+        await page.screenshot({
+          path: resolve(output, "draft-recovery.png"),
+          animations: "disabled",
+        });
+        await banner
+          .getByRole("button", { name: "Restore changes", exact: true })
+          .click();
+        await expect(banner).toHaveCount(0);
+        await expect(saveButton()).toBeEnabled();
+        await sample();
+        await expect(rate()).toHaveValue("33");
+        await page.reload();
+        await expect(banner).toBeVisible();
+        const copies = await recoveryKeys();
+        expect(copies).toHaveLength(2);
+        for (const key of copies)
+          await expect
+            .poll(() =>
+              page.evaluate(
+                (lease) => localStorage.getItem(lease),
+                leaseFor(key),
+              ),
+            )
+            .toBeNull();
+        for (let index = 0; index < 3 && (await banner.count()); index++) {
+          const before = (await recoveryKeys()).length;
+          await expect(
+            banner.getByRole("button", { name: /^Discard( copy)?$/ }),
+          ).toBeEnabled();
+          await banner
+            .getByRole("button", { name: /^Discard( copy)?$/ })
+            .click();
+          await expect
+            .poll(async () => (await recoveryKeys()).length)
+            .toBe(before - 1);
+        }
+        await expect(banner).toHaveCount(0);
+        expect(await recoveryKeys()).toEqual([]);
+        await page.reload();
+        await expect(page.locator(".react-flow__node").first()).toBeVisible();
+        await expect(banner).toHaveCount(0);
+        expect(fixture.saveAttempts).toEqual([]);
+      },
+    );
+    expect(results).toHaveLength(
+      splitRecoveryOnly ? 1 : splitSaveFollowup ? 2 : 11,
+    );
   } else if (checkStateOnly) {
-    const control = () => button("Check pipeline");
-    const checkResults = () =>
-      page.getByRole("dialog", { name: "Pipeline check results" });
+    const control = () => checkButton();
+    const retry = () =>
+      problemsPanel().getByRole("button", { name: "Check again", exact: true });
+    const runCheck = async () => {
+      if (fixture.validations.length === 0) await control().click();
+      else {
+        await control().click();
+        await retry().click();
+      }
+    };
+    const verdict = () => problemsPanel().locator(".problems-verdict");
     const rate = () =>
       page
         .locator(".editor-inspector")
@@ -1375,29 +2108,22 @@ try {
     const state = async (value) => {
       await expect(control()).toHaveAttribute("data-check-state", value);
     };
-    const showChecks = async () => {
-      const before = fixture.validations.length;
-      await control().hover();
-      await expect(checkResults()).toBeVisible();
-      expect(fixture.validations).toHaveLength(before);
-    };
-    const pass = async () => {
+    const pass = async (unappliedCode = false) => {
       fixture.validationValid = true;
       fixture.validationNative = false;
       fixture.validationError = false;
       fixture.holdValidation = false;
-      await control().click();
-      await state("partial");
-      await showChecks();
-      await expect(checkResults()).toContainText("Device validation pending");
-    };
-    const hideChecks = async () => {
-      await page.mouse.move(0, 0);
-      await button("Graph").focus();
-      await expect(checkResults()).toHaveCount(0);
+      await runCheck();
+      await state("device");
+      await expect(control()).toHaveAccessibleName("Open Problems: Checked");
+      await expect(verdict()).toHaveText(
+        "Vector 0.58 accepted this pipeline. Each device checks environment variables before applying it." +
+          (unappliedCode
+            ? " This check reviewed unapplied Code edits. Apply code changes to update the draft."
+            : ""),
+      );
     };
     const sample = async () => {
-      await hideChecks();
       await page.locator('.react-flow__node[data-id="sample"]').click();
       await expect(rate()).toBeVisible();
     };
@@ -1416,31 +2142,211 @@ try {
       await expect(dialog).toHaveCount(0);
     };
     await check(
-      "check distinguishes device-pending, native pass and failed server results",
+      "check names device-pending, native pass, problems and an unavailable checker",
       async () => {
         await load();
-        await state("neutral");
+        await state("unchecked");
+        await expect(control()).toHaveAccessibleName(
+          "Check pipeline: Not checked",
+        );
         expect(fixture.validations).toEqual([]);
         await pass();
-        await hideChecks();
-        await state("partial");
         fixture.validationNative = true;
-        await control().click();
+        await runCheck();
         await state("passed");
-        await showChecks();
-        await expect(checkResults()).toContainText("Vector checks passed");
-        await expect(checkResults()).toContainText(
-          "Devices verify their local environment and permissions",
+        await expect(verdict()).toHaveText(
+          "Vector 0.58 accepted this pipeline.",
         );
         fixture.validationValid = false;
-        await control().click();
-        await state("failed");
-        await showChecks();
-        await expect(checkResults()).toContainText(
-          "Synthetic configuration rejected",
+        await runCheck();
+        await state("problems");
+        await expect(control()).toHaveAccessibleName(
+          "Open Problems: 1 problem",
+        );
+        await expect(problemsPanel()).toContainText(
+          "Synthetic configuration rejected.",
+        );
+        await expect(
+          page.locator(
+            '.react-flow__node[data-id="sample"] .pipeline-node-attention',
+          ),
+        ).toHaveAttribute(
+          "aria-label",
+          "rate: Synthetic configuration rejected.",
+        );
+        fixture.validationError = true;
+        await runCheck();
+        await state("unavailable");
+        await expect(control()).toHaveAccessibleName(
+          "Open Problems: Couldn't check",
+        );
+        await expect(verdict()).toHaveText(
+          "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check.",
+        );
+        // The last findings stay listed while the checker is unreachable.
+        await expect(problemsPanel()).toContainText(
+          "Synthetic configuration rejected.",
         );
         await pass();
-        expect(fixture.validations).toHaveLength(4);
+        await expect(
+          page.locator(
+            '.react-flow__node[data-id="sample"] .pipeline-node-issue',
+          ),
+        ).toHaveCount(0);
+        expect(fixture.validations).toHaveLength(5);
+      },
+    );
+    await check(
+      "check status discloses cached results and opens Problems without validating again",
+      async () => {
+        await load({ width: 375, height: 900 });
+        const summary = () => page.locator(".editor-check-popover");
+        await expect(retry()).toHaveCount(0);
+        await control().hover();
+        await expect(summary()).toBeVisible();
+        await expect(summary()).toHaveAttribute("role", "dialog");
+        await expect(summary()).toContainText(
+          "Run a check to validate this pipeline with Vector.",
+        );
+        await page.mouse.move(1, 850);
+        await expect(summary()).toHaveCount(0);
+
+        await control().click();
+        await state("device");
+        expect(fixture.validations).toHaveLength(1);
+        await problemsPanel().locator(".problems-toggle").click();
+        await expect(retry()).toHaveCount(0);
+
+        await control().hover();
+        await expect(summary()).toContainText(
+          "Vector 0.58 accepted this pipeline.",
+        );
+        await noOverflow("check summary 375px");
+        await axe("checked pipeline summary");
+        await page.screenshot({
+          path: resolve(output, "pipeline-check-summary-375-light.png"),
+          animations: "disabled",
+        });
+        await page.setViewportSize({ width: 390, height: 900 });
+        await control().hover();
+        await page.screenshot({
+          path: resolve(output, "pipeline-check-summary-390-light.png"),
+          animations: "disabled",
+        });
+        await page.evaluate(() => {
+          document.documentElement.dataset.theme = "dark";
+        });
+        await page.screenshot({
+          path: resolve(output, "pipeline-check-summary-390-dark.png"),
+          animations: "disabled",
+        });
+        await noOverflow("dark check summary 390px");
+        await page.evaluate(() => {
+          document.documentElement.dataset.theme = "light";
+        });
+        await page.mouse.move(1, 850);
+        await expect(summary()).toHaveCount(0);
+        await control().focus();
+        await expect(summary()).toBeVisible();
+        await page.keyboard.press("ArrowDown");
+        await expect(summary()).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(summary()).toHaveCount(0);
+        await expect(control()).toBeFocused();
+        await page.keyboard.press("Tab");
+        await control().focus();
+        await expect(summary()).toBeVisible();
+        await page.keyboard.press("Tab");
+        await expect(summary()).toHaveCount(0);
+        await control().focus();
+        await page.keyboard.press("Escape");
+        await expect(summary()).toHaveCount(0);
+        await expect(control()).toBeFocused();
+
+        await control().press("Enter");
+        await expect(retry()).toBeVisible();
+        expect(fixture.validations).toHaveLength(1);
+        fixture.validationValid = false;
+        await retry().click();
+        await state("problems");
+        expect(fixture.validations).toHaveLength(2);
+        await control().hover();
+        await expect(summary()).toContainText(
+          "Synthetic configuration rejected.",
+        );
+        await page.mouse.move(1, 850);
+        await expect(summary()).toHaveCount(0);
+      },
+    );
+    await check(
+      "check summary puts Vector errors ahead of local warnings and marks findings from an earlier check",
+      async () => {
+        const document = baseDocument();
+        for (const name of ["isolated_a", "isolated_b", "isolated_c"])
+          document.config.sources[name] = { type: "demo_logs", format: "json" };
+        await load({ document });
+        fixture.validationDiagnostics = [
+          {
+            severity: "error",
+            section: "transforms",
+            component: "sample",
+            code: "vector_error",
+            message: "Vector rejected the sample step",
+          },
+        ];
+        await expect(problemsPanel()).toContainText("3 warnings");
+        await control().click();
+        await state("problems");
+        const summary = page.locator(".editor-check-popover");
+        await page.mouse.move(1, 850);
+        await control().hover();
+        await expect(summary.locator("li")).toHaveCount(3);
+        await expect(summary).toContainText("1 more finding in Problems.");
+        await expect(summary.locator("li").first()).toContainText(
+          "Vector rejected the sample step.",
+        );
+        await expect(summary.locator("li").first()).toHaveAttribute(
+          "data-severity",
+          "error",
+        );
+        await page.mouse.move(1, 850);
+        await sample();
+        await rate().fill("20");
+        await control().hover();
+        await expect(summary.locator('li[data-stale="true"]')).toContainText(
+          "From an earlier check",
+        );
+        expect(fixture.validations).toHaveLength(1);
+      },
+    );
+    await check(
+      "a stalled Vector response times out, allows retry and cannot replace the newer result",
+      async () => {
+        await load();
+        await page.clock.install();
+        fixture.validationValid = false;
+        fixture.holdValidation = true;
+        await control().click();
+        await state("checking");
+        await expect.poll(() => fixture.pendingValidations.length).toBe(1);
+        await page.clock.fastForward(30_050);
+        await state("unavailable");
+        await expect(control()).toHaveAccessibleName(
+          "Open Problems: Couldn't check",
+        );
+        await expect(verdict()).toHaveText(
+          "Vector's check took too long. It may still be processing; try again.",
+        );
+        await expect(retry()).toBeVisible();
+        fixture.validationValid = true;
+        fixture.holdValidation = false;
+        await retry().click();
+        await state("device");
+        fixture.pendingValidations.shift()();
+        await page.clock.runFor(100);
+        await state("device");
+        expect(fixture.validations).toHaveLength(2);
+        expect(fixture.mutations).toEqual([]);
       },
     );
     await check(
@@ -1454,20 +2360,68 @@ try {
       },
     );
     await check(
-      "network, code parse and blocked pending-field failures cannot retain a green check",
+      "a person who can't run a check reads what is true about the draft, never an instruction",
+      async () => {
+        const instruction =
+          "Run a check to validate this pipeline with Vector.";
+        // A viewer, or anyone on an archived pipeline, sees the check the
+        // published version passed when its steps equal the draft.
+        for (const options of [
+          { role: "viewer", published: true },
+          { role: "admin", published: true, archived: true },
+        ]) {
+          await load(options);
+          await expect(control()).toHaveCount(0);
+          await expect(verdict()).toHaveText(
+            "Version 1 was checked by Vector 0.58 when it was published.",
+          );
+          await expect(problemsPanel()).toContainText("No problems");
+          await expect(problemsPanel()).not.toContainText("Run a check");
+          expect(fixture.validations).toEqual([]);
+        }
+        // Without a published version nothing is known to them, and nothing
+        // is asked of them.
+        for (const options of [
+          { role: "viewer" },
+          { role: "admin", archived: true },
+        ]) {
+          await load(options);
+          await expect(verdict()).toHaveText(
+            "Not checked since the last edit.",
+          );
+          await expect(problemsPanel()).toContainText("Not checked");
+          await expect(problemsPanel()).not.toContainText("Run a check");
+          expect(fixture.validations).toEqual([]);
+        }
+        // The people who can check are still told how.
+        await load({ role: "editor" });
+        await expect(verdict()).toHaveText(instruction);
+        await load({
+          role: "viewer",
+          published: true,
+          width: 375,
+          height: 900,
+        });
+        // On a phone the bar leaves the sentence out; the open panel has it.
+        await problemsPanel()
+          .getByRole("button", { name: "No problems", exact: true })
+          .click();
+        await expect(problemsPanel()).toContainText(
+          "Nothing to fix. Version 1 was checked by Vector 0.58 when it was published.",
+        );
+        await noOverflow("viewer check verdict 375");
+        await page.screenshot({
+          path: resolve(output, "viewer-check-verdict-375.png"),
+          animations: "disabled",
+        });
+        await axe("viewer check verdict");
+      },
+    );
+    await check(
+      "unparsed code and unfinished fields are never sent or shown as checked",
       async () => {
         await load();
         await pass();
-        fixture.validationError = true;
-        await control().click();
-        await state("failed");
-        await expect(
-          page
-            .getByText("Synthetic validator unavailable", { exact: true })
-            .first(),
-        ).toBeVisible();
-        await pass();
-        await hideChecks();
         await button("Code").click();
         await page.getByLabel("Format", { exact: true }).selectOption("json");
         const code = page.getByRole("textbox", {
@@ -1475,47 +2429,61 @@ try {
           exact: true,
         });
         await code.fill("{invalid");
-        await state("stale");
+        // The syntax error in the unapplied text is the problem that counts.
+        await state("problems");
+        await expect(control()).toHaveAccessibleName(
+          "Open Problems: 1 problem",
+        );
         const before = fixture.validations.length;
-        await control().click();
-        await state("failed");
+        await retry().click();
+        await expect(
+          page.getByText("Fix the code syntax before checking it.", {
+            exact: true,
+          }),
+        ).toBeVisible();
+        await state("problems");
         expect(fixture.validations).toHaveLength(before);
+        // A code problem leads to where the text breaks.
+        await problemsPanel().locator(".problems-item").first().click();
+        await expect(code).toBeFocused();
         await discard();
         await button("Graph").click();
         await pass();
         await sample();
         await rate().fill("-");
         await state("stale");
+        await expect(verdict()).toHaveText(
+          "Apply or discard the field you're editing, then check again.",
+        );
         const count = fixture.validations.length;
-        await control().click();
-        await state("failed");
+        await retry().click();
+        await state("stale");
         expect(fixture.validations).toHaveLength(count);
         await expect(rate()).toHaveValue("-");
       },
     );
     await check(
-      "applied configuration, pending scalar, raw JSON and code edits invalidate the last successful check",
+      "applied configuration, raw JSON and code edits make the last check stale until checked again",
       async () => {
         await load();
         await pass();
         await sample();
         await rate().fill("20");
         await state("stale");
+        await expect(verdict()).toHaveText("Changed since the last check.");
         await pass();
         expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
           20,
         );
-        await hideChecks();
-        await rate().fill("-");
+        await rate().fill("10");
         await state("stale");
-        await discard();
-        await pass();
-        await sample();
+        // Returning to the checked draft needs no new check.
+        await rate().fill("20");
+        await state("device");
         await (await fieldJSON("Exclude")).fill('{"unfinished":');
         await state("stale");
         await discard();
         await pass();
-        await hideChecks();
         await button("Code").click();
         await page.getByLabel("Format", { exact: true }).selectOption("json");
         const next = structuredClone(fixture.document.config);
@@ -1527,6 +2495,33 @@ try {
           })
           .fill(JSON.stringify(next));
         await state("stale");
+        await pass(true);
+        // The check reviewed the unapplied Code text, not the saved draft.
+        expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
+          30,
+        );
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    await check(
+      "a result for an earlier draft never marks newer edits checked, and the editor stays usable while checking",
+      async () => {
+        await load();
+        await pass();
+        await sample();
+        fixture.holdValidation = true;
+        await runCheck();
+        await state("checking");
+        await expect.poll(() => fixture.pendingValidations.length).toBe(1);
+        // Checking never locks the editor.
+        await rate().fill("30");
+        await expect(rate()).toHaveValue("30");
+        fixture.pendingValidations.shift()();
+        await state("stale");
+        await expect(verdict()).toHaveText("Changed since the last check.");
+        expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
+          10,
+        );
         await pass();
         expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
           30,
@@ -1534,42 +2529,42 @@ try {
       },
     );
     await check(
-      "late successful responses cannot mark a newer configuration or unfinished scalar edit passed",
+      "auto-check runs once after an edit pause, stays quiet on failure and can be turned off",
       async () => {
-        for (const value of ["30", "-"]) {
-          await load();
-          await pass();
-          await sample();
-          fixture.holdValidation = true;
-          await control().click();
-          await state("checking");
-          await expect.poll(() => fixture.pendingValidations.length).toBe(1);
-          // A queued native input models an edit callback arriving after the request.
-          // Normal pointer interaction is deliberately inert while the check runs.
-          await rate().evaluate((input, value) => {
-            Object.getOwnPropertyDescriptor(
-              HTMLInputElement.prototype,
-              "value",
-            ).set.call(input, value);
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-          }, value);
-          await expect(rate()).toHaveValue(value);
-          fixture.pendingValidations.shift()();
-          await state("stale");
-          await showChecks();
-          await expect(checkResults()).not.toContainText(
-            "Device validation pending",
-          );
-          expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
-            10,
-          );
-          if (value === "30") {
-            await pass();
-            expect(
-              fixture.validations.at(-1).config.transforms.sample.rate,
-            ).toBe(30);
-          }
-        }
+        await load({ autoCheck: true });
+        await expect.poll(() => fixture.validations.length).toBe(1);
+        await state("device");
+        await sample();
+        await rate().fill("40");
+        await state("stale");
+        await expect.poll(() => fixture.validations.length).toBe(2);
+        expect(fixture.validations.at(-1).config.transforms.sample.rate).toBe(
+          40,
+        );
+        await state("device");
+        fixture.validationError = true;
+        await rate().fill("41");
+        await expect.poll(() => fixture.validations.length).toBe(3);
+        // An automatic attempt that fails keeps the last result and waits
+        // for the next edit instead of retrying in a loop.
+        await state("stale");
+        await page.waitForTimeout(2500);
+        expect(fixture.validations).toHaveLength(3);
+        const toggle = problemsPanel().getByRole("checkbox", {
+          name: "Auto-check",
+          exact: true,
+        });
+        await expect(toggle).toBeChecked();
+        await toggle.uncheck();
+        fixture.validationError = false;
+        await rate().fill("42");
+        await page.waitForTimeout(2500);
+        expect(fixture.validations).toHaveLength(3);
+        expect(
+          await page.evaluate(() =>
+            localStorage.getItem("vectory.editor.auto-check"),
+          ),
+        ).toBe("off");
       },
     );
     await check(
@@ -1583,53 +2578,149 @@ try {
           const colors = {};
           const color = () =>
             control().evaluate((element) => getComputedStyle(element).color);
-          colors.neutral = await color();
+          const icon = () =>
+            control()
+              .locator("svg")
+              .evaluate((element) => getComputedStyle(element).color);
+          colors.unchecked = await color();
           await pass();
-          colors.partial = await color();
+          colors.device = await icon();
           await page.screenshot({
             path: resolve(
               output,
-              "pipeline-check-partial-375-" + theme + ".png",
+              "pipeline-check-device-375-" + theme + ".png",
             ),
             animations: "disabled",
           });
-          await axe("partial pipeline check " + theme);
-          fixture.validationNative = true;
-          await control().click();
-          await state("passed");
-          await showChecks();
-          await expect(checkResults()).toContainText("Vector checks passed");
-          colors.passed = await color();
-          await page.screenshot({
-            path: resolve(
-              output,
-              "pipeline-check-passed-375-" + theme + ".png",
-            ),
-            animations: "disabled",
-          });
+          await axe("checked pipeline " + theme);
           fixture.validationValid = false;
-          await control().click();
-          await state("failed");
-          await showChecks();
-          colors.failed = await color();
-          expect(colors.partial).not.toBe(colors.neutral);
-          expect(colors.passed).not.toBe(colors.partial);
-          expect(colors.passed).not.toBe(colors.neutral);
-          expect(colors.failed).not.toBe(colors.passed);
+          await runCheck();
+          await state("problems");
+          colors.problems = await color();
+          expect(colors.problems).not.toBe(colors.unchecked);
+          expect(colors.device).not.toBe(colors.problems);
           measurements.push({ label: "check colors " + theme, ...colors });
           await noOverflow("check " + theme);
-          await axe("failed pipeline check " + theme);
+          await axe("pipeline problems " + theme);
           await page.screenshot({
             path: resolve(
               output,
-              "pipeline-check-failed-375-" + theme + ".png",
+              "pipeline-check-problems-375-" + theme + ".png",
             ),
             animations: "disabled",
           });
         }
       },
     );
-    expect(results).toHaveLength(6);
+    await check(
+      "starters leave out what must be chosen and write what Vector reads, and Vector's refusal of a value lands on its step and setting",
+      async () => {
+        await load();
+        // An HTTP Server decodes JSON, and its card says what it does.
+        await button("Add component").click();
+        await choose("http_server", "Sources");
+        await saved((doc) => Object.keys(doc.config.sources).length === 2);
+        expect(fixture.document.config.sources.http_in).toEqual({
+          type: "http_server",
+          address: "127.0.0.1:8088",
+          decoding: { codec: "json" },
+        });
+        const card = page.locator('.react-flow__node[data-id="http_in"]');
+        await expect(card).toContainText("JSON decoding");
+        await expect(card).not.toContainText("encoding");
+        // An HTTP destination has no URL until one is entered: the local
+        // check names it, and Vector never sees an empty one.
+        await closeInspector();
+        await button("Add component").click();
+        await menu()
+          .getByRole("button", { name: "Destinations", exact: true })
+          .click();
+        await menu()
+          .getByRole("textbox", { name: "Search components" })
+          .fill("http");
+        await menu()
+          .locator(".canvas-component-result")
+          .filter({ has: page.locator("code", { hasText: /^http$/ }) })
+          .click();
+        await expect(menu()).toHaveCount(0);
+        await saved((doc) => Object.keys(doc.config.sinks).length === 3);
+        expect(fixture.document.config.sinks.http_out).toEqual({
+          type: "http",
+          inputs: [],
+          encoding: { codec: "json" },
+        });
+        await control().click();
+        const missing = problemsPanel()
+          .locator(".problems-group", { hasText: "http_out" })
+          .locator(".problems-item", { hasText: "Enter uri." });
+        await expect(missing).toBeVisible();
+        await missing.click();
+        await expect(
+          page
+            .locator(".editor-inspector")
+            .getByLabel("Destination URL", { exact: true }),
+        ).toBeFocused();
+        await page.screenshot({
+          path: resolve(output, "starter-destination-1440-light.png"),
+          animations: "disabled",
+        });
+
+        // Vector's own refusal of a value, as the server files it: under the
+        // step it belongs to, beside the setting, never under the pipeline.
+        const refused = baseDocument();
+        refused.config.sinks.out_http = {
+          type: "http",
+          inputs: ["seed"],
+          uri: "http://127.0.0.1:9/ingest",
+          encoding: { codec: "json" },
+          batch: { max_events: 0 },
+        };
+        const refusal = [
+          {
+            severity: "error",
+            section: "sinks",
+            component: "out_http",
+            field: "batch.max_events",
+            code: "invalid_value",
+            message: "`max_events` must be greater than zero.",
+          },
+        ];
+        await load({ document: refused });
+        fixture.validationDiagnostics = refusal;
+        await control().click();
+        await state("problems");
+        await expect(problemsPanel().locator(".problems-group")).toHaveCount(1);
+        const group = problemsPanel().locator(".problems-group");
+        await expect(group.locator("code").first()).toHaveText("out_http");
+        await expect(group.locator(".problems-location")).toHaveText(
+          "batch.max_events",
+        );
+        await expect(problemsPanel()).not.toContainText("Pipeline settings");
+        await group.locator(".problems-item").click();
+        await expect(page.locator(".editor-inspector")).toContainText(
+          "out_http",
+        );
+        for (const [width, theme] of [
+          [1440, "light"],
+          [1440, "dark"],
+          [390, "light"],
+        ]) {
+          await load({ document: refused, width, height: 900 });
+          fixture.validationDiagnostics = refusal;
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          await control().click();
+          await state("problems");
+          await noOverflow(`Vector's refusal on its step ${width} ${theme}`);
+          await page.screenshot({
+            path: resolve(output, `problems-refusal-${width}-${theme}.png`),
+            animations: "disabled",
+          });
+        }
+      },
+    );
+    expect(results).toHaveLength(12);
   } else if (nodeActionsOnly) {
     const nodeMenu = () =>
       page.getByRole("menu", { name: "Step: sample", exact: true });
@@ -1797,32 +2888,27 @@ try {
     expect(results).toHaveLength(2);
   } else if (checksLayoutOnly) {
     await check(
-      "pipeline checks open on hover or focus, close without a manual action, and remain contained at 375px and 899px",
+      "check results stay in the Problems panel, contained and accessible at 375px and 899px, and lead to the field",
       async () => {
         await load({ width: 375, height: 900 });
-        const trigger = button("Check pipeline");
-        const popover = page.getByRole("dialog", {
-          name: "Pipeline check results",
-        });
-        await trigger.hover();
-        await expect(popover).toBeVisible();
+        const trigger = checkButton();
+        await expect(trigger).toHaveAttribute("data-check-state", "unchecked");
+        await expect(problemsPanel()).toBeVisible();
         expect(fixture.validations).toHaveLength(0);
+        fixture.validationValid = false;
         await trigger.click();
         await expect.poll(() => fixture.validations.length).toBe(1);
-        await expect(trigger).toHaveAttribute("data-check-state", "partial");
-        await trigger.hover();
-        await expect(popover).toBeVisible();
-        await expect(popover).toContainText("Device validation pending");
-        await expect(button("Close pipeline checks")).toHaveCount(0);
+        await expect(trigger).toHaveAttribute("data-check-state", "problems");
+        await expect(trigger).toHaveAccessibleName("Open Problems: 1 problem");
+        const list = problemsPanel().locator("#pipeline-problems-list");
+        await expect(list).toContainText("Synthetic configuration rejected.");
         for (const width of [375, 899]) {
           await page.setViewportSize({ width, height: 900 });
-          await trigger.hover();
-          await expect(popover).toBeVisible();
-          const bounds = await popover.boundingBox();
+          const bounds = await problemsPanel().boundingBox();
           measurements.push({
-            label: `check results ${width}px`,
+            label: `problems panel ${width}px`,
             viewport_width: width,
-            popover: bounds,
+            panel: bounds,
           });
           await page.screenshot({
             path: resolve(output, `editor-check-results-${width}-light.png`),
@@ -1830,23 +2916,32 @@ try {
           });
           expect(bounds.x).toBeGreaterThanOrEqual(0);
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
-          expect(bounds.y).toBeGreaterThanOrEqual(0);
-          expect(bounds.y + bounds.height).toBeLessThanOrEqual(900);
           await noOverflow(`check results ${width}px`);
         }
         await page.setViewportSize({ width: 375, height: 900 });
-        await trigger.hover();
-        await axe("mobile pipeline check results");
-        await page.mouse.move(0, 0);
-        await button("Graph").focus();
-        await expect(popover).toHaveCount(0);
-        await trigger.focus();
-        await expect(popover).toBeVisible();
-        await expect(trigger).toBeFocused();
-        await expect(popover).toContainText("Device validation pending");
-        await page.keyboard.press("Escape");
-        await expect(popover).toHaveCount(0);
-        await expect(trigger).toBeFocused();
+        await axe("mobile pipeline problems");
+        const toggle = problemsPanel().locator(".problems-toggle");
+        await expect(toggle).toHaveAttribute("aria-expanded", "true");
+        await toggle.focus();
+        await page.keyboard.press("Enter");
+        await expect(list).toHaveCount(0);
+        await page.keyboard.press("Enter");
+        await expect(list).toBeVisible();
+        // A finding opens its step and focuses the option it names. The
+        // mobile component sheet covers the list until it closes.
+        await list
+          .getByRole("button", { name: /Synthetic configuration rejected/ })
+          .click();
+        const rate = page
+          .locator(".editor-inspector")
+          .getByLabel("One in every", { exact: true });
+        await expect(rate).toBeFocused();
+        await expect(
+          page.locator('.editor-inspector [data-field-path="rate"]'),
+        ).toContainText("Synthetic configuration rejected.");
+        await expect(problemsPanel()).toBeHidden();
+        await button("Close component settings").click();
+        await expect(problemsPanel()).toBeVisible();
         expect(fixture.validations).toHaveLength(1);
         expect(fixture.mutations).toEqual([]);
       },
@@ -1916,7 +3011,6 @@ try {
             const node = page
               .locator(`.pipeline-node[data-pipeline-category="${category}"]`)
               .first();
-            await expect(node).toHaveCSS("box-shadow", "none");
             const color = await node
               .locator(".pipeline-node-kind")
               .evaluate((element) => getComputedStyle(element).color);
@@ -2001,13 +3095,11 @@ try {
             '.editor-inspector[data-pipeline-category="transforms"]',
           );
           await expect(inspector).toBeVisible();
-          await expect(inspector.locator(".pipeline-category-label")).toHaveCSS(
+          // The category tone lives on the inspector icon; its small
+          // category label stays muted beside the component name.
+          await expect(inspector.locator(".editor-inspector-icon")).toHaveCSS(
             "color",
             categoryColors.transforms,
-          );
-          await expect(page.locator(".pipeline-node-selected")).toHaveCSS(
-            "box-shadow",
-            "none",
           );
           await expect(page.locator(".pipeline-node-selected")).toHaveCSS(
             "outline-style",
@@ -2040,13 +3132,15 @@ try {
         for (const name of [
           "Graph",
           "Code",
-          "Check pipeline",
           "Pipeline settings",
           "Review & publish",
         ])
           await expect(
             toolbar.getByRole("button", { name, exact: true }),
           ).toBeVisible();
+        await expect(checkButton()).toHaveAccessibleName(
+          "Check pipeline: Not checked",
+        );
         await expect(
           toolbar.locator("summary").filter({ hasText: "Actions" }),
         ).toBeVisible();
@@ -2156,7 +3250,14 @@ try {
         await menu()
           .getByRole("textbox", { name: "Search components" })
           .fill("prometheus_exporter");
-        await expect(menu().locator(".canvas-component-result")).toHaveCount(0);
+        // Incompatible steps stay listed, greyed, with the reason.
+        await expect(menu().locator(".canvas-component-result")).toHaveCount(1);
+        await expect(
+          menu().locator(".canvas-component-result"),
+        ).toHaveAttribute("aria-disabled", "true");
+        await expect(menu()).toContainText(
+          "Accepts metrics; branch.accepted sends logs.",
+        );
         await choose("sample", "Transforms");
         await saved((doc) => Object.keys(doc.config.transforms).length === 3);
         const added = Object.keys(fixture.document.config.transforms).find(
@@ -2247,7 +3348,7 @@ try {
           .locator(".editor-inspector")
           .getByLabel("One in every", { exact: true });
         await rate.fill("-");
-        await button("Check pipeline").click();
+        await checkButton().click();
         await expect(page.locator(".editor-inspector")).toContainText(
           "Resolve or apply pending field changes",
         );
@@ -2261,7 +3362,7 @@ try {
         await rate.fill("20");
         await closeInspector();
         await saved((doc) => doc.config.transforms.sample.rate === 20);
-        await button("Check pipeline").click();
+        await checkButton().click();
         await expect.poll(() => fixture.validations.length).toBe(1);
         expect(fixture.validations[0].config.transforms.sample.rate).toBe(20);
         await button("Code").click();
@@ -2579,11 +3680,89 @@ try {
             exact: true,
           }),
         ).toHaveValue("23");
-        await expect(button("Save draft")).toBeEnabled();
+        await expect(
+          page
+            .locator(".editor-toolbar")
+            .getByRole("button", { name: "Save", exact: true }),
+        ).toBeEnabled();
         expect(fixture.mutations).toEqual([]);
       },
     );
-    expect(results).toHaveLength(13);
+    await check(
+      "a link that names a step and a field opens the pipeline with that step selected and the field in view; a step or field this draft lacks opens it with one line saying so",
+      async () => {
+        await load();
+        // Each visit is a fresh load of the link, as when it is followed.
+        const visit = async (query) => {
+          await page.goto(
+            `${origin}/__editor-canvas-fixture#/configurations/${pipelineId}${query}`,
+          );
+          await page.reload();
+          await expect(page.locator(".react-flow__node")).toHaveCount(5);
+        };
+        const inspector = () => page.locator(".editor-inspector");
+        const rate = () =>
+          inspector().getByRole("textbox", {
+            name: "One in every",
+            exact: true,
+          });
+        // The toast: the same words also sit in the screen-reader live region.
+        const note = (text) =>
+          page
+            .getByRole("region", { name: "Notifications" })
+            .getByText(text, { exact: true });
+        await visit("?select=sample&field=rate");
+        await expect(inspector()).toBeVisible();
+        await expect(rate()).toBeFocused();
+        await expect(page.locator(".pipeline-node-selected")).toHaveCount(1);
+        await expect(
+          page.locator(
+            '.react-flow__node[data-id="sample"] .pipeline-node-selected, .react-flow__node[data-id="sample"].pipeline-node-selected',
+          ),
+        ).toHaveCount(1);
+        await expect(
+          page.locator(".toast-stack, [role=status]"),
+        ).not.toContainText("in this draft");
+        // The step alone selects it.
+        await visit("?select=branch");
+        await expect(inspector()).toBeVisible();
+        await expect(inspector()).toContainText("branch");
+        await expect(page.locator(".pipeline-node-selected")).toHaveCount(1);
+        // A VRL setting: the cursor goes into its program.
+        await visit("?select=branch&field=route.accepted");
+        await expect(inspector().locator(".cm-content").first()).toBeFocused();
+        await expect(page.getByText(/no “route.accepted” setting/)).toHaveCount(
+          0,
+        );
+        // A step this draft does not have: the pipeline opens, nothing is
+        // selected, and one line says why.
+        await visit("?select=missing&field=rate");
+        await expect(
+          note("There is no step called “missing” in this draft."),
+        ).toBeVisible();
+        await expect(inspector()).toHaveCount(0);
+        await expect(page.locator(".react-flow__node")).toHaveCount(5);
+        // A field the step does not have: the step opens, with that line.
+        await visit("?select=sample&field=nothing");
+        await expect(
+          note("sample has no “nothing” setting in this draft."),
+        ).toBeVisible();
+        await expect(inspector()).toBeVisible();
+        await expect(page.locator(".pipeline-node-selected")).toHaveCount(1);
+        expect(fixture.mutations).toEqual([]);
+        // Moving to another step and field inside the open editor works too.
+        await page.evaluate((id) => {
+          location.hash = `#/configurations/${id}?select=branch`;
+        }, pipelineId);
+        await expect(inspector()).toContainText("branch");
+        await page.evaluate((id) => {
+          location.hash = `#/configurations/${id}?select=sample&field=rate`;
+        }, pipelineId);
+        await expect(rate()).toBeFocused();
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    expect(results).toHaveLength(14);
   }
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
@@ -2636,27 +3815,29 @@ try {
     JSON.stringify(
       {
         generated_at: new Date().toISOString(),
-        scope: editorHeaderOnly
-          ? editorHeaderLayoutOnly
-            ? "Focused header layout follow-up after title sizing CSS: read-only metadata, computed899/375px geometry, light/dark screenshots and eight accessibility scans. Earlier metadata-write/status/guard groups were not rerun; no real preview/server/device mutations."
-            : "Actual App/editor with isolated synthetic API: metadata entry and CAS failures, pending field/code guards, status transitions, readonly boundaries and responsive accessibility. All writes remain in the disposable in-memory fixture; no real preview/server/device mutations."
-          : connectionStyleOnly
-            ? "Actual App/editor with isolated synthetic API: local connection style path/preview/persistence, unchanged configuration/check state, selected-edge reconnect/undo, readonly preferences and responsive accessibility. Only reconnect/undo writes the disposable in-memory fixture; no preview/server/device mutations."
-            : variablesOnly
-              ? "Actual App/editor with isolated synthetic API: version-variable declaration editing, explicit draft CAS save, discard, read-only boundaries, and focused accessibility scans. All writes remain in the disposable in-memory fixture; no real publication, deployment, or device changes."
-            : splitSaveOnly
-              ? splitSaveFollowup
-                ? "Final split-save follow-up: held-save failure/retry and 899/800/375px popup geometry/accessibility after nonmodal menu and error-reset changes; other earlier behavioral groups were not rerun. Synthetic in-memory API only."
-                : "Focused actual App/editor split-save menu with isolated synthetic draft CAS, held/failed saves and published-version fixtures. No real preview validation, save, publication or deployment requests."
-              : checkStateOnly
-                ? "Focused actual App/editor check-state and hover-result regressions with isolated synthetic validation and draft responses. Includes queued native input while a check is held; viewing cached results never initiates validation. No real server/preview validation or device/publication mutations."
-                : nodeActionsOnly
-                  ? "Focused node-action and inspector ownership review using the actual App/editor with isolated synthetic API: duplicate/remove, exact undo, declined pending-field removal, keyboard access, read-only guards and three viewport/theme accessibility scans. No real server, preview or native device mutations."
-                  : checksLayoutOnly
-                    ? "Focused actual-App check-results hover/focus dismissal and viewport regression at 375px and 899px with a mocked structural-validation response. No real server validation or draft/publication/device mutations; earlier interaction groups were not rerun."
-                    : menuLayoutOnly
-                      ? "Focused CSS follow-up on actual App/editor: S3 icon sizing, compact two-result height, viewport containment and light/dark accessibility. Isolated GET-only synthetic API; the earlier seven interaction groups were not rerun for this CSS follow-up."
-                      : "Actual App/editor with isolated synthetic API and in-memory draft CAS; no preview, publication, enrollment, deployment, or native activation. Accessibility scope is limited to scanned states.",
+        scope: graphFitOnly
+          ? "Focused initial graph fit in the actual App/editor at 375px and 390px in both themes, plus desktop readability and selected-node visibility. Isolated synthetic GET-only API; no preview, save, publication, deployment, or device mutations."
+          : editorHeaderOnly
+            ? editorHeaderLayoutOnly
+              ? "Focused header layout follow-up after title sizing CSS: read-only metadata, computed899/375px geometry, light/dark screenshots and eight accessibility scans. Earlier metadata-write/status/guard groups were not rerun; no real preview/server/device mutations."
+              : "Actual App/editor with isolated synthetic API: metadata entry and CAS failures, pending field/code guards, status transitions, readonly boundaries and responsive accessibility. All writes remain in the disposable in-memory fixture; no real preview/server/device mutations."
+            : connectionStyleOnly
+              ? "Actual App/editor with isolated synthetic API: local connection style path/preview/persistence, unchanged configuration/check state, selected-edge reconnect/undo, readonly preferences and responsive accessibility. Only reconnect/undo writes the disposable in-memory fixture; no preview/server/device mutations."
+              : variablesOnly
+                ? "Actual App/editor with isolated synthetic API: version-variable declaration editing, explicit draft CAS save, discard, read-only boundaries, and focused accessibility scans. All writes remain in the disposable in-memory fixture; no real publication, deployment, or device changes."
+                : splitSaveOnly
+                  ? splitSaveFollowup
+                    ? "Final split-save follow-up: held-save failure/retry and 899/800/375px popup geometry/accessibility after nonmodal menu and error-reset changes; other earlier behavioral groups were not rerun. Synthetic in-memory API only."
+                    : "Focused actual App/editor save controls: visible Save, Ctrl/Cmd+S, save options and notes, held/failed saves, role boundaries and browser draft recovery, with isolated synthetic draft CAS and published-version fixtures. No real preview validation, save, publication or deployment requests."
+                  : checkStateOnly
+                    ? "Focused actual App/editor check states: labels, stale, pending and Code checks, unavailable checker, auto-check and color contrast, with isolated synthetic validation and draft responses. No real server/preview validation or device/publication mutations."
+                    : nodeActionsOnly
+                      ? "Focused node-action and inspector ownership review using the actual App/editor with isolated synthetic API: duplicate/remove, exact undo, declined pending-field removal, keyboard access, read-only guards and three viewport/theme accessibility scans. No real server, preview or native device mutations."
+                      : checksLayoutOnly
+                        ? "Focused actual-App Problems panel containment, keyboard toggle and problem-to-field navigation at 375px and 899px with a mocked validation response. No real server validation or draft/publication/device mutations; earlier interaction groups were not rerun."
+                        : menuLayoutOnly
+                          ? "Focused CSS follow-up on actual App/editor: S3 icon sizing, compact two-result height, viewport containment and light/dark accessibility. Isolated GET-only synthetic API; the earlier seven interaction groups were not rerun for this CSS follow-up."
+                          : "Actual App/editor with isolated synthetic API and in-memory draft CAS; no preview, publication, enrollment, deployment, or native activation. Accessibility scope is limited to scanned states.",
         passed: !failure,
         results,
         accessibility,

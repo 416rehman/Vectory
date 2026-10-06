@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { topics } from "../pages.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -217,7 +218,8 @@ try {
     const result = dialog
       .getByRole("listitem")
       .filter({ hasText: "Roll back deliberately" });
-    await expect(result.locator("mark")).toContainText(/rollback/i);
+    // A snippet can highlight the term more than once; the first is enough.
+    await expect(result.locator("mark").first()).toContainText(/rollback/i);
     const snippet = await result.locator("p").last().innerText();
     expect(snippet.length).toBeGreaterThan(35);
     evidence.search = {
@@ -260,9 +262,13 @@ try {
       await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Search", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Search", exact: true });
+    // Pagefind falls back to the longest indexed prefix of an unknown word, so
+    // start with a letter that never stands alone in the guides ("Ctrl Z" and
+    // the API's `q` parameter do; e, i, j, l and y do not at the time of
+    // writing: if this fails after a docs change, look for a new lone letter).
     await dialog
       .getByRole("textbox", { name: "Search", exact: true })
-      .fill("zzqnovectorydocmatch9371");
+      .fill("jxqnovectorydocmatch9371");
     await expect(dialog.getByText(/no results/i)).toBeVisible();
     evidence.search.empty_summary = await dialog
       .getByText(/no results/i)
@@ -272,15 +278,40 @@ try {
     await expect(dialog).not.toBeVisible();
   });
 
+  await test("common questions find the page that answers them", async () => {
+    // Words people type that the page titles don't always contain.
+    for (const [term, title] of [
+      ["quickstart", "Quickstart"],
+      ["ports", "Ports and network"],
+      ["firewall", "Ports and network"],
+      ["docs", "How can we help?"],
+    ]) {
+      await visit();
+      await page.getByRole("button", { name: "Search", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Search", exact: true });
+      await dialog
+        .getByRole("textbox", { name: "Search", exact: true })
+        .fill(term);
+      await expect(
+        dialog.getByText(new RegExp(`\\d+ results? for ${term}`, "i")),
+      ).toBeVisible();
+      await expect(
+        dialog.getByRole("link", { name: title, exact: true }).first(),
+      ).toBeVisible();
+      evidence.search[term] = title;
+      await page.keyboard.press("Escape");
+    }
+  });
+
   await test("heading anchors and article table of contents navigate to real sections", async () => {
     await visit("installation/");
     const anchor = page.getByRole("link", {
-      name: "Section titled “Prepare the host”",
+      name: "Section titled “Trust the server certificate”",
       exact: true,
     });
     await anchor.click();
     await expect(page).toHaveURL(
-      `${origin}/help/installation/#prepare-the-host`,
+      `${origin}/help/installation/#trust-the-server-certificate`,
     );
     const navigation = page.getByRole("navigation", {
       name: "On this page",
@@ -360,7 +391,8 @@ try {
   await test("every built help page fits a 375px viewport without document overflow", async () => {
     await page.setViewportSize({ width: 375, height: 812 });
     const pages = await htmlPages(dist);
-    expect(pages.length).toBe(13);
+    // Every registered page, plus the home page and the 404 page.
+    expect(pages.length).toBe(topics.length + 2);
     for (const file of pages) {
       const slug =
         file === "index.html"

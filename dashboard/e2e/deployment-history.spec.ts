@@ -173,7 +173,7 @@ test("deployment permalinks survive refresh and new tabs without triggering roll
       mutations.push(new URL(request.url()).pathname);
   });
   await page.goto("/#/" + origin + "/" + selected.id + "?page=1&action=cancel");
-  const detail = page.getByRole("dialog", {
+  const detail = page.getByRole("region", {
     name: "Deployment details",
     exact: true,
   });
@@ -185,42 +185,31 @@ test("deployment permalinks survive refresh and new tabs without triggering roll
   await expect(
     detail.getByRole("heading", { name: expectedTitle, exact: true }),
   ).toBeVisible();
-  await page.reload();
-  await expect(
-    detail.getByRole("heading", { name: expectedTitle, exact: true }),
-  ).toBeVisible();
-  await page.evaluate(() =>
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        writeText: () =>
-          Promise.reject(new Error("Synthetic clipboard denial")),
-      },
-    }),
-  );
-  await detail
-    .getByRole("button", { name: "Copy deployment link", exact: true })
-    .click();
-  const link = detail.getByLabel("Deployment link", { exact: true });
+  // The page is routed: its address becomes the exact link to share, without
+  // the ignored action, so it needs no copy-link row.
   const expectedLink = new URL(
     "/#/" + origin + "/" + selected.id + "?page=1",
     page.url(),
   ).href;
-  await expect(link).toHaveValue(expectedLink);
-  await expect(link).toBeFocused();
-  const opened = context.waitForEvent("page");
-  await detail
-    .getByRole("link", { name: "Open in new tab", exact: true })
-    .click();
-  const popup = await opened;
+  await expect(page).toHaveURL(expectedLink);
   await expect(
-    popup
-      .getByRole("dialog", { name: "Deployment details", exact: true })
+    detail.getByRole("button", { name: "Copy deployment link" }),
+  ).toHaveCount(0);
+  await page.reload();
+  await expect(
+    detail.getByRole("heading", { name: expectedTitle, exact: true }),
+  ).toBeVisible();
+  const tab = await context.newPage();
+  await tab.goto(expectedLink);
+  await expect(
+    tab
+      .getByRole("region", { name: "Deployment details", exact: true })
       .getByRole("heading", { name: expectedTitle, exact: true }),
   ).toBeVisible();
-  await popup.close();
+  await tab.close();
   await detail
-    .getByRole("button", { name: "Close dialog", exact: true })
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(page).toHaveURL(
     new URL("/#/" + origin + "?page=1", page.url()).href,

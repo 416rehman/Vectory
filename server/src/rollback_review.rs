@@ -1,5 +1,14 @@
 //! Reviewed rollback scope. The fingerprint is a compare-and-swap value, not
 //! authorization or a bearer credential. Only an authenticated actor may use it.
+//!
+//! Confirming a rollback also stops its rollout (cancelled, or unassigned at
+//! the priority ceiling) in the same transaction. Devices the rollout never
+//! released are excluded, and the review states what each of them runs once
+//! it stops: the real resolver runs the stop inside a savepoint, exactly as
+//! the assignment-removal review does. A device that keeps what it runs (a
+//! replacing canary defers to the assignment it replaces until it releases a
+//! device; a layered one never reached it) doesn't block the rollback; one
+//! that would switch to something this review doesn't cover does, by name.
 use crate::{
     State, auth, db,
     error::{ApiError, Result},
@@ -12,7 +21,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::{Row, SqliteConnection};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 const MAX_TARGETS: usize = 10_000;
 fn id(value: &str) -> Result<String> {
     let parsed = uuid::Uuid::parse_str(value)
@@ -44,6 +53,197 @@ pub(crate) fn token(request: &Value) -> Result<Option<&str>> {
 fn blocker(code: &str, reason: &str) -> Value {
     json!({"code":code,"reason":reason})
 }
+/// A device's desired configuration state as the resolver leaves it.
+async fn desired_states(
+    db: &mut SqliteConnection,
+    devices: &[String],
+) -> Result<BTreeMap<String, Value>> {
+    let rows = sqlx::query("SELECT d.id,d.assignment_id,d.desired_version_id,d.desired_generation,CASE WHEN json_type(d.data,'$.desired_artifact_sha256')='text' THEN json_extract(d.data,'$.desired_artifact_sha256') END AS sha256 FROM json_each(?) j JOIN devices d ON d.id=j.value")
+        .bind(json!(devices).to_string())
+        .fetch_all(&mut *db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("id"),
+                json!({"assignment_id":row.get::<Option<String>,_>("assignment_id"),"version_id":row.get::<Option<String>,_>("desired_version_id"),"generation":row.get::<i64,_>("desired_generation"),"sha256":row.get::<Option<String>,_>("sha256")}),
+            )
+        })
+        .collect())
+}
+/// What one device the rollout never released runs before and after the
+/// rollout stops, and a winning assignment still waiting to release it.
+struct Projection {
+    before: Value,
+    after: Value,
+    pending: Option<Value>,
+}
+/// Stops the source with the real resolver inside a savepoint that is always
+/// rolled back, then reads what the given devices would run.
+async fn project(
+    db: &mut SqliteConnection,
+    source: &Value,
+    action: &str,
+    devices: &[String],
+) -> Result<BTreeMap<String, Projection>> {
+    sqlx::query("SAVEPOINT rollback_review_projection")
+        .execute(&mut *db)
+        .await?;
+    let result = simulate(db, source, action, devices).await;
+    sqlx::query("ROLLBACK TO rollback_review_projection")
+        .execute(&mut *db)
+        .await?;
+    sqlx::query("RELEASE rollback_review_projection")
+        .execute(&mut *db)
+        .await?;
+    result
+}
+async fn simulate(
+    db: &mut SqliteConnection,
+    source: &Value,
+    action: &str,
+    devices: &[String],
+) -> Result<BTreeMap<String, Projection>> {
+    // Whatever the next scheduler pass delivers anyway is not this rollback's
+    // effect, so compare against that rather than the stored rows.
+    rollout::resolve(db).await?;
+    let before = desired_states(db, devices).await?;
+    let mut stopped = source.clone();
+    stopped["status"] = json!(if action == "unassign" {
+        "unassigned"
+    } else {
+        "cancelled"
+    });
+    db::update(db, "deployment", &stopped).await?;
+    rollout::resolve(db).await?;
+    let after = desired_states(db, devices).await?;
+    let scope: BTreeSet<String> = devices.iter().cloned().collect();
+    let winners = rollout::assignment_winners_for(db, Some(&scope)).await?;
+    let mut out = BTreeMap::new();
+    for device in devices {
+        let (Some(before), Some(after)) = (before.get(device), after.get(device)) else {
+            continue;
+        };
+        // A winner that hasn't released the device leaves it where it is
+        // until its own rollout reaches it.
+        let pending = winners
+            .get(&(device.clone(), "configuration".to_owned()))
+            .filter(|winner| winner["id"] != after["assignment_id"])
+            .cloned();
+        out.insert(
+            device.clone(),
+            Projection {
+                before: before.clone(),
+                after: after.clone(),
+                pending,
+            },
+        );
+    }
+    Ok(out)
+}
+/// Pipeline name and number for each version, in one read.
+async fn labels(
+    db: &mut SqliteConnection,
+    versions: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Value>> {
+    if versions.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let rows=sqlx::query("SELECT v.id,CASE WHEN json_type(v.data,'$.number')='integer' AND json_extract(v.data,'$.number') BETWEEN 1 AND 9007199254740991 THEN json_extract(v.data,'$.number') END AS number,CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END AS name FROM json_each(?) j JOIN records v ON v.kind='version' AND v.id=j.value LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')")
+        .bind(json!(versions).to_string())
+        .fetch_all(&mut *db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("id"),
+                json!({"configuration_name":row.get::<Option<String>,_>("name"),"version_number":row.get::<Option<i64>,_>("number")}),
+            )
+        })
+        .collect())
+}
+fn label(labels: &BTreeMap<String, Value>, version: Option<&str>) -> Value {
+    version
+        .and_then(|id| labels.get(id))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+/// "Web access logs v2" for a label, as a blocker names it.
+fn artifact(label: &Value) -> String {
+    match (
+        label["configuration_name"].as_str(),
+        label["version_number"].as_i64(),
+    ) {
+        (Some(name), Some(number)) => format!("{name} v{number}"),
+        (Some(name), None) => name.to_owned(),
+        (None, Some(number)) => format!("version {number}"),
+        (None, None) => "another version".to_owned(),
+    }
+}
+/// `text` cut to `max` characters, with an ellipsis where it was cut.
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+/// "edge-a, edge-b, edge-c and 4 more", at most three names.
+fn some_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [first, second, third] => format!("{first}, {second} and {third}"),
+        [first, second, third, rest @ ..] => {
+            format!("{first}, {second}, {third} and {} more", rest.len())
+        }
+    }
+}
+/// The devices and the version each would return to, for a rollback that
+/// cannot be one deployment: "edge-nyc-01 and edge-nyc-02 to Edge syslog
+/// processing v1; edge-fra-01 to QA refused sink v1". The text stays under
+/// the limit the dashboard accepts however many devices and versions there are.
+fn mixed_prior_versions(
+    returning: &[(String, String)],
+    labels: &BTreeMap<String, Value>,
+) -> String {
+    const GROUPS: usize = 3;
+    let mut by_version: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (device, version) in returning {
+        by_version
+            .entry(version.as_str())
+            .or_default()
+            .push(shorten(device, 40));
+    }
+    let mut groups: Vec<(String, Vec<String>)> = by_version
+        .into_iter()
+        .map(|(version, mut names)| {
+            names.sort();
+            (shorten(&artifact(&label(labels, Some(version))), 60), names)
+        })
+        .collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    let more = groups.len().saturating_sub(GROUPS);
+    let mut listed: Vec<String> = groups
+        .iter()
+        .take(GROUPS)
+        .map(|(version, names)| format!("{} to {version}", some_names(names)))
+        .collect();
+    if more > 0 {
+        listed.push(format!(
+            "{more} more {}",
+            if more == 1 { "version" } else { "versions" }
+        ));
+    }
+    format!(
+        "These devices would return to different versions: {}. Deploy each version to its own devices from its pipeline's Version history. No subset has been selected for you.",
+        listed.join("; ")
+    )
+}
 pub async fn get(
     AppState(s): AppState<State>,
     h: HeaderMap,
@@ -54,8 +254,7 @@ pub async fn get(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let source = id(&source)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let result = preview(&mut tx, &source).await?;
     tx.rollback().await?;
@@ -90,8 +289,12 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
     let mut excluded = Vec::new();
     let mut identities = Vec::new();
     let mut previous = BTreeSet::new();
+    // Each eligible device and the version it would return to.
+    let mut returning: Vec<(String, String)> = Vec::new();
+    let mut released_any = false;
     let mut unknown_previous = false;
-    let mut live_excluded = false;
+    // Live devices the rollback won't include: (position, UUID, desired version).
+    let mut live: Vec<(usize, String, Option<String>)> = Vec::new();
     let mut missing_prior_artifact = false;
     let mut invalid_prior_association = false;
     for row in rows {
@@ -115,9 +318,16 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
             None
         };
         let name: Option<String> = row.get("device_name");
+        released_any |= generation > 0;
         if let Some(reason) = reason {
-            excluded.push(json!({"device_id":device,"device_name":name,"reason":reason}));
-            live_excluded |= exists && !revoked && reason == "not_released";
+            if exists && !revoked {
+                live.push((
+                    excluded.len(),
+                    device.clone(),
+                    row.get::<Option<String>, _>("desired_version_id"),
+                ));
+            }
+            excluded.push(json!({"device_id":device,"device_name":name,"reason":reason,"effect":null,"current":null,"next":null}));
         } else {
             eligible
                 .push(json!({"device_id":device,"device_name":name,"artifact_sha256":prior_sha}));
@@ -133,6 +343,10 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
             }
             match prior.as_deref().and_then(|v| id(v).ok()) {
                 Some(v) => {
+                    returning.push((
+                        name.clone().unwrap_or_else(|| "An unnamed device".into()),
+                        v.clone(),
+                    ));
                     previous.insert(v);
                 }
                 None => unknown_previous = true,
@@ -147,22 +361,131 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
         blockers.push(blocker("SOURCE_NOT_ROLLBACKABLE","This assignment is not eligible for rollback. Create a new reviewed deployment instead."));
     }
     if eligible.is_empty() {
-        blockers.push(blocker(
-            "NO_ELIGIBLE_TARGETS",
-            "No original released identities remain eligible for this rollback.",
-        ));
+        if released_any {
+            blockers.push(blocker(
+                "NO_ELIGIBLE_TARGETS",
+                "No original released identities remain eligible for this rollback.",
+            ));
+        } else {
+            blockers.push(blocker(
+                "NOTHING_RELEASED",
+                "Nothing was released, so there is nothing to roll back.",
+            ));
+        }
     }
     if unknown_previous {
-        blockers.push(blocker("PRIOR_VERSION_UNKNOWN","At least one eligible identity has no recorded prior version. Review those devices individually before creating a deployment."));
+        blockers.push(blocker("PRIOR_VERSION_UNKNOWN","These devices ran their local config before this deployment, so there is no earlier version to roll back to. Remove this assignment to stop managing them; they keep the config they run now."));
     }
     if invalid_prior_association {
         blockers.push(blocker("PRIOR_ARTIFACT_MISMATCH","The recorded prior artifact no longer matches its target and generation. Preserve history and create a separately reviewed deployment."));
     }
     if previous.len() > 1 {
-        blockers.push(blocker("MIXED_PRIOR_VERSIONS","Eligible identities have different prior versions. Review them in separate deployments; no subset has been selected automatically."));
+        let prior_labels = labels(db, &previous).await?;
+        blockers.push(blocker(
+            "MIXED_PRIOR_VERSIONS",
+            &mixed_prior_versions(&returning, &prior_labels),
+        ));
     }
-    if live_excluded && matches!(source_status, "active" | "paused" | "completed") {
-        blockers.push(blocker("UNSAFE_SOURCE_REMOVAL","Stopping the original assignment would also remove its binding from unreleased live identities excluded from this rollback. Another assignment could then take effect on those identities. Create a separately reviewed deployment instead."));
+    // What each live excluded device runs once the rollout stops. A stopped
+    // rollout already let go of devices it never reached; an active, paused
+    // or completed one lets go now, so the resolver decides what they run.
+    let mut effects = Vec::new();
+    if !live.is_empty() {
+        let devices: Vec<String> = live.iter().map(|(_, device, _)| device.clone()).collect();
+        let mut projection = BTreeMap::new();
+        let mut unknown = false;
+        if matches!(source_status, "active" | "paused" | "completed") {
+            match project(db, &deployment, source_action, &devices).await {
+                Ok(map) => projection = map,
+                Err(error) if error.status == StatusCode::CONFLICT => {
+                    unknown = true;
+                    blockers.push(blocker("ASSIGNMENT_CONFLICT","Current assignments conflict, so it isn't clear what the devices this rollout never reached would run once it stops. Review active assignments, then review the rollback again."));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut versions = BTreeSet::new();
+        for (_, device, current) in &live {
+            match projection.get(device) {
+                Some(p) => {
+                    for version in [
+                        p.before["version_id"].as_str(),
+                        p.after["version_id"].as_str(),
+                        p.pending.as_ref().and_then(|w| w["version_id"].as_str()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        versions.insert(version.to_owned());
+                    }
+                }
+                None => versions.extend(current.clone()),
+            }
+        }
+        let labels = labels(db, &versions).await?;
+        let mut changing = Vec::new();
+        for (index, device, current) in &live {
+            if unknown {
+                break;
+            }
+            let entry = &mut excluded[*index];
+            let Some(p) = projection.get(device) else {
+                entry["effect"] = json!("unchanged");
+                entry["current"] = label(&labels, current.as_deref());
+                continue;
+            };
+            let same = p.before["version_id"] == p.after["version_id"]
+                && p.before["sha256"] == p.after["sha256"]
+                && p.before["generation"] == p.after["generation"];
+            let effect = if !same {
+                if p.after["version_id"].is_null() {
+                    "unmanaged"
+                } else {
+                    "fallback"
+                }
+            } else if p.pending.is_some() {
+                "retained_pending"
+            } else {
+                "unchanged"
+            };
+            let next = match effect {
+                "fallback" => p.after["version_id"].as_str(),
+                "retained_pending" => p.pending.as_ref().and_then(|w| w["version_id"].as_str()),
+                _ => None,
+            };
+            entry["effect"] = json!(effect);
+            entry["current"] = label(&labels, p.before["version_id"].as_str());
+            entry["next"] = label(&labels, next);
+            effects.push(json!({"device_id":device,"effect":effect,"before":p.before,"after":p.after,"pending":p.pending.as_ref().map(|w| w["id"].clone())}));
+            if matches!(effect, "fallback" | "unmanaged") {
+                changing.push((
+                    entry["device_name"]
+                        .as_str()
+                        .unwrap_or("A device it never reached")
+                        .to_owned(),
+                    effect,
+                    entry["next"].clone(),
+                ));
+            }
+        }
+        if let Some((name, effect, next)) = changing.first() {
+            let what = if *effect == "unmanaged" {
+                format!("leave {name} without a pipeline")
+            } else {
+                format!("switch {name} to {}", artifact(next))
+            };
+            let more = match changing.len() - 1 {
+                0 => String::new(),
+                1 => " 1 more device it never reached would change too.".to_owned(),
+                n => format!(" {n} more devices it never reached would change too."),
+            };
+            blockers.push(blocker(
+                "UNSAFE_SOURCE_REMOVAL",
+                &format!(
+                    "Stopping this rollout would also {what}, which this rollback doesn't cover.{more} Cancel the rollout first, then review the rollback."
+                ),
+            ));
+        }
     }
     let previous_version = if !unknown_previous && previous.len() == 1 {
         previous.first().cloned()
@@ -211,9 +534,11 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
             .await?,
         );
     }
+    // The token also binds what every excluded device runs once the rollout
+    // stops, so a change there invalidates the review.
     let review_token = db::hash(format!(
-        "vectory-rollback-review-v1\n{}",
-        json!({"source_deployment_id":source,"source_version_id":version,"source_status":source_status,"source_priority":source_priority,"source_action":source_action,"previous_version_id":previous_version,"previous_sha256":previous_sha,"targets":identities})
+        "vectory-rollback-review-v2\n{}",
+        json!({"source_deployment_id":source,"source_version_id":version,"source_status":source_status,"source_priority":source_priority,"source_action":source_action,"previous_version_id":previous_version,"previous_sha256":previous_sha,"targets":identities,"excluded_effects":effects})
     ));
     Ok(
         json!({"source_deployment_id":source,"source_version_id":version,"source_status":source_status,"source_action":source_action,"previous_version_id":previous_version,"previous_version_number":previous_number,"previous_configuration_id":configuration,"previous_configuration_name":configuration_name,"priority":priority,"eligible_devices":eligible,"excluded_devices":excluded,"ready":blockers.is_empty(),"blockers":blockers,"review_token":review_token}),
@@ -257,4 +582,102 @@ pub(crate) async fn commit(
         actor,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label_map(entries: &[(&str, &str, i64)]) -> BTreeMap<String, Value> {
+        entries
+            .iter()
+            .map(|(id, name, number)| {
+                (
+                    id.to_string(),
+                    json!({"configuration_name":name,"version_number":number}),
+                )
+            })
+            .collect()
+    }
+    fn returning(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+        entries
+            .iter()
+            .map(|(device, version)| (device.to_string(), version.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn devices_are_named_with_the_version_each_returns_to_largest_group_first() {
+        let text = mixed_prior_versions(
+            &returning(&[
+                ("edge-fra-01", "q"),
+                ("edge-nyc-02", "e"),
+                ("edge-nyc-01", "e"),
+            ]),
+            &label_map(&[
+                ("e", "Edge syslog processing", 1),
+                ("q", "QA refused sink", 1),
+            ]),
+        );
+        assert_eq!(
+            text,
+            "These devices would return to different versions: edge-nyc-01 and edge-nyc-02 to Edge syslog processing v1; edge-fra-01 to QA refused sink v1. Deploy each version to its own devices from its pipeline's Version history. No subset has been selected for you."
+        );
+    }
+
+    #[test]
+    fn long_lists_name_a_few_and_count_the_rest() {
+        let devices: Vec<(String, String)> = (1..=6)
+            .map(|n| (format!("edge-{n}"), "a".to_owned()))
+            .chain((1..=5).map(|n| (format!("other-{n}"), format!("v{n}"))))
+            .collect();
+        let mut names = BTreeMap::new();
+        names.insert(
+            "a".to_owned(),
+            json!({"configuration_name":"Edge","version_number":1}),
+        );
+        for n in 1..=5 {
+            names.insert(
+                format!("v{n}"),
+                json!({"configuration_name":format!("Pipeline {n}"),"version_number":n}),
+            );
+        }
+        let text = mixed_prior_versions(&devices, &names);
+        assert!(
+            text.contains("edge-1, edge-2, edge-3 and 3 more to Edge v1; other-1 to Pipeline 1 v1; other-2 to Pipeline 2 v2; 3 more versions."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_unlabelled_version_is_named_as_another_version() {
+        let text = mixed_prior_versions(
+            &returning(&[("edge-1", "x"), ("edge-2", "y")]),
+            &BTreeMap::new(),
+        );
+        assert!(
+            text.contains("edge-1 to another version; edge-2 to another version."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_text_fits_the_dashboard_limit_however_many_devices_and_versions() {
+        let long = "n".repeat(240);
+        let devices: Vec<(String, String)> = (0..10_000)
+            .map(|n| (format!("{long}{n}"), format!("version-{}", n % 50)))
+            .collect();
+        let names: BTreeMap<String, Value> = (0..50)
+            .map(|n| {
+                (
+                    format!("version-{n}"),
+                    json!({"configuration_name":format!("{long}{n}"),"version_number":n + 1}),
+                )
+            })
+            .collect();
+        let text = mixed_prior_versions(&devices, &names);
+        assert!(text.chars().count() <= 1000, "{}", text.chars().count());
+        assert!(text.contains("47 more versions."), "{text}");
+        assert!(text.contains('…'), "long names are cut with an ellipsis");
+    }
 }

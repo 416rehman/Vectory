@@ -1,0 +1,45 @@
+{
+  "description": "A Kafka source's decompression dictionary is a file under an allowed root.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9092",
+        "group_id": "g",
+        "topics": [
+          "logs"
+        ],
+        "decompression": {
+          "algorithm": "zstd",
+          "dictionary_path": "/etc/vector/kafka.dict"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.net:9092"
+    ],
+    "listeners": [],
+    "file_roots": [
+      "/etc/vector/kafka.dict"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

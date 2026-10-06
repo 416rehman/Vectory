@@ -11,7 +11,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sqlx::{QueryBuilder, Sqlite};
+use sqlx::{QueryBuilder, Row, Sqlite};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +20,7 @@ pub struct HistoryQuery {
     search: Option<String>,
     status: Option<String>,
     scheduled: Option<bool>,
+    group_id: Option<String>,
     page: Option<u64>,
     page_size: Option<u64>,
     sort: Option<String>,
@@ -87,15 +89,80 @@ pub(crate) fn query<T>(
     std::str::from_utf8(&decoded).map_err(|_| ApiError::invalid("Invalid query parameters"))?;
     parsed
         .map(|Query(value)| value)
-        .map_err(|_| ApiError::invalid("Invalid query parameters"))
+        .map_err(|rejection| rejected_parameter(&rejection.to_string()))
+}
+
+/// The refusal of a query serde could not read. When the parser names the
+/// parameter (one this request doesn't take, or one given twice), the answer
+/// names it too: the name only, bounded and limited to what a name holds, never
+/// a value.
+fn rejected_parameter(detail: &str) -> ApiError {
+    let named = |marker: &str| -> Option<String> {
+        let name = detail.split_once(marker)?.1.split('`').next()?;
+        (!name.is_empty()
+            && name.len() <= 40
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')))
+        .then(|| name.to_owned())
+    };
+    if let Some(name) = named("unknown field `") {
+        return ApiError::invalid(format!(
+            "Invalid query parameters: {name} isn't a parameter of this request"
+        ));
+    }
+    if let Some(name) = named("duplicate field `") {
+        return ApiError::invalid(format!(
+            "Invalid query parameters: {name} is given more than once"
+        ));
+    }
+    ApiError::invalid("Invalid query parameters")
 }
 
 const JOINS: &str = " LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id') LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')";
 const SCHEDULED: &str = "(json_extract(d.data,'$.scheduled_at') IS NOT NULL)";
 const ORDER: &str = "d.created_at DESC,d.id ASC";
 const NAME: &str = "COALESCE(NULLIF(CASE WHEN json_type(d.data,'$.name')='text' THEN substr(json_extract(d.data,'$.name'),1,120) END,''),CASE WHEN json_type(d.data,'$.policy')='object' THEN 'Agent settings' ELSE COALESCE(NULLIF(json_extract(c.data,'$.name'),''),'Pipeline deployment') END)";
-const STATUS_LABEL: &str = "CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Needs attention' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE json_extract(d.data,'$.status') END";
-const VERIFIED: &str = "(SELECT count(*) FROM deployment_targets st WHERE st.deployment_id=d.id AND st.state='verified_applied')";
+const STATUS_LABEL: &str = "CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN 'Rolled back' WHEN json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.replaced_by')='array' THEN 'Replaced' ELSE CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Failed' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE json_extract(d.data,'$.status') END END";
+const ROLLED_BACK: &str = "json_type(d.data,'$.rolled_back_by')='text'";
+/// The bounded pipeline name of deployment `n`'s version, so lineage says
+/// "Rollback of web-demo v3" rather than a bare number from another pipeline.
+/// Callers add the `WHERE` that picks `n`.
+const PIPELINE_NAME: &str = "CASE WHEN json_type(nc.data,'$.name')='text' THEN substr(json_extract(nc.data,'$.name'),1,240) END FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') JOIN records nc ON nc.kind='configuration' AND nc.id=json_extract(nv.data,'$.configuration_id')";
+/// The assignment of the deployment whose `data` is `deployment` was removed,
+/// and not by a rollback, which keeps counting what applied before it.
+fn assignment_removed(deployment: &str) -> String {
+    format!(
+        "(json_extract({deployment},'$.status')='unassigned' AND json_type({deployment},'$.rolled_back_by') IS NOT 'text')"
+    )
+}
+/// A target's state as counts and rows report it. The stored state is proof of
+/// what happened and stays as it was, but a device that was revoked (or no
+/// longer exists) and every device of a deployment whose assignment was removed
+/// no longer follow it: they read `removed`, **No longer targeted**, and don't
+/// count. `target` and `device` are the aliases of the target row and its left
+/// joined device, `deployment` the deployment's `data`.
+pub(crate) fn followed_state(target: &str, device: &str, deployment: &str) -> String {
+    format!(
+        "CASE WHEN {target}.state<>'removed' AND {} THEN 'removed' ELSE {target}.state END",
+        no_longer_follows(device, deployment)
+    )
+}
+/// The device was revoked (or no longer exists), or the deployment's
+/// assignment was removed: whatever the target's stored state, the device no
+/// longer follows the deployment.
+fn no_longer_follows(device: &str, deployment: &str) -> String {
+    format!(
+        "(COALESCE({device}.revoked,1)=1 OR {})",
+        assignment_removed(deployment)
+    )
+}
+const VERIFIED: &str = "(SELECT count(*) FROM deployment_targets st LEFT JOIN devices sv ON sv.id=st.device_id WHERE st.deployment_id=d.id AND st.state='verified_applied' AND COALESCE(sv.revoked,1)=0 AND NOT (json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.rolled_back_by') IS NOT 'text'))";
+/// Devices of deployment `d` that applied its version but aren't delivering
+/// it: `verified_applied` targets whose device has an open data-plane issue
+/// measured on that version. The rollout lanes count the same devices as
+/// failed (`degraded`); `state_counts` keeps their recorded state.
+pub(crate) const DEGRADED: &str = "(SELECT count(*) FROM deployment_targets dt JOIN devices dv ON dv.id=dt.device_id WHERE dt.deployment_id=d.id AND dt.state='verified_applied' AND dv.revoked=0 AND NOT (json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.rolled_back_by') IS NOT 'text') AND json_extract(dv.data,'$.data_plane.version_id')=json_extract(d.data,'$.version_id') AND json_type(dv.data,'$.data_plane.issues[0]')='object')";
 
 fn direction(value: Option<&str>, default: &'static str) -> Result<&'static str> {
     match value.unwrap_or(default) {
@@ -131,8 +198,9 @@ fn target_order(sort: Option<&str>, order: Option<&str>, terminal: bool) -> Resu
         "device_name" => "COALESCE(NULLIF(d.name,''),t.device_id) COLLATE NOCASE".to_owned(),
         "state" => {
             let pending = if terminal { "Not released" } else { "Waiting" };
+            let state = followed_state("t", "d", "dep.data");
             format!(
-                "CASE t.state WHEN 'verified_applied' THEN 'Applied and verified' WHEN 'desired' THEN 'Waiting for agent' WHEN 'pending' THEN '{pending}' WHEN 'written' THEN 'Applying' WHEN 'reload_requested' THEN 'Restarting Vector' WHEN 'verification_unknown' THEN 'Verification needed' WHEN 'rolled_back' THEN 'Rolled back' WHEN 'removed' THEN 'No longer targeted' ELSE replace(t.state,'_',' ') END COLLATE NOCASE"
+                "CASE {state} WHEN 'verified_applied' THEN 'Applied and verified' WHEN 'desired' THEN 'Waiting for agent' WHEN 'pending' THEN '{pending}' WHEN 'written' THEN 'Applying' WHEN 'reload_requested' THEN 'Restarting Vector' WHEN 'verification_unknown' THEN 'Verification needed' WHEN 'rolled_back' THEN 'Rolled back' WHEN 'removed' THEN 'No longer targeted' ELSE replace({state},'_',' ') END COLLATE NOCASE"
             )
         }
         "generation" => "t.generation".to_owned(),
@@ -148,11 +216,26 @@ fn history_filter(
     status: &str,
     scheduled: Option<bool>,
     search: &str,
+    group: Option<&str>,
 ) {
     q.push(" WHERE d.kind='deployment'");
-    if status != "all" {
+    if status == "rolled_back" {
+        // A rolled-back source keeps its stopped status; lineage decides the label.
+        q.push(" AND json_extract(d.data,'$.status') IN ('cancelled','unassigned') AND ")
+            .push(ROLLED_BACK);
+    } else if status != "all" {
         q.push(" AND json_extract(d.data,'$.status')=")
             .push_bind(status.to_owned());
+        if matches!(status, "cancelled" | "unassigned") {
+            q.push(" AND NOT COALESCE(").push(ROLLED_BACK).push(",0)");
+        }
+    }
+    if let Some(group) = group {
+        q.push(
+            " AND EXISTS(SELECT 1 FROM json_each(d.data,'$.selector.group_ids') g WHERE g.value=",
+        )
+        .push_bind(group.to_owned())
+        .push(")");
     }
     if let Some(scheduled) = scheduled {
         q.push(" AND ")
@@ -160,7 +243,7 @@ fn history_filter(
             .push(if scheduled { "=1" } else { "=0" });
     }
     if !search.is_empty() {
-        q.push(" AND instr(lower(CASE WHEN json_type(d.data,'$.name')='text' THEN substr(json_extract(d.data,'$.name'),1,120) ELSE '' END||' '||COALESCE(json_extract(c.data,'$.name'),'')||' '||COALESCE(json_extract(d.data,'$.status'),'')||' '||CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Needs attention' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE '' END||' '||CASE WHEN v.id IS NOT NULL THEN 'Version '||COALESCE(json_extract(v.data,'$.number'),'') ELSE '' END||' '||CASE WHEN json_type(d.data,'$.policy')='object' THEN 'Agent settings '||COALESCE(json_extract(d.data,'$.policy.heartbeat_seconds'),'')||'s heartbeat, '||CASE WHEN json_extract(d.data,'$.policy.sync_paused')=1 THEN 'Sync paused' ELSE 'Sync enabled' END||' Agent settings '||COALESCE(json_extract(d.data,'$.policy.heartbeat_seconds'),'')||'s heartbeat '||CASE WHEN json_extract(d.data,'$.policy.sync_paused')=1 THEN 'Sync paused' ELSE 'Sync enabled' END||CASE WHEN json_extract(d.data,'$.policy.sync_paused')=1 THEN ' Agent settings '||COALESCE(json_extract(d.data,'$.policy.heartbeat_seconds'),'')||'s heartbeat, Pause sync' ELSE '' END ELSE '' END),lower(")
+        q.push(" AND instr(lower(CASE WHEN json_type(d.data,'$.name')='text' THEN substr(json_extract(d.data,'$.name'),1,120) ELSE '' END||' '||COALESCE(json_extract(c.data,'$.name'),'')||' '||COALESCE(json_extract(d.data,'$.status'),'')||' '||CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Needs attention Failed' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE '' END||CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN ' Rolled back' ELSE '' END||CASE WHEN json_type(d.data,'$.replaced_by')='array' THEN ' Replaced' ELSE '' END||' '||CASE WHEN v.id IS NOT NULL THEN 'Version '||COALESCE(json_extract(v.data,'$.number'),'') ELSE '' END||' '||CASE WHEN json_type(d.data,'$.policy')='object' THEN 'Agent settings '||COALESCE(json_extract(d.data,'$.policy.heartbeat_seconds'),'')||'s heartbeat, '||CASE WHEN json_extract(d.data,'$.policy.sync_paused')=1 THEN 'Sync paused' ELSE 'Sync enabled' END||' Agent settings '||COALESCE(json_extract(d.data,'$.policy.heartbeat_seconds'),'')||'s heartbeat '||CASE WHEN json_extract(d.data,'$.policy.sync_paused')=1 THEN 'Sync paused' ELSE 'Sync enabled' END||CASE WHEN json_extract(d.data,'$.policy.sync_paused')=1 THEN ' Agent settings '||COALESCE(json_extract(d.data,'$.policy.heartbeat_seconds'),'')||'s heartbeat, Pause sync' ELSE '' END ELSE '' END),lower(")
             .push_bind(search.to_owned()).push("))>0");
     }
 }
@@ -168,19 +251,22 @@ fn count_query(
     status: &str,
     scheduled: Option<bool>,
     search: &str,
+    group: Option<&str>,
 ) -> QueryBuilder<'static, Sqlite> {
     let mut q = QueryBuilder::new("SELECT count(*) FROM records d");
     if !search.is_empty() {
         q.push(JOINS);
     }
-    history_filter(&mut q, status, scheduled, search);
+    history_filter(&mut q, status, scheduled, search, group);
     q
 }
 
 fn projection(q: &mut QueryBuilder<'_, Sqlite>, order: &str) {
     // CROSS JOIN pins the bounded page as the outer loop, so target aggregation
     // uses (deployment_id,state) lookups instead of scanning the whole fleet.
-    q.push(", counts AS MATERIALIZED (SELECT t.deployment_id,t.state,count(*) AS n FROM page p CROSS JOIN deployment_targets t ON t.deployment_id=p.id GROUP BY t.deployment_id,t.state) SELECT json_object(\
+    q.push(", counts AS MATERIALIZED (SELECT t.deployment_id,")
+        .push(followed_state("t", "dv", "p.data"))
+        .push(" AS state,count(*) AS n FROM page p CROSS JOIN deployment_targets t ON t.deployment_id=p.id LEFT JOIN devices dv ON dv.id=t.device_id GROUP BY 1,2) SELECT json_object(\
         'id',d.id,'rollback_idempotency',json('true'),'rollback_review',json('true'),'request_correlation',json('true'),'name',CASE WHEN json_type(d.data,'$.name')='text' THEN substr(json_extract(d.data,'$.name'),1,120) ELSE NULL END,\
         'configuration_id',json_extract(v.data,'$.configuration_id'),'configuration_name',json_extract(c.data,'$.name'),\
         'version_id',CASE WHEN json_type(d.data,'$.version_id')='text' THEN json_extract(d.data,'$.version_id') ELSE NULL END,'version_number',json_extract(v.data,'$.number'),\
@@ -190,13 +276,40 @@ fn projection(q: &mut QueryBuilder<'_, Sqlite>, order: &str) {
         'rollout',json_object('kind',json_extract(d.data,'$.rollout.kind'),'canary_size',json_extract(d.data,'$.rollout.canary_size'),'batch_size',json_extract(d.data,'$.rollout.batch_size'),'observation_seconds',json_extract(d.data,'$.rollout.observation_seconds'),'failure_threshold',json_extract(d.data,'$.rollout.failure_threshold')),\
         'target_count',COALESCE((SELECT sum(n) FROM counts WHERE deployment_id=d.id),0),\
         'verified_count',COALESCE((SELECT n FROM counts WHERE deployment_id=d.id AND state='verified_applied'),0),\
-        'state_counts',json((SELECT json_group_object(state,n) FROM counts WHERE deployment_id=d.id))) FROM page d");
+        'state_counts',json((SELECT json_group_object(state,n) FROM counts WHERE deployment_id=d.id)),'degraded',").push(DEGRADED).push(",\
+        'created_by_name',(SELECT substr(u.name,1,120) FROM users u WHERE u.id=COALESCE(json_extract(d.data,'$.created_by'),(SELECT json_extract(a.data,'$.actor') FROM records a WHERE a.kind='audit' AND json_extract(a.data,'$.target')=d.id AND json_extract(a.data,'$.action') IN ('deployment.create','deployment.schedule') LIMIT 1))),\
+        'policy_id',CASE WHEN json_type(d.data,'$.policy_id')='text' THEN json_extract(d.data,'$.policy_id') END,\
+        'policy_name',(SELECT substr(json_extract(sp.data,'$.name'),1,120) FROM records sp WHERE sp.kind='policy' AND sp.id=json_extract(d.data,'$.policy_id')),\
+        'rollback_available',json(CASE WHEN EXISTS(SELECT 1 FROM deployment_targets rt WHERE rt.deployment_id=d.id AND rt.generation>0 AND rt.state<>'removed' AND rt.previous_version_id IS NOT NULL) THEN 'true' ELSE 'false' END),\
+        'completed_at',CASE WHEN json_type(d.data,'$.completed_at')='text' THEN json_extract(d.data,'$.completed_at') END,\
+        'failed_at',CASE WHEN json_type(d.data,'$.failed_at')='text' THEN json_extract(d.data,'$.failed_at') END,\
+        'failure_reason',CASE WHEN json_type(d.data,'$.failure_reason')='text' THEN substr(json_extract(d.data,'$.failure_reason'),1,64) END,\
+        'cancelled_at',CASE WHEN json_type(d.data,'$.cancelled_at')='text' THEN json_extract(d.data,'$.cancelled_at') END,\
+        'removed_at',CASE WHEN json_type(d.data,'$.removed_at')='text' THEN json_extract(d.data,'$.removed_at') END,\
+        'status_before_removal',CASE WHEN json_type(d.data,'$.status_before_removal')='text' THEN substr(json_extract(d.data,'$.status_before_removal'),1,64) END,\
+        'status_before_rollback',CASE WHEN json_type(d.data,'$.status_before_rollback')='text' THEN substr(json_extract(d.data,'$.status_before_rollback'),1,64) END,\
+        'rolled_back_at',CASE WHEN json_type(d.data,'$.rolled_back_at')='text' THEN json_extract(d.data,'$.rolled_back_at') END,\
+        'rolled_back_by',CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN json_extract(d.data,'$.rolled_back_by') END,\
+        'rolled_back_to_version',(SELECT json_extract(lv.data,'$.number') FROM records lb JOIN records lv ON lv.kind='version' AND lv.id=json_extract(lb.data,'$.version_id') WHERE lb.kind='deployment' AND lb.id=json_extract(d.data,'$.rolled_back_by')),\
+        'rolled_back_to_configuration_name',(SELECT ");
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(d.data,'$.rolled_back_by')),\
+        'rollback_of',CASE WHEN json_type(d.data,'$.rollback_of')='text' THEN json_extract(d.data,'$.rollback_of') END,\
+        'rollback_of_version',(SELECT json_extract(lv.data,'$.number') FROM records lb JOIN records lv ON lv.kind='version' AND lv.id=json_extract(lb.data,'$.version_id') WHERE lb.kind='deployment' AND lb.id=json_extract(d.data,'$.rollback_of')),\
+        'rollback_of_configuration_name',(SELECT ");
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(d.data,'$.rollback_of')),\
+        'replaced_by',json(COALESCE((SELECT json_group_array(json_object('deployment_id',json_extract(e.value,'$.deployment_id'),'device_count',json_extract(e.value,'$.device_count'),'at',json_extract(e.value,'$.at'),'version_number',(SELECT json_extract(nv.data,'$.number') FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')),'configuration_name',(SELECT ");
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')))) FROM json_each(d.data,'$.replaced_by') e WHERE json_type(d.data,'$.replaced_by')='array'),'[]')),\
+        'replaces',json(COALESCE((SELECT json_group_array(json_object('deployment_id',r.value,'version_number',(SELECT json_extract(rv.data,'$.number') FROM records rd JOIN records rv ON rv.kind='version' AND rv.id=json_extract(rd.data,'$.version_id') WHERE rd.kind='deployment' AND rd.id=r.value),'configuration_name',(SELECT ");
+    // `rollback` tells a rollback's snapshot apart from the assignment it
+    // restored: both run the same pipeline version.
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=r.value),'rollback',json(CASE WHEN EXISTS(SELECT 1 FROM records rr WHERE rr.kind='deployment' AND rr.id=r.value AND json_type(rr.data,'$.rollback_of')='text') THEN 'true' ELSE 'false' END))) FROM json_each(d.data,'$.replaces') r WHERE json_type(d.data,'$.replaces')='array'),'[]'))) FROM page d");
     q.push(JOINS).push(" ORDER BY ").push(order);
 }
 fn page_query(
     status: &str,
     scheduled: Option<bool>,
     search: &str,
+    group: Option<&str>,
     size: i64,
     offset: i64,
     order: &str,
@@ -208,7 +321,7 @@ fn page_query(
     if !search.is_empty() || order.contains("c.data") {
         q.push(JOINS);
     }
-    history_filter(&mut q, status, scheduled, search);
+    history_filter(&mut q, status, scheduled, search, group);
     q.push(" ORDER BY ")
         .push(order)
         .push(" LIMIT ")
@@ -242,19 +355,39 @@ pub async fn history(
             | "failed"
             | "missed"
             | "unassigned"
+            | "rolled_back"
     ) {
         return Err(ApiError::invalid("Invalid deployment status"));
     }
+    let group = input
+        .group_id
+        .as_deref()
+        .map(|id| {
+            uuid::Uuid::parse_str(id)
+                .ok()
+                .map(|parsed| parsed.hyphenated().to_string())
+                .filter(|parsed| parsed == id)
+                .ok_or_else(|| ApiError::invalid("group_id must be a lowercase UUID"))
+        })
+        .transpose()?;
     let order = history_order(input.sort.as_deref(), input.direction.as_deref())?;
     let mut tx = s.pool.begin().await?;
-    let total: i64 = count_query(status, input.scheduled, search)
+    let total: i64 = count_query(status, input.scheduled, search, group.as_deref())
         .build_query_scalar()
         .fetch_one(&mut *tx)
         .await?;
-    let rows: Vec<String> = page_query(status, input.scheduled, search, size, offset, &order)
-        .build_query_scalar()
-        .fetch_all(&mut *tx)
-        .await?;
+    let rows: Vec<String> = page_query(
+        status,
+        input.scheduled,
+        search,
+        group.as_deref(),
+        size,
+        offset,
+        &order,
+    )
+    .build_query_scalar()
+    .fetch_all(&mut *tx)
+    .await?;
     let items = rows
         .iter()
         .map(|row| db::parse(row))
@@ -286,12 +419,28 @@ pub async fn summary(
             .await?
             .projection(&context);
     }
+    // The devices the request chose as its canary (absent when it chose none).
+    if let Some(chosen) = context["rollout"]["canary_device_ids"]
+        .as_array()
+        .filter(|chosen| !chosen.is_empty())
+    {
+        result["rollout"]["canary_device_ids"] = json!(chosen);
+    }
     Ok(Json(result))
 }
 fn target_filter(q: &mut QueryBuilder<'_, Sqlite>, id: &str, state: &str, search: &str) {
     q.push(" WHERE t.deployment_id=").push_bind(id.to_owned());
-    if state != "all" {
-        q.push(" AND t.state=").push_bind(state.to_owned());
+    // The stored state still narrows the read to an index range, except for
+    // `removed`, which also holds every device that no longer follows.
+    if state == "removed" {
+        q.push(" AND (t.state='removed' OR ")
+            .push(no_longer_follows("d", "dep.data"))
+            .push(")");
+    } else if state != "all" {
+        q.push(" AND t.state=")
+            .push_bind(state.to_owned())
+            .push(" AND NOT ")
+            .push(no_longer_follows("d", "dep.data"));
     }
     if !search.is_empty() {
         q.push(" AND (instr(lower(t.device_id),lower(")
@@ -308,12 +457,21 @@ fn target_query(
     page: Option<(i64, i64)>,
     order: &str,
 ) -> QueryBuilder<'static, Sqlite> {
+    let followed = followed_state("t", "d", "dep.data");
     let mut q = QueryBuilder::new(if page.is_some() {
-        "SELECT json_object('device_id',t.device_id,'device_name',d.name,'state',t.state,'generation',t.generation,'error',t.error,'original',json(CASE WHEN t.original=1 THEN 'true' ELSE 'false' END))"
+        "SELECT json_object('device_id',t.device_id,'device_name',d.name,'state',@STATE@,'generation',t.generation,'error',t.error,'original',json(CASE WHEN t.original=1 THEN 'true' ELSE 'false' END),\
+        'released_at',t.released_at,'verified_at',t.verified_at,'last_seen',CASE WHEN json_type(d.data,'$.last_seen')='text' THEN substr(json_extract(d.data,'$.last_seen'),1,64) END,\
+        'replaced_by',CASE WHEN @STATE@='removed' THEN (SELECT json_extract(e.value,'$.deployment_id') FROM records rp,json_each(rp.data,'$.replaced_by') e JOIN deployment_targets rn ON rn.deployment_id=json_extract(e.value,'$.deployment_id') AND rn.device_id=t.device_id WHERE rp.kind='deployment' AND rp.id=t.deployment_id AND json_type(rp.data,'$.replaced_by')='array' LIMIT 1) END,\
+        'next_release_at',(SELECT min(x.released_at) FROM deployment_targets x WHERE x.device_id=t.device_id AND x.deployment_id<>t.deployment_id AND x.released_at>t.released_at),\
+        '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
+        '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
+        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
+        '_data_plane',CASE WHEN @STATE@='verified_applied' AND json_type(d.data,'$.data_plane.issues')='array' AND json_extract(d.data,'$.data_plane.version_id')=(SELECT json_extract(p.data,'$.version_id') FROM records p WHERE p.kind='deployment' AND p.id=t.deployment_id) THEN json_extract(d.data,'$.data_plane.issues[0]') END)"
+            .replace("@STATE@", &followed)
     } else {
-        "SELECT count(*)"
+        "SELECT count(*)".to_owned()
     });
-    q.push(" FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id");
+    q.push(" FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id JOIN records dep ON dep.kind='deployment' AND dep.id=t.deployment_id");
     target_filter(&mut q, id, state, search);
     if let Some((size, offset)) = page {
         q.push(" ORDER BY ")
@@ -371,6 +529,10 @@ pub async fn targets(
         .iter()
         .map(|row| db::parse(row))
         .collect::<Result<Vec<_>>>()?;
+    for item in &mut items {
+        finish_target(item);
+    }
+    timelines(&mut tx, &id, &mut items).await?;
     let context = crate::canary_gate::load(&mut tx, &id).await?;
     if crate::canary_gate::enabled(&context) {
         let ids = items
@@ -393,6 +555,631 @@ pub async fn targets(
     ))
 }
 
+const FAILED_STATES: [&str; 6] = [
+    "failed",
+    "rolled_back",
+    "verification_unknown",
+    "incompatible",
+    "blocked",
+    // Applied, but a data-plane issue on this version shows it isn't
+    // delivering. Lanes and failure groups only; never a stored target state.
+    "degraded",
+];
+/// The first sanitized diagnostic the agent reported for this exact candidate.
+/// Older agents and servers omit diagnostics; callers fall back to the error.
+/// Stored attempt errors are always `safe_error`'s shape, whose diagnostics
+/// are allowlisted objects with a message.
+fn diagnostic(attempt: &Value, generation: &Value) -> Option<String> {
+    if !attempt.is_object() || attempt["generation"] != *generation {
+        return None;
+    }
+    let text = attempt["error"]["diagnostics"]
+        .as_array()
+        .and_then(|list| list.first())
+        .and_then(|item| item["message"].as_str())?;
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.chars().take(500).collect())
+}
+/// Code, component and field of that same leading diagnostic, when the agent
+/// reported them, so a rollout can tell a failure the pipeline must fix
+/// (a port in use, a VRL error) from one a retry might clear.
+fn diagnostic_origin(attempt: &Value, generation: &Value) -> Option<Value> {
+    if !attempt.is_object() || attempt["generation"] != *generation {
+        return None;
+    }
+    let first = attempt["error"]["diagnostics"]
+        .as_array()
+        .and_then(|list| list.first())?;
+    let token = |key: &str, max: usize, extra: &[u8]| {
+        first[key]
+            .as_str()
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= max
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
+            })
+            .map(str::to_owned)
+    };
+    let code = first["code"].as_str().filter(|code| {
+        !code.is_empty()
+            && code.len() <= 48
+            && code
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    })?;
+    Some(
+        json!({"code":code,"component_id":token("component_id",100,b"_.-"),"field":token("field",128,b"_.-[]")}),
+    )
+}
+/// The apply step that failed for this exact candidate ("validation",
+/// "reload", …), so the rollout names the same step as the device page.
+fn failure_stage(attempt: &Value, generation: &Value) -> Option<String> {
+    if !attempt.is_object() || attempt["generation"] != *generation {
+        return None;
+    }
+    attempt["error"]["stage"]
+        .as_str()
+        .filter(|stage| {
+            !stage.is_empty()
+                && stage.len() <= 32
+                && stage.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        })
+        .map(str::to_owned)
+}
+// Private join columns become public, bounded fields; nothing else leaves.
+fn finish_target(item: &mut Value) {
+    let object = item.as_object_mut().unwrap();
+    let attempt = object.remove("_attempt").unwrap_or(Value::Null);
+    let terminal = object.remove("_terminal").unwrap_or(Value::Null);
+    let policy = object.remove("_policy").unwrap_or(Value::Null);
+    let policy_generation = object
+        .remove("_policy_generation")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let acknowledgement = object.remove("_acknowledgement").unwrap_or(Value::Null);
+    let generation = object.get("generation").cloned().unwrap_or(Value::Null);
+    // Applied, but the device's telemetry shows the version isn't delivering:
+    // the open data-plane issue in the user's words (see data_plane.rs).
+    if let Some(issue) = object.remove("_data_plane").filter(Value::is_object) {
+        object.insert(
+            "delivery".into(),
+            json!({"code":issue["code"],"title":issue["title"],"message":issue["message"],"hint":issue["hint"]}),
+        );
+    }
+    object.insert(
+        "diagnostic".into(),
+        json!(diagnostic(&terminal, &generation).or_else(|| diagnostic(&attempt, &generation))),
+    );
+    object.insert(
+        "failure_stage".into(),
+        json!(
+            failure_stage(&terminal, &generation).or_else(|| failure_stage(&attempt, &generation))
+        ),
+    );
+    object.insert(
+        "check_in_seconds".into(),
+        if policy.is_object() {
+            json!(crate::rollout::check_in_seconds(
+                &policy,
+                &acknowledgement,
+                policy_generation
+            ))
+        } else {
+            Value::Null
+        },
+    );
+}
+/// Changes a target's timeline shows, newest last.
+const TIMELINE_CHANGES: i64 = 12;
+/// Observed progress for each released target on this page, from the device's
+/// recorded apply-state changes after its release and before the next release
+/// of another deployment on that device, and up to its verification. The
+/// window is cut by the audit log's own order, not by the second a row carries:
+/// a release and the previous deployment's last rows can share a second, and
+/// each row belongs to the deployment it followed. A target with no release
+/// row (an older record) falls back to the times. Heartbeats can skip states;
+/// missing steps stay missing rather than being invented. Each target gets its
+/// own latest changes (a repeat of the previous state isn't a change), so a
+/// device that reported thousands of states pushes out neither its newest
+/// ones nor another device's.
+async fn timelines(
+    db: &mut sqlx::SqliteConnection,
+    deployment: &str,
+    items: &mut [Value],
+) -> Result<()> {
+    let windows: Vec<Value> = items
+        .iter()
+        .map(|item| {
+            let end = [
+                item["next_release_at"].as_str(),
+                item["verified_at"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            json!([
+                item["device_id"],
+                item["released_at"],
+                end,
+                item["verified_at"]
+            ])
+        })
+        .collect();
+    let rows = sqlx::query(
+        "WITH w AS (SELECT key AS slot,json_extract(value,'$[0]') AS device,json_extract(value,'$[1]') AS start,json_extract(value,'$[2]') AS finish,json_extract(value,'$[3]') AS verified FROM json_each(?) WHERE json_type(value,'$[0]')='text' AND json_type(value,'$[1]')='text'), \
+         opened AS MATERIALIZED (SELECT w.*,(SELECT max(s.sequence) FROM records r INDEXED BY audit_target JOIN audit_sequence s ON s.audit_id=r.id WHERE r.kind='audit' AND json_extract(r.data,'$.target')=?||':'||w.device AND json_extract(r.data,'$.action')='deployment.release') AS opened_at FROM w), \
+         bounded AS MATERIALIZED (SELECT opened.*,(SELECT min(s.sequence) FROM deployment_targets x JOIN records r INDEXED BY audit_target ON r.kind='audit' AND json_extract(r.data,'$.target')=x.deployment_id||':'||x.device_id AND json_extract(r.data,'$.action')='deployment.release' JOIN audit_sequence s ON s.audit_id=r.id WHERE x.device_id=opened.device AND x.deployment_id<>? AND s.sequence>opened.opened_at) AS closed_at FROM opened), \
+         events AS (SELECT b.slot,substr(json_extract(r.data,'$.outcome'),1,32) AS state,r.created_at AS at,s.sequence FROM bounded b \
+          JOIN records r INDEXED BY audit_target ON r.kind='audit' AND json_extract(r.data,'$.target')=b.device JOIN audit_sequence s ON s.audit_id=r.id \
+          WHERE json_extract(r.data,'$.action')='device.apply_state' AND json_extract(r.data,'$.outcome') IS NOT NULL \
+          AND CASE WHEN b.opened_at IS NOT NULL \
+              THEN s.sequence>b.opened_at AND (b.closed_at IS NULL OR s.sequence<b.closed_at) AND (b.verified IS NULL OR r.created_at<=b.verified) \
+              ELSE r.created_at>=b.start AND (b.finish IS NULL OR r.created_at<=b.finish) END), \
+         changes AS (SELECT *,lag(state) OVER (PARTITION BY slot ORDER BY sequence) AS previous FROM events), \
+         latest AS (SELECT *,row_number() OVER (PARTITION BY slot ORDER BY sequence DESC) AS recency FROM changes WHERE previous IS NULL OR previous<>state) \
+         SELECT slot,state,at FROM latest WHERE recency<=? ORDER BY slot,sequence",
+    )
+    .bind(json!(windows).to_string())
+    .bind(deployment)
+    .bind(deployment)
+    .bind(TIMELINE_CHANGES)
+    .fetch_all(&mut *db)
+    .await?;
+    for item in items.iter_mut() {
+        item["timeline"] = json!([]);
+        item.as_object_mut().unwrap().remove("next_release_at");
+    }
+    for row in rows {
+        let slot: i64 = row.get("slot");
+        if let Some(events) = usize::try_from(slot)
+            .ok()
+            .and_then(|index| items.get_mut(index))
+            .and_then(|item| item["timeline"].as_array_mut())
+        {
+            events.push(
+                json!({"state":row.get::<String, _>("state"),"at":row.get::<String, _>("at")}),
+            );
+        }
+    }
+    Ok(())
+}
+/// Stage lanes and failure groups for the rollout page. Waves are recovered from
+/// persisted release times; future waves follow the scheduler's own order
+/// (pending targets by device ID, canary first, then batches).
+pub async fn rollout(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+    parsed: std::result::Result<Query<EmptyQuery>, QueryRejection>,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &[], false).await?;
+    query(raw.as_deref(), parsed)?;
+    let mut tx = s.pool.begin().await?;
+    let context = crate::canary_gate::load(&mut tx, &id).await?;
+    if context.is_null() {
+        return Err(ApiError::missing());
+    }
+    let followed = followed_state("t", "d", "dep.data");
+    let rows: Vec<String> = sqlx::query_scalar(&"SELECT json_object('device_id',t.device_id,'device_name',substr(d.name,1,240),'state',@STATE@,'generation',t.generation,'released_at',t.released_at,'verified_at',t.verified_at,'error',t.error,\
+        '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
+        '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
+        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
+        '_data_plane',CASE WHEN @STATE@='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END,\
+        '_buffer',(SELECT json_extract(c.value,'$.buffer_utilization') FROM json_each(d.data,'$.telemetry.components') c WHERE json_type(c.value,'$.id')='text' AND json_extract(c.value,'$.id')=json_extract(d.data,'$.data_plane.issues[0].component_id') LIMIT 1)) \
+        FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id JOIN records dep ON dep.kind='deployment' AND dep.id=t.deployment_id WHERE t.deployment_id=? ORDER BY t.device_id LIMIT 10001".replace("@STATE@", &followed))
+        .bind(context["version_id"].as_str())
+        .bind(&id)
+        .fetch_all(&mut *tx)
+        .await?;
+    if rows.len() > 10_000 {
+        return Err(ApiError::invalid(
+            "Rollout lanes support at most 10000 targets",
+        ));
+    }
+    let mut targets = rows
+        .iter()
+        .map(|row| db::parse(row))
+        .collect::<Result<Vec<_>>>()?;
+    for target in &mut targets {
+        let generation = target["generation"].clone();
+        let origin = diagnostic_origin(&target["_terminal"], &generation)
+            .or_else(|| diagnostic_origin(&target["_attempt"], &generation));
+        let component = target["_data_plane"]["component_id"]
+            .as_str()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 100
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+            })
+            .map(str::to_owned);
+        // The current fill of that component's buffer, as the device last
+        // reported it; no trend is claimed.
+        let buffer = target
+            .as_object_mut()
+            .unwrap()
+            .remove("_buffer")
+            .and_then(|fill| fill.as_f64())
+            .filter(|fill| (0.0..=1.0).contains(fill));
+        finish_target(target);
+        // Lanes and failure groups count a device that isn't delivering as
+        // failed, with the issue's title, measured reason and fix.
+        if let Some(delivery) = target.get("delivery").filter(|d| d.is_object()).cloned() {
+            target["state"] = json!("degraded");
+            target["error"] = delivery["title"].clone();
+            target["diagnostic"] = delivery["message"].clone();
+            target["fix"] = delivery["hint"].clone();
+            target["_origin"] = json!({"code":delivery["code"],"component_id":component,"field":null,"buffer_utilization":buffer});
+        } else if let Some(origin) = origin {
+            target["_origin"] = origin;
+        }
+    }
+    let mut early: HashMap<String, Value> = HashMap::new();
+    for entry in context["early_releases"].as_array().into_iter().flatten() {
+        let (Some(at), Some(by)) = (entry["released_at"].as_str(), entry["by"].as_str()) else {
+            continue;
+        };
+        let name: Option<String> =
+            sqlx::query_scalar("SELECT substr(name,1,120) FROM users WHERE id=?")
+                .bind(by)
+                .fetch_optional(&mut *tx)
+                .await?;
+        early.insert(at.to_owned(), json!({"by_name":name,"at":at}));
+    }
+    let status = context["status"].as_str().unwrap_or("");
+    let canary = context["rollout"]["kind"] == "canary";
+    // Only a rollout that can still release has a queue of future waves.
+    let planning = matches!(status, "active" | "paused" | "scheduled");
+    let size = |key: &str| {
+        context["rollout"][key]
+            .as_u64()
+            .unwrap_or(1)
+            .clamp(1, 10_000) as usize
+    };
+    let removed = targets.iter().filter(|t| t["state"] == "removed").count();
+    let mut waves: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+    let mut unreleased: Vec<&Value> = Vec::new();
+    for target in targets.iter().filter(|t| t["state"] != "removed") {
+        match target["released_at"].as_str() {
+            Some(at) => waves.entry(at.to_owned()).or_default().push(target),
+            None => unreleased.push(target),
+        }
+    }
+    let lane = |kind: &str, index: usize, members: &[&Value], released_at: Option<&str>| {
+        let mut counts = BTreeMap::<String, u64>::new();
+        for member in members {
+            *counts
+                .entry(member["state"].as_str().unwrap_or("unknown").to_owned())
+                .or_default() += 1;
+        }
+        let verified = counts.get("verified_applied").copied().unwrap_or(0) as usize;
+        let failing = FAILED_STATES
+            .iter()
+            .map(|state| counts.get(*state).copied().unwrap_or(0))
+            .sum::<u64>();
+        let state = if released_at.is_none() {
+            if !planning || members.iter().any(|m| m["state"] != "pending") {
+                "stopped"
+            } else {
+                "queued"
+            }
+        } else if failing > 0 {
+            "failed"
+        } else if verified == members.len() {
+            "verified"
+        } else {
+            "in_progress"
+        };
+        let verified_at = if state == "verified" {
+            members
+                .iter()
+                .filter_map(|m| m["verified_at"].as_str())
+                .max()
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        json!({"kind":kind,"index":index,"state":state,"released_at":released_at,"released_early":released_at.and_then(|at| early.get(at)).cloned(),"verified_at":verified_at,"size":members.len(),"counts":counts,
+            "devices":members.iter().take(60).map(|m| json!({"device_id":m["device_id"],"device_name":m["device_name"],"state":m["state"]})).collect::<Vec<_>>(),
+            "more":members.len().saturating_sub(60)})
+    };
+    let mut stages = Vec::new();
+    let mut batch = 0;
+    for (position, (at, members)) in waves.iter().enumerate() {
+        let kind = if !canary {
+            if position == 0 { "all" } else { "added" }
+        } else if position == 0 {
+            "canary"
+        } else {
+            batch += 1;
+            "batch"
+        };
+        stages.push(lane(kind, batch, members, Some(at)));
+    }
+    if !unreleased.is_empty() {
+        if !planning {
+            stages.push(lane("not_released", 0, &unreleased, None));
+        } else {
+            // Nothing released yet: the queued canary is the devices the
+            // scheduler will choose, not the first by ID.
+            let chosen_first: Vec<&Value>;
+            let mut queue: &[&Value] = if canary && waves.is_empty() {
+                let ids: Vec<String> = unreleased
+                    .iter()
+                    .map(|t| t["device_id"].as_str().unwrap_or("").to_owned())
+                    .collect();
+                let order = crate::canary_choice::release_order(&mut tx, &context, &ids).await?;
+                let place: HashMap<&str, usize> = order
+                    .iter()
+                    .enumerate()
+                    .map(|(at, id)| (id.as_str(), at))
+                    .collect();
+                let mut sorted = unreleased.clone();
+                sorted.sort_by_key(|t| {
+                    place
+                        .get(t["device_id"].as_str().unwrap_or(""))
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+                chosen_first = sorted;
+                chosen_first.as_slice()
+            } else {
+                unreleased.as_slice()
+            };
+            let mut first = waves.is_empty();
+            while !queue.is_empty() {
+                let take = if !canary {
+                    queue.len()
+                } else if first {
+                    size("canary_size")
+                } else {
+                    size("batch_size")
+                };
+                let (wave, rest) = queue.split_at(take.min(queue.len()));
+                let kind = if !canary {
+                    if waves.is_empty() { "all" } else { "added" }
+                } else if first {
+                    "canary"
+                } else {
+                    batch += 1;
+                    "batch"
+                };
+                stages.push(lane(kind, batch, wave, None));
+                queue = rest;
+                first = false;
+            }
+        }
+    }
+    let mut failures: BTreeMap<(String, String), (Value, Vec<Value>)> = BTreeMap::new();
+    for target in targets
+        .iter()
+        .filter(|t| FAILED_STATES.contains(&t["state"].as_str().unwrap_or("")))
+    {
+        let state = target["state"].as_str().unwrap_or("").to_owned();
+        let diagnostic = target["diagnostic"].as_str().map(str::to_owned);
+        let message = target["error"].as_str().map(str::to_owned);
+        let key = (
+            state.clone(),
+            diagnostic.clone().or(message.clone()).unwrap_or_default(),
+        );
+        let fix = target["fix"].as_str().map(str::to_owned);
+        let origin = &target["_origin"];
+        failures
+            .entry(key)
+            .or_insert_with(|| {
+                // Where the leading finding points: its code (a port in use,
+                // a VRL error, a delivery problem), component and field.
+                let mut group = json!({"state":state,"message":message,"diagnostic":diagnostic,
+                    "code":origin["code"],"component_id":origin["component_id"],"field":origin["field"],"buffer_utilization":origin["buffer_utilization"]});
+                if fix.is_some() {
+                    group["fix"] = json!(fix);
+                }
+                (group, Vec::new())
+            })
+            .1
+            .push(json!({"device_id":target["device_id"],"device_name":target["device_name"]}));
+    }
+    let mut failures: Vec<Value> = failures
+        .into_values()
+        .map(|(mut group, devices)| {
+            group["count"] = json!(devices.len());
+            // Every member (bounded) so a retry covers the whole group, not
+            // only the names shown.
+            group["device_ids"] = json!(
+                devices
+                    .iter()
+                    .take(1000)
+                    .map(|device| device["device_id"].clone())
+                    .collect::<Vec<_>>()
+            );
+            group["devices"] = json!(devices.into_iter().take(8).collect::<Vec<_>>());
+            group
+        })
+        .collect();
+    failures.sort_by(|a, b| b["count"].as_u64().cmp(&a["count"].as_u64()));
+    let check_in_seconds = targets
+        .iter()
+        .filter(|t| t["state"] != "removed")
+        .filter_map(|t| t["check_in_seconds"].as_i64())
+        .max();
+    let mut next_admission_at = Value::Null;
+    if crate::canary_gate::enabled(&context) {
+        let gate = crate::canary_gate::evaluate(&mut tx, &context, None)
+            .await?
+            .projection(&context);
+        if gate["state"] == "observing" {
+            if let Some(started) = gate["observation_started_at"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            {
+                let due = started
+                    + chrono::Duration::seconds(gate["observation_seconds"].as_i64().unwrap_or(0));
+                next_admission_at = json!(
+                    due.with_timezone(&chrono::Utc)
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                );
+            }
+        }
+    }
+    // What the canary devices deliver now against just before their release.
+    let canary_watch = if crate::canary_gate::enabled(&context) && context["version_id"].is_string()
+    {
+        crate::canary_choice::watch(&mut tx, &context).await?
+    } else {
+        Value::Null
+    };
+    Ok(Json(
+        json!({"deployment_id":id,"status":status,"evaluated_at":db::now(),"stages":stages,"failures":failures,"removed_count":removed,"check_in_seconds":check_in_seconds,"next_admission_at":next_admission_at,"canary_watch":canary_watch}),
+    ))
+}
+
+/// Values each device last received for a new version's variables: from the
+/// most recent released deployment of the same pipeline that bound them (or,
+/// for values still missing, of the pipeline it was duplicated from), when the
+/// name and type still match. A rollback in between (which restores exact
+/// artifacts and binds nothing) doesn't lose them. Variables are nonsecret by
+/// contract; operators see them in review.
+pub async fn binding_suggestions(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Json(v): Json<Value>,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &["operator"], true).await?;
+    let object = v
+        .as_object()
+        .ok_or_else(|| ApiError::invalid("Request must be an object"))?;
+    if object
+        .keys()
+        .any(|key| key != "version_id" && key != "device_ids")
+    {
+        return Err(ApiError::invalid("Unknown request field"));
+    }
+    let uuid = |value: &Value| {
+        value
+            .as_str()
+            .and_then(|text| uuid::Uuid::parse_str(text).ok().map(|id| (text, id)))
+            .filter(|(text, id)| id.hyphenated().to_string() == *text)
+            .map(|(text, _)| text.to_owned())
+    };
+    let version_id =
+        uuid(&v["version_id"]).ok_or_else(|| ApiError::invalid("version_id must be a UUID"))?;
+    let devices: Vec<String> = v["device_ids"]
+        .as_array()
+        .filter(|ids| ids.len() <= 10_000)
+        .ok_or_else(|| ApiError::invalid("device_ids must list at most 10000 device IDs"))?
+        .iter()
+        .map(|id| uuid(id).ok_or_else(|| ApiError::invalid("device_ids must contain device IDs")))
+        .collect::<Result<_>>()?;
+    let mut tx = s.pool.begin().await?;
+    let version = db::record(&mut tx, "version", &version_id).await?;
+    let declared: BTreeMap<String, String> = version["variables"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    Some((
+                        item["name"].as_str()?.to_owned(),
+                        item["type"].as_str()?.to_owned(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut values = serde_json::Map::new();
+    let mut sources = serde_json::Map::new();
+    let Some(pipeline) = version["configuration_id"].as_str() else {
+        return Ok(Json(json!({"devices":values,"sources":sources})));
+    };
+    if declared.is_empty() || devices.is_empty() {
+        return Ok(Json(json!({"devices":values,"sources":sources})));
+    }
+    let typed = |kind: &str, value: &Value| match kind {
+        "integer" => value.is_i64(),
+        "boolean" => value.is_boolean(),
+        _ => value.as_str().is_some_and(|text| text.len() <= 4096),
+    };
+    // The requested pipeline first, then the pipelines it was duplicated from
+    // (nearest first), so "duplicate, then deploy" starts from the values the
+    // devices run now. Unrelated pipelines never contribute.
+    let mut lineage = vec![pipeline.to_owned()];
+    while lineage.len() < 5 {
+        let parent: Option<String> = sqlx::query_scalar(
+            "SELECT json_extract(data,'$.source.id') FROM records WHERE kind='revision' AND json_extract(data,'$.configuration_id')=? AND json_extract(data,'$.message')='Duplicated saved pipeline' AND json_extract(data,'$.source.kind')='draft' AND json_type(data,'$.source.id')='text' ORDER BY CAST(json_extract(data,'$.revision') AS INTEGER) LIMIT 1",
+        )
+        .bind(lineage.last().unwrap())
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
+        match parent {
+            Some(parent) if !lineage.contains(&parent) => lineage.push(parent),
+            _ => break,
+        }
+    }
+    for source_pipeline in &lineage {
+        let wanted: Vec<&String> = devices
+            .iter()
+            .filter(|device| {
+                values
+                    .get(*device)
+                    .and_then(Value::as_object)
+                    .is_none_or(|found| found.len() < declared.len())
+            })
+            .collect();
+        for chunk in wanted.chunks(500) {
+            let mut query: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "SELECT t.device_id AS device,d.id AS deployment,json_extract(d.data,'$.variable_bindings') AS bindings,\
+                 CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END AS number,\
+                 CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END AS name \
+                 FROM deployment_targets t JOIN devices dev ON dev.id=t.device_id AND dev.revoked=0 \
+                 JOIN records d ON d.kind='deployment' AND d.id=t.deployment_id \
+                 JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id') \
+                 LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id') \
+                 WHERE t.generation>0 AND json_type(d.data,'$.variable_bindings')='object' AND json_extract(v.data,'$.configuration_id')=",
+            );
+            query.push_bind(source_pipeline);
+            query.push(" AND t.device_id IN (");
+            let mut separated = query.separated(",");
+            for id in chunk {
+                separated.push_bind(*id);
+            }
+            separated.push_unseparated(") ORDER BY d.created_at DESC,d.id");
+            for row in query.build().fetch_all(&mut *tx).await? {
+                let device: String = row.get("device");
+                let bindings = db::parse(&row.get::<String, _>("bindings"))?;
+                let found = values
+                    .entry(device.clone())
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                let mut added = false;
+                for (name, kind) in &declared {
+                    if found.get(name).is_some() {
+                        continue;
+                    }
+                    let value = bindings["devices"][&device]
+                        .get(name)
+                        .or_else(|| bindings["defaults"].get(name));
+                    if let Some(value) = value.filter(|value| typed(kind, value)) {
+                        found[name] = value.clone();
+                        added = true;
+                    }
+                }
+                // The newest deployment that supplied a value is the source.
+                if added && !sources.contains_key(&device) {
+                    sources.insert(
+                        device,
+                        json!({"deployment_id":row.get::<String, _>("deployment"),"version_number":row.get::<Option<i64>, _>("number"),"configuration_id":source_pipeline,"configuration_name":row.get::<Option<String>, _>("name")}),
+                    );
+                }
+            }
+        }
+    }
+    values.retain(|_, found| found.as_object().is_some_and(|map| !map.is_empty()));
+    Ok(Json(json!({"devices":values,"sources":sources})))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,7 +1198,7 @@ mod tests {
             ("all", Some(true), "deployment_history_scheduled"),
             ("missed", Some(true), "deployment_history_status_scheduled"),
         ] {
-            let q = page_query(status, scheduled, "", 12, 0, ORDER);
+            let q = page_query(status, scheduled, "", None, 12, 0, ORDER);
             let sql = format!("EXPLAIN QUERY PLAN {}", q.sql());
             let mut explain = sqlx::query(&sql);
             if status != "all" {
@@ -430,12 +1217,25 @@ mod tests {
                 "{detail}"
             );
             assert!(!detail.contains("SCAN t"), "{detail}");
+            // Not delivering: this deployment's applied targets, then each
+            // device by its key; never the whole fleet.
+            assert!(
+                detail.contains(
+                    "SEARCH dt USING INDEX deployment_targets_state (deployment_id=? AND state=?)"
+                ),
+                "{detail}"
+            );
+            assert!(
+                detail.contains("SEARCH dv USING INDEX sqlite_autoindex_devices_1 (id=?)"),
+                "{detail}"
+            );
+            assert!(!detail.contains("SCAN dv"), "{detail}");
             assert!(
                 detail
                     .contains("SEARCH v USING INDEX sqlite_autoindex_records_1 (kind=? AND id=?)"),
                 "{detail}"
             );
-            let q = count_query(status, scheduled, "");
+            let q = count_query(status, scheduled, "", None);
             let sql = format!("EXPLAIN QUERY PLAN {}", q.sql());
             let mut explain = sqlx::query(&sql);
             if status != "all" {
@@ -507,7 +1307,7 @@ mod tests {
         .await
         .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        let total: i64 = count_query("all", None, "")
+        let total: i64 = count_query("all", None, "", None)
             .build_query_scalar()
             .fetch_one(&mut *tx)
             .await
@@ -519,7 +1319,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let rows: Vec<String> = page_query("all", None, "", 12, 0, ORDER)
+        let rows: Vec<String> = page_query("all", None, "", None, 12, 0, ORDER)
             .build_query_scalar()
             .fetch_all(&mut *tx)
             .await
@@ -549,7 +1349,7 @@ mod tests {
         assert_eq!(target_total, 1);
         assert_eq!(db::parse(&targets[0]).unwrap()["state"], "pending");
         tx.rollback().await.unwrap();
-        let total: i64 = count_query("all", None, "")
+        let total: i64 = count_query("all", None, "", None)
             .build_query_scalar()
             .fetch_one(&pool)
             .await

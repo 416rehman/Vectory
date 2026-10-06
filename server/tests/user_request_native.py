@@ -111,7 +111,7 @@ try:
         return connection
 
     def create_body(key,email):
-        return {'request_id':key,'name':'Synthetic colleague','email':email,'password':password,'role':'viewer'}
+        return {'request_id':key,'name':'Synthetic colleague','email':email,'password':password,'role':'viewer','current_password':password}
 
     start()
     csrf=api('/bootstrap',{'bootstrap_secret':bootstrap,'name':'Synthetic administrator','email':'admin@example.invalid','password':password})['csrf_token']
@@ -134,7 +134,7 @@ try:
     assert 'password' not in json.dumps(found)
     emit('native_created_status',found,'UserRequestStatus')
     duplicate=api('/users',create_body(key,'colleague@example.invalid'),expected=409)
-    assert duplicate['error']['code']=='CONFLICT'
+    assert duplicate['error']['code']=='REQUEST_ALREADY_USED'
     emit('native_duplicate',duplicate,'Error')
     assert sql("SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='user.create'")[0][0]==1
     assert sql("SELECT count(*) FROM users WHERE email='colleague@example.invalid'")[0][0]==1
@@ -170,7 +170,7 @@ try:
     assert receipt['request_id']==fresh_key and receipt['user']['email']=='receipt@example.invalid'
     assert 'password' not in json.dumps(receipt)
     emit('native_receipt',receipt,'UserCreateReceipt')
-    legacy=api('/users',{'name':'Legacy','email':'legacy@example.invalid','password':password,'role':'viewer'})
+    legacy=api('/users',{'name':'Legacy','email':'legacy@example.invalid','password':password,'role':'viewer','current_password':password})
     assert 'request_id' not in legacy and legacy['email']=='legacy@example.invalid'
     emit('native_legacy',legacy,'User')
     assert api('/openapi.json')==json.loads((ROOT/'contracts/openapi.json').read_text(encoding='utf-8'))

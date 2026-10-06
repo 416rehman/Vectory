@@ -1,0 +1,16 @@
+[Unit]
+Description=Vectory agent update step
+
+[Service]
+Type=oneshot
+ExecStart="/var/lib/vectory-update/private/helper/vectory" update-helper --state-dir "/var/lib/vectory-agent"
+TimeoutStartSec=1200
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+ReadWritePaths="/usr/local/bin" "/var/lib/vectory-update" "/etc/vectory/updates"
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_KILL

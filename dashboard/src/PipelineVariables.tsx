@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { Config, VariableDeclaration } from "./api";
 import { Button, ErrorBox, Field } from "./ui";
+import DocLink from "./DocLink";
 import { variableErrors, variableFields } from "./variableFields";
 import "./pipeline-variables.css";
 
@@ -90,7 +91,9 @@ export default function PipelineVariables({
         </ul>
       )}
       {!variables.length && (
-        <p className="pipeline-variable-empty">No device-specific fields yet.</p>
+        <p className="pipeline-variable-empty">
+          No device-specific fields yet.
+        </p>
       )}
       {editable && (
         <div className="pipeline-variable-add">
@@ -123,7 +126,12 @@ export default function PipelineVariables({
               maxLength={64}
             />
           </Field>
-          <Button variant="secondary" icon={Plus} onClick={add} disabled={!available.length || variables.length >= 64}>
+          <Button
+            variant="secondary"
+            icon={Plus}
+            onClick={add}
+            disabled={!available.length || variables.length >= 64}
+          >
             Add variable
           </Button>
           {!available.length && (
@@ -136,8 +144,12 @@ export default function PipelineVariables({
       )}
       <p className="pipeline-variable-note">
         Deployment values are stored with the deployment and visible to
-        authorized users. Do not enter credentials here; use a device-local
-        Vector secret provider for those.
+        authorized users. Do not enter credentials here. Use a device secret,
+        which works in restricted and full mode:{" "}
+        <code>vectory-secret:NAME</code>{" "}
+        <DocLink topic="resources" section="keep-credentials-on-the-device">
+          How device secrets work
+        </DocLink>
       </p>
     </div>
   );

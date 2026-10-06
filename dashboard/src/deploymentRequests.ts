@@ -7,11 +7,17 @@ import {
   type RollbackPreview,
 } from "./rollbackReview";
 import { APIError, type Policy } from "./api";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
 import type { VariableBindings } from "./deploymentVariables";
 
 export type DeploymentCreateRequest = {
   version_id?: string;
   policy?: Policy;
+  /** Saved agent settings this request applies, for attribution. */
+  policy_id?: string;
   selector: {
     device_ids: string[];
     group_ids: string[];
@@ -19,6 +25,8 @@ export type DeploymentCreateRequest = {
   };
   expected_device_ids: string[];
   variable_bindings?: VariableBindings;
+  /** Reviewed assignments this request takes over on its devices. */
+  replaces?: string[];
   priority: number;
   target_mode: string;
   scheduled_at: string | null;
@@ -28,6 +36,8 @@ export type DeploymentCreateRequest = {
     batch_size: number;
     observation_seconds: number;
     failure_threshold: number;
+    /** The devices to release first (canary rollouts only). */
+    canary_device_ids?: string[];
   };
   request_id?: string;
 };
@@ -39,10 +49,12 @@ const variableValue = z.union([
   z.boolean(),
 ]);
 const variableMap = z.record(variableName, variableValue);
-const variableBindings = z.object({
-  defaults: variableMap,
-  devices: z.record(z.string().uuid(), variableMap),
-}).strict();
+const variableBindings = z
+  .object({
+    defaults: variableMap,
+    devices: z.record(z.string().uuid(), variableMap),
+  })
+  .strict();
 const operationBase = {
   actor_id: z.string().min(1).max(128),
   id: z.string().uuid(),
@@ -65,11 +77,13 @@ const createOperationSchema = z
           })
           .strict()
           .optional(),
+        policy_id: z.string().uuid().optional(),
         selector: z
           .object({ device_ids: ids, group_ids: ids, exclude_ids: ids })
           .strict(),
         expected_device_ids: ids,
         variable_bindings: variableBindings.optional(),
+        replaces: z.array(z.string().uuid()).max(100).optional(),
         priority: z.number().int().min(-1000000).max(1000000),
         target_mode: z.enum(["snapshot", "persistent"]),
         scheduled_at: z.string().datetime({ offset: true }).nullable(),
@@ -80,6 +94,7 @@ const createOperationSchema = z
             batch_size: z.number().int().min(1).max(10000),
             observation_seconds: z.number().int().min(0).max(86400),
             failure_threshold: z.number().int().min(0).max(10000),
+            canary_device_ids: z.array(z.string().uuid()).max(100).optional(),
           })
           .strict(),
         request_id: z.string().uuid().optional(),
@@ -386,6 +401,32 @@ export function beginDeploymentOperation(
   retrySupported: boolean,
   label: string,
 ): DeploymentOperation {
+  const bindings = request.variable_bindings;
+  if (bindings) {
+    const groups: [string, Record<string, string | number | boolean>][] = [
+      ["defaults", bindings.defaults],
+      ...Object.entries(bindings.devices).map(
+        ([device, values]): [
+          string,
+          Record<string, string | number | boolean>,
+        ] => [`devices.${device}`, values],
+      ),
+    ];
+    for (const [group, values] of groups)
+      for (const [name, value] of Object.entries(values)) {
+        if (typeof value !== "string") continue;
+        // Binding names are arbitrary variable names, not credential fields.
+        // Check only strong token and credential-URL shapes in their values.
+        const finding = findPlainCredential(value, ["value"]);
+        if (finding)
+          throw Error(
+            credentialPreflightMessage({
+              ...finding,
+              path: `variable_bindings.${group}.${name}`,
+            }),
+          );
+      }
+  }
   const id = crypto.randomUUID();
   const operation = operationSchema.parse({
     actor_id: actor,

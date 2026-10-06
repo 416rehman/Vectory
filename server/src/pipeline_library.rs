@@ -98,9 +98,19 @@ fn page_query(
           'sources',CASE WHEN json_type(data,'$.config.sources')='object' THEN (SELECT count(*) FROM json_each(c.data,'$.config.sources')) ELSE 0 END,\
           'transforms',CASE WHEN json_type(data,'$.config.transforms')='object' THEN (SELECT count(*) FROM json_each(c.data,'$.config.transforms')) ELSE 0 END,\
           'sinks',CASE WHEN json_type(data,'$.config.sinks')='object' THEN (SELECT count(*) FROM json_each(c.data,'$.config.sinks')) ELSE 0 END),\
-        'latest_version',json((SELECT json_object('id',v.id,'number',json_extract(v.data,'$.number'),'created_at',json_extract(v.data,'$.created_at')) \
+        'latest_version',json((SELECT json_object('id',v.id,'number',json_extract(v.data,'$.number'),'created_at',json_extract(v.data,'$.created_at'),\
+            'author',CASE WHEN json_type(v.data,'$.author')='text' THEN substr(json_extract(v.data,'$.author'),1,240) ELSE NULL END,\
+            'draft_changed',json(CASE WHEN json_extract(v.data,'$.config') IS json_extract(c.data,'$.config') \
+              AND COALESCE(json_extract(v.data,'$.variables'),'[]') IS COALESCE(json_extract(c.data,'$.variables'),'[]') THEN 'false' ELSE 'true' END)) \
           FROM records AS v WHERE v.kind='version' AND json_extract(v.data,'$.configuration_id')=+c.id \
-          ORDER BY CAST(json_extract(v.data,'$.number') AS INTEGER) DESC,v.id ASC LIMIT 1))) \
+          ORDER BY CAST(json_extract(v.data,'$.number') AS INTEGER) DESC,v.id ASC LIMIT 1)),\
+        'assigned_devices',(SELECT count(*) FROM devices AS d WHERE d.revoked=0 AND d.desired_version_id IN \
+          (SELECT v.id FROM records AS v WHERE v.kind='version' AND json_extract(v.data,'$.configuration_id')=+c.id)),\
+        'running_versions',json((SELECT COALESCE(json_group_array(json_object('id',r.id,'number',r.number,'devices',r.devices)),'[]') FROM \
+          (SELECT v.id AS id,CAST(json_extract(v.data,'$.number') AS INTEGER) AS number,count(*) AS devices \
+           FROM devices AS d JOIN records AS v ON v.kind='version' AND v.id=json_extract(d.data,'$.verified_configuration_attempt.version_id') \
+           WHERE d.revoked=0 AND json_extract(v.data,'$.configuration_id')=+c.id \
+           GROUP BY v.id ORDER BY number DESC,v.id ASC) AS r))) \
         FROM page AS c ORDER BY ");
     query.push(order);
     query
@@ -263,5 +273,101 @@ mod tests {
         assert_eq!(sort_order(Some("name"), None).unwrap(), NAME_ORDER);
         assert!(sort_order(Some("name"), Some("sideways")).is_err());
         assert!(sort_order(Some("name;DROP TABLE records"), Some("asc")).is_err());
+    }
+    #[tokio::test]
+    async fn library_reports_unpublished_changes_and_assigned_devices() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let config = json!({"sources":{"in":{"type":"demo_logs","format":"json"}}});
+        let insert = |kind: &'static str, id: &'static str, value: Value| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO records(kind,id,data,created_at) VALUES(?,?,?,'2026-01-01')",
+                )
+                .bind(kind)
+                .bind(id)
+                .bind(value.to_string())
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        };
+        insert(
+            "configuration",
+            "p",
+            json!({"id":"p","name":"P","updated_at":"2026-01-02","revision":3,"config":config}),
+        )
+        .await;
+        insert(
+            "configuration",
+            "q",
+            json!({"id":"q","name":"Q","updated_at":"2026-01-01","revision":1,"config":{}}),
+        )
+        .await;
+        for (id, number, config) in [("v1", 1, json!({})), ("v2", 2, config.clone())] {
+            insert("version", id, json!({"id":id,"configuration_id":"p","number":number,"config":config,"author":"Ada","created_at":"2026-01-02"})).await;
+        }
+        for (id, version, revoked) in [("d1", "v1", 0), ("d2", "v2", 0), ("d3", "v2", 1)] {
+            sqlx::query(
+                "INSERT INTO devices(id,name,data,revoked,desired_version_id) VALUES(?,?,'{}',?,?)",
+            )
+            .bind(id)
+            .bind(id)
+            .bind(revoked)
+            .bind(version)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let page = |pool: sqlx::SqlitePool| async move {
+            page_query("all", "", UPDATED_ORDER, 10, 0)
+                .build_query_scalar::<String>()
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .map(|row| db::parse(row).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let rows = page(pool.clone()).await;
+        assert_eq!(rows[0]["id"], "p");
+        assert_eq!(rows[0]["latest_version"]["number"], 2);
+        assert_eq!(rows[0]["latest_version"]["author"], "Ada");
+        assert_eq!(rows[0]["latest_version"]["draft_changed"], false);
+        assert_eq!(rows[0]["assigned_devices"], 2);
+        assert_eq!(rows[1]["latest_version"], Value::Null);
+        assert_eq!(rows[1]["assigned_devices"], 0);
+        let draft_changed = |pool: sqlx::SqlitePool| async move {
+            page(pool).await[0]["latest_version"]["draft_changed"].clone()
+        };
+        let set_draft_variables = |pool: sqlx::SqlitePool, list: Value| async move {
+            sqlx::query(
+                "UPDATE records SET data=json_set(data,'$.variables',json(?)) WHERE id='p'",
+            )
+            .bind(list.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        };
+        // A version written before variables existed carries none, which is an
+        // empty list.
+        set_draft_variables(pool.clone(), json!([])).await;
+        assert_eq!(draft_changed(pool.clone()).await, false);
+        // Variables alone change what publishing creates, so they count.
+        let declared = json!([{"name":"fmt","path":"/sources/in/format","type":"string"}]);
+        set_draft_variables(pool.clone(), declared.clone()).await;
+        assert_eq!(draft_changed(pool.clone()).await, true);
+        insert("version", "v3", json!({"id":"v3","configuration_id":"p","number":3,"config":config,"variables":declared,"author":"Ada","created_at":"2026-01-03"})).await;
+        assert_eq!(draft_changed(pool.clone()).await, false);
+        sqlx::query("UPDATE records SET data=json_set(data,'$.config.sources.in.format','text') WHERE id='p'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(draft_changed(pool.clone()).await, true);
     }
 }

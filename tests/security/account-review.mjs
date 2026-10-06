@@ -203,7 +203,7 @@ async function fixture(name, validationUrl, task) {
         await call(
           "POST",
           "/users",
-          { name: role, role, email, password },
+          { name: role, role, email, password, current_password: password },
           admin,
         )
       ).body;
@@ -765,8 +765,9 @@ try {
             .length,
           4,
         );
+        // The fifth wrong factor exhausts the challenge with a distinct code.
         assert.equal(
-          replies.filter((r) => r.body.error.code === "MFA_CHALLENGE_EXPIRED")
+          replies.filter((r) => r.body.error.code === "MFA_TOO_MANY_ATTEMPTS")
             .length,
           1,
         );

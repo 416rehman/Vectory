@@ -300,6 +300,511 @@ async fn credential_arrays_cannot_enter_draft_graph_or_immutable_history() {
 }
 
 #[tokio::test]
+async fn short_named_credentials_are_refused_before_draft_history() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Short credential guard","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    for (index, path, secret) in [
+        (0, &["client_secret"][..], "c5sC3"),
+        (1, &["request", "headers", "Authorization"][..], "h6rB2"),
+        (2, &["request", "query", "api_key"][..], "q7zA1"),
+    ] {
+        let mut config = pipeline();
+        config["sinks"]["out"]["type"] = json!("http");
+        config["sinks"]["out"]["uri"] = json!("https://example.test/events");
+        let mut field = &mut config["sinks"]["out"];
+        for key in path {
+            field = &mut field[*key];
+        }
+        *field = json!(secret);
+        let create_body = json!({"name":format!("Rejected credential {index}"),"description":"","config":config,"graph":{"nodes":[],"edges":[]},"request_id":uuid::Uuid::new_v4().to_string()});
+        let (status, refused, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            create_body.clone(),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["reason"], "plaintext_credential");
+        assert!(!refused.to_string().contains(secret));
+
+        let (status, refused, _) = call(
+            app.clone(),
+            "PUT",
+            &format!("/api/v1/configurations/{id}/draft"),
+            json!({"revision":draft["revision"],"config":create_body["config"],"graph":create_body["graph"]}),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["reason"], "plaintext_credential");
+        assert!(!refused.to_string().contains(secret));
+        let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+            .bind(format!("%{secret}%"))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(persisted, 0, "{secret} entered draft history");
+    }
+    let mappings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pipeline_requests")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(mappings, 0, "refused request IDs must not be committed");
+}
+
+#[tokio::test]
+async fn nested_credential_literals_cannot_hide_in_malformed_drafts() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (status, safe, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Nested credential guard","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{safe}");
+    for (nested, path) in [
+        (json!(["short"]), "sinks.out.api_key[0]"),
+        (json!({"value":"short"}), "sinks.out.api_key.value"),
+    ] {
+        let mut config = pipeline();
+        config["sinks"]["out"]["type"] = json!("http");
+        config["sinks"]["out"]["uri"] = json!("https://example.test/events");
+        config["sinks"]["out"]["api_key"] = nested;
+        let payload = json!({"name":"Nested credential refused","description":"","config":config,"graph":{"nodes":[],"edges":[]},"request_id":uuid::Uuid::new_v4().to_string()});
+        let (status, refused, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            payload.clone(),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["problems"][0]["path"], path);
+        assert!(!refused.to_string().contains("short"));
+        let (status, refused, _) = call(
+            app.clone(),
+            "PUT",
+            &format!(
+                "/api/v1/configurations/{}/draft",
+                safe["id"].as_str().unwrap()
+            ),
+            json!({"revision":safe["revision"],"config":payload["config"],"graph":payload["graph"]}),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["problems"][0]["path"], path);
+    }
+    let mappings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pipeline_requests")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(mappings, 0);
+    let stored: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE '%\"api_key\"%'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, 0, "nested credential key entered history");
+}
+
+#[tokio::test]
+async fn plaintext_refusal_names_fields_without_values_and_bounds_problems() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let canary = "synthetic-credential-never-store-123";
+    let mut config = pipeline();
+    config["sinks"]["out"]["type"] = json!("http");
+    config["sinks"]["out"]["uri"] = json!("https://example.test/events");
+    config["sinks"]["out"]["request"]["headers"]["Authorization"] =
+        json!(format!("Bearer {canary}"));
+    let payload = json!({"name":"Refused credential","description":"","config":config,"graph":{"nodes":[],"edges":[]}});
+
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        payload.clone(),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["code"], "INVALID_INPUT");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["truncated"], false);
+    assert_eq!(refused["error"]["problems"].as_array().unwrap().len(), 1);
+    let finding = &refused["error"]["problems"][0];
+    assert_eq!(finding["code"], "plaintext_credential");
+    assert_eq!(finding["path"], "sinks.out.request.headers.Authorization");
+    assert_eq!(finding["component"], "out");
+    assert_eq!(finding["field"], "request.headers.Authorization");
+    assert!(finding["fix"].as_str().unwrap().contains("SECRET["));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Plaintext credentials")
+    );
+    assert!(!refused.to_string().contains(canary));
+
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Safe baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!("/api/v1/configurations/{id}/draft"),
+        json!({"revision":draft["revision"],"config":payload["config"],"graph":payload["graph"]}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"][0]["path"], finding["path"]);
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{canary}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0);
+
+    let mut many = payload;
+    for index in 0..25 {
+        many["config"]["sinks"]["out"]["request"]["headers"][format!("X-Api-Key-{index}")] =
+            json!(canary);
+    }
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        many,
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"].as_array().unwrap().len(), 20);
+    assert_eq!(refused["error"]["truncated"], true);
+    assert!(!refused.to_string().contains(canary));
+
+    let graph = json!({"nodes":[{"data":{"service_token":canary}}],"edges":[]});
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Unsafe graph metadata","description":"","config":pipeline(),"graph":graph}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"]["problems"][0]["path"],
+        "graph.nodes[0].data.service_token"
+    );
+    assert!(!refused.to_string().contains(canary));
+
+    let long_url = format!("https://example.test/{}", "x".repeat(16 * 1024));
+    let mut config = pipeline();
+    config["sinks"]["out"]["type"] = json!("http");
+    config["sinks"]["out"]["uri"] = json!(long_url);
+    let (status, refused, _) = call(
+        api::router(state.clone()),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Scan limit","description":"","config":config,"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["code"], "INVALID_INPUT");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scan limit")
+    );
+    assert!(refused["error"].get("reason").is_none());
+}
+
+#[tokio::test]
+async fn pipeline_metadata_credentials_do_not_enter_history() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    for (field, candidate) in [
+        ("name", "ghp_synthetictokenvalue123"),
+        ("name", "ghp_synthetictokenvalue123 vectory-secret:DUMMY"),
+        (
+            "description",
+            "https://synthetic-user:synthetic-password@example.test/path",
+        ),
+        (
+            "description",
+            "https://synthetic-user:synthetic-password@example.test/path vectory-secret:DUMMY",
+        ),
+    ] {
+        let mut payload = json!({"name":"Safe name","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}});
+        payload[field] = json!(candidate);
+        let (status, refused, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            payload,
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["reason"], "plaintext_credential");
+        assert_eq!(refused["error"]["problems"][0]["path"], field);
+        assert!(!refused.to_string().contains(candidate));
+        let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+            .bind(format!("%{candidate}%"))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, 0, "{field} entered history");
+    }
+
+    let variable_name = "ghp_syntheticvariabletoken123";
+    let variable = json!([{"name":variable_name,"path":"/sources/sample/format","type":"string"}]);
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Safe variable baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]},"variables":variable}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "variables[0].name");
+    assert!(!refused.to_string().contains(variable_name));
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{variable_name}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0, "variable declaration entered history");
+
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Safe baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!("/api/v1/configurations/{}/draft", draft["id"].as_str().unwrap()),
+        json!({"revision":draft["revision"],"config":draft["config"],"graph":draft["graph"],"variables":variable}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"][0]["path"], "variables[0].name");
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{variable_name}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0, "variable declaration entered draft history");
+    let note = "ghp_syntheticrevisiontoken123 vectory-secret:DUMMY";
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!(
+            "/api/v1/configurations/{}/draft",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"config":draft["config"],"graph":draft["graph"],"message":note}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "message");
+    assert!(!refused.to_string().contains(note));
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+
+    let revision_id: String = sqlx::query_scalar(
+        "SELECT id FROM records WHERE kind='revision' AND json_extract(data,'$.configuration_id')=? LIMIT 1",
+    )
+    .bind(draft["id"].as_str().unwrap())
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let (status, refused, _) = call(
+        app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/restore",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"revision_id":revision_id,"message":note}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["problems"][0]["path"], "message");
+    let after_restore: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(after_restore, before);
+
+    let (status, refused, _) = call(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/publish",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"message":note}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "message");
+    assert!(!refused.to_string().contains(note));
+    let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='version'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(versions, 0);
+}
+
+#[tokio::test]
+async fn omitted_legacy_metadata_cannot_be_copied_to_revision_or_published() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (status, draft, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Legacy baseline","description":"","config":pipeline(),"graph":{"nodes":[],"edges":[]}}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let candidate = "ghp_syntheticlegacytoken123";
+    let mut conn = state.pool.acquire().await.unwrap();
+    let mut legacy = db::record(&mut conn, "configuration", draft["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    legacy["description"] = json!(candidate);
+    db::update(&mut conn, "configuration", &legacy)
+        .await
+        .unwrap();
+    drop(conn);
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+    let (status, refused, _) = call(
+        app.clone(),
+        "PUT",
+        &format!(
+            "/api/v1/configurations/{}/draft",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"config":draft["config"],"graph":draft["graph"]}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "description");
+    assert!(!refused.to_string().contains(candidate));
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='revision'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+
+    let (status, refused, _) = call(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/publish",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"message":""}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"]["reason"], "plaintext_credential");
+    assert_eq!(refused["error"]["problems"][0]["path"], "description");
+    assert!(!refused.to_string().contains(candidate));
+    let versions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='version'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(versions, 0);
+}
+
+#[tokio::test]
 async fn only_get_api_reference_permits_same_origin_embedding() {
     let (_temp, s) = state().await;
     let app = api::router(s);
@@ -546,7 +1051,7 @@ async fn pipeline_validation_allows_publishers_without_granting_draft_writes() {
             app.clone(),
             "POST",
             "/api/v1/users",
-            json!({"email":email,"name":role,"role":role,"password":"another-long-password"}),
+            json!({"email":email,"name":role,"role":role,"password":"another-long-password","current_password":"a-long-enough-password"}),
             &sessions[0].1,
             &sessions[0].2,
         )
@@ -911,6 +1416,33 @@ async fn restored_generations_require_explicit_review_and_atomic_fencing() {
         serde_json::from_value::<GenerationReport>(report.clone()).is_err(),
         "Missing agent high-water counters must fail closed"
     );
+    // The export is unreviewed on purpose: the message names the device and the
+    // counter, how many gaps remain, and where on the device to read the value.
+    let first = report["devices"][0]["device_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let gap =
+        vectory_server::maintenance::missing_counters(&report).expect("every counter is null");
+    assert!(
+        gap.starts_with(&format!(
+            "highest_generation of device {first} has no value (5 more counters need a value too)."
+        )),
+        "{gap}"
+    );
+    assert!(
+        gap.contains("sudo vectory status --json") && gap.contains("state.secret_revision"),
+        "{gap}"
+    );
+    report["devices"][0]["highest_generation"] = json!(8);
+    report["devices"][0]["highest_policy_generation"] = json!("6");
+    let gap = vectory_server::maintenance::missing_counters(&report).unwrap();
+    assert!(
+        gap.starts_with(&format!(
+            "highest_policy_generation of device {first} isn't a whole number"
+        )),
+        "{gap}"
+    );
     for entry in report["devices"].as_array_mut().unwrap() {
         entry["highest_generation"] = json!(8);
         entry["highest_policy_generation"] = json!(6);
@@ -921,12 +1453,28 @@ async fn restored_generations_require_explicit_review_and_atomic_fencing() {
         .unwrap();
     assert_eq!(preview["applied"], false);
     assert_eq!(preview["devices"][0]["generation"], 9);
+    assert!(vectory_server::maintenance::missing_counters(&report).is_none());
     let mut wrong = report.clone();
     wrong["devices"][1]["device_id"] = json!("unknown");
+    let refusal = recover_generations(&s, serde_json::from_value(wrong).unwrap(), true)
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(
-        recover_generations(&s, serde_json::from_value(wrong).unwrap(), true)
-            .await
-            .is_err()
+        refusal.starts_with("Device unknown in the generation report is unknown or revoked"),
+        "{refusal}"
+    );
+    let mut twice = report.clone();
+    twice["devices"][1]["device_id"] = twice["devices"][0]["device_id"].clone();
+    let refusal = recover_generations(&s, serde_json::from_value(twice).unwrap(), true)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.starts_with(&format!(
+            "Device {first} appears more than once in the generation report"
+        )),
+        "{refusal}"
     );
     let mut wrong = report.clone();
     wrong["devices"][0]["expected_sha256"] = json!("0".repeat(64));
@@ -1101,6 +1649,7 @@ async fn state() -> (tempfile::TempDir, State) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Test".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -1238,7 +1787,7 @@ async fn authentication_csrf_roles_and_immutable_versions() {
             app.clone(),
             "POST",
             "/api/v1/users",
-            json!({"email":email,"name":role,"role":role,"password":"another-long-password"}),
+            json!({"email":email,"name":role,"role":role,"password":"another-long-password","current_password":"a-long-enough-password"}),
             &cookie,
             &csrf,
         )
@@ -1759,6 +2308,47 @@ async fn signed_manifest_binds_nonce_and_artifact_is_current_only() {
 }
 
 #[tokio::test]
+async fn artifact_downloads_never_wait_for_the_writer_lock() {
+    let (_temp, s) = state().await;
+    let ids = seed(&s, 1).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    rollout::create(&mut tx, &request(&ids, "version-a", 10, false), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "INSERT INTO credentials(fingerprint,device_id,expires_at) VALUES('fingerprint',?,?)",
+    )
+    .bind(&ids[0])
+    .bind((chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339())
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let app = device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(
+        "fingerprint".into(),
+    ))));
+    let path = format!("/agent/v1/artifacts/{}", db::hash("{}\n"));
+    // A heartbeat or the scheduler is writing. A download is a read: it
+    // must not queue behind the writer, nor make writers queue behind it.
+    let writing = s.writer.lock().await;
+    let download = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        call(app.clone(), "GET", &path, Value::Null, "", ""),
+    )
+    .await;
+    drop(writing);
+    let (status, artifact, _) = download.expect("the download waited for the writer lock");
+    assert_eq!(status, StatusCode::OK, "{artifact}");
+    assert_eq!(artifact, json!({}));
+    // The digest still decides: anything but the current artifact is refused.
+    let other = format!("/agent/v1/artifacts/{}", db::hash("other"));
+    assert_eq!(
+        call(app, "GET", &other, Value::Null, "", "").await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn mfa_requires_second_factor_and_recovery_codes_are_single_use() {
     let (_temp, s) = state().await;
     let app = api::router(s.clone());
@@ -1885,7 +2475,7 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
         call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
             .await
             .1,
-        json!({"enabled": false}),
+        json!({"enabled": false, "recovery_codes_remaining": null}),
         "a pending setup is not a recoverable secret or enabled state"
     );
     let first_ciphertext: String = sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa")
@@ -1930,7 +2520,7 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
         call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
             .await
             .1,
-        json!({"enabled": true})
+        json!({"enabled": true, "recovery_codes_remaining": 8})
     );
     let recovery_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes")
         .fetch_one(&s.pool)
@@ -1969,7 +2559,7 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
         call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
             .await
             .1,
-        json!({"enabled": false})
+        json!({"enabled": false, "recovery_codes_remaining": null})
     );
     let remaining_codes: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes")
         .fetch_one(&s.pool)
@@ -2041,6 +2631,69 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
     assert_eq!(disable_audits, 2);
 }
 
+// What an enrollment says about the host and the request names or identifies
+// something, so it refuses every character that can't be shown safely, in one
+// line, and leaves the token unused. A real release candidate, with build
+// metadata, enrolls.
+#[tokio::test]
+async fn enrollment_refuses_what_cannot_be_shown_in_the_members_that_identify_a_device() {
+    let (_temp, s) = state().await;
+    let app = api::router(s.clone());
+    let (cookie, csrf) = admin(&s).await;
+    let (_, token, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/tokens",
+        json!({"name":"Test enrollment","expires_hours":1,"max_uses":1}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    let device_api = device::router(s.clone());
+    let key = rcgen::KeyPair::generate().unwrap();
+    let csr = rcgen::CertificateParams::default()
+        .serialize_request(&key)
+        .unwrap()
+        .pem()
+        .unwrap();
+    let request = json!({"protocol_version":1,"request_id":"hostile-members","token":token["token"],"name":"edge-02","csr_pem":csr,"os":"linux","arch":"amd64","agent_version":"0.58.1-rc.1+build.5","vector_version":"0.58.0"});
+    let hostile = [0x1b, 0x0a, 0x2028, 0x202e, 0x2066, 0xfeff].map(|c| char::from_u32(c).unwrap());
+    for member in [
+        "os",
+        "arch",
+        "agent_version",
+        "vector_version",
+        "request_id",
+    ] {
+        for c in hostile {
+            let mut bad = request.clone();
+            bad[member] = json!(format!("x{c}y"));
+            let (status, body, _) =
+                call(device_api.clone(), "POST", "/agent/v1/enroll", bad, "", "").await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{member} with U+{:04X}: {body}",
+                c as u32
+            );
+        }
+    }
+    let devices: i64 = sqlx::query_scalar("SELECT count(*) FROM devices")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(devices, 0, "a refused enrollment leaves no device");
+    let (status, enrolled, _) = call(device_api, "POST", "/agent/v1/enroll", request, "", "").await;
+    assert_eq!(status, StatusCode::OK, "{enrolled}");
+    let version: String =
+        sqlx::query_scalar("SELECT json_extract(data,'$.agent_version') FROM devices WHERE id=?")
+            .bind(enrolled["device_id"].as_str().unwrap())
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(version, "0.58.1-rc.1+build.5");
+}
+
 #[tokio::test]
 async fn authorized_recovery_retires_old_identity_without_inheriting_assignments() {
     let (_temp, s) = state().await;
@@ -2109,6 +2762,11 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{recovery}");
+    // The old identity has an open issue that it can never resolve itself.
+    let stranded = db::hash(format!("{old}:stranded"));
+    let mut conn = s.pool.acquire().await.unwrap();
+    db::insert(&mut conn, "issue", &json!({"id":stranded,"device_id":old,"code":"VALIDATION_FAILED","stage":"validate","count":1,"reports":1,"first_seen":db::now(),"last_seen":db::now(),"resolved":false,"revision":1})).await.unwrap();
+    drop(conn);
     let replacement = rcgen::KeyPair::generate().unwrap();
     let mut retry = request;
     retry["token"] = recovery["token"].clone();
@@ -2164,6 +2822,16 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
             .await
             .unwrap();
     assert_eq!(creds, 0);
+    let (_, issue, _) = call(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/issues/{stranded}"),
+        Value::Null,
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(issue["resolved_reason"], "revoked", "{issue}");
     let (_, groups, _) = call(app, "GET", "/api/v1/groups", Value::Null, &cookie, "").await;
     assert!(groups[0]["device_ids"].as_array().unwrap().is_empty());
 }
@@ -2563,7 +3231,7 @@ async fn authenticated_fleet_limiter_is_independent_of_anonymous_key_pressure() 
         )
         .unwrap();
     }
-    for i in 0..4096 {
+    for i in 0..vectory_server::ANONYMOUS_LIMIT_KEYS {
         s.limit(
             format!("login:unknown-{i}"),
             8,
@@ -2571,18 +3239,86 @@ async fn authenticated_fleet_limiter_is_independent_of_anonymous_key_pressure() 
         )
         .unwrap();
     }
-    assert!(
-        s.limit(
-            "login:overflow".into(),
-            8,
-            std::time::Duration::from_secs(300)
-        )
-        .is_err()
-    );
     s.limit(
         "heartbeat:another-registered-device".into(),
         30,
         std::time::Duration::from_secs(60),
     )
     .unwrap();
+    assert_eq!(s.device_limits.lock().unwrap().len(), 10001);
+}
+
+#[tokio::test]
+async fn a_full_limiter_admits_new_sign_in_clients_and_keeps_spent_budgets() {
+    let (_temp, s) = state().await;
+    let minute = std::time::Duration::from_secs(60);
+    let five_minutes = std::time::Duration::from_secs(300);
+    // Someone spent a reset code's budget, in a five-minute window.
+    for _ in 0..8 {
+        s.limit("password-reset:guessed".into(), 8, five_minutes)
+            .unwrap();
+    }
+    assert!(
+        s.limit("password-reset:guessed".into(), 8, five_minutes)
+            .is_err()
+    );
+    // Sign-in clients with one-minute windows fill the partition.
+    for i in 0..vectory_server::ANONYMOUS_LIMIT_KEYS {
+        s.limit(format!("login-client:198.51.{i}"), 60, minute)
+            .unwrap();
+    }
+    assert_eq!(
+        s.limits.lock().unwrap().len(),
+        vectory_server::ANONYMOUS_LIMIT_KEYS
+    );
+    // A new client can still sign in: the key whose window ends soonest
+    // makes room. The server is never "busy" because the map is full.
+    for n in 0..100 {
+        s.limit(format!("login-client:203.0.113.{n}"), 60, minute)
+            .unwrap();
+    }
+    assert_eq!(
+        s.limits.lock().unwrap().len(),
+        vectory_server::ANONYMOUS_LIMIT_KEYS
+    );
+    // The spent budget has the most time left, so it still holds.
+    let refused = s
+        .limit("password-reset:guessed".into(), 8, five_minutes)
+        .unwrap_err();
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(refused.retry_after.unwrap() > 60, "{refused:?}");
+}
+
+#[tokio::test]
+async fn unauthenticated_agent_listener_traffic_never_displaces_sign_in_keys() {
+    let (_temp, s) = state().await;
+    let minute = std::time::Duration::from_secs(60);
+    for _ in 0..60 {
+        s.limit("login-client:198.51.100.7".into(), 60, minute)
+            .unwrap();
+    }
+    let signing_in = s.limits.lock().unwrap().len();
+    // A flood from many addresses fills its own partition: installer,
+    // download, enrollment and invitation keys. Nothing is ever refused
+    // because a map is full.
+    for i in 0..vectory_server::PUBLIC_LIMIT_KEYS + 1000 {
+        let key = match i % 4 {
+            0 => format!("agent-installer:2001:db8:{i:x}::/64"),
+            1 => format!("agent-download:2001:db8:{i:x}::/64"),
+            2 => format!("enrollment:2001:db8:{i:x}::/64"),
+            _ => format!("invite-preview:2001:db8:{i:x}::/64"),
+        };
+        s.limit(key, 300, std::time::Duration::from_secs(600))
+            .unwrap();
+    }
+    assert_eq!(
+        s.public_limits.lock().unwrap().len(),
+        vectory_server::PUBLIC_LIMIT_KEYS
+    );
+    assert_eq!(s.limits.lock().unwrap().len(), signing_in);
+    // The sign-in client's spent minute still holds.
+    assert!(
+        s.limit("login-client:198.51.100.7".into(), 60, minute)
+            .is_err()
+    );
 }

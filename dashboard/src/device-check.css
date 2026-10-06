@@ -1,0 +1,460 @@
+/* Check on devices: the deploy review's per-device check, as a table or cards. */
+.device-check {
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.device-check > * + * {
+  margin-top: var(--space-3);
+}
+.device-check-head + .device-check-note,
+.device-check-head + .device-check-live {
+  margin-top: var(--space-4);
+}
+.device-check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+}
+.device-check-intro {
+  display: grid;
+  flex: 1 1 320px;
+  gap: var(--space-2-5);
+  min-width: 0;
+}
+.device-check-intro > p {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+}
+/* The button keeps one width whatever it says, so the row never shifts. */
+.device-check-button {
+  flex: none;
+  min-width: 160px;
+}
+.device-check .button[aria-disabled="true"] {
+  color: var(--text-subtle);
+  background: var(--surface-sunken);
+  border-color: var(--border);
+  box-shadow: none;
+  cursor: default;
+}
+.device-check-button[aria-busy="true"] {
+  cursor: progress;
+}
+.device-check .button[aria-disabled="true"]:hover,
+.device-check .button[aria-disabled="true"]:active {
+  background: var(--surface-sunken);
+  border-color: var(--border);
+  transform: none;
+}
+.device-check .button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The tests switch: a real checkbox with the switch role. */
+.device-check-switch {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2-5);
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+}
+.device-check-switch[data-disabled] {
+  cursor: default;
+}
+/* The invisible checkbox lies over the track, so a press on it is a press on the switch. */
+.device-check-switch > input[type="checkbox"] {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  z-index: 1;
+  width: 32px;
+  height: 20px;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.device-check-track {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: var(--radius-full);
+  background: var(--border-input);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.device-check-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.device-check-switch > input:checked + .device-check-track {
+  background: var(--accent);
+}
+.device-check-switch > input:checked + .device-check-track::after {
+  transform: translateX(12px);
+}
+.device-check-switch > input:focus-visible + .device-check-track {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.device-check-switch > input:disabled + .device-check-track {
+  opacity: 0.55;
+}
+/* Forced colors drop backgrounds: the switch keeps an outline and a visible thumb. */
+@media (forced-colors: active) {
+  .device-check-track {
+    border: 1px solid ButtonText;
+  }
+  .device-check-track::after {
+    background: ButtonText;
+  }
+  .device-check-switch > input:checked + .device-check-track {
+    border-color: Highlight;
+  }
+  .device-check-switch > input:checked + .device-check-track::after {
+    background: Highlight;
+  }
+}
+.device-check-switch-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-weight: var(--weight-medium);
+}
+.device-check-switch-text small {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-weight: var(--weight-regular);
+}
+
+/* The sentence that is always true, and what stands beside it. */
+.device-check-live:empty {
+  margin: 0;
+}
+.device-check-summary,
+.device-check-stale {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+  font-variant-numeric: tabular-nums;
+}
+.device-check-summary {
+  font-weight: var(--weight-semibold);
+}
+.device-check-summary > svg,
+.device-check-stale > svg {
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+.device-check-summary[data-running] > svg {
+  color: var(--accent-text);
+}
+.device-check-stale {
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+}
+.device-check-stale > svg {
+  color: inherit;
+}
+.device-check-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+.device-check-meta p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-variant-numeric: tabular-nums;
+}
+.device-check-truncated {
+  margin: var(--space-1) 0 0;
+  color: var(--text);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-variant-numeric: tabular-nums;
+}
+.device-check-quiet {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A calm inline message about the check; the deployment is untouched. */
+.device-check-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-md);
+  color: var(--info-text);
+  background: var(--info-bg);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-variant-numeric: tabular-nums;
+}
+.device-check-note[data-kind="failed"],
+.device-check-note[data-kind="refused"],
+.device-check-note[data-kind="role"],
+.device-check-note[data-kind="session"] {
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+.device-check-note > svg {
+  margin-top: 2px;
+}
+
+/* Results: a table from 768 px, cards below. */
+.device-check-table-wrap {
+  max-height: 440px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.device-check-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.device-check-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+.device-check-table thead th:nth-child(1) {
+  width: 20%;
+}
+.device-check-table thead th:nth-child(2) {
+  width: 208px;
+}
+.device-check-table tbody th,
+.device-check-table tbody td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  overflow-wrap: anywhere;
+}
+.device-check-table tbody th {
+  color: var(--text);
+  background: none;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  white-space: normal;
+  text-align: left;
+}
+.device-check-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.device-check-table tbody tr:focus,
+.device-check-card:focus {
+  outline: none;
+}
+.device-check-table tbody tr:focus-visible,
+.device-check-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.device-check-table .status-badge {
+  max-width: 100%;
+}
+.device-check-detail > p,
+.device-check-detail > .diagnostic-list {
+  margin: 0;
+}
+.device-check-detail > p + p,
+.device-check-detail > * + .device-check-more {
+  margin-top: var(--space-1-5);
+}
+.device-check-detail > .device-check-retry {
+  margin-top: var(--space-2-5);
+}
+.device-check-detail .diagnostic {
+  padding: var(--space-2-5) var(--space-3);
+}
+.device-check-cards {
+  display: grid;
+  gap: var(--space-2-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.device-check-card {
+  display: grid;
+  gap: var(--space-2-5);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.device-check-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1-5) var(--space-3);
+}
+.device-check-card-head strong {
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+.device-check-card .device-check-detail {
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  overflow-wrap: anywhere;
+}
+
+/* What a failed row opens: more findings, tests, the bindings file. */
+.device-check-more > summary {
+  display: inline-block;
+  padding: var(--space-1) 0;
+  color: var(--accent-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.device-check-more[open] > summary {
+  margin-bottom: var(--space-1-5);
+}
+.device-check-more > .diagnostic-list {
+  margin-top: 0;
+}
+.device-check-tests {
+  display: grid;
+  gap: var(--space-1-5);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.device-check-tests li {
+  display: grid;
+  gap: 1px;
+}
+.device-check-tests li[data-result="failed"] span {
+  color: var(--danger-text);
+}
+.device-check-tests li[data-result="not_run"] span {
+  color: var(--text-muted);
+}
+.device-check-secret > * + * {
+  margin-top: var(--space-2-5);
+}
+.device-check-secret > .device-check-more {
+  margin-top: var(--space-1);
+}
+.device-check-more > p {
+  margin: var(--space-1-5) 0 0;
+}
+.device-check-secrets {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.device-check-secrets li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+.device-check-secrets li > svg {
+  margin-top: 3px;
+  color: var(--warning-text);
+}
+.device-check-command {
+  display: grid;
+  gap: var(--space-2);
+}
+.device-check-command-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1-5) var(--space-3);
+}
+.device-check-command-head > p {
+  flex: 1 1 200px;
+  margin: 0;
+}
+.device-check-command pre {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--space-2-5) var(--space-3);
+  overflow-x: auto;
+  white-space: pre;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.device-check-command pre code {
+  padding: 0;
+  background: none;
+  font: inherit;
+}
+.device-check-command pre:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  .device-check {
+    padding: var(--space-3);
+  }
+  .device-check-button {
+    flex: 1 1 100%;
+  }
+  .device-check-meta .button {
+    width: 100%;
+  }
+}

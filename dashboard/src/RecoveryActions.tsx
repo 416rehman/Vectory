@@ -6,14 +6,11 @@ import {
   can,
   getSessionEpoch,
   withRequestDeadline,
-  type Deployment,
   type Device,
   type User,
 } from "./api";
 import { Button, ErrorBox, RefreshButton } from "./ui";
-import AssignmentRemoval from "./AssignmentRemoval";
 import DeviceRecoveryAuthorization from "./DeviceRecoveryAuthorization";
-import ScheduledAssignmentRefresh from "./ScheduledAssignmentRefresh";
 import "./control.css";
 
 type DeviceRecoveryProps = {
@@ -22,7 +19,7 @@ type DeviceRecoveryProps = {
   onDone: (message: string) => void;
   onRefresh: () => Promise<void>;
 };
-function eligibleState(snapshot: Device) {
+export function eligibleState(snapshot: Device) {
   return [
     "failed",
     "rolled_back",
@@ -33,7 +30,16 @@ function eligibleState(snapshot: Device) {
   ].includes(snapshot.apply_state);
 }
 export function DeviceRecoveryActions(props: DeviceRecoveryProps) {
-  const { device, user, onDone } = props;
+  return (
+    <>
+      <DeviceRetryAction {...props} />
+      <DeviceIdentityRecovery {...props} />
+    </>
+  );
+}
+/** Application retry alone, e.g. beside a failure message. */
+export function DeviceRetryAction(props: DeviceRecoveryProps) {
+  const { device, user } = props;
   // Retire each retry review permanently when its assignment or eligibility
   // changes. Identity recovery keeps its independent review and token lifetime.
   const review = JSON.stringify([
@@ -48,20 +54,22 @@ export function DeviceRecoveryActions(props: DeviceRecoveryProps) {
     eligibleState(device),
     device.retry_preconditions === true,
   ]);
+  return <DeviceApplicationRetry key={review} {...props} />;
+}
+/** Identity recovery alone, kept apart from routine sync controls. */
+export function DeviceIdentityRecovery({ device, user }: DeviceRecoveryProps) {
   return (
-    <>
-      <DeviceApplicationRetry key={review} {...props} />
-      <DeviceRecoveryAuthorization
-        key={`${user.id}:${user.role}:${device.id}:${device.name}`}
-        device={device}
-        user={user}
-        onDone={onDone}
-      />
-    </>
+    <DeviceRecoveryAuthorization
+      key={`${user.id}:${user.role}:${device.id}:${device.name}`}
+      device={device}
+      user={user}
+    />
   );
 }
 type RetryRequest = { controller: AbortController; epoch: number };
-function DeviceApplicationRetry({
+// Also used by Issues for "Retry on device"; mount it keyed by the reviewed
+// assignment so a changed assignment retires the old review.
+export function DeviceApplicationRetry({
   device,
   user,
   onDone,
@@ -309,106 +317,6 @@ function DeviceApplicationRetry({
         </div>
       )}
       {retryState?.error && <ErrorBox message={retryState.error} />}
-    </>
-  );
-}
-
-export function AssignmentActions({
-  deployment,
-  user,
-  onDone,
-  onCommittingChange,
-  onReviewRemoval,
-  onReviewScheduled,
-}: {
-  deployment: Pick<Deployment, "id" | "status">;
-  user: User;
-  onDone(message: string): void;
-  onCommittingChange?(busy: boolean): void;
-  onReviewRemoval?(): void;
-  onReviewScheduled?(): void;
-}) {
-  const [removalOpen, setRemovalOpen] = useState(false);
-  const [scheduledOpen, setScheduledOpen] = useState(false);
-  const removalOpener = useRef<HTMLButtonElement | null>(null);
-  const scheduledOpener = useRef<HTMLButtonElement | null>(null);
-  if (!can(user, "operate")) return null;
-  return (
-    <>
-      {deployment.status === "scheduled" && (
-        <details className="control-disclosure">
-          <summary>Update scheduled devices</summary>
-          <div className="control-disclosure-content">
-            <p className="control-muted">
-              Compare the saved device selection with current group membership
-              before the schedule activates.
-            </p>
-            <Button
-              variant="secondary"
-              onClick={(event) => {
-                if (onReviewScheduled) {
-                  onReviewScheduled();
-                  return;
-                }
-                scheduledOpener.current = event.currentTarget;
-                setScheduledOpen(true);
-              }}
-            >
-              Review scheduled devices
-            </Button>
-          </div>
-        </details>
-      )}
-      {!["scheduled", "missed", "unassigned"].includes(deployment.status) && (
-        <details className="control-disclosure">
-          <summary>Remove this assignment</summary>
-          <div className="control-disclosure-content">
-            <p className="control-muted">
-              Review what each device will use after this assignment is removed.
-              Removing a configuration assignment does not stop Vector.
-            </p>
-            <Button
-              variant="secondary"
-              onClick={(event) => {
-                if (onReviewRemoval) {
-                  onReviewRemoval();
-                  return;
-                }
-                removalOpener.current = event.currentTarget;
-                setRemovalOpen(true);
-              }}
-            >
-              Review assignment removal
-            </Button>
-          </div>
-        </details>
-      )}
-      {!onReviewRemoval && (
-        <AssignmentRemoval
-          key={`${user.id}:${deployment.id}`}
-          deploymentId={deployment.id}
-          actorId={user.id}
-          allowed={can(user, "operate")}
-          open={removalOpen}
-          onClose={() => setRemovalOpen(false)}
-          onDone={onDone}
-          onCommittingChange={onCommittingChange}
-          returnFocusRef={removalOpener}
-        />
-      )}
-      {!onReviewScheduled && (
-        <ScheduledAssignmentRefresh
-          key={`${user.id}:${deployment.id}`}
-          deploymentId={deployment.id}
-          actorId={user.id}
-          allowed={can(user, "operate")}
-          open={scheduledOpen}
-          onClose={() => setScheduledOpen(false)}
-          onDone={onDone}
-          onCommittingChange={onCommittingChange}
-          returnFocusRef={scheduledOpener}
-        />
-      )}
     </>
   );
 }

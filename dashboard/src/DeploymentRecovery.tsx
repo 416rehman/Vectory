@@ -9,6 +9,7 @@ import {
   type DeploymentReceipt,
   type User,
 } from "./api";
+import { countLabel } from "./countLabel";
 import { deploymentRoute } from "./deploymentRouting";
 import {
   assertDeploymentLookup,
@@ -28,6 +29,7 @@ import {
 import { DeploymentStorageRecoveryDialog } from "./DeploymentStorageRecovery";
 import { Button, ErrorBox, Modal } from "./ui";
 import "./deployment-recovery.css";
+import type { Notify } from "./toast";
 
 export function DeploymentRecoveryDialog({
   operation,
@@ -222,14 +224,15 @@ export function DeploymentRecoveryDialog({
         <strong>{operation.label}</strong>
         {operation.kind === "create" ? (
           <p>
-            {operation.request.expected_device_ids.length} devices · Priority{" "}
-            {operation.request.priority}
+            {countLabel(operation.request.expected_device_ids.length, "device")}{" "}
+            · Priority {operation.request.priority}
           </p>
         ) : operation.review ? (
           <p>
-            {operation.review.configuration_name || "Previous pipeline"}
+            Returns to{" "}
+            {operation.review.configuration_name || "the previous pipeline"}
             {operation.review.version_number !== null &&
-              ` · Version ${operation.review.version_number}`}
+              ` v${operation.review.version_number}`}
             <br />
             {(operation.review.configuration_name === null ||
               operation.review.version_number === null) && (
@@ -238,9 +241,13 @@ export function DeploymentRecoveryDialog({
                 <br />
               </>
             )}
-            {operation.review.device_ids.length} reviewed devices ·{" "}
-            {operation.review.excluded_count} excluded. Recovery keeps the
-            original reviewed scope.
+            {operation.review.device_ids.length === 1
+              ? "1 reviewed device"
+              : `${operation.review.device_ids.length} reviewed devices`}
+            {operation.review.excluded_count
+              ? ` · ${operation.review.excluded_count} left out`
+              : ""}
+            . Checking or sending again covers exactly these devices.
           </p>
         ) : (
           <p>
@@ -391,7 +398,7 @@ export default function DeploymentRecoveryCenter({
   notify,
 }: {
   user: User;
-  notify(message: string): void;
+  notify: Notify;
 }) {
   const { pendingOperations, errors, refresh } = useDeploymentOperation(
     user.id,
@@ -534,7 +541,7 @@ export default function DeploymentRecoveryCenter({
               recoveryOpener.current = document.getElementById("main-content");
             setOpened(null);
           }}
-          onRecovered={notify}
+          onRecovered={(message) => notify(message, { tone: "success" })}
         />
       )}
       {visibleIssue && (
@@ -548,7 +555,7 @@ export default function DeploymentRecoveryCenter({
               recoveryOpener.current = document.getElementById("main-content");
             setOpenedIssue(null);
           }}
-          onRecovered={notify}
+          onRecovered={(message) => notify(message, { tone: "success" })}
         />
       )}
     </>

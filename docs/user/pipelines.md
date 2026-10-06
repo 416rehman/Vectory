@@ -1,80 +1,64 @@
 # Build a pipeline
 
-Build the event flow on the graph, configure each component in the right-hand panel, then check and publish a version. Moving nodes changes the diagram only; component settings and connections become the Vector configuration sent to devices.
+Draw the event flow on the graph, configure each component, then check and publish a version. Moving cards only changes the picture; components and their connections become the Vector configuration devices run.
 
-You need an Editor or Admin role to change drafts. Publishing and deploying require Operator or Admin access. A Viewer can inspect configurations and history.
+Editors and Administrators can change drafts. Operators and Administrators can publish and deploy. Everyone can view pipelines and their history.
 
 ## Find and organize pipelines
 
-Open [**Pipelines**](/#/configurations) and search by name or description. Use the **Status** column's filter to switch between active and archived pipelines. Select **Pipeline** or **Updated** in the header to sort; select it again to reverse the order. A page contains up to 12 pipelines. Open a pipeline to inspect its draft, components and history; returning to the library keeps your search, filters and page during the current signed-in visit.
+Open [**Pipelines**](/#/configurations) to search by name or description, sort by name or last update, and filter active or archived pipelines. Your search and page are kept while you work.
 
-Editors and administrators can use a pipeline's **Actions** menu to:
+A row's **Status** says where the pipeline runs: its latest published version and when it was published, the versions devices verified running and on how many of the devices it is assigned to (**Running v2 on 1, v1 on 2 of 3 · v4 not running**), and **Unpublished changes** when the draft differs. An assignment alone isn't evidence that Vector runs it: **Assigned to 2 devices · not verified running yet**. When no device runs the latest version, the row also says how its newest rollout ended, linked to that rollout: **v4 failed on 1 device · 12m ago** or **v4 rolled back on 1 device · 12m ago**. The row reads the 20 newest failed and the 20 newest rolled-back rollouts, so an older ending isn't shown, and it says nothing about a rollout that went well.
 
-| Action                 | Result                                                                                                                                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Duplicate pipeline** | Create a separate active pipeline from the current saved draft configuration and canvas. Choose its name and description. The copy begins at revision 1 and inherits no published versions, device assignments or deployments. |
-| **Archive pipeline**   | Move it out of the active library and freeze changes to its draft and publication. Existing history, published versions and device deployments remain in place.                                                                |
-| **Unarchive pipeline** | Return it to the active library and allow draft editing and publication again. This does not deploy a version.                                                                                                                 |
+A name can use any script, spaces and punctuation. It can't hold a line break, another control character or a text-direction override, because names appear on one line in alerts, the audit log and exports. Vectory refuses a name that has one and says which field to fix. Deployments, groups, saved agent settings, enrollment tokens, notification channels and people follow the same rule.
 
-These actions are also available under [**Actions**](/#/configurations?panel=tools) in the editor. Complete pending field edits before changing the pipeline's lifecycle. If the pipeline changed since you opened the action, load and review its latest details before trying again.
+A pipeline's **Actions** menu offers:
 
-Starting from a device's **Choose pipeline** action carries that device into the pipeline workflow. Check the selected-device context and still review the target set before deployment; choosing a pipeline does not apply it automatically.
+| Action | Result |
+| --- | --- |
+| **Duplicate pipeline** | A new, independent pipeline from the saved draft. It starts at revision 1, with no versions or deployments. |
+| **Archive pipeline** | Moves it out of the active list and freezes the draft. Published versions stay deployable, and running devices are unaffected. |
+| **Unarchive pipeline** | Returns it to the active list so you can edit and publish again. |
 
-### Recover a creation or duplication
-
-Creating or duplicating a pipeline saves the exact request in this browser before sending it. A duplicate stays bound to the source's saved revision; it never copies later edits silently. If the reply is lost, choose **Close and review request** to open the saved requests. After closing or reloading, use **Review pipeline requests**. Review the reminder before starting another create or duplicate; existing pipelines can still be opened, edited or archived.
-
-**Check status** looks up the original request. A missing result may still be in flight, including from another tab. **Retry same request** sends only the preserved request with its original ID. Nothing is retried automatically. If the initial duplicate is definitively rejected because the source revision changed, **Load latest for review** preserves the proposed copy name and description while loading the source for review. A subsequent explicit submission uses that reviewed revision and a new request ID. If a recovery retry is rejected, review the error and deliberately dismiss its reminder before starting a separate request.
-
-**Pipeline saved** identifies the exact result with its current details. **Open pipeline** opens that UUID, including later edits or an archived state; the current editor's unsaved-change confirmation still applies. Recovery never overwrites the result with the original creation contents. A saved copy remains independent and recoverable after its source changes or disappears. Creating, duplicating and recovering a pipeline do not publish a version or deploy it.
-
-Use **Your pipeline requests** in the library or the editor's **Actions** menu to find requests saved by your account on the server, including from another tab or device. This list can recover a committed result after a browser reminder is lost, but cannot reconstruct a missing request for retry. **Dismiss reminder** removes only the local reminder, without cancelling a request or deleting a pipeline.
-
-Working browser storage and an updated server are required. An unsupported server is blocked before this tab sends a create or duplicate, but the saved reminder stays available for review because another tab may have sent it.
+To start from a device, use **Choose pipeline** on its page. You still review the devices before anything deploys.
 
 ## Add and connect components
 
-1. Open [**Pipelines**](/#/configurations) and create a pipeline, or open an existing draft.
-2. Right-click an empty part of the canvas, or use the labeled **Add component** floating button at its upper left. Search by name, such as `http_server` or `remap`, and filter by sources, transforms or destinations. A component added on empty canvas starts without new connections.
-3. Drag an output handle to a transform or sink input. Drop it on empty canvas to choose a compatible component and connect it to that exact output. Existing branches stay connected. For a named output, choose the port that carries the intended events.
-4. Select a node. Complete its required settings in the right-hand panel. **Add field** stays in the Configuration toolbar while you scroll; use it to search for optional settings. Nested objects have their own Add field control above their children. The small info icon beside a field shows its description, limits, defaults and examples on hover or keyboard focus. Moving the pointer away from both the icon and help closes it, including after a mouse click. On touch screens, tap the icon to open help and tap outside to dismiss it. Its actions menu contains JSON, null and removal options when supported.
+<!-- steps -->
+1. Open a draft, or choose **Create pipeline**.
+2. Add a component: right-click empty canvas, or use **Add component**. Search by name (`http_server`, `remap`) and filter by sources, transforms and destinations.
+3. Connect it: drag from an output handle to the next component. Drop on empty canvas to add a compatible component already connected. For components with named outputs, such as `route`, pick the output that carries the events you want.
+4. Select a card and complete its required settings in the right-hand panel. **Add field** searches the optional settings; the info icon beside a field explains it, with limits, defaults and examples.
+5. Choose **Check pipeline**, then **Save draft** to keep your work or **Review & publish** to create a version.
 
-Related properties appear together in sections such as Sampling, Encoding, Connection and Delivery. The sidebar closes with **×** or **Escape**; no Done action is needed. Committed edits stay in the editor until you choose **Save draft**, **Discard changes**, or **Review & publish**. Unfinished inputs still require applying or deliberately discarding them before closing. Save state remains visible in the pipeline toolbar.
-5. Choose **Check pipeline** to review the current edits. To keep your work without publishing, open the arrow beside **Review & publish** and choose **Save draft**. Use **Review & publish** when ready to create a version; it saves committed edits before publishing.
+A **source** receives or generates events, a **transform** changes, filters or routes them, and a **sink** delivers them. Connections can't form a loop. A branch that never reaches a sink gets a dashed outline and a **No destination** hint; it doesn't block publishing.
 
-A source receives events, a transform changes or routes them, and a sink delivers them. Connections must not form a cycle. See [pipeline terms](#/docs/glossary#pipeline-and-components).
+| To | Do this |
+| --- | --- |
+| Move or remove a connection | Select it, then drag an end grip to another port, or press **Delete**. |
+| Change connection lines | **Connection style**: **Curved**, **Right-angle** or **Straight**. Display only. |
+| Tidy the graph | **Arrange graph**, then **Fit graph**. |
+| Insert a component into a connection | Choose **+** on the line, then pick a component. It is wired in between. |
+| Find a component | **Ctrl F** (**⌘ F**), then type an ID, name or type. The graph moves to it. |
+| Select several components | **Ctrl**-click (**⌘**-click) or **Shift**-drag; **Ctrl A** selects all. Then move, duplicate (**Ctrl D**) or delete them together. |
+| Copy components | Select them, then **Ctrl C**, **Ctrl V** (**⌘ C**, **⌘ V**). They are copied as Vector YAML and pasted with new IDs and their connections rewired. You can also paste components from any Vector configuration. |
+| See live rates | **Live** is on when a device runs the pipeline, and Vectory remembers your choice for each pipeline. Each connection carries its events per second on a label and gets thicker as the rate grows, with error, drop and buffer badges on the steps. Rates are summed across the devices verified running a version of this pipeline. **Fit** brings the whole graph into view with the numbers still readable, and **Show as table** lists every number as text. It shows rates only, never event contents, and needs devices with [telemetry](telemetry.md) on. **Add monitoring** adds Vector's internal metrics if the pipeline doesn't export them. |
+| Tell cards apart | A card's title takes two lines before it is cut, and its tooltip holds all of it. Steps that share a title lead with their IDs, for example **archive · Discard events**. |
+| Open a step from a link | **Fix in pipeline**, on a rollout or an issue, opens the pipeline with the step the failure names selected and the setting it names in view. If this draft has no such step or setting, the pipeline opens as usual and one line says so. |
+| Rename a component | The pencil beside its name. Connections and test targets follow; wildcard inputs and VRL text don't, so review those. An ID can't contain `.`, `/`, `\` or control characters, or start with a drive letter and a colon (like `C:`): Vector uses it as a folder name for its checkpoints and disk buffers. |
+| Undo | **Ctrl Z** (**⌘ Z**); add Shift to redo. |
+| Work from the keyboard | Arrow keys move a focused card, **Enter** opens it, **Delete** removes it, **Shift F10** opens its menu. **Canvas shortcuts** lists the rest. |
 
-Hover a connection to highlight that exact line and its two endpoint nodes. Other lines fade and unrelated cards become quieter while their text and controls stay readable. Move away to restore the graph. Keyboard focus on a connection provides the same aid; Escape clears it. This is only a view change and does not edit, save or recheck the pipeline.
+The status beside **Save draft** always shows where you are: **Saved**, **Saving…**, **Unsaved**, **Unapplied edits** or **Save failed**. Nothing saves in the background. **Discard changes** returns to the last saved draft. When the server refuses a draft, your edits stay and the message says why. If one setting is the cause, such as a plaintext credential, **Go to field** opens it. If the server draft changed elsewhere, Save stops. **Compare drafts** shows both copies and offers **Apply combined draft** when the editor has their common starting revision. Changes to different fields combine automatically; for a field both editors changed, choose **Keep server** or **Keep mine**. Changes to a component's type require choosing the complete component, so options from different types are not mixed. The combined result stays unsaved for review. The editor checks the server revision again before applying, so a further server change requires a new comparison. **Save mine as a new pipeline** opens a review of your local configuration, canvas layout and variable declarations; name the separate draft before creating it. Apply any unfinished field or Code edits first. A lost create reply leaves a saved request to check by its exact ID before retrying, and your original local edits stay in place. **Download my draft** saves your local work; **Discard my edits and load server draft** explicitly replaces it. Browser recovery keeps separate copies for separate editor tabs. If several copies exist, choose one in the recovery notice; a copy open in another tab can be downloaded or restored into a separate draft, but cannot be discarded until that tab closes. A browser recovery copy without a starting snapshot can still be compared and downloaded, but must be merged manually. This can happen with an older copy or when the starting snapshot exceeded browser storage limits. If a pipeline is archived or your access changes after a local backup was stored, the read-only editor still offers that copy for download.
 
-Select a connection to reveal its endpoint grips and action button. Drag either grip to a highlighted compatible port to move that end. Dropping an existing grip on blank canvas disconnects the line; dropping it on an incompatible node leaves the original connection in place. Press Escape during the drag to cancel. Named output connections keep their exact output name.
-
-Use **Connection style** in the canvas view controls to choose **Curved**, **Right-angle** (square circuit-style corners), or **Straight** lines. New connection previews use the same style. The choice is remembered on this browser and changes only the display; it does not edit or save the pipeline.
-
-Right-click a line for **Disconnect**, or select it and press **Delete** / **Backspace**. Middle-clicking a line also disconnects it. Open a node's **…** menu, or right-click it, for properties, duplication, disconnecting its connections, and removal. Read-only nodes offer properties only. All of these edits support **Undo**. Removing a simple transform reconnects its neighboring steps; use **Disconnect connections** when you want to break its links explicitly. **Arrange graph** spaces the cards and named outputs automatically; use it if an older saved layout is crowded.
-
-Focus a node and use arrow keys to move it by 10 pixels, or hold Shift for 50 pixels. **Ctrl/⌘ D** duplicates it, **Enter** opens its properties, and **Delete** removes it. **Ctrl/⌘ Z** undoes; adding Shift redoes. **Shift F10** or the Menu key opens actions for the focused node or connection. The **Canvas shortcuts** help button beside Fit graph lists these controls.
-
-The toolbar above the canvas contains a shared **Graph / Code** view switch, **Check pipeline**, **Pipeline settings**, **Actions**, and publishing. **Discard changes** appears when graph, code or field edits have not been saved. Confirm to return to the last acknowledged draft revision; Cancel keeps your unsaved edits. Nothing saves in the background. The floating canvas controls contain **Undo**, **Redo**, zoom, **Fit graph**, and **Arrange graph**. Fit animates to the graph; reduced-motion preferences disable the animation. Use arrow keys to browse component search results, Enter to add, and Escape to dismiss the menu without changing the pipeline.
-
-Select a component to edit its properties. Sources are blue, transformations purple, and destinations teal; the same labels and colors appear in the canvas, component picker, and properties header. The help icon beside the name opens its Vector reference in a new tab. Nested objects use full-width sections and small property paths instead of increasingly narrow cards. Values fixed by the selected format, such as a buffer's internal type, stay in the configuration without repeating as inputs. Missing or mismatched fixed values offer an explicit repair action.
-
-Fields and required markers follow the schema's conditions and dependencies. A field's info control explains why it is required. Changing an option preserves existing values and guards unfinished edits. Requirements that the schema cannot resolve remain advisory; device validation still checks the complete configuration. Use the pipeline's **Code** view to edit the complete configuration, including custom components and input patterns.
-
-The catalog describes production component types in the pinned Vector 0.58.0 reference. Availability still depends on the device's OS and Vector build. Types and features outside restricted policy require [full Vector mode](#/docs/installation#choose-configuration-capabilities).
-
-Use the pencil beside a component name to rename it. Literal connections and native test targets follow the new name; wildcard expressions and VRL text remain unchanged. Review those expressions afterward. To rename the pipeline itself or change its description, click its name or description in the page header. Pipelines without a description show **Add description**. [**Actions → Pipeline details**](/#/configurations?panel=details) opens the same form. Read-only pipelines show the details without editing controls.
-
-The compact status beside save and publish shows **Saved**, **Saving…**, **Unsaved**, **Unapplied edits**, or **Save failed**. Hover over it for the full status and draft or published-version context. In history, the status sits beside Refresh. Failed saves retain your input so you can retry.
+The component catalog covers the 128 production component types of Vector 0.58.0. A component in the catalog still needs the device's Vector build and platform to support it, and restricted devices accept [only some components](security.md#restricted-and-full-mode).
 
 ## Try a complete example
 
-This deliberately synthetic pipeline generates a log once per second, adds a service field and discards the result. It does not read production events or send data to an external destination.
-
-Save it as `example.json`, replace `data_dir` with an existing writable directory on the target device, then choose [**Actions**](/#/configurations?panel=tools) → **Import configuration file**. In restricted mode, that directory also needs a local file allowance.
+This synthetic pipeline generates a log line every second, adds a field and discards the result. It reads no files and sends nothing anywhere. Save it as `example.json` and choose **Actions → Import configuration files**:
 
 ```json
 {
-  "data_dir": "/var/lib/vectory-data",
   "sources": {
     "example": { "type": "demo_logs", "format": "json", "interval": 1 }
   },
@@ -91,46 +75,40 @@ Save it as `example.json`, replace `data_dir` with an existing writable director
 }
 ```
 
-The graph should show `example → normalize → discard`. Sources and transforms in a branch with no path to a destination have a dashed outline and a **No destination** hint. Connect the branch to a destination to clear the hint. This describes the configured connections, not live traffic, and does not block checking or publishing. Native dynamic inputs can make connectivity uncertain, so the editor avoids declaring those branches unused. **Check pipeline** checks the configuration; it does not display a live event stream. Add the [transformation test](#/docs/resources#test-transformations) to verify the new field. To observe rates after deployment, add [local metrics](#/docs/telemetry#enable-real-metrics).
+You should see `example → normalize → discard`. Add a [pipeline test](resources.md#test-transformations) to prove the new field, or [local metrics](telemetry.md#enable-real-metrics) to watch throughput after you deploy.
 
 ## Work with detailed settings
 
-The field's type determines its control. A setting may also carry a more specific intent, such as a device path, event template or credential reference.
+Each field's type decides its control.
 
-| Field shape       | How to edit it                                               | What to check                                                                      |
-| ----------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| Text              | Enter a string; use multiline input for code or longer text. | A URL, path, regex and VRL program have different native meanings.                 |
-| Number or integer | Enter a numeric value within the shown bounds.               | Read the unit: seconds, milliseconds and bytes are different quantities.           |
-| Boolean or enum   | Choose an explicit value.                                    | `false` is a real setting; it is not omission.                                     |
-| Object            | Open its settings and complete the relevant children.        | Adding an object does not make all its optional children required.                 |
-| Map               | Add a name, then edit its typed value.                       | Names must be unique; a header map and a component map have different value types. |
-| List              | Add, duplicate, reorder or remove rows.                      | Order is preserved. A list of objects is not comma-separated text.                 |
-| Variant           | Choose a supported mode or shape, then configure it.         | Changing mode can change which fields are legal or required.                       |
+| Field | How to edit it | Watch for |
+| --- | --- | --- |
+| Text | Type a value; multi-line fields fit code. | A URL, path, regex and VRL program mean different things. |
+| Number | Enter a value within the shown bounds. | Units: seconds, milliseconds and bytes differ. |
+| Boolean or choice | Pick an explicit value. | `false` is a real value, not "unset". |
+| Object | Open it and fill in the children you need. | Adding an object doesn't make its optional children required. |
+| Map | Add a name, then its value. | Names must be unique. |
+| List | Add, reorder, duplicate or remove rows. | Order matters. |
+| Variant | Choose a mode, then configure it. | Changing mode changes which fields apply. |
 
-A mode change, such as Syslog TCP to Unix, replaces mode-specific settings. The editor keeps the previous branch's draft during editing and retains shared settings; review the selected branch before saving or publishing. **Undo** can reverse an edit. Do not rely on an inactive branch draft being stored in an exported or published configuration.
-
-Some rules simply require an alternative field. For example, remap accepts inline **VRL program**, **File**, or **Files**. That is a requirement to supply a program, not three different component types. Use **Add field** to configure device-local files; they require full mode.
+Changing a mode (for example Syslog TCP to Unix) keeps shared settings and replaces mode-specific ones. **Undo** brings the previous values back. Some rules ask for one of several fields, for example a remap's inline **VRL program**, **File** or **Files**; supply one.
 
 ## Omitted null and empty values
 
-| Configuration                  | Meaning                                                                     |
-| ------------------------------ | --------------------------------------------------------------------------- |
-| Field absent                   | Let Vector use its default or absence behavior.                             |
-| `"field": null`                | Explicit null, only when the schema permits it.                             |
-| `"field": ""`                  | An empty string.                                                            |
-| `"field": []` or `"field": {}` | An empty list or object. These can still be invalid for a particular field. |
+| Configuration | Meaning |
+| --- | --- |
+| Field absent | Vector uses its default. |
+| `"field": null` | An explicit null, where the field allows it. |
+| `"field": ""` | An empty string. |
+| `"field": []` or `"field": {}` | An empty list or object. Some fields reject these. |
 
-Leave optional fields omitted unless you need an override. Choose **Add field**, search by name or description, then select a field to configure it. Open the field's actions menu beside its name: **Remove field** restores omission, **Set to null** stores an explicit null, and **Edit as JSON** switches a record or list to its highlighted JSON editor. **Enter value** opens the non-null control. Adding a field prepares an input; it does not mean you have supplied a valid value.
+Leave optional fields out unless you need to override a default. A field's menu offers **Remove field** (back to absent), **Set to null** and **Edit as JSON**. JSON editors mark errors as you type; choose **Apply** to use the value or **Discard changes** to keep the saved one.
 
-JSON editors highlight syntax and mark invalid values while you type. **Format JSON** adjusts indentation; it does not apply the change. Choose **Apply** to update the field or **Discard changes** to keep its saved value. These controls work the same way in component properties and pipeline-wide settings, including secrets and configuration providers.
-
-Unfinished input remains in the editor until you correct, apply or deliberately discard it. Resolve pending edits before checking the pipeline, changing editing modes or leaving. A displayed default is explanatory; it need not be written into the document.
-
-The browser refuses integers outside −9,007,199,254,740,991 through 9,007,199,254,740,991 during import, loading and saving. Use a lossless native workflow for larger values; converting an integer to a string changes its type.
+Numbers beyond ±9,007,199,254,740,991 can't be edited safely in a browser, so Vectory refuses them rather than rounding. Edit such configurations outside the browser.
 
 ## VRL
 
-A remap transform runs Vector Remap Language. Its **VRL program** can assign, parse or remove event fields:
+A `remap` transform runs [Vector Remap Language](https://vector.dev/docs/reference/vrl/). Its **VRL program** can add, parse or remove fields:
 
 ```vrl
 .service = "edge"
@@ -138,97 +116,98 @@ A remap transform runs Vector Remap Language. Its **VRL program** can assign, pa
 del(.temporary_debug_field)
 ```
 
-Use the editor's VRL test with explicitly supplied sample events, then add [pipeline assertions](#/docs/resources#test-transformations) for repeatable checks. Neither test reads production device events. Native Vector checks VRL syntax and semantics; the browser does not treat VRL as JavaScript.
+The VRL editor highlights the program, completes function names and marks problems on the line Vector reports. Choose **Expand** for a wide editor. Under the program, add sample events (one JSON object per line) and choose **Run**: the server's sandboxed Vector runs the step on each sample and shows what comes out, or why an event was dropped. Samples stay in your browser, and a new sample starts from a realistic event for the source, such as a syslog line. **Auto-run** repeats the run when you pause typing. For a step that isn't first in the pipeline, **Run through upstream steps** sends the samples through the steps before it, so a `route` or `filter` sees the fields they added; turn it off to test the step alone. A `route` also shows how many samples each output received. **Save as test** runs the same sample again before making a [pipeline test](resources.md#test-transformations). It omits fields that changed or that depend on time, random, UUID or device-dependent calls, and names those fields; it refuses to save when the outcome or output port changed. Nothing here reads live device events.
 
-A file-based remap program is read on the device. It is not uploaded when you enter its path, and its contents are not frozen into the published document.
+A remap that reads its program from a **File** reads it on the device. That file isn't uploaded or frozen into the version, and it needs full mode. A restricted device refuses it; paste the program into **Source** instead.
 
 ## Event templates
 
-In fields that support Vector templates, `{{ hostname }}` reads a value from each event. For example, a supported destination template could use `logs/{{ service }}/` to select an event-specific path or key. Missing fields and supported template features depend on the component. See [Vector template syntax](https://vector.dev/docs/reference/configuration/template-syntax/).
+Fields that support Vector templates can read a value from each event: `{{ hostname }}`, or `logs/{{ service }}/` for a per-service path. Which fields accept templates, and how missing values behave, depends on the component. See [Vector template syntax](https://vector.dev/docs/reference/configuration/template-syntax/).
 
-Templates differ from `${HOSTNAME}`, which reads the Vector process environment, and from `SECRET[backend.key]`, which reads a secret provider. These device-dependent features require full mode. Use the [reference comparison](#/docs/resources#choose-the-right-reference) before choosing a mechanism.
+Templates differ from `${HOSTNAME}`, which reads the Vector process environment, and from `SECRET[backend.key]`, which reads a secret provider. Restricted devices refuse all three. [Choose the right reference](resources.md#choose-the-right-reference) compares them.
 
 ## Input patterns
 
-An input such as `normalize` names a component's default output. A reference such as `routes.errors` names a particular output. A wildcard such as `normalize_*` can connect matching outputs, including ones added later.
+An input names what a component reads from:
 
-Use explicit graph connections when you want a fixed set. Review wildcard inputs in the pipeline's **Code** view. Renaming a component does not rewrite patterns or embedded VRL. Check the pipeline after changes so missing inputs or newly introduced cycles are caught.
+| Input | Reads |
+| --- | --- |
+| `normalize` | The default output of `normalize`. |
+| `routes.errors` | The `errors` output of the `routes` component. |
+| `normalize_*` | Every matching output, including ones added later. |
+
+Use graph connections when you want a fixed set. Wildcards live in **Code** view; the graph draws each one as dashed lines from the components it matches, with the pattern on a chip. Renaming a component doesn't rewrite patterns or VRL, so check the pipeline after a rename.
 
 ## Global settings
 
-Open [**Actions → Pipeline settings**](/#/configurations?panel=settings), then choose a section:
+Choose [**Settings**](/#/configurations?panel=settings) in the editor toolbar for settings that apply to the whole pipeline:
 
 | Section | What you configure |
 | --- | --- |
-| [General](/#/configurations?panel=settings&section=general) | Pipeline-wide Vector options, including the data directory and internal API. |
-| [Enrichment tables](/#/configurations?panel=settings&section=enrichment_tables) | Lookup data used to enrich events. |
+| [General](/#/configurations?panel=settings&section=general) | Pipeline-wide Vector options, such as the data directory and the internal API. |
+| [Enrichment tables](/#/configurations?panel=settings&section=enrichment_tables) | Lookup data for enriching events. |
 | [Secrets](/#/configurations?panel=settings&section=secret) | Providers that resolve credentials on each device. |
+| [Variables](/#/configurations?panel=settings&section=variables) | Fields whose value differs by device. You enter the values when you deploy: see [Values that differ by device](resources.md#values-that-differ-by-device). |
 | [Tests](/#/configurations?panel=settings&section=tests) | Sample events and assertions for your transforms. |
 | [Configuration provider](/#/configurations?panel=settings&section=provider) | A device-side provider that supplies Vector configuration. |
 
-These links open the relevant section of your pipeline. If you opened help without a pipeline selected, choose one first. These settings travel with the published document. Paths refer to the target device, not the browser or Vectory server.
+These settings travel with the version. Paths refer to the device, not your browser or the server. If you opened help without a pipeline, the links ask you to choose one first.
 
-A memory enrichment table with inputs appears as a graph destination. If it exports events, its separately named source appears too. Both graph roles open the same table settings. See [enrichment tables](#/docs/resources#enrich-events-with-local-data).
+Leave **Data directory** empty unless you need a specific path: the agent gives Vector a private data directory on each device. If you set one, it must exist and be writable on every device, and restricted devices must allow it.
+
+Any `api` block needs a full-mode device, even when `api.enabled` is `false`; restricted devices refuse the block. Vector leaves the API disabled by default. If you set `api.enabled: true`, its unauthenticated API can stream live events. With no `api.address`, Vector binds to `127.0.0.1:8686`, where clients on the device can reach it. A wildcard address such as `0.0.0.0:8686` listens on every interface, and a non-loopback address may be reachable by other network clients, depending on host and network controls. Keep the API isolated from untrusted clients. The editor and publish review warn when it is enabled; the deploy review asks you to confirm the exposure. See [Vector's API reference](https://vector.dev/docs/reference/configuration/api/).
 
 ## Import and export
 
-Drop a UTF-8 `.json`, `.yaml`, `.yml` or `.toml` file onto the graph or Code view, or choose [**Actions**](/#/configurations?panel=tools) → **Import configuration file**. Files may be up to 1 MiB. Vectory checks syntax, configuration structure and known local constraints before changing the draft. Invalid files show a message explaining the problem.
+To create a pipeline from files, choose **Import a Vector config** in the creation dialog. In an existing draft, choose **Actions → Import configuration files**, or drop files onto the graph or **Code** view. Choose one or several UTF-8 `.json`, `.yaml`, `.yml` or `.toml` files. You can choose up to 32 files; their total size and the combined configuration must each be at most 1 MiB. Vectory joins sources, transforms, sinks and enrichment tables by ID, appends named tests, and keeps each pipeline-wide option from one file. If two files define the same ID, test or pipeline-wide option, the error names both files instead of silently choosing one. Invalid UTF-8, syntax and broken connections are refused before import. A single-file import retains its format and suggested name; a multi-file import opens as YAML. Choose the files individually for now: importing an entire configuration directory with Vector's directory namespacing is not supported yet. Into an existing pipeline, you review a diff and choose **Replace pipeline**. Imports can be undone.
 
-A valid file loads directly into an empty pipeline. For an existing pipeline, review the highlighted configuration diff and choose **Replace pipeline**, or cancel to keep the draft. Switch the diff between YAML, JSON and TOML when those formats can represent every value. Imports can be undone. Apply or discard unfinished code and property fields before importing.
+**Code** view edits the complete configuration in YAML, JSON or TOML, with search, folding and inline errors. It places `api` first when present, followed by sources, transforms and sinks in event-flow order, then other sections, with `tests` last. TOML keeps root-level scalar settings above its tables so they retain their scope. **Format code** tidies it; **Apply code changes** puts it into the draft. While Code changes are unapplied, Pipeline settings are read-only and draft-changing actions such as Undo and Add monitoring require you to apply or discard those changes first. **Ctrl S** (**⌘ S**) applies code that parses and then saves the draft. Code that doesn't parse isn't saved: the message says where, for example "Not saved. Line 12:5: Map keys must be unique", and the status stays on **Unapplied edits**. **Actions → Export configuration** downloads the configuration in the selected format, with secret references rather than values.
 
-**Code** provides syntax colors, line numbers, folding, search and inline diagnostics for all three formats. **Format code** (Ctrl/Cmd+Shift+F) normalizes the text; **Copy code** copies the current editor contents, including unapplied edits. **Check pipeline** checks the current Code candidate without applying or saving it. Choose **Apply code changes** to update the draft, or **Discard code changes** to return to the draft. Either action clears the earlier check result so it cannot describe a different editing state. Local diagnostics do not run Vector or resolve device environment variables; use **Check pipeline** before publishing.
+Devices receive JSON. Comments and formatting from an imported file aren't kept. TOML can't express `null`, so Vectory refuses a conversion that would lose one; use JSON or YAML for those.
 
-The configuration is normalized to JSON for deployment; original comments and formatting are not preserved. [**Actions**](/#/configurations?panel=tools) → **Export configuration** exports the current configuration, including reference strings rather than resolved Vectory credentials.
-
-The component picker also offers **Import a component definition** for a custom build. Imported unknown fields remain in the document and can be edited as JSON. Importing does not install a component or make it available on target devices.
-
-TOML cannot represent an explicit `null`. Vectory checks format conversions and refuses any conversion that would drop a value. Use JSON or YAML for those configurations. If a restored or reloaded snapshot cannot be represented in the selected format, the code editor switches to JSON and explains why; the complete saved configuration is preserved.
-
-Apply or discard Code edits before switching to Graph. Never paste passwords, tokens or private keys into a shared configuration; use [secret references](#/docs/resources#keep-credentials-on-the-device).
+> [!WARNING]
+> Never paste passwords, tokens or keys into a pipeline, even in imported files. Import and Code Apply flag likely plaintext credentials before they enter a draft, and the server refuses them at save or publish. Use a [device secret](resources.md#keep-credentials-on-the-device), such as `vectory-secret:DD_API_KEY`, in a supported credential field. Device secrets cannot fill headers or URLs in this preview; see [Known limits](whats-new.md#known-limits).
 
 ## Validate, test, publish
 
-1. Resolve incomplete fields. To save without publishing, open the arrow beside **Review & publish** (or **Choose devices**) and select **Save draft**. Editors without publishing access have a **Save draft** button instead. Apply or discard unfinished code and field edits first. **Save draft** is available when there are committed unsaved changes.
-2. Choose **Check pipeline**. It checks connections, required fields and known local schema constraints such as field types and numeric bounds before requesting server validation. Any local error keeps the result red and appears in the check results; in Code view, this checks the current code rather than an older graph and leaves unapplied edits out of the draft. Green means the isolated Vector check passed without warnings. Amber means checks passed with warnings, or full Vector validation is still pending on a device; it does not promise the device will accept the configuration. A disconnected branch appears as a warning in the results. Red means the check failed; new edits make the result stale until you check again. Applying or discarding checked Code edits makes that result stale. Hover or focus the icon for its current status and latest results; hovering does not run another check. Results appear beside the button and close when the pointer leaves both. With keyboard focus, press Arrow Down to enter the results and Escape to dismiss them. Read warnings as well as errors.
-3. Run declared tests under [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests).
-4. Choose **Review & publish**, review the version and publish it.
-5. Choose devices in the deployment step. Publishing alone changes no device.
+<!-- steps -->
+1. Choose the check button in the toolbar. It checks connections, required fields and types, then asks the sandboxed Vector on your server to validate the configuration where safe. A configuration provider is checked structurally here and by each device before it applies. The **Problems** panel under the canvas lists every problem by step; choose one to jump to the step, field or line. With **Auto-check** on, the editor checks again shortly after you stop editing.
+2. Run your tests under [**Settings → Tests**](/#/configurations?panel=settings&section=tests).
+3. Choose **Review & publish**. The review checks again, runs the pipeline's tests and lists what changes since the last version, with line-by-line differences for VRL programs. Add a note and choose **Publish version**. Unsaved edits are saved first. While a test is failing, the button reads **Publish anyway**: see [Tests gate publishing](resources.md#test-transformations).
+4. Deploy it: choose **Choose devices** when the version is published, or see [Deploy a published version](deployments.md#deploy-a-published-version).
 
-When you choose **Publish version**, the dashboard saves committed unsaved edits first, waits for that save to finish, then stores the exact saved revision, version note and request ID in this browser. If the reply is lost or takes too long, choose **Close and review request**, then **Review publish requests**. Closing or reloading preserves the request. Do not publish a replacement while its result is uncertain.
+| Check button | Meaning |
+| --- | --- |
+| **Checked** | Vector accepted the configuration. Anything only a device can resolve, such as a local file, is checked there before it applies. |
+| **Partly checked** | No Vector checker is configured on the server, so only the structure was checked. |
+| **N problems** | Fix the listed problems before publishing. Each one names the step and setting. |
+| **Not checked** | You changed the pipeline since the last check. |
+| **Couldn't check** | The checker didn't answer. Publishing waits until a check succeeds. |
 
-**Check status** reads the original request. A missing result may still be in flight; it does not mean publication failed. Only **Retry same request** resends the original revision and note with the same ID. A supporting server returns the original immutable version if it was already published. No retry or deployment happens automatically.
+Viewers, and anyone on an archived pipeline, can't run a check. When the draft equals the latest published version, the **Problems** panel says "Version 2 was checked by Vector 0.58 when it was published." Otherwise it says "Not checked since the last edit."
 
-**Published** identifies the exact version and its source draft revision. **Review published version** opens that version in History, even when newer versions exist. Recovering it does not replace your current draft. A successful earlier publication remains recoverable after the draft changes or the pipeline is archived. If the request never succeeded and its revision is now stale, review the rejection, deliberately dismiss its reminder, then review the current draft before publishing separately.
+Some checks can only run on the device, such as reading local files, resolving environment variables, talking to providers, running Lua, reading enrichment tables or asking the AWS instance metadata service. The device runs them before it applies the version, and keeps its current configuration if they fail.
 
-Open **Actions → Your publish requests** to find publications saved by your account for this pipeline, including from another tab or device. This server list can recover an exact saved version after a browser reminder is lost; it cannot reconstruct missing original contents for a retry. Dismissing a reminder removes only the browser reminder, without cancelling publication or deleting a version. Publishing requires working browser storage and an updated server; an older server is blocked before an unsafe request is sent.
+The server never runs Lua, because Lua can run any program. It never opens the file of an enrichment table (`file`, `geoip` or `mmdb`) or the program file of a remap (`file` or `files`), because those files live on the device, and it never builds an AWS instance metadata step (`aws_ec2_metadata`), because that step asks the host's own metadata service. Its check covers the rest of the pipeline and leaves those steps to the devices, so it still reads **Checked** with a note that each device checks them. A restricted device refuses a Lua step; only a full-mode device runs it. A `memory` table reads no file, so it is checked here as before. A remap that names its program twice, such as `source` and `file`, fails the check with Vector's rule: it must provide exactly one of `source`, `file` or `files`.
 
-An error does not erase the saved request, even if the draft changed or the server rejected this attempt. Another tab may already have published it. Review its status first. If no result is confirmed, retry only the same request, or deliberately dismiss its reminder after checking history before reviewing a corrected draft. Vectory does not silently replace the original revision or version note.
+Results point at the component and setting to fix, with Vector's message, and are bounded in size. For Vector's complete output, run `vector validate` on a host with the same configuration.
 
-Structural checks, native checks and activation are separate. A device-resource-dependent check can be **deferred**; that is not a native runtime success. The agent validates the exact assigned document in its own environment before activation. Follow [deployment results](#/docs/deployments#read-the-apply-states).
-
-For a native rejection, Check pipeline identifies a safe error category and, when Vector's output can be matched to the submitted configuration, the affected component and required setting. The portal does not display raw Vector diagnostics: they can contain configuration values, local paths, VRL source or sample-event data. If the category is not enough to fix the pipeline, run the pinned Vector `validate` command locally with the intended configuration and service identity, and handle its output as sensitive. A successful isolated check still leaves device resources and activation unverified.
-
-If another editor saved first, preserve your local changes before reloading the newer draft. Resolve the revision conflict deliberately, check the merged result and publish that result.
+If someone else saved while you were editing, keep your changes, review theirs and save the merged draft.
 
 ## Compare saved history
 
-Open [**Actions → Version history**](/#/configurations?panel=history) to review published versions and saved draft revisions without replacing the editor. **Back to editor** returns to your work. Unapplied field input stays in the editor; it is not included in configuration comparisons.
+Open [**Actions → Version history**](/#/configurations?panel=history) to compare published versions and saved draft revisions without leaving your work.
 
-1. Choose **Published versions** or **Draft revisions**, then select a snapshot. Use **Previous** and **Next** to browse older entries.
-2. **Compare changes** shows that snapshot before your current draft. Each change includes its exact configuration path and the before/after values.
-3. Use **Choose comparison** to compare it with another published version or saved revision. This can compare two historical snapshots without changing the current draft.
-4. Choose **Configuration** to inspect the selected snapshot's complete read-only JSON, including fields the visual editor does not recognize.
+<!-- steps -->
+1. Choose **Published versions** or **Draft revisions** and select a snapshot.
+2. **Compare changes** lists every changed configuration path with its before and after values.
+3. **Choose comparison** compares any two snapshots.
+4. **Configuration** shows the snapshot's complete JSON.
 
-Only configuration values are compared. Pipeline names, descriptions and graph positions are excluded. Array order matters. **Not set**, `null`, `""`, `0` and `false` are different values; the comparison preserves those distinctions. For example, a change at `sources.input.include[0]` changes the first file pattern, while `["field.with.dot"]` identifies a single key containing dots, not nested objects.
-
-History lists load 12 entries per page; comparisons show up to 25 changes per page. Refresh the history if another person has saved or published since you opened it.
-
-The snapshot header shows its creation time, author when recorded, change message and available source information. Expand **Snapshot details** for the snapshot, author and source identifiers. Older records may have less authorship or source information.
+Comparisons cover configuration only, not names or card positions. Unset, `null`, `""`, `0` and `false` are all different values.
 
 ## Restore a snapshot as a new draft
 
-Choose the snapshot in History, then **Restore as draft**. Review the confirmation before selecting **Restore draft**. This replaces the current draft configuration and canvas with the chosen snapshot, keeps the pipeline's current name and description, and creates a new revision. It does not rewrite the historical snapshot or change running devices.
+Select a snapshot in History and choose **Restore as draft**. It becomes a new draft revision; history and running devices don't change. Check and publish it when you're ready.
 
-Finish or discard unapplied editor fields first. If another person saved a newer revision, review that conflict rather than repeatedly submitting the old restore request. An archived pipeline's draft cannot be changed until the pipeline is restored to the active library.
-
-Inspect the restored draft, check it and publish a new version when ready. To deploy an already published historical version directly, choose **Deploy this version** in History and review its target devices. Published versions remain deployable when their pipeline is archived. See [deliberate rollback](#/docs/deployments#roll-back-deliberately) for the difference between restoring a draft and changing a device's assigned version.
+To run an older version without editing, choose **Deploy this version** instead. That is how you [roll back](deployments.md#roll-back-deliberately).

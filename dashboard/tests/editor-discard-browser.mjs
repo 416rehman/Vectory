@@ -1,7 +1,7 @@
 // Actual App/editor, isolated synthetic API. Never contacts preview or devices.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -136,6 +136,7 @@ async function load({
     ({ theme, collapsed }) => {
       localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
       localStorage.setItem("vectory-theme", theme);
+      localStorage.setItem("vectory.editor.auto-check", "off");
       window.__copiedCode = [];
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
@@ -185,6 +186,8 @@ async function load({
           },
           csrf_token: "synthetic-code-csrf",
         });
+      // The publish review shows where versions are assigned.
+      if (path === "/devices") return reply([]);
       if (path === "/settings")
         return reply({ instance_name: "Synthetic isolated editor" });
       if (path === `/configurations/${pipelineId}`) {
@@ -246,6 +249,13 @@ async function load({
         deferred: true,
       });
     }
+    // The VRL studio tries a program against samples; no tester here.
+    if (method === "POST" && path === "/vrl/test")
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "VRL tester unavailable" }),
+      });
     unexpected.push(`${method} ${path}`);
     return reject(
       "UNEXPECTED_REQUEST",
@@ -746,7 +756,7 @@ try {
         .getByRole("button", { name: "Close component settings", exact: true })
         .click();
       page.once("dialog", (dialog) => dialog.accept());
-      await button("Reload server draft").click();
+      await button("Discard my edits and load server draft").click();
       await expectClean();
       await selectSample();
       await expect(rateInput()).toHaveValue("11");
@@ -756,6 +766,7 @@ try {
       await load();
       await page.clock.install();
       fixture.holdSave = true;
+      const initialLayout = await transforms();
       await selectSample();
       await rateInput().fill("12");
       await saveDraft();
@@ -777,6 +788,7 @@ try {
       ).toBeVisible();
       await selectSample();
       await expect(rateInput()).toHaveValue("10");
+      expect(await transforms()).toEqual(initialLayout);
       fixture.pendingSaves.shift().release(true);
       fixture.holdSave = false;
       await button("Confirm server draft").click();
@@ -795,7 +807,7 @@ try {
       ).toBeVisible();
       fixture.holdReload = true;
       page.once("dialog", (dialog) => dialog.accept());
-      await button("Reload server draft").click();
+      await button("Discard my edits and load server draft").click();
       await expect.poll(() => fixture.pendingReloads.length).toBe(1);
       await expect(page.locator(".editor-draft-workspace")).toHaveAttribute(
         "inert",

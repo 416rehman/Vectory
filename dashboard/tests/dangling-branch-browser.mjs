@@ -1,7 +1,7 @@
 // Actual App/editor, isolated synthetic API. Never contacts preview or devices.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -136,6 +136,7 @@ async function load({
   await context.addInitScript((collapsed) => {
     localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
     localStorage.setItem("vectory-theme", "light");
+    localStorage.setItem("vectory.editor.auto-check", "off");
   }, collapsed);
   await context.route("**/*", async (route) => {
     const request = route.request(),
@@ -387,15 +388,17 @@ try {
         await expect(card(id)).toHaveCSS("border-top-style", "dashed");
         await expect(card(id)).not.toHaveClass(/pipeline-node-issue/);
       }
-      await button("Check pipeline").click();
-      await expect(button("Check pipeline")).toHaveAttribute(
+      await page.locator(".editor-check-button").click();
+      await expect(page.locator(".editor-check-button")).toHaveAttribute(
         "data-check-state",
         "partial",
       );
-      await button("Check pipeline").hover();
+      // Check opens the Problems panel; the branch stays a warning there.
       await expect(
-        page.getByRole("dialog", { name: "Pipeline check results" }),
-      ).toContainText("throttle: This branch has no path to a destination.");
+        page.getByRole("region", { name: "Problems", exact: true }),
+      ).toContainText(
+        /throttle[\s\S]*This branch has no path to a destination\./,
+      );
       expect(fixture.validations).toHaveLength(1);
       expect(fixture.validations[0].config).toEqual(branchDocument().config);
       expect(fixture.saveAttempts).toEqual([]);

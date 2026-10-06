@@ -1,12 +1,13 @@
 // Actual fleet/settings/review components; all HTTP is intercepted synthetic data.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -130,7 +131,7 @@ const config = {
 };
 const pipeline = {
   id: id(10),
-  name: "Synthetic deployment handoff",
+  name: "Synthetic deployment",
   description: "Never sent to a real device",
   revision: 1,
   archived: false,
@@ -239,6 +240,15 @@ async function load({
     outcomeOverride: null,
   };
   const current = state;
+  const groups = () => [
+    {
+      id: id(20),
+      name: "Synthetic group",
+      description: "Fixture only",
+      device_ids: current.devices.map((d) => d.id),
+    },
+  ];
+  const replies = fleetReplies({ devices: () => current.devices, groups });
   context = await browser.newContext({
     viewport: { width, height: 920 },
     reducedMotion: "reduce",
@@ -334,21 +344,12 @@ async function load({
           csrf_token: "synthetic",
         });
       if (path === "/settings")
-        return reply({ instance_name: "Synthetic handoff" });
+        return reply({ instance_name: "Synthetic instance" });
+      if (path === `/devices/${id(1)}`) current.detailReads++;
+      // A page of devices, one device, and the groups without their members.
+      if (await fulfillFleetRead(replies, route)) return;
       if (path === "/devices") return reply(current.devices);
-      if (path === `/devices/${id(1)}`) {
-        current.detailReads++;
-        return reply(current.devices[0]);
-      }
-      if (path === "/groups")
-        return reply([
-          {
-            id: id(20),
-            name: "Synthetic group",
-            description: "Fixture only",
-            device_ids: current.devices.map((d) => d.id),
-          },
-        ]);
+      if (path === "/groups") return reply(groups());
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/policies")
         return reply([
@@ -402,6 +403,17 @@ async function load({
           blockers: [],
           review_token: reviewToken,
           ready: true,
+        });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
         });
       const summaryMatch = /^\/deployments\/([^/]+)\/summary$/.exec(path);
       if (summaryMatch) {
@@ -718,10 +730,8 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
-    await page
-      .getByLabel("Schedule (optional)", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
@@ -737,7 +747,7 @@ async function check(name, run) {
   console.log("PASS", name);
 }
 const details = () =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const rollbackConfirm = () =>
   page.getByRole("dialog", { name: "Review rollback", exact: true });
 const recovery = () =>
@@ -750,10 +760,15 @@ const operations = () =>
       .filter(([key]) => key.startsWith("vectory:deployment-operation:"))
       .map(([key, value]) => ({ key, value: JSON.parse(value) })),
   );
-async function beginRollback() {
+// Roll back lives in the header's Stop rollout / Roll back or remove menu.
+async function chooseRollBack() {
   await details()
-    .getByRole("button", { name: "Roll back", exact: true })
+    .getByRole("button", { name: /^(Stop rollout|Roll back or remove)$/ })
     .click();
+  await page.getByRole("menuitem", { name: "Roll back", exact: true }).click();
+}
+async function beginRollback() {
+  await chooseRollBack();
   await expect(rollbackConfirm()).toBeVisible();
 }
 async function sendRollback() {
@@ -781,7 +796,8 @@ async function reloadApp() {
 async function leaveDetails() {
   await expect(details()).toBeVisible();
   await details()
-    .getByRole("button", { name: "Close dialog", exact: true })
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
   await expect(page).toHaveURL(/#\/deployments\?page=1$/);
@@ -1389,10 +1405,10 @@ try {
         }
       }
       await load({ storageBlocked: true });
-      await details().getByRole("button", { name: "Roll back", exact: true }).click();
-      await expect(page.getByRole("dialog", { name: "Review saved deployment reminder" })).toContainText(
-        "Browser storage is unavailable",
-      );
+      await chooseRollBack();
+      await expect(
+        page.getByRole("dialog", { name: "Review saved deployment reminder" }),
+      ).toContainText("Browser storage is unavailable");
       expect(state.rollbacks).toHaveLength(0);
     },
   );
@@ -1405,7 +1421,8 @@ try {
         .getByRole("button", { name: "Close", exact: true })
         .click();
       await expect(details()).toBeVisible();
-      await expect(page.getByRole("dialog")).toHaveCount(1);
+      // The rollout is a page, so closing recovery leaves no dialog open.
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect
         .poll(() =>
           details().evaluate((element) =>
@@ -1574,8 +1591,14 @@ try {
       await preview();
       state.createMode = "heldBody";
       state.lookupMode = "failed";
+      // Synthetic alpha's own settings outrank these: sending says it stays.
       await page
-        .getByRole("button", { name: "Apply settings", exact: true })
+        .getByRole("checkbox", {
+          name: /^Synthetic alpha keeps its current agent settings \(priority 200\)/,
+        })
+        .check();
+      await page
+        .getByRole("button", { name: "Apply to 1 of 2 devices", exact: true })
         .click();
       await expect.poll(() => state.bodyHolds.length).toBe(1);
       await page.clock.fastForward(30_050);

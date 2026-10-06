@@ -54,6 +54,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Actor) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Issue tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -633,7 +634,7 @@ async fn action_details_are_allowlisted_and_typed_with_immutable_target_mapping(
     let data = [
         json!({"action":"configuration.publish","target":version}),
         json!({"action":"device.secret_reconciliation","actual_sha256":"a".repeat(64),"applied_template_sha256":"b".repeat(64),"secret_revision":4,"previous_secret_revision":3,"generation":999,"reason":"PRIVATE_REASON"}),
-        json!({"action":"server.restore_access.invalidate","details":{"browser_sessions":2,"password_reset_codes":3,"enrollment_tokens_to_revoke":4,"mfa_recovery_codes":5,"private":"PRIVATE_DETAILS"}}),
+        json!({"action":"server.restore_access.invalidate","details":{"browser_sessions":2,"password_reset_codes":3,"enrollment_tokens_to_revoke":4,"mfa_recovery_codes":5,"agent_update_rollouts_to_cancel":6,"agent_update_stop":1,"private":"PRIVATE_DETAILS"}}),
         json!({"action":"issue.reopen","reason":"x".repeat(2000),"issue_revision":5,"secret_revision":123,"created_at":"INVALID_PRIVATE_TIME"}),
         json!({"action":"other.unknown","reason":"PRIVATE_REASON","actual_sha256":"a".repeat(64),"details":{"browser_sessions":1}}),
     ];
@@ -664,7 +665,11 @@ async fn action_details_are_allowlisted_and_typed_with_immutable_target_mapping(
         assert!(!v.to_string().contains("PRIVATE"));
         match n {
             1 => assert_eq!(v["details"].as_object().unwrap().len(), 4),
-            2 => assert_eq!(v["details"].as_object().unwrap().len(), 4),
+            2 => {
+                assert_eq!(v["details"].as_object().unwrap().len(), 6);
+                assert_eq!(v["details"]["agent_update_rollouts_to_cancel"], 6);
+                assert_eq!(v["details"]["agent_update_stop"], 1);
+            }
             3 => {
                 assert_eq!(v["created_at"], Value::Null);
                 assert_eq!(v["details"]["reason"].as_str().unwrap().len(), 1000);
@@ -902,4 +907,226 @@ async fn activity_links_use_existing_typed_identity_and_immutable_pipeline_paren
             .iter()
             .all(|v| v["target_exists"].is_boolean())
     );
+}
+
+#[tokio::test]
+async fn deployment_events_are_named_after_what_they_deployed() {
+    let (_temp, s, app, a) = fixture().await;
+    let config = db::id();
+    let version = db::id();
+    let policy = db::id();
+    let (pipeline_rollout, saved_settings, adhoc_settings) = (db::id(), db::id(), db::id());
+    let device = db::id();
+    add_device(&s, &device, "edge-fra-01").await;
+    insert(
+        &s,
+        "configuration",
+        &json!({"id":config,"name":"Edge syslog processing"}),
+    )
+    .await;
+    insert(
+        &s,
+        "version",
+        &json!({"id":version,"configuration_id":config,"number":3}),
+    )
+    .await;
+    insert(&s, "policy", &json!({"id":policy,"name":"Maintenance"})).await;
+    insert(
+        &s,
+        "deployment",
+        &json!({"id":pipeline_rollout,"version_id":version,"status":"failed"}),
+    )
+    .await;
+    insert(&s,"deployment",&json!({"id":saved_settings,"policy_id":policy,"policy":{"heartbeat_seconds":15,"sync_paused":true,"telemetry_enabled":true},"status":"completed"})).await;
+    insert(&s,"deployment",&json!({"id":adhoc_settings,"policy":{"heartbeat_seconds":15,"sync_paused":false,"telemetry_enabled":true},"status":"completed"})).await;
+    let rows = [
+        ("deployment.create", pipeline_rollout.clone()),
+        ("deployment.release", format!("{pipeline_rollout}:{device}")),
+        ("deployment.create", saved_settings.clone()),
+        ("deployment.create", adhoc_settings.clone()),
+    ];
+    for (n, (action, target)) in rows.iter().enumerate() {
+        let mut value = event(n, &a.id, target);
+        value["action"] = json!(action);
+        value["outcome"] = json!("success");
+        insert(&s, "audit", &value).await;
+    }
+    let history = get(&app, "/api/v1/audit/history?page_size=50", &a).await;
+    let mut names: Vec<&str> = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["target_name"].as_str().unwrap_or(""))
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "Agent settings",
+            "Agent settings: Maintenance",
+            "Edge syslog processing v3",
+            "Edge syslog processing v3",
+        ]
+    );
+    // Searching for the pipeline finds its rollouts, not only pipeline edits.
+    let found = get(&app, "/api/v1/audit/history?search=edge%20syslog", &a).await;
+    assert_eq!(found["total"], 2);
+}
+
+/// Rows read as names, never as the identifiers they join: an issue is its
+/// title on its device, a device recovery was completed by the token that
+/// authorized it, and a row about a device carries the device's name.
+#[tokio::test]
+async fn issue_events_recoveries_and_devices_are_named_at_read_time() {
+    let (_temp, s, app, a) = fixture().await;
+    let device = db::id();
+    add_device(&s, &device, "edge-nyc-02").await;
+    let issue = db::hash("sink errors on edge-nyc-02");
+    insert(
+        &s,
+        "issue",
+        &json!({"id":issue,"device_id":device,"code":"DATA_PLANE_SINK_ERRORS","resolved":false,"revision":1}),
+    )
+    .await;
+    let token = db::id();
+    sqlx::query("INSERT INTO enrollment_tokens(id,verifier,data) VALUES(?,?,?)")
+        .bind(&token)
+        .bind(db::hash(&token))
+        .bind(json!({"id":token,"name":"Recovery for edge-nyc-02","expires_at":"2099-01-01T00:00:00Z","uses":1,"max_uses":1,"revoked":false,"created_at":"2026-09-26T12:00:00Z"}).to_string())
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let other_device = db::id();
+    let mut acknowledged = event(0, &a.id, &issue);
+    acknowledged["action"] = json!("issue.acknowledge");
+    acknowledged["outcome"] = json!("success");
+    acknowledged["device_id"] = json!(device);
+    insert(&s, "audit", &acknowledged).await;
+    let mut recovered = event(1, &token, &format!("{other_device}:{device}"));
+    recovered["action"] = json!("device.recovery_complete");
+    recovered["outcome"] = json!("success");
+    insert(&s, "audit", &recovered).await;
+    let history = get(&app, "/api/v1/audit/history?page_size=50", &a).await;
+    let row = |action: &str| {
+        history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["action"] == action)
+            .unwrap()
+            .clone()
+    };
+    let issue_row = row("issue.acknowledge");
+    assert_eq!(issue_row["target"], issue.as_str());
+    // An issue record keeps a code and no title: the name is built from the code.
+    assert_eq!(
+        issue_row["target_name"],
+        "A sink can't deliver events on edge-nyc-02"
+    );
+    assert_eq!(issue_row["target_kind"], "issue");
+    assert_eq!(issue_row["device_id"], device.as_str());
+    assert_eq!(issue_row["device_name"], "edge-nyc-02");
+    let recovery_row = row("device.recovery_complete");
+    assert_eq!(recovery_row["actor"], "Recovery for edge-nyc-02");
+    assert_eq!(recovery_row["actor_id"], token.as_str());
+    assert_eq!(recovery_row["actor_kind"], "unknown");
+    // A row about nobody's device has no device name, and a name never
+    // replaces the identity it labels.
+    let mut plain = event(2, &a.id, "unrelated");
+    plain["action"] = json!("login");
+    plain["outcome"] = json!("success");
+    insert(&s, "audit", &plain).await;
+    let history = get(&app, "/api/v1/audit/history?page_size=50", &a).await;
+    let login = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["action"] == "login")
+        .unwrap();
+    assert!(login["device_name"].is_null());
+    // The detail carries the same names.
+    let detail = get(
+        &app,
+        &format!("/api/v1/audit/{}", issue_row["id"].as_str().unwrap()),
+        &a,
+    )
+    .await;
+    assert_eq!(detail["device_name"], "edge-nyc-02");
+    assert_eq!(
+        detail["target_name"],
+        "A sink can't deliver events on edge-nyc-02"
+    );
+}
+
+#[tokio::test]
+async fn scope_separates_sign_in_activity_from_changes() {
+    let (_temp, s, app, admin) = fixture().await;
+    let mut tx = s.pool.begin().await.unwrap();
+    for (n, (action, outcome)) in [
+        ("login", "denied"),
+        ("login.mfa", "success"),
+        ("logout", "success"),
+        ("user.create", "success"),
+        ("configuration.publish", "success"),
+        ("device.apply_state", "verified_applied"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        db::insert(
+            &mut tx,
+            "audit",
+            &json!({"id":format!("40000000-0000-4000-8000-{n:012}"),"actor":admin.id,"action":action,"target":admin.id,"outcome":outcome,"created_at":"2026-09-26T12:00:00Z"}),
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let total = |query: &str| format!("/api/v1/audit/history?{query}");
+    assert_eq!(get(&app, &total(""), &admin).await["total"], 6);
+    // Changes hide sign-in and sign-out activity only.
+    assert_eq!(get(&app, &total("scope=changes"), &admin).await["total"], 3);
+    assert_eq!(
+        get(&app, &total("scope=security"), &admin).await["total"],
+        4
+    );
+    assert_eq!(
+        get(&app, &total("scope=changes&family=user"), &admin).await["total"],
+        1
+    );
+    let security = get(&app, &total("scope=security"), &admin).await;
+    assert!(
+        security["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["action"] != "configuration.publish")
+    );
+    for query in ["scope=everything", "scope=changes&scope=security"] {
+        let (status, _) = call(&app, "GET", &total(query), Value::Null, Some(&admin), false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn the_unpaged_list_answers_with_the_newest_events_only() {
+    let (_temp, s, app, admin) = fixture().await;
+    sqlx::query(
+        "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1300) \
+         INSERT INTO records(kind,id,data,created_at) \
+         SELECT 'audit',printf('audit-%08d',x),\
+                json_object('id',printf('audit-%08d',x),'actor','scheduler','action','deployment.release','target','','outcome','success'),\
+                printf('2026-09-26T%02d:%02d:%02dZ',x/3600,(x/60)%60,x%60) FROM n",
+    )
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let legacy = get(&app, "/api/v1/audit", &admin).await;
+    let events = legacy.as_array().unwrap();
+    assert_eq!(events.len(), 1000);
+    assert_eq!(events[0]["id"], "audit-00001300");
+    assert_eq!(events[999]["id"], "audit-00000301");
+    // Paging through history still reaches every event.
+    let history = get(&app, "/api/v1/audit/history?page=1&page_size=50", &admin).await;
+    assert_eq!(history["total"], 1300);
 }

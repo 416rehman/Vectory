@@ -1,17 +1,23 @@
 use crate::{
-    State, auth, db,
+    State,
+    auth::{self, ending},
+    db,
     error::{ApiError, Result},
 };
 use axum::{
     Json,
     extract::{Path, State as AppState},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use sqlx::{Row, SqliteConnection};
 use subtle::ConstantTimeEq;
 use totp_rs::{Algorithm, Secret, TOTP};
+
+/// A scanned setup must be confirmed within this window.
+pub const SETUP_MINUTES: i64 = 10;
+const RECOVERY_CODES: usize = 8;
 
 fn totp(secret: String, email: &str) -> Result<TOTP> {
     TOTP::new(
@@ -43,7 +49,11 @@ pub async fn verify_login(
         if code.len() > 80 {
             return Err(ApiError::unauthorized());
         }
-        let normalized = code.replace('-', "").to_ascii_lowercase();
+        let normalized: String = code
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .collect::<String>()
+            .to_ascii_lowercase();
         let result = sqlx::query("DELETE FROM mfa_recovery_codes WHERE user_id=? AND verifier=?")
             .bind(user)
             .bind(db::hash(normalized))
@@ -57,7 +67,7 @@ pub async fn verify_login(
     }
     let code = code.ok_or_else(|| {
         ApiError::new(
-            axum::http::StatusCode::UNAUTHORIZED,
+            StatusCode::UNAUTHORIZED,
             "UNAUTHENTICATED",
             "Authenticator code required",
         )
@@ -72,6 +82,11 @@ pub async fn verify_login(
     Ok(())
 }
 fn verify_code(secret: &str, code: &str, last: i64) -> Result<i64> {
+    // Accept a pasted "123 456" or "123-456"; only six digits are compared.
+    let code: String = code
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
     if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return Err(ApiError::unauthorized());
     }
@@ -91,44 +106,75 @@ fn verify_code(secret: &str, code: &str, last: i64) -> Result<i64> {
     }
     Err(ApiError::unauthorized())
 }
-fn authenticated_code_error(error: ApiError) -> ApiError {
-    if error.code == "UNAUTHENTICATED" {
-        ApiError::new(
-            axum::http::StatusCode::FORBIDDEN,
-            "INVALID_MFA_CODE",
-            "Authenticator or recovery code is invalid or already used",
-        )
-    } else {
-        error
+fn authenticated_code_error(message: &'static str) -> impl Fn(ApiError) -> ApiError {
+    move |error| {
+        if error.code == "UNAUTHENTICATED" {
+            ApiError::new(StatusCode::FORBIDDEN, "INVALID_MFA_CODE", message)
+        } else {
+            error
+        }
     }
 }
+const SETUP_CODE_MISMATCH: &str =
+    "That code didn't match. Enter the current 6-digit code from your authenticator app.";
+const FACTOR_MISMATCH: &str =
+    "That code didn't match. Enter a current authenticator code or an unused recovery code.";
 async fn revoke_other_sessions(
     conn: &mut SqliteConnection,
     user: &str,
     h: &HeaderMap,
 ) -> Result<()> {
-    let token = h
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| {
-            c.split(';')
-                .find_map(|p| p.trim().strip_prefix("vectory_session="))
-        })
-        .unwrap_or("");
-    sqlx::query("DELETE FROM sessions WHERE user_id=? AND verifier<>?")
-        .bind(user)
-        .bind(db::hash(token))
-        .execute(conn)
+    let current = auth::session_token(h).map(db::hash).unwrap_or_default();
+    auth::end_sessions(conn, user, Some(&current), ending::MFA_CHANGED).await
+}
+async fn replace_recovery_codes(conn: &mut SqliteConnection, id: &str) -> Result<Vec<String>> {
+    sqlx::query("DELETE FROM mfa_recovery_codes WHERE user_id=?")
+        .bind(id)
+        .execute(&mut *conn)
         .await?;
-    Ok(())
+    let mut codes = Vec::with_capacity(RECOVERY_CODES);
+    for _ in 0..RECOVERY_CODES {
+        let raw = auth::random_secret()[..32].to_owned();
+        sqlx::query("INSERT INTO mfa_recovery_codes(user_id,verifier) VALUES(?,?)")
+            .bind(id)
+            .bind(db::hash(&raw))
+            .execute(&mut *conn)
+            .await?;
+        codes.push(
+            raw.as_bytes()
+                .chunks(8)
+                .map(|c| std::str::from_utf8(c).unwrap())
+                .collect::<Vec<_>>()
+                .join("-"),
+        );
+    }
+    Ok(codes)
+}
+fn not_enabled() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "MFA_NOT_ENABLED",
+        "Two-factor authentication is off for this account.",
+    )
 }
 pub async fn status(AppState(s): AppState<State>, h: HeaderMap) -> Result<Json<Value>> {
     let user = auth::authorize(&s, &h, &[], false).await?;
+    let id = user["id"].as_str().unwrap();
+    let mut tx = s.pool.begin().await?;
     let enabled: Option<bool> = sqlx::query_scalar("SELECT enabled FROM user_mfa WHERE user_id=?")
-        .bind(user["id"].as_str().unwrap())
-        .fetch_optional(&s.pool)
+        .bind(id)
+        .fetch_optional(&mut *tx)
         .await?;
-    Ok(Json(json!({"enabled":enabled.unwrap_or(false)})))
+    let enabled = enabled.unwrap_or(false);
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes WHERE user_id=?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    Ok(Json(json!({
+        "enabled":enabled,
+        "recovery_codes_remaining":if enabled { json!(remaining) } else { Value::Null }
+    })))
 }
 pub async fn manage(
     AppState(s): AppState<State>,
@@ -146,7 +192,7 @@ pub async fn manage(
         .bind(id)
         .fetch_one(&s.pool)
         .await?;
-    let password_hash = if action == "setup" || action == "disable" {
+    let password_hash = if matches!(action.as_str(), "setup" | "disable" | "recovery-codes") {
         Some(
             crate::accounts::reauthenticate(&s, &h, &[], db::string(&v, "password", 256)?)
                 .await?
@@ -167,8 +213,7 @@ async fn commit_prepared(
     expected_epoch: i64,
     password_hash: Option<String>,
 ) -> Result<Json<Value>> {
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = if let Some(hash) = password_hash {
         crate::accounts::recheck(&mut tx, h, &[], &hash).await?
     } else {
@@ -179,27 +224,32 @@ async fn commit_prepared(
         .fetch_one(&mut *tx)
         .await?;
     if current_epoch != expected_epoch {
-        return Err(ApiError::conflict(
-            "MFA changed while this request was being checked. Review its current state and start again.",
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "MFA_CHANGED",
+            "Your two-factor settings changed in another window. Check them and try again.",
         ));
     }
+    let enabled: Option<bool> = sqlx::query_scalar("SELECT enabled FROM user_mfa WHERE user_id=?")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
     let out = match action {
         "setup" => {
-            let enabled: Option<bool> =
-                sqlx::query_scalar("SELECT enabled FROM user_mfa WHERE user_id=?")
-                    .bind(id)
-                    .fetch_optional(&mut *tx)
-                    .await?;
             if enabled == Some(true) {
-                return Err(ApiError::conflict(
-                    "Disable existing MFA before replacing its authenticator",
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "MFA_ALREADY_ENABLED",
+                    "Two-factor authentication is already on. Turn it off before connecting a new authenticator.",
                 ));
             }
             let secret = Secret::generate_secret().to_encoded().to_string();
             let generator = totp(secret.clone(), actor["email"].as_str().unwrap_or("account"))?;
             let ciphertext = s.keys.seal_mfa(id, &secret)?;
-            sqlx::query("INSERT INTO user_mfa(user_id,secret_ciphertext,pending_expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext,pending_expires_at=excluded.pending_expires_at,last_used_step=-1").bind(id).bind(ciphertext).bind((Utc::now()+Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true)).execute(&mut *tx).await?;
-            json!({"secret":secret,"otpauth_url":generator.get_url()})
+            let expires_at = (Utc::now() + Duration::minutes(SETUP_MINUTES))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            sqlx::query("INSERT INTO user_mfa(user_id,secret_ciphertext,pending_expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext,pending_expires_at=excluded.pending_expires_at,last_used_step=-1").bind(id).bind(ciphertext).bind(&expires_at).execute(&mut *tx).await?;
+            json!({"secret":secret,"otpauth_url":generator.get_url(),"expires_at":expires_at})
         }
         "confirm" => {
             let row = sqlx::query(
@@ -209,52 +259,47 @@ async fn commit_prepared(
             .bind(db::now())
             .fetch_optional(&mut *tx)
             .await?
-            .ok_or_else(|| ApiError::conflict("Start a new MFA setup"))?;
+            .ok_or_else(|| {
+                if enabled == Some(true) {
+                    ApiError::new(
+                        StatusCode::CONFLICT,
+                        "MFA_ALREADY_ENABLED",
+                        "Two-factor authentication is already on for your account.",
+                    )
+                } else {
+                    ApiError::new(
+                        StatusCode::CONFLICT,
+                        "MFA_SETUP_EXPIRED",
+                        "This setup expired. Start a new one to get a fresh QR code.",
+                    )
+                }
+            })?;
             let secret = s.keys.open_mfa(id, row.get("secret_ciphertext"))?;
             let step = verify_code(
                 &secret,
-                db::string(&v, "code", 6)?,
+                db::string(v, "code", 16)?,
                 row.get("last_used_step"),
             )
-            .map_err(authenticated_code_error)?;
+            .map_err(authenticated_code_error(SETUP_CODE_MISMATCH))?;
             sqlx::query("UPDATE user_mfa SET enabled=1,last_used_step=? WHERE user_id=?")
                 .bind(step)
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query("DELETE FROM mfa_recovery_codes WHERE user_id=?")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-            let mut codes = Vec::new();
-            for _ in 0..8 {
-                let raw = auth::random_secret()[..32].to_owned();
-                sqlx::query("INSERT INTO mfa_recovery_codes(user_id,verifier) VALUES(?,?)")
-                    .bind(id)
-                    .bind(db::hash(&raw))
-                    .execute(&mut *tx)
-                    .await?;
-                codes.push(
-                    raw.as_bytes()
-                        .chunks(8)
-                        .map(|c| std::str::from_utf8(c).unwrap())
-                        .collect::<Vec<_>>()
-                        .join("-"),
-                );
-            }
+            let codes = replace_recovery_codes(&mut tx, id).await?;
             revoke_other_sessions(&mut tx, id, h).await?;
             json!({"enabled":true,"recovery_codes":codes})
         }
         "disable" => {
             verify_login(
-                &s,
+                s,
                 &mut tx,
                 id,
                 v["code"].as_str(),
                 v["recovery_code"].as_str(),
             )
             .await
-            .map_err(authenticated_code_error)?;
+            .map_err(authenticated_code_error(FACTOR_MISMATCH))?;
             sqlx::query("DELETE FROM user_mfa WHERE user_id=?")
                 .bind(id)
                 .execute(&mut *tx)
@@ -266,15 +311,149 @@ async fn commit_prepared(
             revoke_other_sessions(&mut tx, id, h).await?;
             json!({"enabled":false})
         }
+        "recovery-codes" => {
+            if enabled != Some(true) {
+                return Err(not_enabled());
+            }
+            if v["code"].as_str().is_none_or(str::is_empty)
+                && v["recovery_code"].as_str().is_none_or(str::is_empty)
+            {
+                return Err(ApiError::invalid(
+                    "Enter a current authenticator code or an unused recovery code.",
+                ));
+            }
+            verify_login(
+                s,
+                &mut tx,
+                id,
+                v["code"].as_str(),
+                v["recovery_code"].as_str(),
+            )
+            .await
+            .map_err(authenticated_code_error(FACTOR_MISMATCH))?;
+            let codes = replace_recovery_codes(&mut tx, id).await?;
+            json!({"enabled":true,"recovery_codes":codes})
+        }
         _ => return Err(ApiError::missing()),
     };
     sqlx::query("UPDATE users SET mfa_epoch=mfa_epoch+1 WHERE id=?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    db::audit(&mut tx, id, &format!("mfa.{action}"), id, "success").await?;
+    db::audit(
+        &mut tx,
+        id,
+        &format!("mfa.{}", action.replace('-', "_")),
+        id,
+        "success",
+    )
+    .await?;
     tx.commit().await?;
     Ok(Json(out))
+}
+
+/// Remove every second factor from one person's account. Shared by the
+/// administrator action and the offline break-glass command; the caller holds
+/// the writer transaction. Every session of that person ends.
+async fn remove_factors(conn: &mut SqliteConnection, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM user_mfa WHERE user_id=?")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM mfa_recovery_codes WHERE user_id=?")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("UPDATE users SET mfa_epoch=mfa_epoch+1,revision=revision+1 WHERE id=?")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    auth::end_sessions(conn, id, None, ending::MFA_RESET).await
+}
+
+/// Administrator break-glass for someone who lost their authenticator and
+/// recovery codes. Needs the administrator's password and the reviewed account
+/// revision. The person signs in with their password and can set up again.
+pub async fn admin_reset(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>> {
+    // Authenticate before the body is judged at all, so an anonymous caller
+    // learns nothing from a malformed or undeclared one.
+    crate::auth::authorize(&s, &h, &["admin"], true).await?;
+    let v = crate::token_requests::parse(&body)?;
+    let id = crate::deployment_requests::parse_id(&id)?;
+    let (_, hash) = crate::accounts::reauthenticate(
+        &s,
+        &h,
+        &["admin"],
+        db::string(&v, "current_password", 256)?,
+    )
+    .await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
+    let actor = crate::accounts::recheck(&mut tx, &h, &["admin"], &hash).await?;
+    let actor_id = actor["id"].as_str().unwrap();
+    if actor_id == id {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "OWN_MFA",
+            "Change your own two-factor authentication from Your account.",
+        ));
+    }
+    let target = crate::accounts::user(&mut tx, &id).await?;
+    crate::accounts::revision(&v, target.get("revision"))?;
+    let enabled: Option<bool> = sqlx::query_scalar("SELECT enabled FROM user_mfa WHERE user_id=?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if enabled != Some(true) {
+        return Err(not_enabled());
+    }
+    remove_factors(&mut tx, &id).await?;
+    db::audit(&mut tx, actor_id, "user.mfa_reset", &id, "success").await?;
+    let out = auth::public_user(&crate::accounts::user(&mut tx, &id).await?);
+    tx.commit().await?;
+    Ok(Json(json!({"user":out})))
+}
+
+/// Whether the account behind `email` signs in with two-factor authentication,
+/// for the words `vectory-admin reset-password` closes with.
+pub async fn local_is_on(s: &State, email: &str) -> anyhow::Result<bool> {
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "SELECT m.enabled FROM user_mfa m JOIN users u ON u.id=m.user_id WHERE u.email=?",
+    )
+    .bind(email.trim().to_ascii_lowercase())
+    .fetch_optional(&s.pool)
+    .await?;
+    Ok(enabled == Some(true))
+}
+
+/// Offline break-glass from `vectory-admin disable-mfa` on a stopped server.
+pub async fn local_disable(s: &State, email: &str) -> anyhow::Result<String> {
+    let email = email.trim().to_ascii_lowercase();
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
+    let row = sqlx::query("SELECT id,name FROM users WHERE email=?")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("No account uses {email}."))?;
+    let id: String = row.get("id");
+    let enabled: Option<bool> = sqlx::query_scalar("SELECT enabled FROM user_mfa WHERE user_id=?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if enabled != Some(true) {
+        anyhow::bail!("Two-factor authentication is already off for {email}.");
+    }
+    let fail = |error: ApiError| anyhow::anyhow!(error.message);
+    remove_factors(&mut tx, &id).await.map_err(fail)?;
+    db::audit(&mut tx, "local-admin", "user.mfa_reset", &id, "success")
+        .await
+        .map_err(fail)?;
+    tx.commit().await?;
+    Ok(row.get("name"))
 }
 
 #[cfg(test)]
@@ -282,6 +461,40 @@ mod tests {
     use super::*;
     use crate::{Settings, initialize};
     use axum::http::{HeaderValue, StatusCode};
+
+    #[tokio::test]
+    async fn the_admin_tool_asks_whether_an_account_signs_in_with_two_factor() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = initialize(Settings {
+            data_dir: temp.path().join("state"),
+            bootstrap_secret: "isolated-test-bootstrap-secret-123456789".into(),
+            cookie_secure: false,
+            dashboard_dir: temp.path().join("dist"),
+            releases_dir: temp.path().join("releases"),
+            instance_name: "Test".into(),
+            validation_url: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES('u1','one@example.test','One','admin','unused','2020-01-01T00:00:00Z')")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        assert!(!local_is_on(&s, "one@example.test").await.unwrap());
+        // A setup that was started and never confirmed is not two-factor.
+        sqlx::query("INSERT INTO user_mfa(user_id,secret_ciphertext,pending_expires_at,enabled) VALUES('u1','sealed','2099-01-01T00:00:00Z',0)")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        assert!(!local_is_on(&s, "one@example.test").await.unwrap());
+        sqlx::query("UPDATE user_mfa SET enabled=1 WHERE user_id='u1'")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        assert!(local_is_on(&s, " One@Example.test ").await.unwrap());
+        assert!(!local_is_on(&s, "nobody@example.test").await.unwrap());
+    }
 
     #[tokio::test]
     async fn epoch_migration_preserves_existing_account_session_and_mfa() {
@@ -339,12 +552,15 @@ mod tests {
             releases_dir: temp.path().join("releases"),
             instance_name: "Test".into(),
             validation_url: None,
+            ..Default::default()
         })
         .await
         .unwrap();
         let password = "a-long-enough-password";
         let (response_headers, Json(bootstrap)) = auth::bootstrap(
             AppState(s.clone()),
+            HeaderMap::new(),
+            crate::ClientAddress(None),
             Json(json!({
                 "bootstrap_secret": "isolated-test-bootstrap-secret-123456789",
                 "email": "admin@example.test",
@@ -411,7 +627,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.status, StatusCode::CONFLICT);
-        assert_eq!(error.code, "CONFLICT");
+        assert_eq!(error.code, "MFA_CHANGED");
         let unchanged: String =
             sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa WHERE user_id=?")
                 .bind(id)

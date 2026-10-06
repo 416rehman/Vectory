@@ -1,8 +1,96 @@
 use std::{env, net::SocketAddr, path::PathBuf};
-use vectory_server::{Settings, api, device, initialize, rollout};
+use vectory_server::{
+    Settings, api, device, http_listener, initialize, install, notifier, rollout, wake,
+};
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_owned())
+}
+
+/// Agent wake-ups: `VECTORY_AGENT_WAKE_LIMIT` parked waits at once (default
+/// 20,000; 0 turns them off and agents only poll).
+fn wake_options(value: Option<String>) -> anyhow::Result<wake::Options> {
+    let mut options = wake::Options::default();
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        options.limit = value
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|limit| *limit <= 100_000)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "VECTORY_AGENT_WAKE_LIMIT must be a whole number from 0 (off) to 100000"
+                )
+            })?;
+    }
+    Ok(options)
+}
+
+/// The limits that decide how much the server keeps and accepts. A value that
+/// is not a whole number in its range stops the server here, before it opens
+/// anything, with a sentence that names the variable, the value and the range:
+/// it is never replaced by another one.
+fn check_resource_limits() -> anyhow::Result<()> {
+    vectory_server::db::check_telemetry_retention(
+        env::var(vectory_server::db::TELEMETRY_RETENTION_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
+    vectory_server::device::max_agent_connections(
+        env::var(vectory_server::device::MAX_CONNECTIONS_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
+    vectory_server::agent_releases::storage_limit(
+        env::var(vectory_server::agent_releases::STORAGE_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
+    Ok(())
+}
+
+/// Ctrl-C, or SIGTERM from a service manager or `docker stop`.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Answers every parked wait (`changed:false`) and gives the answers a moment
+/// to leave, so agents fall back to their schedule instead of seeing a reset.
+async fn release_waits(state: &vectory_server::State) {
+    let answered = state.wake.close();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while state.wake.parked() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    if answered > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tracing::info!(answered, "answered parked agent waits before stopping");
+    }
+}
+
+/// An optional public origin from the environment, normalized, or an error
+/// that names the variable when it isn't a bare origin.
+fn optional_origin(key: &str, schemes: &[&str]) -> anyhow::Result<Option<String>> {
+    match env::var(key) {
+        Ok(value) if !value.trim().is_empty() => install::origin(&value, schemes)
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{key} must be a bare {} origin such as {}://vectory.example.com:8443 (no path, query or user name)",
+                    schemes.join(" or "),
+                    schemes[0]
+                )
+            }),
+        _ => Ok(None),
+    }
 }
 
 fn validation_url_for_mode(
@@ -37,6 +125,32 @@ fn check_http_bind_address(development: bool, address: &str) -> anyhow::Result<(
     Ok(())
 }
 
+/// What a production server says when its HTTP listener is bound beyond
+/// loopback: it speaks plain HTTP and is meant to be reached only through the
+/// TLS proxy. Nothing refuses the bind, because the container image binds
+/// `0.0.0.0` inside its private network by design. A listener that accepts only
+/// the peers it is told to (`VECTORY_HTTP_ALLOWED_PEERS`) has nothing to warn
+/// about.
+fn http_exposure_warning(
+    development: bool,
+    bound: SocketAddr,
+    trust_proxy_headers: bool,
+    peers_restricted: bool,
+) -> Option<String> {
+    if development || peers_restricted || bound.ip().to_canonical().is_loopback() {
+        return None;
+    }
+    let mut warning = format!(
+        "The HTTP listener is bound to {bound}, which is not a loopback address. It speaks plain HTTP. Reach it only through your TLS reverse proxy, for example over a private container network: anyone who can connect to it directly bypasses TLS."
+    );
+    if trust_proxy_headers {
+        warning.push_str(
+            " VECTORY_TRUST_PROXY_HEADERS is true, so a client that connects directly chooses its own sign-in and rate-limit key, and the address the audit log records, by sending an X-Forwarded-For header.",
+        );
+    }
+    Some(warning)
+}
+
 fn check_agent_bind_address(
     development: bool,
     validator_configured: bool,
@@ -69,10 +183,14 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let data = PathBuf::from(env_or("VECTORY_DATA_DIR", "./data"));
     let development = env_or("VECTORY_DEVELOPMENT", "false") == "true";
-    let secret = if let Ok(path) = env::var("VECTORY_BOOTSTRAP_SECRET_FILE") {
-        std::fs::read_to_string(path)?.trim().to_owned()
+    // Where the setup secret comes from, for the banner; never its value.
+    let (secret, secret_source) = if let Ok(path) = env::var("VECTORY_BOOTSTRAP_SECRET_FILE") {
+        (std::fs::read_to_string(&path)?.trim().to_owned(), path)
     } else {
-        env::var("VECTORY_BOOTSTRAP_SECRET").unwrap_or_default()
+        (
+            env::var("VECTORY_BOOTSTRAP_SECRET").unwrap_or_default(),
+            "the VECTORY_BOOTSTRAP_SECRET environment variable".to_owned(),
+        )
     };
     if secret.len() < 24 && !data.join("vectory.db").exists() {
         anyhow::bail!(
@@ -92,8 +210,24 @@ async fn main() -> anyhow::Result<()> {
     }
     let validation_url =
         validation_url_for_mode(development, env::var("VECTORY_VALIDATION_URL").ok())?;
+    let schedule_late_start_seconds = vectory_server::schedule::late_start_from(
+        env::var("VECTORY_SCHEDULE_LATE_START_SECONDS")
+            .ok()
+            .as_deref(),
+    )?;
     let web_addr = env_or("VECTORY_HTTP_ADDR", "127.0.0.1:8080");
     check_http_bind_address(development, &web_addr)?;
+    let http_limits = http_listener::Limits::from_values(
+        env::var(http_listener::HEADER_TIMEOUT_VARIABLE).ok(),
+        env::var(http_listener::BODY_TIMEOUT_VARIABLE).ok(),
+        env::var(http_listener::CONNECTIONS_VARIABLE).ok(),
+    )?;
+    let allowed_peers = http_listener::AllowedPeers::parse(
+        env::var(http_listener::ALLOWED_PEERS_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
+    check_resource_limits()?;
     let agent_addr = if cert.is_some() && key.is_some() {
         let address = env_or("VECTORY_AGENT_ADDR", "0.0.0.0:8443");
         check_agent_bind_address(development, validation_url.is_some(), &address)?;
@@ -106,6 +240,19 @@ async fn main() -> anyhow::Result<()> {
             "Development preview has no isolated Vector validator; checks and publication are structural-only until each device validates the configuration"
         );
     }
+    let public_agent_url = optional_origin("VECTORY_PUBLIC_AGENT_URL", &["https"])?;
+    let public_url = optional_origin("VECTORY_PUBLIC_URL", &["https", "http"])?;
+    let public_downloads = env_or("VECTORY_PUBLIC_AGENT_DOWNLOADS", "true");
+    if public_downloads != "true" && public_downloads != "false" {
+        anyhow::bail!("VECTORY_PUBLIC_AGENT_DOWNLOADS must be true or false")
+    }
+    let agent_port = agent_addr
+        .as_deref()
+        .and_then(|address| address.rsplit(':').next()?.parse::<u16>().ok());
+    let agent_certificate_pem = match (&agent_addr, &cert) {
+        (Some(_), Some(path)) => std::fs::read_to_string(path).ok(),
+        _ => None,
+    };
     let settings = Settings {
         data_dir: data.clone(),
         bootstrap_secret: secret,
@@ -117,42 +264,122 @@ async fn main() -> anyhow::Result<()> {
         ),
         instance_name: env_or("VECTORY_INSTANCE_NAME", "Vectory"),
         validation_url,
+        trust_proxy_headers: env_or("VECTORY_TRUST_PROXY_HEADERS", "false") == "true",
+        schedule_late_start_seconds,
+        bundled_releases_dir: env::var("VECTORY_BUNDLED_RELEASES_DIR")
+            .ok()
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from),
+        public_agent_url,
+        public_url,
+        disable_public_agent_downloads: public_downloads == "false",
+        agent_port,
+        agent_certificate_pem,
+        outbound: Default::default(),
+        wake: wake_options(env::var("VECTORY_AGENT_WAKE_LIMIT").ok())?,
+        agent_release_storage_bytes: Some(vectory_server::agent_releases::storage_limit(
+            env::var(vectory_server::agent_releases::STORAGE_VARIABLE)
+                .ok()
+                .as_deref(),
+        )?),
     };
     let state = initialize(settings).await?;
+    tracing::info!(
+        "{}",
+        install::startup_banner(&state, &web_addr, &secret_source).await
+    );
     let scheduler = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        loop {
+        for tick in 0u64.. {
             interval.tick().await;
-            if let Err(e) = rollout::tick(&scheduler).await {
+            // A released wave wakes its agents once the tick has committed.
+            if let Err(e) = wake::changes(&scheduler, rollout::tick(&scheduler)).await {
                 tracing::error!(
                     code = e.code,
                     "scheduler transaction failed; last valid desired state retained"
                 )
             }
+            if tick % 30 == 0 {
+                if let Err(e) = rollout::prune(&scheduler).await {
+                    tracing::error!(
+                        code = e.code,
+                        "retention pruning failed; retrying next minute"
+                    )
+                }
+                vectory_server::db::report_writer(&scheduler.settings.data_dir);
+            }
         }
     });
+    // Notifications send from their own task: a slow receiver never holds
+    // the writer lock, a heartbeat, the scheduler or a request.
+    tokio::spawn(notifier::run(state.clone()));
     let listener = tokio::net::TcpListener::bind(&web_addr).await?;
+    // Host names are looked up before the first connection is accepted, so a
+    // proxy that is already up is allowed from the start.
+    let allowed_peers = match allowed_peers {
+        Some(peers) => Some(
+            peers
+                .start(http_listener::SystemResolver, Default::default())
+                .await,
+        ),
+        None => None,
+    };
+    if let Some(warning) = http_exposure_warning(
+        development,
+        listener.local_addr()?,
+        state.settings.trust_proxy_headers,
+        allowed_peers.is_some(),
+    ) {
+        tracing::warn!("{warning}");
+    }
     let app = api::router(state.clone());
     tracing::info!(%web_addr,"dashboard listener ready (use a TLS reverse proxy in production)");
     if let (Some(cert), Some(key), Some(agent_addr)) = (cert, key, agent_addr) {
-        tokio::select! {result=axum::serve(listener,app)=>{result?},result=device::serve_tls(state,&agent_addr,&cert,&key)=>{result?},_=tokio::signal::ctrl_c()=>{}}
+        // Both listeners log a failed accept and try again, and return only
+        // when their socket is unusable. Whichever way the server ends, the
+        // agents' parked waits are answered first.
+        let outcome = tokio::select! {
+            result = http_listener::serve_on(listener, app, http_limits, allowed_peers, std::future::pending()) => result,
+            result = device::serve_tls(state.clone(), &agent_addr, &cert, &key) => result,
+            _ = shutdown_signal() => Ok(()),
+        };
+        release_waits(&state).await;
+        outcome?;
     } else {
         tracing::warn!(
             "Explicit development mode: agent listener disabled without TLS certificate and key"
         );
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = tokio::signal::ctrl_c().await;
-            })
-            .await?;
+        http_listener::serve_on(listener, app, http_limits, allowed_peers, async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{check_agent_bind_address, check_http_bind_address, validation_url_for_mode};
+    use super::{
+        check_agent_bind_address, check_http_bind_address, http_exposure_warning,
+        validation_url_for_mode, wake_options,
+    };
+
+    #[test]
+    fn wake_limit_defaults_and_bounds() {
+        let default = wake_options(None).unwrap();
+        assert_eq!(
+            (default.limit, default.hold),
+            (20_000, std::time::Duration::from_secs(25))
+        );
+        assert_eq!(wake_options(Some(" ".into())).unwrap().limit, 20_000);
+        assert_eq!(wake_options(Some("0".into())).unwrap().limit, 0);
+        assert_eq!(wake_options(Some(" 5000 ".into())).unwrap().limit, 5000);
+        for value in ["-1", "100001", "many", "1e4"] {
+            let error = wake_options(Some(value.into())).unwrap_err();
+            assert!(error.to_string().contains("VECTORY_AGENT_WAKE_LIMIT"));
+        }
+    }
 
     #[test]
     fn production_requires_configured_isolated_validator() {
@@ -194,6 +421,46 @@ mod tests {
             );
         }
         check_http_bind_address(false, "0.0.0.0:8080").unwrap();
+    }
+
+    #[test]
+    fn production_warns_once_about_an_http_listener_beyond_loopback() {
+        let bound = |address: &str| address.parse().unwrap();
+        for address in ["127.0.0.1:8080", "127.8.2.1:8080", "[::1]:8080"] {
+            assert_eq!(
+                http_exposure_warning(false, bound(address), true, false),
+                None
+            );
+        }
+        // An IPv4 loopback address a dual-stack socket reports as IPv6 is still loopback.
+        assert_eq!(
+            http_exposure_warning(false, bound("[::ffff:127.0.0.1]:8080"), false, false),
+            None
+        );
+        // Development already refuses anything but loopback.
+        assert_eq!(
+            http_exposure_warning(true, bound("0.0.0.0:8080"), true, false),
+            None
+        );
+        // A listener that accepts only the peers it is told to has nothing to warn about.
+        assert_eq!(
+            http_exposure_warning(false, bound("0.0.0.0:8080"), true, true),
+            None
+        );
+        for address in ["0.0.0.0:8080", "[::]:8080", "192.0.2.1:8080"] {
+            let warning = http_exposure_warning(false, bound(address), false, false).unwrap();
+            assert!(warning.contains(address), "{warning}");
+            assert!(warning.contains("plain HTTP"), "{warning}");
+            assert!(warning.contains("TLS reverse proxy"), "{warning}");
+            assert!(!warning.contains("X-Forwarded-For"), "{warning}");
+            let trusting = http_exposure_warning(false, bound(address), true, false).unwrap();
+            assert!(trusting.starts_with(&warning), "{trusting}");
+            assert!(
+                trusting.contains("VECTORY_TRUST_PROXY_HEADERS is true")
+                    && trusting.contains("X-Forwarded-For"),
+                "{trusting}"
+            );
+        }
     }
 
     #[test]

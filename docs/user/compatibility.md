@@ -1,42 +1,90 @@
-# Compatibility and release evidence
+# Compatibility
 
-This help center describes the Vectory development release targeting **Vector 0.58.0**. Install Vector separately; the agent adopts a fixed local executable and does not install or upgrade it. Match both the operating system and CPU architecture when choosing an agent download.
+Which platforms, Vector versions and browsers Vectory supports today, what each needs at a minimum, and what has been tested on each. This release targets **Vector 0.58**: devices accept any 0.58.x release, the automated tests use 0.58.0, and the validator on your server runs 0.58.0.
 
-## Choose a platform
+## Devices
 
-| Device target                | Vector 0.58.0 distribution             | Current Vectory evidence                                                                                                                                                              |
-| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows amd64                | Upstream ZIP and MSI                   | Native development tests cover configuration application, recovery and full-mode features. Service installation, reboot, upgrade and oldest-supported-Windows acceptance remain open. |
-| Linux amd64                  | Upstream GNU and musl archives         | Agent cross-build exists. Native distribution, service and supervisor acceptance remain open.                                                                                         |
-| Linux arm64                  | Upstream GNU and musl archives         | Agent cross-build exists. Native arm64 acceptance remains open.                                                                                                                       |
-| macOS arm64                  | Upstream archive                       | Agent cross-build exists. Native installation, launchd, reboot, upgrade and apply acceptance remain open.                                                                             |
-| macOS amd64 / Intel Mac      | No upstream Vector 0.58.0 distribution | Agent build-only artifact; not a supported combination for this pinned Vector release.                                                                                                |
-| Windows arm64 or Linux armv7 | Not a Vectory release target           | No native compatibility claim.                                                                                                                                                        |
+Vectory manages an installed Vector; it never installs or upgrades it. Match both the operating system and the CPU when you download the agent.
 
-A downloadable binary is not proof of native platform support. Download checksum/size checks establish which bytes were served, not installation or activation. Current downloads are unsigned development artifacts. Native acceptance from an earlier artifact does not automatically transfer to a newer checksum.
+| Device | Vector 0.58.0 downloads | Status |
+| --- | --- | --- |
+| **Linux x86-64** | `.deb`, `.rpm`, GNU and musl archives | Agent tests with real Vector 0.58.0 run on every change. The full loop (install, enroll, deploy, apply and metrics) works end to end in the local demo fleet. A service test on Ubuntu 24.04 (systemd, the generated and the packaged unit) runs on demand, and so does an agent update through a rollout, with the update step as a systemd service of its own; reboot tests, an upgrade from an earlier release and other distributions are still to come. |
+| **Linux Arm64** | `.deb`, `.rpm`, GNU and musl archives | The agent builds for it. Not yet tested on Arm64 hardware. |
+| **macOS on Apple silicon** | Archive | Apply and rollback are tested on every change on macOS 15 with real Vector 0.58.0. A launchd test on macOS 15 runs on demand, and so does an agent update through a rollout, with the update step as a launch daemon of its own; an upgrade from an earlier release is not tested. |
+| **Windows x86-64** | MSI and ZIP | Apply, recovery, local secrets, metrics and full-mode features are tested on every change on Windows Server 2025. A test of the Windows service runs on demand, and so does an agent update through a rollout, with the update step as a service of its own; reboot tests and an upgrade from an earlier release are still to come. |
+| macOS on Intel | None | Not supported: Vector 0.58.0 has no Intel Mac build. |
+| Windows Arm64, 32-bit Arm Linux | Not an agent target | Not supported. |
 
-The development work includes native Windows testing, not a complete oldest/current OS matrix. Do not treat the Go compiler's minimum OS requirements as the minimum for Vector or the complete managed workload. The release's `docs/COMPATIBILITY.md` and `docs/ACCEPTANCE.md` retain the detailed evidence and remaining release gates.
+"The agent builds for it" means we ship a binary but haven't yet proven it on that platform. Use those platforms for trials first.
 
-## Check component and host requirements
+## Minimums
 
-The editor catalog includes 128 production component types from the pinned reference. Its presence in the editor does not mean a particular Vector build includes it. For example, Unix socket modes and journald need an appropriate Unix build; Windows Event Log needs Windows. A Windows validation worker cannot establish Linux runtime support.
+What each part needs, where that is established. "Not yet established" means nothing proves a lower bound yet, so start with the versions under [Tested on](#tested-on).
 
-Restricted mode permits a reviewed subset of components and locally authorized resources. Full mode is an explicit host-operator grant to use the adopted Vector process's available features and permissions. It does not install platform components, create credentials, provision files or make unavailable services reachable. See [installation modes](#/docs/installation) and [device resources](#/docs/resources).
+| Requirement | Minimum | Where it comes from |
+| --- | --- | --- |
+| macOS | macOS 12 | The agent declares macOS 12.0 as its minimum; Go 1.26.8 sets it. Only macOS 15 is tested. |
+| Linux kernel | Not yet established | The agent binary declares none. Go 1.26's published minimum plus a test on an older kernel would establish it. |
+| Linux C library | None | The agent is a static binary with no dynamic loader or shared libraries. |
+| Windows | Not yet established | Go 1.26's published minimum plus a test on an older Windows would establish it. Only Windows Server 2025 is tested. |
+| x86-64 CPU | x86-64-v1 | Agents are built with `GOAMD64=v1`, the baseline instruction set. |
+| Arm64 CPU | ARMv8.0 | Agents use Go's default, `GOARM64=v8.0`. |
+| Vector on a device | 0.58.0 | Any 0.58.x release is accepted; pre-releases are refused. Vector's own OS requirements aren't recorded here yet: check the [Vector 0.58.0 release notes](https://vector.dev/releases/0.58.0/). |
+| Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
+| Browser | Not yet established | Chromium is tested on every change; Firefox and WebKit run four first-use flows on demand (see [Browsers](#browsers)). |
 
-Native checks involving local paths, providers or platform-specific sources can be deferred to the device. The UI reports this boundary; it does not turn a structural check into native validation. Actual configuration validity and activation still depend on the target device.
+The prebuilt Linux x86-64 server and preview kits require Docker Engine with Compose v2. Normal installation needs no Rust, Go, Node, or compiler. Other server architectures and Docker Desktop installations are not qualified yet. Toolchain versions below describe how CI builds and tests the release; contributors can find source-build requirements in [CONTRIBUTING.md](https://github.com/416rehman/Vectory/blob/main/CONTRIBUTING.md).
 
-## Server, browser and offline use
+## Tested on
 
-The supplied server deployment targets one Linux Docker host with Compose and durable local storage. Its configuration has been checked; container execution and isolation still require verification on a Docker-capable host. Use [Administer Vectory](#/docs/administer) for the setup and recovery procedures.
+Every change runs the same automated checks on GitHub-hosted runners. They prove what this table lists, and nothing more.
 
-Browser checks use Chromium on a Windows development host, including narrow mobile-sized layouts. Those checks do not certify every browser or physical mobile device. The configuration editor rejects integers outside JavaScript's exact safe range rather than silently rounding them; use a lossless native configuration workflow for such values.
+| Runner | Versions | What passes | Not covered |
+| --- | --- | --- | --- |
+| Ubuntu 24.04 | Vector 0.58.0, Go 1.26.8, Rust 1.94.0, Node 22, Chromium from Playwright 1.63.0 | Server, dashboard and agent unit tests. The agent's native tests with real Vector: validate, apply, reload, drift repair, rollback, metrics, device secrets and full mode. The server's validator tests with real Vector. An adversarial TLS and protocol suite against a running server. Browser checks of the dashboard and this Help center. Both container images build. | Installing under systemd, reboot, upgrade, starting Compose, Linux on Arm64 |
+| Windows Server 2025 | Vector 0.58.0, Go 1.26.8 | The agent's unit and native tests with real Vector. Windows restarts Vector instead of reloading it. | The Windows service, the MSI, reboot, upgrade |
+| macOS 15 on Apple silicon | Vector 0.58.0, Go 1.26.8 | The agent's unit and native tests with real Vector, including reload and rollback. | The package, launchd, reboot, upgrade |
 
-The built help center is served with Vectory and can be read without a third-party documentation service. It follows the installed release. External Vector links require internet access and may describe a newer release; compare them with the pinned version before changing a configuration. An offline installation needs its server images, build dependencies, Vector binaries and agent artifacts prepared in advance.
+Nothing tests the oldest versions of an operating system yet.
 
-## Reference sources
+### On demand
 
-- [Vector 0.58.0 release](https://vector.dev/releases/0.58.0/)
-- [Vector Intel Mac distribution change](https://vector.dev/highlights/2025-11-04-0-51-0-upgrade-guide/)
+A second workflow, `platforms`, runs when someone starts it and when its own scripts change, not on every change. On a clean runner of each kind it runs the real server and the pinned Vector 0.58.0, and its results are kept as downloadable evidence.
+
+| Runner | What it runs | Not covered |
+| --- | --- | --- |
+| Ubuntu 24.04 | Installs the agent as a systemd service for an unprivileged account with `vectory setup`, applies a pipeline through it, then restarts, kills and stops the service and removes it. Reads the unit's sandbox from inside the running service, for the unit setup registers and for the packaged unit. Then updates the agent from one build to the next through a rollout, with the update step as root under its own sandboxed unit; takes back a build that doesn't start and one that never checks in; and refuses what a hostile server offers. | Other distributions, reboot, an upgrade from an earlier release, installing the `.deb` or `.rpm`, SELinux and AppArmor, a power cut |
+| Windows Server 2025 | Runs the server natively, then the agent in the foreground and as the Windows service: restart, kill, stop, start and removal. Then updates the agent through a rollout with the update step as a second service, `VectoryUpdate`; takes back a build that doesn't start and one that never checks in; recovers when the step is ended between the two renames of its swap; and refuses what a hostile server offers. | An administrator editing the managed file while the service runs, reboot, an upgrade from an earlier release, the MSI, a power cut |
+| macOS 15 on Apple silicon | Runs `scripts/preview.sh` and the installer with macOS's own shell and tools, then the agent as a launch daemon: restart, kill, stop, start and removal. Then updates the agent through a rollout with the update step as a launch daemon of its own; takes back a build that doesn't start and one that never checks in; and refuses what a hostile server offers. | Reboot, an upgrade from an earlier release, the package, a power cut |
+| Ubuntu 24.04 with Firefox and WebKit | Creates the first administrator, signs in, creates and publishes a pipeline and opens Devices, in each browser. | Everything else the Chromium checks cover |
+
+## Components
+
+The editor knows all 128 production component types of Vector 0.58.0. Whether a device can run one also depends on:
+
+- **Its platform.** For example, `journald` needs Linux and `windows_event_log` needs Windows.
+- **Its Vector build**, which must include the component.
+- **Its mode.** Restricted devices accept [a reviewed subset](security.md#restricted-and-full-mode).
+
+Checks that need the device itself, such as local files, run on the device before it applies a version. See [Validate, test, publish](pipelines.md#validate-test-publish).
+
+## Server
+
+- **Prebuilt kits for Linux x86-64**, with Docker Engine, Compose v2 and local disk. The kits load unsigned Docker image archives from the GitHub release; no compiler or source build is needed. A container registry is not published yet.
+- On every change, CI builds the server stack from source on a clean Ubuntu 24.04 runner, starts it, waits for healthy services, creates the first administrator, enrolls a device with the Add device installer and checks validator isolation. The release candidate workflow also checks the prebuilt preview and server kits against saved image archives. A customer's host, a public certificate and your network aren't covered, so try it on a staging host first.
+- One server per data directory. SQLite doesn't support network filesystems or active-active replicas.
+
+## Browsers
+
+The dashboard and this Help center are tested with Chromium on desktop and phone-sized screens, in light and dark themes, with automated accessibility checks. Firefox and WebKit run four first-use flows on demand, against a real server: creating the first administrator, signing in, creating and publishing a pipeline, and opening Devices. Every other check runs in Chromium only. Safari itself isn't tested (WebKit is its engine, not the browser), and neither are older versions of any browser.
+
+## Offline use
+
+The dashboard, API reference, fonts and this Help center, including search, are served by your server with no outside requests. The first kit start downloads the released image archives; retain the verified cache to restart offline, or provide the image archives and release checksum inventory through `VECTORY_PREVIEW_RELEASE_DIR`. The server kit also needs its pinned proxy image pre-loaded. Devices need an existing supported Vector installation, which can be supplied offline. Links to [vector.dev](https://vector.dev/docs/) need internet access and may describe a newer Vector than 0.58.0.
+
+## References
+
+- [Vector 0.58.0 release notes](https://vector.dev/releases/0.58.0/)
 - [Vector configuration reference](https://vector.dev/docs/reference/configuration/)
-
-These external references describe Vector. Vectory's own test evidence determines what has been exercised through this agent and control plane.
+- [Intel Mac support ended in Vector 0.51](https://vector.dev/highlights/2025-11-04-0-51-0-upgrade-guide/)
+- [Go minimum requirements](https://go.dev/wiki/MinimumRequirements)

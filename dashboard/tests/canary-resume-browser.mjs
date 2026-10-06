@@ -1,7 +1,7 @@
 // Actual App/Deployments/device identity navigation; isolated synthetic API only.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -165,17 +165,11 @@ async function start(
     reducedMotion: "reduce",
   });
   await context.addInitScript(
-    ({ theme, deadline }) => {
+    ({ theme }) => {
       localStorage.setItem("vectory-theme", theme);
       localStorage.setItem("vectory-sidebar-collapsed", "true");
-      if (deadline) {
-        const original = window.setTimeout;
-        window.setTimeout = function (fn, ms, ...args) {
-          return original(fn, ms === 30000 ? 180 : ms, ...args);
-        };
-      }
     },
-    { theme, deadline },
+    { theme },
   );
   await context.route("**/*", async (route) => {
     const req = route.request(),
@@ -258,6 +252,17 @@ async function start(
       );
       return respond({ items, total: items.length, page: 1, page_size: 12 });
     }
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${id(100)}/summary`) {
       const mode = f.summaryMode;
       if (mode === "hold") await new Promise((done) => f.holds.push(done));
@@ -284,6 +289,18 @@ async function start(
   await expect(
     page.getByRole("heading", { name: "Deployments", exact: true }),
   ).toBeVisible();
+  // Shorten the 30 s request deadline only once the page (loaded on demand
+  // behind a 30 s guard of its own) is on screen.
+  await expect(
+    page.getByRole("link", { name: "Synthetic paused canary", exact: true }),
+  ).toBeVisible();
+  if (deadline)
+    await page.evaluate(() => {
+      const original = window.setTimeout;
+      window.setTimeout = function (fn, ms, ...args) {
+        return original(fn, ms === 30000 ? 180 : ms, ...args);
+      };
+    });
   return {
     page,
     context,
@@ -295,7 +312,7 @@ async function start(
   };
 }
 const details = (page) =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const action = (page) =>
   page.getByRole("dialog", { name: "Resume rollout", exact: true });
 const submit = (page) =>
@@ -309,7 +326,7 @@ async function open(page) {
 async function begin(page) {
   await open(page);
   await details(page)
-    .getByRole("button", { name: "Resume rollout", exact: true })
+    .getByRole("button", { name: "Resume", exact: true })
     .click();
   await expect(action(page)).toBeVisible();
   await expect(details(page)).toHaveCount(0);
@@ -471,7 +488,7 @@ try {
           await expect.poll(() => f.holds.length).toBe(1);
           expect(writes(f)).toHaveLength(1);
           const controls = page.getByRole("button", {
-            name: /^(Resume rollout|Pause rollout|Cancel rollout|Roll back)$/,
+            name: /^(Resume|Pause|Cancel|Stop)( rollout)?$|^Roll back$/,
           });
           for (const button of await controls.all())
             await expect(button).toBeDisabled();
@@ -483,9 +500,10 @@ try {
             .toBeGreaterThanOrEqual(2);
           await expect(action(page)).toHaveCount(0);
           await expect(details(page)).toBeVisible();
+          // A running rollout's Pause is in the Stop rollout menu.
           await expect(
             details(page).getByRole("button", {
-              name: mode === "lost" ? "Pause rollout" : "Resume rollout",
+              name: mode === "lost" ? "Stop rollout" : "Resume",
               exact: true,
             }),
           ).toBeEnabled();
@@ -506,12 +524,17 @@ try {
         await action(page)
           .getByRole("button", { name: "Check current status", exact: true })
           .click();
+        // Earlier data is on screen: the server's reason is behind Details.
+        await page
+          .getByRole("alert")
+          .getByText("Details", { exact: true })
+          .click();
         await expect(
           page.getByText("Synthetic status unavailable", { exact: true }),
         ).toBeVisible();
         expect(writes(f)).toHaveLength(1);
         await expect(
-          page.getByRole("button", { name: "Resume rollout", exact: true }),
+          page.getByRole("button", { name: /^Resume( rollout)?$/ }),
         ).toHaveCount(0);
         f.summaryMode = "wrong-source";
         await page
@@ -522,7 +545,7 @@ try {
         );
         for (const button of await details(page)
           .getByRole("button", {
-            name: /^(Resume rollout|Pause rollout|Cancel rollout|Roll back)$/,
+            name: /^(Resume|Pause|Cancel|Stop)( rollout)?$|^Roll back$/,
           })
           .all())
           await expect(button).toBeDisabled();
@@ -532,9 +555,10 @@ try {
           .getByRole("button", { name: "Check current status", exact: true })
           .click();
         await expect(action(page)).toHaveCount(0);
+        // Pause lives in the Stop rollout menu, available again.
         await expect(
           details(page).getByRole("button", {
-            name: "Pause rollout",
+            name: "Stop rollout",
             exact: true,
           }),
         ).toBeEnabled();
@@ -586,9 +610,10 @@ try {
         await action(page)
           .getByRole("button", { name: "Check current status", exact: true })
           .click();
+        // Pause lives in the Stop rollout menu, available again.
         await expect(
           details(page).getByRole("button", {
-            name: "Pause rollout",
+            name: "Stop rollout",
             exact: true,
           }),
         ).toBeEnabled();
@@ -609,7 +634,7 @@ try {
           await open(app.page);
           await expect(
             details(app.page).getByRole("button", {
-              name: "Resume rollout",
+              name: "Resume",
               exact: true,
             }),
           ).toHaveCount(0);
@@ -635,7 +660,7 @@ try {
           )
           .toBe(true);
         await details(app.page)
-          .getByRole("button", { name: "Resume rollout", exact: true })
+          .getByRole("button", { name: "Resume", exact: true })
           .click();
         await expect(action(app.page)).toBeVisible();
         await app.page.keyboard.press("Escape");

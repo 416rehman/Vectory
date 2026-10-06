@@ -1,0 +1,43 @@
+{
+  "description": "The Azure CLI credential runs a program; Azure sinks aren't reviewed yet, so it needs full mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "azure_logs_ingestion",
+        "inputs": [
+          "in"
+        ],
+        "endpoint": "https://dce.example.ingest.monitor.azure.com",
+        "dcr_immutable_id": "dcr-00000000000000000000000000000000",
+        "stream_name": "Custom-Vector",
+        "auth": {
+          "azure_credential_kind": "azure_cli"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sinks/out"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

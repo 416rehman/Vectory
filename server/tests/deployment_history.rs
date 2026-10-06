@@ -43,6 +43,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, String) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Deployment history tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -530,15 +531,23 @@ async fn targets_are_parent_bound_paged_and_counts_are_exact_persisted_states() 
         .unwrap();
     let (_, summary) = get(&app, "/api/v1/deployments/one/summary", Some(&cookie)).await;
     assert_eq!(summary["target_count"], 1000);
-    assert_eq!(summary["verified_count"], 100);
+    // The first device is revoked: its target keeps its stored state, but the
+    // device no longer follows the deployment, so it reads as removed and
+    // doesn't count as applied.
+    assert_eq!(summary["verified_count"], 99);
     for state in states {
-        assert_eq!(summary["state_counts"][state], 100);
+        let expected = match state {
+            "verified_applied" => 99,
+            "removed" => 101,
+            _ => 100,
+        };
+        assert_eq!(summary["state_counts"][state], expected, "{state}");
     }
     assert_eq!(
         get(&app, "/api/v1/deployments/other/summary", Some(&cookie))
             .await
             .1["verified_count"],
-        1000
+        999
     );
     let (_, page) = get(
         &app,
@@ -555,7 +564,8 @@ async fn targets_are_parent_bound_paged_and_counts_are_exact_persisted_states() 
     assert!(!page.to_string().contains("PRIVATE_DEVICE"));
     assert!(!page.to_string().contains("SPOOFED_NAME"));
     for (query, total) in [
-        ("state=verified_applied", 100),
+        ("state=verified_applied", 99),
+        ("state=removed", 101),
         ("state=future_state", 100),
         ("state=unknown_state", 0),
         ("search=Device%200012", 1),
@@ -582,6 +592,14 @@ async fn targets_are_parent_bound_paged_and_counts_are_exact_persisted_states() 
     .await;
     assert_eq!(page["items"][0]["device_name"], "Device 0000");
     assert_eq!(page["items"][0]["generation"], 0);
+    assert_eq!(page["items"][0]["state"], "removed");
+    let stored: String = sqlx::query_scalar(
+        "SELECT state FROM deployment_targets WHERE deployment_id='one' AND device_id='device-0000'",
+    )
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, "verified_applied", "the stored state is history");
     let after: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='audit'")
         .fetch_one(&s.pool)
         .await
@@ -611,6 +629,149 @@ async fn targets_are_parent_bound_paged_and_counts_are_exact_persisted_states() 
     .await;
     assert_eq!(page["total"], 1);
     assert!(page["items"][0]["device_name"].is_null());
+}
+
+/// A device that no longer follows a deployment reads "No longer targeted"
+/// and doesn't count as applied: one that was revoked, and every device of an
+/// assignment that was removed. The stored target states stay as history, and a
+/// rollback keeps counting what applied before it.
+#[tokio::test]
+async fn devices_that_no_longer_follow_a_deployment_do_not_count_as_applied() {
+    let (_temp, s, app, cookie) = fixture().await;
+    for (id, status, extra) in [
+        ("kept", "completed", json!({})),
+        (
+            "removed",
+            "unassigned",
+            json!({"status_before_removal":"completed"}),
+        ),
+        (
+            "rolled-back",
+            "unassigned",
+            json!({"rolled_back_by":"replacement"}),
+        ),
+        ("live", "active", json!({})),
+    ] {
+        let mut record = deployment(id);
+        record["status"] = json!(status);
+        for (key, value) in extra.as_object().unwrap() {
+            record[key] = value.clone();
+        }
+        insert(&s, "deployment", &record).await;
+    }
+    for (device, revoked) in [("device-a", false), ("device-b", false), ("device-c", true)] {
+        sqlx::query("INSERT INTO devices(id,name,data,revoked) VALUES(?,?,'{}',?)")
+            .bind(device)
+            .bind(device)
+            .bind(revoked)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        for deployment in ["kept", "removed", "rolled-back", "live"] {
+            sqlx::query("INSERT INTO deployment_targets(deployment_id,device_id,state,generation) VALUES(?,?,'verified_applied',1)")
+                .bind(deployment)
+                .bind(device)
+                .execute(&s.pool)
+                .await
+                .unwrap();
+        }
+    }
+    let summary = |id: &'static str| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            get(
+                &app,
+                &format!("/api/v1/deployments/{id}/summary"),
+                Some(&cookie),
+            )
+            .await
+            .1
+        }
+    };
+    // Revoked: kept in the rows, out of the count.
+    let kept = summary("kept").await;
+    assert_eq!(kept["target_count"], 3);
+    assert_eq!(kept["verified_count"], 2);
+    assert_eq!(
+        kept["state_counts"],
+        json!({"verified_applied":2,"removed":1})
+    );
+    // The assignment was removed: no device follows it any more.
+    let removed = summary("removed").await;
+    assert_eq!(removed["target_count"], 3);
+    assert_eq!(removed["verified_count"], 0);
+    assert_eq!(removed["state_counts"], json!({"removed":3}));
+    // A rollback removes the assignment too, but its counts stay what applied
+    // before the rollback.
+    let rolled_back = summary("rolled-back").await;
+    assert_eq!(rolled_back["verified_count"], 2);
+    assert_eq!(
+        rolled_back["state_counts"],
+        json!({"verified_applied":2,"removed":1})
+    );
+    // Rows and their filters read the same way.
+    for (deployment, query, total) in [
+        ("kept", "state=verified_applied", 2),
+        ("kept", "state=removed", 1),
+        ("removed", "state=verified_applied", 0),
+        ("removed", "state=removed", 3),
+        ("rolled-back", "state=verified_applied", 2),
+    ] {
+        let (_, page) = get(
+            &app,
+            &format!("/api/v1/deployments/{deployment}/targets?{query}"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(page["total"], total, "{deployment} {query}");
+    }
+    let (_, rows) = get(
+        &app,
+        "/api/v1/deployments/removed/targets?sort=state",
+        Some(&cookie),
+    )
+    .await;
+    assert!(
+        rows["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["state"] == "removed")
+    );
+    // The rollout page's lanes leave them out, as they do any removed row.
+    let (_, lanes) = get(&app, "/api/v1/deployments/removed/rollout", Some(&cookie)).await;
+    assert_eq!(lanes["removed_count"], 3);
+    assert_eq!(lanes["stages"], json!([]));
+    let (_, lanes) = get(&app, "/api/v1/deployments/kept/rollout", Some(&cookie)).await;
+    assert_eq!(lanes["removed_count"], 1);
+    let in_lanes: u64 = lanes["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stage| stage["size"].as_u64().unwrap())
+        .sum();
+    assert_eq!(in_lanes, 2);
+    // So does the Overview's progress of a rollout that is still running.
+    let (_, overview) = get(&app, "/api/v1/overview", Some(&cookie)).await;
+    let live = overview["rollouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rollout| rollout["id"] == "live")
+        .unwrap();
+    assert_eq!(
+        live["state_counts"],
+        json!({"verified_applied":2,"removed":1})
+    );
+    // Nothing was rewritten: every target keeps its stored state.
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM deployment_targets WHERE state='verified_applied'",
+    )
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, 12);
 }
 
 #[tokio::test]
@@ -679,8 +840,8 @@ async fn global_sort_precedes_pagination_and_keeps_identity_ties_and_nulls_last(
     for (sort, direction, expected) in [
         ("name", "asc", vec!["b", "c", "d", "a"]),
         ("name", "desc", vec!["a", "d", "b", "c"]),
-        ("status", "asc", vec!["b", "a", "c", "d"]),
-        ("status", "desc", vec!["d", "c", "a", "b"]),
+        ("status", "asc", vec!["b", "c", "a", "d"]),
+        ("status", "desc", vec!["d", "a", "c", "b"]),
         ("verified", "asc", vec!["d", "c", "a", "b"]),
         ("verified", "desc", vec!["b", "a", "c", "d"]),
         ("created_at", "asc", vec!["d", "c", "b", "a"]),
@@ -768,10 +929,15 @@ async fn target_progress_sort_uses_terminal_pending_label_before_pagination() {
             .unwrap();
         }
         let terminal = ["failed", "cancelled", "missed", "unassigned"].contains(&status);
+        // No device follows a removed assignment: every row reads as removed,
+        // so only the device ID orders them.
+        let unassigned = status == "unassigned";
         for (direction, expected) in [
             (
                 "asc",
-                if terminal {
+                if unassigned {
+                    vec!["a", "b", "c", "d", "e"]
+                } else if terminal {
                     vec!["d", "e", "a", "b", "c"]
                 } else {
                     vec!["d", "e", "c", "a", "b"]
@@ -779,7 +945,9 @@ async fn target_progress_sort_uses_terminal_pending_label_before_pagination() {
             ),
             (
                 "desc",
-                if terminal {
+                if unassigned {
+                    vec!["a", "b", "c", "d", "e"]
+                } else if terminal {
                     vec!["c", "a", "b", "e", "d"]
                 } else {
                     vec!["a", "b", "c", "e", "d"]
@@ -803,6 +971,10 @@ async fn target_progress_sort_uses_terminal_pending_label_before_pagination() {
             Some(&cookie),
         )
         .await;
+        if unassigned {
+            assert_eq!(pending["total"], 0);
+            continue;
+        }
         assert_eq!(pending["total"], 2);
         assert_eq!(pending["items"][0]["device_id"], "b");
         assert_eq!(

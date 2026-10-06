@@ -51,6 +51,7 @@ async fn fixture() -> (
         releases_dir: temp.path().join("releases"),
         instance_name: "Saved settings request tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -642,7 +643,7 @@ async fn strict_json_query_identity_and_bounds_fail_without_effects() {
 }
 
 #[tokio::test]
-async fn cancellation_blocks_new_enrollment_and_replay_without_revoking_issued_identity() {
+async fn cancellation_blocks_new_enrollment_without_revoking_issued_identity_or_its_replay() {
     let (_temp, s, app, _, c, t) = fixture().await;
     let key = db::id();
     let (_, receipt) = create(&app, body(Some(&key)), &c, &t).await;
@@ -673,6 +674,8 @@ async fn cancellation_blocks_new_enrollment_and_replay_without_revoking_issued_i
     .unwrap();
     assert_eq!(credentials.len(), 1);
     assert_eq!(cancel(&app, &key, &c, &t).await.0, StatusCode::OK);
+    // The enrollment already happened: a host whose reply was lost still
+    // receives its stored identity, so a refusal always means "never enrolled".
     assert_eq!(
         call(
             &device_api,
@@ -682,9 +685,8 @@ async fn cancellation_blocks_new_enrollment_and_replay_without_revoking_issued_i
             "",
             ""
         )
-        .await
-        .0,
-        StatusCode::UNAUTHORIZED
+        .await,
+        (StatusCode::OK, enrolled)
     );
     request["request_id"] = json!("different-enrollment");
     request["name"] = json!("synthetic-other");
@@ -727,9 +729,13 @@ async fn migration_adds_empty_registry_without_inventing_request_identity() {
     let s = initialize(settings).await.unwrap();
     let app = api::router(s.clone());
     assert_eq!(snapshot(&s).await, before);
-    let list = call(&app, "GET", "/api/v1/tokens", Value::Null, &c, "")
+    let mut list = call(&app, "GET", "/api/v1/tokens", Value::Null, &c, "")
         .await
         .1;
+    // The list adds usage (creator, enrolled devices) to each stored record.
+    for key in ["created_by", "devices", "device_count", "last_used_at"] {
+        assert!(list[0].as_object_mut().unwrap().remove(key).is_some());
+    }
     assert_eq!(list, json!([legacy["record"]]));
     let key = db::id();
     assert_eq!(read(&app, &key, &c).await.1["found"], false);

@@ -1,69 +1,215 @@
-.enrollment-trust {
-  margin: 22px 0 26px;
+.enroll-mode-picker {
+  margin: 22px 0 0;
 }
-.enrollment-trust > .field {
-  margin-bottom: 8px;
+.enroll-mode-picker > a {
+  display: inline-flex;
+  margin-top: 8px;
+  font-size: 12.5px;
 }
-.enrollment-trust-purpose,
-.enrollment-certificate-retain {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-  margin: 8px 0;
+.enroll-modes {
+  min-width: 0;
+  margin: 22px 0 0;
+  padding: 0;
+  border: 0;
 }
-.enrollment-certificate-file {
-  margin: 16px 0 12px;
-  padding: 14px;
+.enroll-modes legend {
+  margin-bottom: 10px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 550;
+}
+.enroll-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.enroll-mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    border-color 0.15s var(--ease),
+    background-color 0.15s var(--ease);
 }
-.enrollment-certificate-file .field {
-  margin-bottom: 8px;
+.enroll-mode:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
 }
-.enrollment-certificate-retain {
-  margin-bottom: 0;
+.enroll-mode:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
-.enrollment-trust-help {
-  font-size: 12px;
-  line-height: 1.6;
+.enroll-mode:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.enroll-modes:disabled .enroll-mode {
+  cursor: default;
+  opacity: 0.7;
+}
+.enroll-mode input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.enroll-mode svg {
+  margin-top: 1px;
   color: var(--muted);
 }
-.enrollment-trust-help > summary {
-  width: fit-content;
-  padding: 6px 0;
-  color: var(--ink);
-  cursor: pointer;
-}
-.enrollment-trust-help > summary:hover {
+.enroll-mode:has(input:checked) svg {
   color: var(--accent-ink);
 }
-.enrollment-trust-help > div {
-  padding: 0 0 8px;
+.enroll-mode strong {
+  display: block;
+  font-size: 14px;
 }
-.enrollment-trust-help ol {
-  padding-left: 20px;
-  margin: 8px 0;
+.enroll-mode small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
-.enrollment-trust-help li + li {
+.enroll-trust {
+  min-width: 0;
+  margin: 2px 0 18px;
+  padding: 0;
+  border: 0;
+}
+.enroll-trust legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 550;
+}
+.enroll-trust > p {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.enroll-trust-options {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.enroll-trust-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
+}
+.enroll-trust-option + .enroll-trust-option {
+  border-top: 1px solid var(--line);
+}
+.enroll-trust-option:hover {
+  background: var(--surface-hover);
+}
+.enroll-trust-option:has(input:checked) {
+  background: var(--accent-soft);
+}
+.enroll-trust:disabled .enroll-trust-option {
+  cursor: default;
+}
+.enroll-trust-option input {
+  margin-top: 3px;
+}
+.enroll-trust-option strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+}
+.enroll-trust-option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.enroll-default {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 450;
+}
+.enroll-trust .field {
+  margin-top: 12px;
+}
+.enroll-trust > a {
+  display: inline-flex;
   margin-top: 8px;
+  font-size: 12.5px;
 }
-.enrollment-trust-help code {
+.enroll-receipt {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.enroll-receipt > div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+}
+.enroll-receipt dt {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.enroll-receipt dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.enroll-receipt code {
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
-.enrollment-policy {
-  margin: 12px 0 18px;
-  padding: 14px;
+.enroll-fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.enroll-fingerprint code {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface-soft);
-  font-size: 12px;
-  line-height: 1.6;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  overflow-wrap: normal;
 }
-.enrollment-policy > p {
-  margin: 0 0 12px;
-  color: var(--muted);
+.enroll-fingerprint .button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
 }
-.enrollment-policy .field {
-  margin-bottom: 8px;
+@media (max-width: 640px) {
+  .enroll-mode-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .enroll-receipt > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 }

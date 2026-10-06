@@ -7,6 +7,7 @@ export default function PipelineDetails({
   onSave,
   onClose,
   onPendingChange,
+  preserveAfterFailedSave = false,
   editable,
   returnFocusRef,
 }: {
@@ -15,6 +16,7 @@ export default function PipelineDetails({
   onSave: (name: string, description: string) => Promise<boolean>;
   onClose: () => void;
   onPendingChange: (id: string, pending: boolean) => void;
+  preserveAfterFailedSave?: boolean;
   editable: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
@@ -28,8 +30,17 @@ export default function PipelineDetails({
     return () => onPendingChange("pipeline-details", false);
   }, [changed, onPendingChange]);
   function close() {
-    if (!busy && (!changed || confirm("Discard changes to pipeline details?")))
-      onClose();
+    if (busy) return;
+    if (
+      changed &&
+      !confirm(
+        preserveAfterFailedSave
+          ? "Discard the new details you just typed? The previous unconfirmed save remains in your local draft."
+          : "Discard changes to pipeline details?",
+      )
+    )
+      return;
+    onClose();
   }
   return (
     <Modal
@@ -64,6 +75,13 @@ export default function PipelineDetails({
       >
         <div className="modal-body stack">
           {error && <ErrorBox message={error} />}
+          {preserveAfterFailedSave && (
+            <p role="status">
+              The previous save was not confirmed. Those attempted details stay
+              in your local draft until you resolve or discard it. New edits in
+              this dialog need another save.
+            </p>
+          )}
           <Field label="Pipeline name">
             <input
               value={title}
@@ -88,7 +106,7 @@ export default function PipelineDetails({
         </div>
         <div className="modal-footer">
           <Button variant="secondary" onClick={close} disabled={busy}>
-            {editable ? "Cancel" : "Close"}
+            {editable && !preserveAfterFailedSave ? "Cancel" : "Close"}
           </Button>
           {editable && (
             <Button

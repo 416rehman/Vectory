@@ -57,13 +57,30 @@ function formattedValue(value: unknown): string {
 }
 
 /** Complete, value-local unified diff. Expensive comparisons fall back to full replacement. */
+/**
+ * Whether a change is a program (multi-line text such as VRL). Programs
+ * compare line by line as written, not as one escaped JSON string.
+ */
+export function isProgramDifference(difference: Difference) {
+  const sides = [difference.before, difference.after];
+  return (
+    sides.some((side) => typeof side === "string" && side.includes("\n")) &&
+    sides.every((side) => side === undefined || typeof side === "string")
+  );
+}
+
 export function historyDifferenceLines(
   difference: Difference,
 ): HistoryDifferenceLine[] {
-  const before =
-    difference.kind === "added" ? "" : formattedValue(difference.before);
-  const after =
-    difference.kind === "removed" ? "" : formattedValue(difference.after);
+  const program = isProgramDifference(difference);
+  // Each program line becomes a diff line; the added line break keeps a
+  // trailing newline (or its absence) visible as its own line.
+  const format = (value: unknown) =>
+    program
+      ? `${(value as string | undefined) ?? ""}\n`
+      : formattedValue(value);
+  const before = difference.kind === "added" ? "" : format(difference.before);
+  const after = difference.kind === "removed" ? "" : format(difference.after);
   const changes =
     before === after
       ? [{ value: before, added: false, removed: false }]

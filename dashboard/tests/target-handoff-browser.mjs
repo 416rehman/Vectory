@@ -1,12 +1,17 @@
 // Actual fleet/settings/review components; all HTTP is intercepted synthetic data.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  nothingOffered,
+} from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -68,7 +73,7 @@ const config = {
 };
 const pipeline = {
   id: id(10),
-  name: "Synthetic deployment handoff",
+  name: "Synthetic deployment",
   description: "Never sent to a real device",
   revision: 1,
   archived: false,
@@ -157,8 +162,19 @@ async function load({
     detailReads: 0,
     legacyPreview: false,
     outcomeOverride: null,
+    // A whole preview response for the request, when a check needs one.
+    previewFor: null,
   };
   const current = state;
+  const groups = () => [
+    {
+      id: id(20),
+      name: "Synthetic group",
+      description: "Fixture only",
+      device_ids: current.devices.map((d) => d.id),
+    },
+  ];
+  const replies = fleetReplies({ devices: () => current.devices, groups });
   context = await browser.newContext({
     viewport: { width, height: 920 },
     reducedMotion: "reduce",
@@ -197,21 +213,12 @@ async function load({
           csrf_token: "synthetic",
         });
       if (path === "/settings")
-        return reply({ instance_name: "Synthetic handoff" });
+        return reply({ instance_name: "Synthetic instance" });
+      if (path === `/devices/${id(1)}`) current.detailReads++;
+      // A page of devices, one device, and the groups without their members.
+      if (await fulfillFleetRead(replies, route)) return;
       if (path === "/devices") return reply(current.devices);
-      if (path === `/devices/${id(1)}`) {
-        current.detailReads++;
-        return reply(current.devices[0]);
-      }
-      if (path === "/groups")
-        return reply([
-          {
-            id: id(20),
-            name: "Synthetic group",
-            description: "Fixture only",
-            device_ids: current.devices.map((d) => d.id),
-          },
-        ]);
+      if (path === "/groups") return reply(groups());
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/policies")
         return reply([
@@ -244,6 +251,17 @@ async function load({
           total: 0,
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
+        });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
         });
       if (path === `/deployments/${id(40)}/summary`)
         return reply({
@@ -282,6 +300,15 @@ async function load({
             : []),
         ].filter((key) => !body.selector.exclude_ids.includes(key)),
       );
+      if (current.previewFor)
+        return reply({
+          devices: current.devices.filter((d) => selected.has(d.id)),
+          warnings: [],
+          create_idempotency: true,
+          request_correlation: true,
+          blockers: [],
+          ...current.previewFor(body),
+        });
       return reply({
         devices: current.devices.filter((d) => selected.has(d.id)),
         warnings: [],
@@ -349,6 +376,20 @@ async function load({
         })),
       });
     }
+    // The device page also shows telemetry, open issues and recent activity.
+    if (method === "GET") {
+      const telemetry = path.match(/^\/devices\/([^/]+)\/telemetry$/);
+      if (telemetry) return reply({ device_id: telemetry[1], samples: [] });
+      const configuration = path.match(/^\/devices\/([^/]+)\/configuration$/);
+      if (configuration) return reply(nothingOffered(configuration[1]));
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
+    }
     unexpected.push(`${method} ${path}`);
     return reply(
       {
@@ -404,15 +445,25 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
-    await page
-      .getByLabel("Schedule (optional)", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
     .click();
   await expect(table()).toBeVisible();
+}
+// Synthetic alpha's own settings (priority 200) outrank the request: the
+// dialog says it stays behind and asks before sending to the other device.
+const keptAlpha = () =>
+  page.getByRole("checkbox", {
+    name: /^Synthetic alpha keeps its current agent settings \(priority 200\)/,
+  });
+const applyToOthers = () =>
+  page.getByRole("button", { name: "Apply to 1 of 2 devices", exact: true });
+async function sendPolicy() {
+  await keptAlpha().check();
+  await applyToOthers().click();
 }
 async function check(name, run) {
   const focus = process.env.VECTORY_TARGET_HANDOFF_FOCUS;
@@ -431,8 +482,17 @@ try {
       const row = table()
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
-      await expect(row).toContainText("Higher priority wins (200)");
+      await expect(row).toContainText("Keeps current");
+      await expect(row).toContainText("Priority 200 wins");
       expect(state.previews[0].priority).toBe(100);
+      // Sending names the devices it changes and waits until the person
+      // accepts what stays behind.
+      await expect(applyToOthers()).toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "Apply settings", exact: true }),
+      ).toHaveCount(0);
+      await keptAlpha().check();
+      await expect(applyToOthers()).toBeEnabled();
       expect(state.creates).toEqual([]);
       await load({ kind: "version" });
       await preview();
@@ -440,8 +500,149 @@ try {
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
       await expect(configRow).toContainText("Version 1");
-      await expect(configRow).not.toContainText("Higher priority wins");
-      await expect(configRow).toContainText("No current priority conflict");
+      await expect(configRow).not.toContainText("Keeps current");
+      await expect(configRow).toContainText("No pipeline assigned");
+    },
+  );
+  await check(
+    "Redeploying a fix after a rollback takes one review: the rolled-back rollout and its rollback are replaced at the rollback's priority; declining shows the real winner",
+    async () => {
+      const described = (n, extra) => ({
+        id: id(n),
+        name: null,
+        resource: "configuration",
+        target_mode: "snapshot",
+        created_at: created,
+        version_id: id(n + 10),
+        configuration_id: id(n + 20),
+        policy: null,
+        policy_id: null,
+        policy_name: null,
+        ...extra,
+      });
+      // The canary of this pipeline's v1, rolled back on alpha, and the
+      // rollback one priority up that alpha follows now.
+      const cancelled = described(60, {
+        priority: 100,
+        status: "cancelled",
+        configuration_name: pipeline.name,
+        configuration_id: pipeline.id,
+        version_number: 1,
+      });
+      const rollback = described(61, {
+        priority: 101,
+        status: "active",
+        configuration_name: "Edge syslog processing",
+        version_number: 1,
+        rollback_of: id(60),
+      });
+      const lineage = [id(60), id(61)];
+      const entries = [cancelled, rollback].map((assignment) => ({
+        assignment,
+        device_ids: [id(1)],
+        retires_assignment: true,
+      }));
+      const previewFor = (body) =>
+        lineage.every((x) => (body.replaces || []).includes(x))
+          ? {
+              conflicts: [],
+              replacements: entries,
+              outcomes: [
+                {
+                  device_id: id(1),
+                  resource: "configuration",
+                  outcome: "replace",
+                  winner: rollback,
+                  replaces: rollback,
+                },
+                {
+                  device_id: id(2),
+                  resource: "configuration",
+                  outcome: "requested",
+                },
+              ],
+            }
+          : {
+              conflicts: [
+                {
+                  device_id: id(1),
+                  assignment_ids: [id(60), "preview"],
+                  priority: body.priority,
+                  resource: "configuration",
+                  assignments: [cancelled],
+                },
+              ],
+              outcomes: [
+                {
+                  device_id: id(1),
+                  resource: "configuration",
+                  outcome: "conflict",
+                  winner: rollback,
+                },
+                {
+                  device_id: id(2),
+                  resource: "configuration",
+                  outcome: "requested",
+                },
+              ],
+              suggested_replaces: entries,
+              suggested_priority: 101,
+              replacements_needed: entries,
+              winning_priority: 102,
+            };
+      await load({ kind: "version" });
+      state.previewFor = previewFor;
+      await preview();
+      // One round: the dialog adopts the lineage and the rollback's priority.
+      await expect.poll(() => state.previews.length).toBe(2);
+      expect([...state.previews[1].replaces].sort()).toEqual(lineage);
+      expect(state.previews[1].priority).toBe(101);
+      await expect(page.getByRole("dialog")).toContainText(
+        "Replaces the rollback to Edge syslog processing v1 and the rollout it stopped",
+      );
+      await expect(
+        table().locator("tbody tr").filter({ hasText: "Synthetic alpha" }),
+      ).toContainText("Replaces");
+      await page
+        .getByRole("button", { name: "Deploy to devices", exact: true })
+        .click();
+      await expect(
+        page.getByRole("link", { name: "View deployment", exact: true }),
+      ).toBeVisible();
+      expect([...state.creates[0].replaces].sort()).toEqual(lineage);
+      expect(state.creates[0].priority).toBe(101);
+      // Declined: the conflict names what alpha follows today and what else
+      // is bound, and one Replace existing covers both tiers.
+      await load({ kind: "version" });
+      state.previewFor = previewFor;
+      await preview();
+      await page
+        .getByRole("button", {
+          name: "Keep the current assignments as well",
+          exact: true,
+        })
+        .click();
+      const conflicts = page.getByRole("table", {
+        name: "Devices with a conflicting assignment",
+      });
+      await expect(conflicts).toContainText(
+        "Rollback to Edge syslog processing v1",
+      );
+      await expect(conflicts).toContainText("Priority 101 · higher");
+      await expect(conflicts).toContainText(
+        `Also bound: ${pipeline.name} v1 (cancelled)`,
+      );
+      await page
+        .getByRole("button", { name: "Replace existing", exact: true })
+        .click();
+      await expect
+        .poll(() => [...(state.previews.at(-1).replaces || [])].sort())
+        .toEqual(lineage);
+      await expect(conflicts).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "Deploy to devices", exact: true }),
+      ).toBeEnabled();
+      expect(state.creates).toEqual([]);
     },
   );
   await check(
@@ -476,20 +677,20 @@ try {
       const row = table()
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
-      await expect(row).toContainText("Higher priority wins (300)");
+      await expect(row).toContainText("Priority 300 wins");
       await expect(
-        row.getByRole("link", { name: "View assignment", exact: true }),
+        row.getByRole("link", { name: /^View assignment/ }),
       ).toHaveAttribute("href", `#/deployments/${id(82)}?page=1`);
       await load();
       state.legacyPreview = true;
       await preview();
       await expect(table().locator("tbody tr").first()).toContainText(
-        "Priority outcome unavailable",
+        "Outcome unavailable",
       );
       await expect(
-        page.getByText(/This server does not report priority outcomes/),
+        page.getByText(/This server doesn.t report outcomes/),
       ).toBeVisible();
-      await expect(table()).not.toContainText("No current priority conflict");
+      await expect(table()).not.toContainText("No settings assigned");
       await load();
       state.conflicts = [
         {
@@ -505,7 +706,7 @@ try {
       ];
       await preview();
       await expect(table().locator("tbody tr").first()).toContainText(
-        "Conflicting assignment",
+        "Conflict",
       );
       await expect(
         page.getByRole("button", { name: "Apply settings", exact: true }),
@@ -532,12 +733,13 @@ try {
         await page.keyboard.press("Escape");
         await expect(table().locator("tbody tr")).toHaveCount(1);
         const before = page.url();
+        if (kind === "policy") await keptAlpha().check();
         await page
           .getByRole("button", {
             name: scheduled
               ? "Schedule deployment"
               : kind === "policy"
-                ? "Apply settings"
+                ? "Apply to 1 of 2 devices"
                 : "Deploy to devices",
             exact: true,
           })
@@ -570,12 +772,15 @@ try {
       await load();
       await preview();
       state.failCreate = true;
-      await page
-        .getByRole("button", { name: "Apply settings", exact: true })
-        .click();
-      const recovery = page.getByRole("dialog", { name: "Confirm deployment", exact: true });
+      await sendPolicy();
+      const recovery = page.getByRole("dialog", {
+        name: "Confirm deployment",
+        exact: true,
+      });
       await expect(recovery).toBeVisible();
-      await expect(recovery).toContainText("No completed request was found yet");
+      await expect(recovery).toContainText(
+        "No completed request was found yet",
+      );
       await expect(
         page.getByRole("link", { name: "View deployment", exact: true }),
       ).toHaveCount(0);
@@ -583,7 +788,9 @@ try {
       expect(await page.evaluate(() => window.notices.length)).toBe(0);
       state.failCreate = false;
       state.holdCreate = true;
-      await recovery.getByRole("button", { name: "Retry same request", exact: true }).click();
+      await recovery
+        .getByRole("button", { name: "Retry same request", exact: true })
+        .click();
       await expect.poll(() => state.holds.length).toBe(1);
       await page.keyboard.press("Escape");
       expect(await page.evaluate(() => window.fixtureClosed)).toBe(false);
@@ -686,7 +893,7 @@ try {
         new RegExp(`#/deployments/${id(40)}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
       expect(state.creates).toHaveLength(1);
     },
@@ -713,13 +920,21 @@ try {
         .click();
       await preview();
       state.holdCreate = true;
+      // Synthetic alpha's own assignment (priority 200) outranks this one.
       await page
-        .getByRole("button", { name: "Deploy to devices", exact: true })
+        .getByRole("checkbox", {
+          name: /^Synthetic alpha keeps .*\(priority 200\)/,
+        })
+        .check();
+      await expect(page.locator(".target-left-behind")).toContainText(
+        "Only the other device changes.",
+      );
+      await page
+        .getByRole("button", { name: "Deploy to 1 of 2 devices", exact: true })
         .click();
       await expect.poll(() => state.holds.length).toBe(1);
       const assignmentLink = page.getByRole("link", {
-        name: "View assignment",
-        exact: true,
+        name: /^View assignment/,
       });
       await expect(assignmentLink).toHaveAttribute("aria-disabled", "true");
       await assignmentLink.click({ force: true });
@@ -756,7 +971,7 @@ try {
         new RegExp(`#/deployments/${id(40)}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
     },
   );
@@ -766,9 +981,7 @@ try {
       await load();
       state.responseId = "../../invalid";
       await preview();
-      await page
-        .getByRole("button", { name: "Apply settings", exact: true })
-        .click();
+      await sendPolicy();
       await expect(
         page.getByRole("dialog", { name: "Confirm deployment", exact: true }),
       ).toContainText("No completed request was found yet");
@@ -778,9 +991,7 @@ try {
           exact: true,
         }),
       ).toHaveAttribute("href", "#/deployments?page=1");
-      await expect(
-        page.getByRole("button", { name: "Apply settings", exact: true }),
-      ).toHaveCount(0);
+      await expect(applyToOthers()).toHaveCount(0);
       await expect(
         page.getByRole("button", { name: "Retry same request", exact: true }),
       ).toBeEnabled();
@@ -839,10 +1050,7 @@ try {
           await load({ width, theme });
           await preview();
           for (const stage of ["review", "receipt"]) {
-            if (stage === "receipt")
-              await page
-                .getByRole("button", { name: "Apply settings", exact: true })
-                .click();
+            if (stage === "receipt") await sendPolicy();
             if (stage === "receipt")
               await expect(
                 page.getByRole("link", {

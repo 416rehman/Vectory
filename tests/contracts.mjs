@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 const root = path.resolve(import.meta.dirname, ".."),
   require = createRequire(path.join(root, "dashboard/package.json"));
@@ -11,10 +12,18 @@ const schema = JSON.parse(
 const ajv = new Ajv({ strict: false, allErrors: true });
 formats(ajv);
 ajv.addSchema(schema);
+// Defaults read the local preview; the variables point it at another instance.
 const credentials = JSON.parse(
-  await fs.readFile(path.join(root, ".local/preview/credentials.json"), "utf8"),
+  await fs.readFile(
+    process.env.VECTORY_CONTRACT_CREDENTIALS ||
+      path.join(root, ".local/preview/credentials.json"),
+    "utf8",
+  ),
 );
-const base = "http://127.0.0.1:8080/api/v1";
+// The preview's port, as scripts/preview.sh chooses it; a full URL overrides it.
+const base =
+  process.env.VECTORY_CONTRACT_BASE ||
+  `http://127.0.0.1:${process.env.VECTORY_PREVIEW_WEB_PORT || 8080}/api/v1`;
 const login = await fetch(base + "/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -31,12 +40,44 @@ function validate(name, value) {
 }
 try {
   validate("Session", session);
+  // A keyed creation rejected before storage must identify the offending
+  // field without echoing its value. This exercises the live error response,
+  // not only the generated schema.
+  const testCredential = "synthetic-contract-credential";
+  const refusedCreate = await fetch(base + "/configurations", {
+    method: "POST",
+    headers: {
+      Cookie: cookie,
+      "Content-Type": "application/json",
+      "X-CSRF-Token": session.csrf_token,
+    },
+    body: JSON.stringify({
+      request_id: randomUUID(),
+      name: "Contract credential refusal",
+      description: "Synthetic contract check",
+      config: { sinks: { out: { type: "datadog_logs", default_api_key: testCredential } } },
+      graph: { nodes: [], edges: [] },
+    }),
+  });
+  if (refusedCreate.status !== 400)
+    throw Error(`Plaintext credential creation returned ${refusedCreate.status}, expected 400`);
+  const refusal = await refusedCreate.json();
+  validate("Error", refusal);
+  if (
+    refusal.error?.code !== "INVALID_INPUT" ||
+    refusal.error?.reason !== "plaintext_credential" ||
+    refusal.error?.problems?.[0]?.path !== "sinks.out.default_api_key" ||
+    JSON.stringify(refusal).includes(testCredential)
+  )
+    throw Error("Plaintext credential refusal lacks a safe field-specific problem");
   async function get(endpoint) {
     const r = await fetch(base + endpoint, { headers: { Cookie: cookie } });
     if (!r.ok) throw Error(`${endpoint}: ${r.status}`);
     return r.json();
   }
   validate("Status", await get("/status"));
+  // Needs you, Rollouts and Recent changes, with rollback lineage.
+  validate("Overview", await get("/overview"));
   const prepared = await get("/audit/exports");
   if (!Array.isArray(prepared) || prepared.length > 2)
     throw Error("Unexpected prepared export list");
@@ -70,14 +111,29 @@ try {
     const history = await get(`/deployments/history?page_size=12${suffix}`);
     validate("DeploymentHistoryPage", history);
     for (const deployment of history.items) {
-      validate(
-        "DeploymentSummary",
-        await get(`/deployments/${deployment.id}/summary`),
-      );
+      const summary = await get(`/deployments/${deployment.id}/summary`);
+      validate("DeploymentSummary", summary);
       validate(
         "DeploymentTargetPage",
         await get(`/deployments/${deployment.id}/targets?page_size=12`),
       );
+      validate(
+        "RolloutLanes",
+        await get(`/deployments/${deployment.id}/rollout`),
+      );
+      // What a rollback would do, for every rollout that can still take one.
+      if (
+        summary.rollback_review === true &&
+        summary.version_id &&
+        !summary.rolled_back_by &&
+        ["active", "paused", "completed", "cancelled", "failed"].includes(
+          summary.status,
+        )
+      )
+        validate(
+          "RollbackPreview",
+          await get(`/deployments/${deployment.id}/rollback-preview`),
+        );
     }
   }
   for (const state of ["active", "archived", "all"])
@@ -120,8 +176,67 @@ try {
   }
   for (const d of await get("/devices"))
     validate("TelemetryHistory", await get(`/devices/${d.id}/telemetry`));
+  // What each device was offered, read back: the text is the bytes its digest
+  // and size describe, earlier generations read the same way, and the
+  // comparison with the previous offer is bounded.
+  for (const d of await get("/devices")) {
+    const configuration = await get(`/devices/${d.id}/configuration`);
+    validate("DeviceConfiguration", configuration);
+    if (configuration.device_id !== d.id)
+      throw Error(`/devices/${d.id}/configuration answered another device`);
+    for (const offered of configuration.generations.items.slice(0, 3)) {
+      const read = await get(
+        `/devices/${d.id}/configuration?generation=${offered.generation}`,
+      );
+      validate("DeviceConfiguration", read);
+      if (read.sha256 !== offered.sha256)
+        throw Error(`${d.id} generation ${offered.generation}: digest differs`);
+    }
+    if (configuration.content === null) continue;
+    const bytes = Buffer.from(configuration.content, "utf8");
+    if (
+      bytes.length !== configuration.size ||
+      createHash("sha256").update(bytes).digest("hex") !== configuration.sha256
+    )
+      throw Error(`${d.id}: content is not the bytes its digest describes`);
+    const diff = await get(`/devices/${d.id}/configuration/diff`);
+    validate("DeviceConfigurationDiff", diff);
+    if (diff.unified.split("\n").length - 1 > 2000)
+      throw Error(`${d.id}: diff is longer than 2,000 lines`);
+  }
+  // Fleet-scale reads.
+  for (const query of ["", "?slim=1"]) {
+    const overview = await get(`/overview${query}`);
+    validate("Overview", overview);
+    if (query && "devices" in overview)
+      throw Error("/overview?slim=1: devices must be left out");
+  }
+  for (const query of [
+    "",
+    "?page_size=100&sort=status",
+    "?status=applied&sort=events_in",
+    "?view=no_telemetry&dir=desc",
+    "?status=revoked",
+    "?q=a",
+  ]) {
+    const page = await get(`/devices/inventory${query}`);
+    validate("DeviceInventoryPage", page);
+    for (const device of page.items)
+      validate("Device", await get(`/devices/${device.id}?include=groups`));
+  }
+  validate("DeviceInventoryIds", await get("/devices/inventory/ids"));
+  for (const group of await get("/groups?slim=1")) {
+    validate("GroupSummary", group);
+    validate(
+      "GroupMemberPage",
+      await get(`/groups/${group.id}/members?page_size=100`),
+    );
+  }
+  for (const group of await get("/groups?include=members"))
+    validate("Group", group);
   await fs.writeFile(
-    path.join(root, "docs/evidence/contract-tests.json"),
+    process.env.VECTORY_CONTRACT_EVIDENCE ||
+      path.join(root, "docs/evidence/contract-tests.json"),
     JSON.stringify(
       {
         timestamp: new Date().toISOString(),

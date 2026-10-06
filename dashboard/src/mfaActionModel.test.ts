@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   MfaConfirmSchema,
   MfaDisableSchema,
+  MfaRecoveryCodesSchema,
   MfaSetupSchema,
   MfaStatusSchema,
+  groupRecoveryCode,
+  groupSetupKey,
   mfaCanUseContext,
+  mfaOutcome,
   mfaSameContext,
   mfaSetupUri,
-  mfaStatusMeaning,
+  recoveryCodesText,
   type MfaContext,
 } from "./mfaActionModel";
 
@@ -34,10 +38,26 @@ const context: MfaContext = {
 describe("MFA response and context model", () => {
   it("accepts only an exact enabled status and the intended fixed action receipts", () => {
     expect(MfaStatusSchema.parse({ enabled: true })).toEqual({ enabled: true });
+    expect(
+      MfaStatusSchema.parse({ enabled: true, recovery_codes_remaining: 7 }),
+    ).toEqual({ enabled: true, recovery_codes_remaining: 7 });
+    expect(
+      MfaStatusSchema.parse({ enabled: false, recovery_codes_remaining: null }),
+    ).toEqual({ enabled: false, recovery_codes_remaining: null });
+    for (const remaining of [-1, 9, 1.5, "7"])
+      expect(
+        MfaStatusSchema.safeParse({
+          enabled: true,
+          recovery_codes_remaining: remaining,
+        }).success,
+      ).toBe(false);
     expect(MfaStatusSchema.safeParse({ enabled: "true" }).success).toBe(false);
     expect(
       MfaStatusSchema.safeParse({ enabled: true, token: "extra" }).success,
     ).toBe(false);
+    expect(
+      MfaRecoveryCodesSchema.parse({ enabled: true, recovery_codes: codes }),
+    ).toMatchObject({ recovery_codes: codes });
     expect(
       MfaConfirmSchema.parse({ enabled: true, recovery_codes: codes }),
     ).toMatchObject({ enabled: true, recovery_codes: codes });
@@ -84,6 +104,10 @@ describe("MFA response and context model", () => {
       otpauth_url: `otpauth://totp/Vectory%3Aadmin?secret=${secret}`,
     };
     expect(MfaSetupSchema.safeParse(optionalDefaults).success).toBe(true);
+    expect(
+      MfaSetupSchema.safeParse({ ...valid, expires_at: "2026-09-29T14:13:00Z" })
+        .success,
+    ).toBe(true);
   });
 
   it("rejects a foreign, mismatched, duplicate or unsafe authenticator URI", () => {
@@ -116,19 +140,47 @@ describe("MFA response and context model", () => {
     );
   });
 
-  it("describes a fresh status as current state without attributing a prior write", () => {
-    for (const flow of ["setup", "confirm", "disable"] as const) {
-      for (const enabled of [true, false]) {
-        const message = mfaStatusMeaning(flow, enabled);
-        expect(message).toContain(enabled ? "enabled now" : "not enabled now");
-        expect(message).not.toMatch(
-          /your request succeeded|your request failed/i,
-        );
-      }
-    }
-    expect(mfaStatusMeaning("confirm", true)).toContain("cannot be recovered");
-    expect(mfaStatusMeaning("setup", false)).toContain("setup key is pending");
-    expect(mfaStatusMeaning("setup", false)).toContain("can invalidate");
+  it("maps a fresh status read to what can be said, never to a resend", () => {
+    expect(mfaOutcome("setup", false)).toBe("restart");
+    expect(mfaOutcome("setup", true)).toBe("codes-lost");
+    expect(mfaOutcome("confirm", true)).toBe("codes-lost");
+    expect(mfaOutcome("confirm", false)).toBe("retry-code");
+    expect(mfaOutcome("disable", false)).toBe("off");
+    expect(mfaOutcome("disable", true)).toBe("still-on");
+    // A full set of codes can't prove whether this request replaced them.
+    expect(mfaOutcome("codes", true)).toBe("codes-unknown");
+    expect(mfaOutcome("codes", false)).toBe("off");
+  });
+
+  it("groups setup keys and labels recovery-code files with their account", () => {
+    expect(groupSetupKey("JBSWY3DPEHPK3PXP")).toBe("JBSW Y3DP EHPK 3PXP");
+    expect(groupSetupKey("ABCDEF")).toBe("ABCD EF");
+    const text = recoveryCodesText({
+      codes: codes.slice(0, 2),
+      email: "jane@example.test",
+      workspace: "Acme Production (vectory.example.test)",
+      generatedAt: new Date("2026-09-29T14:03:00Z"),
+    });
+    expect(text.split("\n")[0]).toBe(
+      "Vectory recovery codes for jane@example.test on Acme Production (vectory.example.test), generated 2026-09-29.",
+    );
+    // Grouped in fours for typing from paper; sign-in ignores the spaces.
+    expect(text).toContain(" 1. 0000 0000 0000 0001 0000 0002 0000 0003");
+    expect(text).toContain(" 2. 0000 0001 0000 0001 0000 0002 0000 0003");
+    expect(text).toContain("Each code works once.");
+    expect(text).toContain("Type a code with or without its spaces.");
+  });
+
+  it("groups a recovery code in fours and leaves anything unexpected as it came", () => {
+    expect(groupRecoveryCode("0f3a91c2-5b7d8e10-aa00bb11-cc22dd33")).toBe(
+      "0f3a 91c2 5b7d 8e10 aa00 bb11 cc22 dd33",
+    );
+    expect(groupRecoveryCode("0F3A91C25B7D8E10AA00BB11CC22DD33")).toBe(
+      "0F3A 91C2 5B7D 8E10 AA00 BB11 CC22 DD33",
+    );
+    expect(groupRecoveryCode("not-a-recovery-code")).toBe(
+      "not-a-recovery-code",
+    );
   });
 
   it("requires the original usable actor, role and session binding", () => {

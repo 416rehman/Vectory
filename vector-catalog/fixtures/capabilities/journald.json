@@ -1,0 +1,59 @@
+{
+  "description": "journald needs approval; its journalctl path and extra arguments need full mode; its directories need roots.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "plain": {
+        "type": "journald",
+        "include_units": [
+          "nginx.service"
+        ],
+        "journal_directory": "/var/log/journal",
+        "data_dir": "/var/lib/vector/journald"
+      },
+      "custom": {
+        "type": "journald",
+        "journalctl_path": "/usr/local/bin/journalctl",
+        "extra_args": [
+          "--file=/var/log/other.journal"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "plain",
+          "custom"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "PASSTHROUGH_OPTION_DENIED",
+        "at": "/sources/custom/extra_args"
+      },
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sources/custom/journalctl_path"
+      }
+    ],
+    "components": [
+      "journald"
+    ],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/lib/vector/journald",
+      "/var/log/journal"
+    ],
+    "writes": [
+      "/var/lib/vector/journald"
+    ],
+    "assets": []
+  }
+}

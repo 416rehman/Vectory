@@ -1,7 +1,7 @@
 // Actual App/editor, isolated synthetic API. Never contacts preview or devices.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -124,6 +124,7 @@ async function load({
     ({ theme }) => {
       localStorage.setItem("vectory-sidebar-collapsed", "true");
       localStorage.setItem("vectory-theme", theme);
+      localStorage.setItem("vectory.editor.auto-check", "off");
       window.__copiedCode = [];
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
@@ -406,6 +407,67 @@ try {
   );
 
   await check(
+    "Ctrl/Cmd+S in Code applies code that parses and saves it; code that does not parse is refused with its line and column and nothing is saved",
+    async () => {
+      await load();
+      await openCode("yaml");
+      const status = page.locator(".pipeline-save-status");
+      await expect(status).toContainText("All changes saved");
+      const text = (await codeValue()).trimEnd();
+      // A repeated key does not parse: the message names where, the text stays
+      // as typed, the status says the code is not in the draft, nothing is sent.
+      const lines = text.split("\n");
+      const first = lines.indexOf("    format: json");
+      expect(first).toBeGreaterThan(0);
+      lines.splice(first + 1, 0, "    format: syslog");
+      const broken = lines.join("\n");
+      await codeInput().fill(broken);
+      await expect(status).toContainText("Unapplied code changes");
+      await expect(status).not.toContainText("field");
+      await codeInput().press("ControlOrMeta+s");
+      // The repeated key is on the line after the first one, four columns in.
+      await expect(
+        page.getByText(
+          `Not saved. Line ${first + 2}:5: Map keys must be unique`,
+        ),
+      ).toBeVisible();
+      expect(await codeValue()).toBe(broken);
+      await expect(status).toContainText("Unapplied code changes");
+      await page.waitForTimeout(500);
+      expect(fixture.mutations).toEqual([]);
+      await expect(button("Save")).toBeEnabled();
+      // Fixed and changed: saving applies the code, then saves the draft.
+      await codeInput().fill(text.replace("rate: 10", "rate: 25"));
+      await codeInput().press("ControlOrMeta+s");
+      await expect.poll(() => fixture.mutations.length).toBe(1);
+      expect(fixture.mutations[0].config.transforms.sample.rate).toBe(25);
+      expect(fixture.mutations[0].config.sources).toEqual(
+        baseDocument().config.sources,
+      );
+      await expect(status).toContainText("All changes saved");
+      await expect(page.getByText(/Not saved\./)).toHaveCount(0);
+      await toast("Draft revision saved.");
+      await expect(button("Save")).toBeDisabled();
+      // Only the layout and a comment changed: there is nothing to apply or
+      // save, and the code reads as the draft again.
+      await codeInput().fill(`# keep this\n${await codeValue()}`);
+      await expect(status).toContainText("Unapplied code changes");
+      await codeInput().press("ControlOrMeta+s");
+      await expect(status).toContainText("All changes saved");
+      expect(await codeValue()).not.toContain("keep this");
+      await page.waitForTimeout(500);
+      expect(fixture.mutations).toHaveLength(1);
+      // The Save button does the same as the shortcut.
+      await codeInput().fill(
+        (await codeValue()).replace("rate: 25", "rate: 30"),
+      );
+      await button("Save").click();
+      await expect.poll(() => fixture.mutations.length).toBe(2);
+      expect(fixture.mutations[1].config.transforms.sample.rate).toBe(30);
+    },
+  );
+
+  await check(
     "one valid uppercase-extension file dropped on an empty graph loads exact values and remains undoable",
     async () => {
       await load({ document: emptyDocument() });
@@ -434,6 +496,50 @@ try {
         await expect(codeInput()).toBeVisible();
         await expect(replacement()).toHaveCount(0);
       }
+    },
+  );
+
+  await check(
+    "several mixed-format files form one reviewed pipeline without dropping an existing draft",
+    async () => {
+      const files = [
+        {
+          name: "03-sink.toml",
+          text: '[sinks.out]\ntype = "blackhole"\ninputs = ["sample"]\n',
+        },
+        {
+          name: "01-source.json",
+          text: JSON.stringify({
+            sources: { demo: { type: "demo_logs", format: "json" } },
+          }),
+        },
+        {
+          name: "02-transform.yaml",
+          text: "transforms:\n  sample:\n    type: sample\n    inputs: [demo]\n    rate: 10\n",
+        },
+      ];
+      const assembled = {
+        sources: { demo: { type: "demo_logs", format: "json" } },
+        transforms: { sample: { type: "sample", inputs: ["demo"], rate: 10 } },
+        sinks: { out: { type: "blackhole", inputs: ["sample"] } },
+      };
+      await load({ document: emptyDocument() });
+      await drop(files);
+      await expect(replacement()).toHaveCount(0);
+      await saved(assembled);
+      await expect(page.locator(".react-flow__node")).toHaveCount(3);
+      await load();
+      const before = structuredClone(fixture.document.config);
+      await drop(files);
+      await expect(replacement()).toBeVisible();
+      await expect(replacement()).toContainText("3 configuration files");
+      expect(fixture.document.config).toEqual(before);
+      await replacement()
+        .getByRole("button", { name: "Replace pipeline", exact: true })
+        .click();
+      await saved(assembled);
+      await button("Undo").click();
+      await saved(before);
     },
   );
 
@@ -593,7 +699,7 @@ try {
   );
 
   await check(
-    "delayed reads cannot overwrite newer code and multiple, oversized or unsupported files are refused",
+    "delayed reads cannot overwrite newer code and conflicting, oversized or unsupported files are refused",
     async () => {
       await load({ document: emptyDocument() });
       await openCode();
@@ -629,10 +735,10 @@ try {
       for (const [files, reason] of [
         [
           [
-            { name: "a.json", text: "{}" },
-            { name: "b.json", text: "{}" },
+            { name: "a.json", text: '{"api":{"enabled":false}}' },
+            { name: "b.json", text: '{"api":{"enabled":true}}' },
           ],
-          /one|single/i,
+          /api.*also defined|global option/i,
         ],
         [[{ name: "large.json", size: 1048577 }], /1 MiB|large|size/i],
         [
@@ -647,6 +753,29 @@ try {
       await page.waitForTimeout(2150);
       expect(fixture.mutations).toEqual([]);
       expect(fixture.document.config).toEqual(emptyDocument().config);
+    },
+  );
+
+  await check(
+    "an import error is about its page: it stays while the person does and leaves with the page",
+    async () => {
+      await load({ document: emptyDocument() });
+      await drop([{ name: "array.json", text: "[]" }]);
+      await toast(/object/i);
+      await page.waitForTimeout(1500);
+      await expect(page.locator(".toast")).toHaveCount(1);
+      // Another page of the same app: the failure is not about this one.
+      await page.evaluate(() => {
+        window.location.hash = "#/nowhere";
+      });
+      await expect(
+        page.getByRole("heading", { name: "Page not found", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator(".toast")).toHaveCount(0);
+      // Coming back shows the editor without the old message.
+      await page.goBack();
+      await expect(page.locator(".editor-draft-workspace")).toBeVisible();
+      await expect(page.locator(".toast")).toHaveCount(0);
     },
   );
 
@@ -711,7 +840,7 @@ try {
       }
     },
   );
-  expect(results).toHaveLength(8);
+  expect(results).toHaveLength(11);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

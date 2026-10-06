@@ -62,6 +62,14 @@ pub struct Filters {
         skip_serializing_if = "Option::is_none"
     )]
     pub target_id: Option<String>,
+    /// `changes` hides sign-in activity; `security` shows only sign-in,
+    /// account and signing-key events. Absent means every event.
+    #[serde(
+        default,
+        deserialize_with = "optional_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub scope: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_string",
@@ -85,6 +93,7 @@ pub struct HistoryQuery {
     actor_id: Option<String>,
     device_id: Option<String>,
     target_id: Option<String>,
+    scope: Option<String>,
     from: Option<String>,
     to: Option<String>,
     page: Option<u64>,
@@ -143,6 +152,14 @@ impl Filters {
                 ));
             }
         }
+        if let Some(scope) = &mut self.scope {
+            *scope = scope.trim().to_owned();
+            match scope.as_str() {
+                "" => self.scope = None,
+                "changes" | "security" => {}
+                _ => return Err(ApiError::invalid("Invalid scope filter")),
+            }
+        }
         if self.action.is_some() && self.family.is_some() {
             return Err(ApiError::invalid("Choose action or family, not both"));
         }
@@ -192,6 +209,11 @@ fn number(path: &str) -> String {
         "CASE WHEN json_type(r.data,'$.{path}')='integer' AND json_extract(r.data,'$.{path}') BETWEEN 0 AND 9007199254740991 THEN json_extract(r.data,'$.{path}') ELSE NULL END"
     )
 }
+fn flag(path: &str) -> String {
+    format!(
+        "CASE json_type(r.data,'$.{path}') WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE NULL END"
+    )
+}
 fn uuid_sql(expression: &str) -> String {
     format!(
         "(length({expression})=36 AND substr({expression},9,1)='-' AND substr({expression},14,1)='-' AND substr({expression},19,1)='-' AND substr({expression},24,1)='-' AND length(replace({expression},'-',''))=32 AND replace({expression},'-','') NOT GLOB '*[^0-9a-f]*')"
@@ -204,6 +226,41 @@ fn compound_sql(expression: &str) -> String {
         uuid_sql(&format!("substr({expression},38,36)"))
     )
 }
+/// The ids of the devices an event lists, at most 100 of them, as a JSON array.
+fn id_list(path: &str) -> String {
+    format!(
+        "CASE WHEN json_type(r.data,'$.{path}')='array' THEN json((SELECT json_group_array(value) FROM (SELECT value FROM json_each(r.data,'$.{path}') WHERE type='text' AND length(value)=36 LIMIT 100))) ELSE NULL END"
+    )
+}
+/// What the audit events of agent updates may show, a second projection beside
+/// the first one (a function takes only so many arguments): versions, digests,
+/// counters, fingerprints, codes and counts, never key material.
+fn update_details() -> String {
+    format!(
+        ",json_object('custody',{},'fingerprint',{},'from_fingerprint',{},'source',{},'version',{},'counter',{},'manifest_sha256',{},'release_id',{},'rollout_id',{},'stage',{},'gate_state',{},'device_ids',{},'released_count',{},'verified_count',{},'withdrawn_releases',{},'cancelled_rollouts',{},'from_version',{},'to_version',{},'code',{},'state',{},'reason',{}) AS extra_updates",
+        text("details.custody", 16),
+        digest("details.fingerprint"),
+        digest("details.from_fingerprint"),
+        text("details.source", 16),
+        text("details.version", 32),
+        number("details.counter"),
+        digest("details.manifest_sha256"),
+        text("details.release_id", 36),
+        text("details.rollout_id", 36),
+        text("details.stage", 32),
+        text("details.gate_state", 32),
+        id_list("details.device_ids"),
+        number("details.released_count"),
+        number("details.verified_count"),
+        number("details.withdrawn_releases"),
+        number("details.cancelled_rollouts"),
+        text("details.from_version", 128),
+        text("details.to_version", 32),
+        text("details.code", 64),
+        text("details.state", 32),
+        text("details.reason", 1000)
+    )
+}
 fn digest(path: &str) -> String {
     let t = text(path, 65);
     format!("CASE WHEN length({t})=64 AND {t} NOT GLOB '*[^0-9a-f]*' THEN {t} ELSE NULL END")
@@ -214,7 +271,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'agent_update_rollouts_to_cancel',{},'agent_update_stop',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{},'validation_id',{},'configuration_id',{},'run_tests',{},'truncated',{},'device_count',{},'pending_count',{},'offline_count',{},'unsupported_count',{}) AS extra{}",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -235,13 +292,47 @@ fn base(details: bool) -> String {
             number("details.browser_sessions"),
             number("details.password_reset_codes"),
             number("details.enrollment_tokens_to_revoke"),
-            number("details.mfa_recovery_codes")
+            number("details.mfa_recovery_codes"),
+            number("details.agent_update_rollouts_to_cancel"),
+            number("details.agent_update_stop"),
+            text("details.reason_code", 64),
+            text("details.name", 100),
+            text("details.token_id", 128),
+            text("details.agent_os", 64),
+            text("details.agent_arch", 64),
+            text("details.agent_version", 64),
+            text("details.configuration_mode", 16),
+            text("details.client_address", 64),
+            text("details.summary", 500),
+            flag("details.tests_failed"),
+            number("details.tests_failed_count"),
+            number("details.tests_refused_count"),
+            number("details.tests_not_run_count"),
+            number("details.tests_passed_count"),
+            text("details.stage", 32),
+            text("details.gate_state", 32),
+            number("details.released_count"),
+            number("details.verified_count"),
+            number("details.measuring_count"),
+            number("details.next_released_count"),
+            text("details.validation_id", 36),
+            text("details.configuration_id", 128),
+            flag("details.run_tests"),
+            flag("details.truncated"),
+            number("details.device_count"),
+            number("details.pending_count"),
+            number("details.offline_count"),
+            number("details.unsupported_count"),
+            update_details()
         )
     } else {
         String::new()
     };
     let compound = compound_sql("target");
     let a_compound = compound_sql("a.target");
+    // An issue record keeps no title: it is built from the issue's code, as the
+    // issue list builds it, so an event names the issue as people read it.
+    let issue_title = crate::issues::title_sql("other");
     // Version/revision references resolve through their immutable parent ID. A
     // missing parent retains that historical identity, but is not linkable.
     let parent = "CASE WHEN json_type(v.data,'$.configuration_id')='text' THEN substr(json_extract(v.data,'$.configuration_id'),1,128) WHEN json_type(rv.data,'$.configuration_id')='text' THEN substr(json_extract(rv.data,'$.configuration_id'),1,128) ELSE NULL END";
@@ -253,24 +344,29 @@ fn base(details: bool) -> String {
             SELECT s.sequence,s.created_at AS order_time,substr(r.id,1,128) AS id,
                 COALESCE({},'unknown') AS actor_id,COALESCE({},'unknown') AS action,
                 COALESCE({},'') AS target,COALESCE({},'unknown') AS outcome,
-                {} AS explicit_device,{} AS request_id,{} AS created_at {extras}
+                {} AS explicit_device,{} AS request_id,{} AS created_at,{} AS detail_name {extras}
             FROM audit_sequence s CROSS JOIN records r ON r.kind='audit' AND r.id=s.audit_id
         ), classified AS (
             SELECT raw.*,
                 CASE WHEN action='deployment.release' AND {compound} THEN substr(target,1,36)
                      WHEN action='device.recovery_complete' AND {compound} THEN substr(target,38,36)
                      ELSE target END AS linked_target,
-                CASE WHEN action LIKE 'configuration.%' THEN 'configuration'
+                CASE WHEN action LIKE 'configuration.%' OR action='deployment.device_validation_requested' THEN 'configuration'
                      WHEN action LIKE 'deployment.%' THEN 'deployment'
                      WHEN action LIKE 'device.%' OR action='server.restore_generation_fence' THEN 'device'
                      WHEN action LIKE 'issue.%' THEN 'issue' WHEN action LIKE 'group.%' THEN 'group'
                      WHEN action LIKE 'policy.%' THEN 'policy' WHEN action LIKE 'token.%' THEN 'token'
                      WHEN action LIKE 'signing.%' THEN 'signing_key' WHEN action LIKE 'server.%' THEN 'server'
+                     WHEN substr(action,1,18)='agent_release_key.' THEN 'agent_release_key'
+                     WHEN substr(action,1,14)='agent_release.' THEN 'agent_release'
+                     WHEN substr(action,1,20)='agent_update_rollout' THEN 'agent_update_rollout'
+                     WHEN substr(action,1,13)='agent_update.' THEN 'server'
                      WHEN action IN ('bootstrap','login','logout') OR action LIKE 'user.%' OR action LIKE 'account.%' OR action LIKE 'mfa.%' THEN 'user'
                      ELSE 'unknown' END AS target_kind
             FROM raw
         ), named AS (
-            SELECT a.*,COALESCE(substr(au.name,1,120),substr(ad.name,1,256),a.actor_id) AS actor,
+            SELECT a.*,COALESCE(substr(au.name,1,120),substr(ad.name,1,256),
+                    CASE WHEN json_type(atk.data,'$.name')='text' THEN substr(json_extract(atk.data,'$.name'),1,120) END,a.actor_id) AS actor,
                 CASE WHEN au.id IS NOT NULL THEN 'user' WHEN ad.id IS NOT NULL THEN 'device'
                      WHEN a.actor_id IN ('anonymous','scheduler','local-admin') THEN 'system' ELSE 'unknown' END AS actor_kind,
                 CASE WHEN a.target_kind='unknown' OR a.linked_target='' THEN NULL
@@ -281,23 +377,41 @@ fn base(details: bool) -> String {
                      WHEN 'token' THEN et.id IS NOT NULL
                      WHEN 'deployment' THEN other.id IS NOT NULL WHEN 'group' THEN other.id IS NOT NULL
                      WHEN 'policy' THEN other.id IS NOT NULL WHEN 'issue' THEN other.id IS NOT NULL
+                     WHEN 'agent_release' THEN EXISTS(SELECT 1 FROM agent_releases WHERE id=a.linked_target)
+                     WHEN 'agent_update_rollout' THEN EXISTS(SELECT 1 FROM agent_update_rollouts WHERE id=a.linked_target)
+                     WHEN 'agent_release_key' THEN EXISTS(SELECT 1 FROM agent_release_keys WHERE fingerprint=a.linked_target)
                      ELSE 0 END AS target_exists,
                 COALESCE(substr(tu.name,1,120),substr(td.name,1,256),
                     CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END,
                     CASE WHEN json_type(other.data,'$.name')='text' THEN substr(json_extract(other.data,'$.name'),1,120) END,
-                    CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END) AS target_name,
+                    CASE WHEN a.target_kind='issue' AND other.id IS NOT NULL THEN substr({issue_title},1,120)||CASE WHEN idv.id IS NOT NULL THEN ' on '||substr(idv.name,1,100) ELSE '' END END,
+                    CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END,
+                    CASE WHEN json_type(dc.data,'$.name')='text' THEN substr(json_extract(dc.data,'$.name'),1,120)||CASE WHEN json_type(dv.data,'$.number')='integer' THEN ' v'||json_extract(dv.data,'$.number') ELSE '' END END,
+                    CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
+                    CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END,
+                    CASE WHEN a.action LIKE 'notification.channel.%' THEN a.detail_name
+                         WHEN a.action='detection.update' THEN 'Detection thresholds' END,
+                    CASE a.target_kind
+                         WHEN 'agent_release' THEN (SELECT 'Agent '||version FROM agent_releases WHERE id=a.linked_target)
+                         WHEN 'agent_update_rollout' THEN (SELECT COALESCE(substr(ro.name,1,120),'Update to '||rel.version) FROM agent_update_rollouts ro JOIN agent_releases rel ON rel.id=ro.release_id WHERE ro.id=a.linked_target)
+                         WHEN 'agent_release_key' THEN (SELECT 'Release key '||substr(fingerprint,1,16) FROM agent_release_keys WHERE fingerprint=a.linked_target) END) AS target_name,
                 CASE WHEN length(a.explicit_device)=36 THEN a.explicit_device
                      WHEN a.action='deployment.release' AND {a_compound} THEN substr(a.target,38,36)
                      WHEN a.target_kind='device' AND length(a.linked_target)=36 THEN a.linked_target
                      WHEN ad.id IS NOT NULL THEN ad.id ELSE NULL END AS device_id
             FROM classified a
             LEFT JOIN users au ON au.id=a.actor_id LEFT JOIN devices ad ON ad.id=a.actor_id
+            LEFT JOIN enrollment_tokens atk ON atk.id=a.actor_id
             LEFT JOIN users tu ON tu.id=a.linked_target LEFT JOIN devices td ON td.id=a.linked_target
             LEFT JOIN records v ON v.kind='version' AND v.id=a.target
             LEFT JOIN records rv ON rv.kind='revision' AND rv.id=a.target
             LEFT JOIN records c ON c.kind='configuration' AND c.id={configuration_target}
             LEFT JOIN records other ON other.kind=a.target_kind AND other.id=a.linked_target
             LEFT JOIN enrollment_tokens et ON a.target_kind='token' AND et.id=a.linked_target
+            LEFT JOIN devices idv ON a.target_kind='issue' AND idv.id=json_extract(other.data,'$.device_id')
+            LEFT JOIN records dv ON a.target_kind='deployment' AND dv.kind='version' AND dv.id=json_extract(other.data,'$.version_id')
+            LEFT JOIN records dc ON a.target_kind='deployment' AND dc.kind='configuration' AND dc.id=json_extract(dv.data,'$.configuration_id')
+            LEFT JOIN records dp ON a.target_kind='deployment' AND dp.kind='policy' AND dp.id=json_extract(other.data,'$.policy_id')
         )",
         text("actor", 128),
         text("action", 128),
@@ -311,7 +425,9 @@ fn base(details: bool) -> String {
             text("details.device_id", 128)
         ),
         text("request_id", 128),
-        timestamp("s.created_at")
+        timestamp("s.created_at"),
+        // Notification channels are named in their own audit details.
+        text("details.name", 120)
     )
 }
 fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
@@ -330,6 +446,15 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
                 .push("=")
                 .push_bind(value.clone());
         }
+    }
+    match f.scope.as_deref() {
+        Some("changes") => {
+            q.push(" AND NOT (action IN ('login','logout') OR substr(action,1,6)='login.')");
+        }
+        Some("security") => {
+            q.push(" AND (action IN ('bootstrap','login','logout') OR substr(action,1,6)='login.' OR substr(action,1,8)='account.' OR substr(action,1,5)='user.' OR substr(action,1,4)='mfa.' OR substr(action,1,8)='signing.' OR substr(action,1,22)='server.restore_access.')");
+        }
+        _ => {}
     }
     if let Some(family) = &f.family {
         q.push(" AND (action=")
@@ -377,7 +502,7 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
         q.push(" AND instr(lower(actor||' '||actor_id||' '||action||' '||replace(replace(action,'.',' '),'_',' ')||' '||target||' '||COALESCE(target_name,'')||' '||outcome),lower(").push_bind(search.clone()).push("))>0");
     }
 }
-const SUMMARY: &str = "json_object('id',id,'actor_id',actor_id,'actor',actor,'actor_kind',actor_kind,'action',action,'target',target,'target_id',target_id,'target_kind',target_kind,'target_exists',json(CASE WHEN target_exists THEN 'true' ELSE 'false' END),'target_name',target_name,'device_id',device_id,'outcome',outcome,'created_at',created_at,'request_id',request_id)";
+const SUMMARY: &str = "json_object('id',id,'actor_id',actor_id,'actor',actor,'actor_kind',actor_kind,'action',action,'target',target,'target_id',target_id,'target_kind',target_kind,'target_exists',json(CASE WHEN target_exists THEN 'true' ELSE 'false' END),'target_name',target_name,'device_id',device_id,'device_name',(SELECT substr(dn.name,1,256) FROM devices dn WHERE dn.id=named.device_id),'outcome',outcome,'created_at',created_at,'request_id',request_id)";
 pub(crate) async fn count(
     conn: &mut SqliteConnection,
     f: &Filters,
@@ -387,6 +512,16 @@ pub(crate) async fn count(
     q.push(" SELECT count(*) FROM named");
     filter(&mut q, f, cutoff);
     Ok(q.build_query_scalar().fetch_one(conn).await?)
+}
+/// Where someone connected from is for the people who run devices and
+/// accounts: viewers read every event without its client address.
+pub(crate) fn for_reader(mut event: Value, reader: &Value) -> Value {
+    if reader["role"] == "viewer" {
+        if let Some(details) = event["details"].as_object_mut() {
+            details.remove("client_address");
+        }
+    }
+    event
 }
 pub(crate) async fn legacy(conn: &mut SqliteConnection, size: i64) -> Result<Vec<Value>> {
     let records = rows(conn, &Filters::default(), size, 0, None, None, true).await?;
@@ -442,7 +577,7 @@ async fn ordered_rows(
         .push(SUMMARY)
         .push(" AS summary,sequence");
     if detail {
-        q.push(",extra");
+        q.push(",extra,extra_updates");
     }
     q.push(" FROM named");
     filter(&mut q, f, cutoff);
@@ -468,7 +603,8 @@ async fn ordered_rows(
             let mut v = db::parse(r.get("summary"))?;
             if detail {
                 let extra = db::parse(r.get("extra"))?;
-                v["details"] = details(&v, &extra);
+                let updates = db::parse(r.get("extra_updates"))?;
+                v["details"] = details(&v, &extra, &updates);
             }
             Ok((
                 v,
@@ -479,10 +615,86 @@ async fn ordered_rows(
         })
         .collect()
 }
-fn details(v: &Value, extra: &Value) -> Value {
+/// The keys an agent update event shows: all from the second projection.
+fn update_keys(action: &str) -> Option<&'static [&'static str]> {
+    Some(match action {
+        "agent_update.enable" => &["custody", "fingerprint"],
+        "agent_update.stop" => &["reason", "cancelled_rollouts"],
+        "agent_release_key.rotate" | "agent_release_key.rollover" => {
+            &["fingerprint", "from_fingerprint", "source"]
+        }
+        "agent_release_key.revoke" => &[
+            "fingerprint",
+            "reason",
+            "withdrawn_releases",
+            "cancelled_rollouts",
+        ],
+        "agent_release.prepare" | "agent_update_rollout.create" => {
+            &["release_id", "version", "counter", "manifest_sha256"]
+        }
+        "agent_release.sign" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "fingerprint",
+        ],
+        "agent_release.signature_upload" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "fingerprint",
+            "reason",
+        ],
+        "agent_release.withdraw" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "reason",
+            "cancelled_rollouts",
+        ],
+        "agent_release.expire" => &[
+            "release_id",
+            "version",
+            "counter",
+            "manifest_sha256",
+            "cancelled_rollouts",
+        ],
+        "agent_update_rollout.release" => &["stage", "device_ids", "released_count"],
+        "agent_update_rollout.gate" => &["gate_state", "reason", "verified_count"],
+        "device.agent_update" => &[
+            "rollout_id",
+            "release_id",
+            "version",
+            "manifest_sha256",
+            "from_version",
+            "to_version",
+            "code",
+            "state",
+        ],
+        _ => return None,
+    })
+}
+
+fn details(v: &Value, extra: &Value, updates: &Value) -> Value {
     let mut out = json!({});
     let action = v["action"].as_str().unwrap_or("");
-    let keys: &[&str] = match action {
+    let (extra, keys): (&Value, &[&str]) = match update_keys(action) {
+        Some(keys) => (updates, keys),
+        None => (extra, existing_keys(action)),
+    };
+    for key in keys {
+        if !extra[*key].is_null() {
+            out[*key] = extra[*key].clone();
+        }
+    }
+    positional(&mut out, v, action);
+    out
+}
+fn existing_keys(action: &str) -> &'static [&'static str] {
+    match action {
         "issue.acknowledge" | "issue.reopen" => &["reason", "issue_revision"],
         "group.update" => &["previous_group_revision", "group_revision"],
         "device.secret_reconciliation" => &[
@@ -507,14 +719,68 @@ fn details(v: &Value, extra: &Value) -> Value {
             "password_reset_codes",
             "enrollment_tokens_to_revoke",
             "mfa_recovery_codes",
+            "agent_update_rollouts_to_cancel",
+            "agent_update_stop",
+        ],
+        // Written by notifications and detection: a name and a change summary
+        // built from secret-free settings (never a URL path or credential).
+        "notification.channel.create"
+        | "notification.channel.update"
+        | "notification.channel.delete"
+        | "notification.channel.test" => &["name", "summary"],
+        "detection.update" => &["summary"],
+        // The stage that was released early, what the gate showed then, and how
+        // many devices it released.
+        "deployment.stage_released_early" => &[
+            "summary",
+            "stage",
+            "gate_state",
+            "released_count",
+            "verified_count",
+            "measuring_count",
+            "next_released_count",
+        ],
+        // A check on devices: which pipeline version, and counts of devices
+        // by what happened to each at the request. Never the configuration.
+        "deployment.device_validation_requested" => &[
+            "validation_id",
+            "configuration_id",
+            "version_id",
+            "run_tests",
+            "truncated",
+            "device_count",
+            "pending_count",
+            "offline_count",
+            "unsupported_count",
+        ],
+        // Published over failing tests: the counts and one sentence, never a
+        // test's name or body.
+        "configuration.publish" => &[
+            "tests_failed",
+            "tests_failed_count",
+            "tests_refused_count",
+            "tests_not_run_count",
+            "tests_passed_count",
+            "summary",
+        ],
+        // The one row a minute says how many refusals the shared budget left out.
+        "device.enroll_refusals_summarized" => &["summary"],
+        // Written by the enrollment endpoint from bounded, secret-free fields.
+        "device.enroll" => &[
+            "reason_code",
+            "name",
+            "token_id",
+            "agent_os",
+            "agent_arch",
+            "agent_version",
+            "configuration_mode",
+            "client_address",
         ],
         _ => &[],
-    };
-    for key in keys {
-        if !extra[*key].is_null() {
-            out[*key] = extra[*key].clone();
-        }
     }
+}
+/// What a compound target says by its position.
+fn positional(out: &mut Value, v: &Value, action: &str) {
     let target = v["target"].as_str().unwrap_or("");
     if let Some((left, right)) = target.split_once(':') {
         if uuid::Uuid::parse_str(left).is_ok() && uuid::Uuid::parse_str(right).is_ok() {
@@ -539,7 +805,6 @@ fn details(v: &Value, extra: &Value) -> Value {
             out["signing_key_id"] = json!(right);
         }
     }
-    out
 }
 pub async fn history(
     AppState(s): AppState<State>,
@@ -559,6 +824,7 @@ pub async fn history(
         actor_id: q.actor_id,
         device_id: q.device_id,
         target_id: q.target_id,
+        scope: q.scope,
         from: q.from,
         to: q.to,
     }
@@ -581,12 +847,12 @@ pub async fn detail(
     RawQuery(raw): RawQuery,
     parsed: std::result::Result<Query<crate::deployment_history::EmptyQuery>, QueryRejection>,
 ) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &[], false).await?;
+    let reader = auth::authorize(&s, &h, &[], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let mut q = QueryBuilder::new(base(true));
     q.push(" SELECT ")
         .push(SUMMARY)
-        .push(" AS summary,extra FROM named WHERE id=")
+        .push(" AS summary,extra,extra_updates FROM named WHERE id=")
         .push_bind(id);
     let r = q
         .build()
@@ -594,8 +860,12 @@ pub async fn detail(
         .await?
         .ok_or_else(ApiError::missing)?;
     let mut v = db::parse(r.get("summary"))?;
-    v["details"] = details(&v, &db::parse(r.get("extra"))?);
-    Ok(Json(v))
+    v["details"] = details(
+        &v,
+        &db::parse(r.get("extra"))?,
+        &db::parse(r.get("extra_updates"))?,
+    );
+    Ok(Json(for_reader(v, &reader)))
 }
 
 #[cfg(test)]

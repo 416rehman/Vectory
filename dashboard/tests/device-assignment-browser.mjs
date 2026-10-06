@@ -1,7 +1,9 @@
 // Actual App/device page. Every API response is synthetic; no real device or mutation.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
+import { nothingOffered } from "./fleet-replies.mjs";
+import { updatesOff } from "./agent-update-replies.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -113,6 +115,10 @@ const baseDevice = () => ({
     id: policyAssignmentId,
     priority: 250,
     reason: "Current independent policy winner",
+    created_by_name: "Ada",
+    created_at: new Date().toISOString(),
+    policy_id: null,
+    policy_name: null,
   },
   effective_policy: {
     heartbeat_seconds: 120,
@@ -134,6 +140,8 @@ async function load({
   width = 899,
   theme = "light",
   path = `devices/${id(1)}`,
+  library = [],
+  collapsed = true,
 } = {}) {
   if (context) await context.close();
   state = { device, reads: 0, holdNext: false, failNext: false, holds: [] };
@@ -143,10 +151,13 @@ async function load({
     colorScheme: theme,
     reducedMotion: "reduce",
   });
-  await context.addInitScript((theme) => {
-    localStorage.setItem("vectory-theme", theme);
-    localStorage.setItem("vectory-sidebar-collapsed", "true");
-  }, theme);
+  await context.addInitScript(
+    ({ theme, collapsed }) => {
+      localStorage.setItem("vectory-theme", theme);
+      localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
+    },
+    { theme, collapsed },
+  );
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url()),
@@ -176,6 +187,8 @@ async function load({
         });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic device context" });
+      // Agent updates are off here, so the page is what it was without them.
+      if (path === "/agent-updates") return reply(updatesOff());
       if (path === `/devices/${id(1)}`) {
         current.reads++;
         const snapshot = structuredClone(current.device);
@@ -202,13 +215,31 @@ async function load({
       if (path === `/versions/${version.id}`) return reply(version);
       if (path === `/configurations/${pipeline.id}`) return reply(pipeline);
       if (path === "/configurations/library")
-        return reply({ items: [], total: 0, page: 1, page_size: 12 });
+        return reply({
+          items: library,
+          total: library.length,
+          page: 1,
+          page_size: 12,
+        });
+      if (path === `/configurations/${pipeline.id}/history`)
+        return reply({ items: [], total: 0 });
       if (path === "/deployments/history")
         return reply({
           items: [],
           total: 0,
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
+        });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
         });
       const detail = path.match(/^\/deployments\/([^/]+)\/(summary|targets)$/);
       if (detail) {
@@ -236,6 +267,18 @@ async function load({
           state_counts: { verified_applied: 1 },
         });
       }
+      // The device page also shows telemetry, open issues and recent activity.
+      if (path === `/devices/${id(1)}/telemetry`)
+        return reply({ device_id: id(1), samples: [] });
+      if (path === `/devices/${id(1)}/configuration`)
+        return reply(nothingOffered(id(1)));
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
     }
     unexpected.push(`${method} ${path}`);
     return reply(
@@ -248,7 +291,10 @@ async function load({
   page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${origin}/__device-assignment#/${path}`);
+  // A cold Vite transform on a busy host can outlast the 7 s action timeout.
+  await page.goto(`${origin}/__device-assignment#/${path}`, {
+    timeout: 60000,
+  });
 }
 const settings = () =>
   page.getByRole("region", { name: "Agent settings", exact: true });
@@ -291,7 +337,7 @@ try {
       await load({ device: failed });
       await deviceVisible();
       await expect(page.locator(".device-explanation")).toContainText(
-        "rejected this version during Vector validation",
+        "Vector rejected this version on the device.",
       );
       await expect(page.locator("body")).not.toContainText(
         "raw diagnostic must not appear",
@@ -299,11 +345,11 @@ try {
       await page.getByText("Technical details", { exact: true }).click();
       const details = page.locator(".device-disclosure[open]");
       await expect(
-        details.locator("div").filter({
+        details.locator("dl > div").filter({
           has: page.locator("dt", { hasText: /^Last verified generation$/ }),
         }),
       ).toContainText("4");
-      await expect(details).toContainText("Generation 5 · failed");
+      await expect(details).toContainText("Generation 5 · Failed");
       await expect(details).toContainText("Reported workload state");
       for (const mismatch of [
         { generation: 4 },
@@ -331,7 +377,7 @@ try {
         await page.getByText("Technical details", { exact: true }).click();
         await expect(
           page.locator(".device-disclosure[open]"),
-        ).not.toContainText("Generation 5 · failed");
+        ).not.toContainText("Generation 5 · Failed");
       }
       await load({
         device: {
@@ -430,6 +476,114 @@ try {
     },
   );
   await check(
+    "a first version that couldn't start reads as nothing running, and applied without metrics says delivery isn't measured",
+    async () => {
+      const snapshot = async (name, width, theme) => {
+        const audit = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        accessibility.push({
+          label: name,
+          width,
+          theme,
+          violations: audit.violations.map(({ id, impact }) => ({
+            id,
+            impact,
+          })),
+        });
+        expect(audit.violations).toEqual([]);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        const filename = `device-${name}-${width}-${theme}.png`;
+        await page.screenshot({
+          path: resolve(output, filename),
+          fullPage: true,
+          animations: "disabled",
+        });
+        screenshots.push(relative(repository, resolve(output, filename)));
+      };
+      for (const width of [899, 375])
+        for (const theme of ["light", "dark"]) {
+          await load({
+            width,
+            theme,
+            device: {
+              ...baseDevice(),
+              status: "failed",
+              apply_state: "failed",
+              reported_apply_state: "failed",
+              reported_generation: 0,
+              vector_running: false,
+              configuration_attempt: {
+                generation: 5,
+                version_id: version.id,
+                sha256: version.sha256,
+                state: "failed",
+                error: {
+                  code: "ROLLBACK_UNAVAILABLE",
+                  stage: "rollback",
+                  message: "sanitized",
+                  diagnostics: [
+                    {
+                      severity: "error",
+                      code: "PRIVILEGED_PORT",
+                      component_kind: "source",
+                      component_id: "syslog",
+                      message:
+                        "Vector can't listen on 127.0.0.1:514: ports below 1024 need a privilege the service account lacks.",
+                      hint: "Listen on a port above 1023, such as 1514, or allow it on this host.",
+                    },
+                  ],
+                },
+              },
+            },
+          });
+          await deviceVisible();
+          const lines = page.locator(".device-running-lines");
+          await expect(lines).toContainText(
+            "Nothing running: Vector stopped after v3 failed to start.",
+          );
+          await expect(lines).not.toContainText("local config");
+          const explanation = page.locator(".device-explanation");
+          await expect(explanation).toContainText(
+            "there is no earlier version to go back to, so nothing is running",
+          );
+          await expect(explanation).toContainText(
+            "Vector can't listen on 127.0.0.1:514",
+          );
+          await expect(explanation).not.toContainText("Inspect the host");
+          await snapshot("first-version", width, theme);
+          await load({
+            width,
+            theme,
+            device: {
+              ...baseDevice(),
+              effective_policy: {
+                ...baseDevice().effective_policy,
+                telemetry_enabled: true,
+              },
+              host_runtime: { metrics_source: "none" },
+            },
+          });
+          await deviceVisible();
+          const unmeasured = page.locator(".device-delivery-unmeasured");
+          await expect(unmeasured).toHaveText(
+            "Delivery health: not measured. Add monitoring",
+          );
+          await expect(
+            unmeasured.getByRole("link", { name: "Add monitoring" }),
+          ).toHaveAttribute(
+            "href",
+            `#/configurations/${pipeline.id}?panel=tools`,
+          );
+          await snapshot("delivery-unmeasured", width, theme);
+        }
+    },
+  );
+  await check(
     "configuration and policy links use separate canonical IDs, clear old list context, and remain read-only for viewers",
     async () => {
       await load({ path: "deployments?search=unrelated&status=failed&page=4" });
@@ -457,8 +611,9 @@ try {
         "href",
         `#/deployments/${policyAssignmentId}?page=1`,
       );
-      await expect(settings()).toContainText("priority 250");
-      await expect(settings()).toContainText("120 seconds");
+      await expect(settings()).toContainText(
+        /Check-in 2 min · applied by Ada on .+ \(not saved\)/,
+      );
       await expect(
         settings()
           .locator(".control-summary-list > div")
@@ -476,20 +631,12 @@ try {
         new RegExp(`#/deployments/${configurationAssignmentId}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toContainText("Synthetic governing pipeline");
-      await expect
-        .poll(() =>
-          requests.some(
-            (r) =>
-              r.path === "/deployments/history" &&
-              !r.query.includes("unrelated") &&
-              r.query.includes("page=1"),
-          ),
-        )
-        .toBe(true);
+      // The rollout is its own page; its route (checked above) already
+      // dropped the old list search and page, which Back returns to.
       await expect(
-        page.getByRole("button", { name: "Pause rollout", exact: true }),
+        page.getByRole("button", { name: "Pause", exact: true }),
       ).toHaveCount(0);
       await page.goBack();
       await deviceVisible();
@@ -498,7 +645,7 @@ try {
         new RegExp(`#/deployments/${policyAssignmentId}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toContainText("Synthetic governing settings");
     },
   );
@@ -529,7 +676,7 @@ try {
       );
       await settingsLink().click();
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
     },
   );
@@ -552,11 +699,12 @@ try {
         await expect(pipelineLink()).toHaveCount(0);
         await expect(settingsLink()).toHaveCount(0);
         await expect(settings()).toContainText(
-          "No settings assignment reported.",
+          effective
+            ? "Check-in 1 min · no settings assignment reported"
+            : "No settings assignment reported",
         );
         await expect(settings()).not.toContainText("default");
-        if (effective) await expect(settings()).toContainText("60 seconds");
-        else
+        if (!effective)
           await expect(settings()).toContainText(
             "Current agent settings have not been reported.",
           );
@@ -581,10 +729,27 @@ try {
     },
   );
   await check(
-    "unassigned devices with or without a file digest do not claim Vector is running and retain device selection in the pipeline chooser",
+    "unassigned devices say what runs from the agent's own report and retain device selection in the pipeline chooser",
     async () => {
-      for (const digest of [null, "a".repeat(64)]) {
+      for (const [digest, running, says] of [
+        [
+          null,
+          undefined,
+          "Nothing yet. Vector starts when you deploy a pipeline.",
+        ],
+        [
+          "a".repeat(64),
+          undefined,
+          "A local configuration adopted at setup (SHA-256 aaaaaaaa…) stays in place until you deploy.",
+        ],
+        [
+          "a".repeat(64),
+          true,
+          "A local configuration adopted at setup (SHA-256 aaaaaaaa…) keeps running until you deploy.",
+        ],
+      ]) {
         await load({
+          role: "operator",
           device: {
             ...baseDevice(),
             desired_version_id: null,
@@ -592,22 +757,19 @@ try {
             apply_state: "unmanaged",
             status: "unmanaged",
             actual_sha256: digest,
+            vector_running: running,
           },
         });
         await deviceVisible();
-        const unassigned = page.locator(".device-pipeline").filter({
-          has: page.getByRole("heading", {
-            name: "No pipeline assigned",
-            exact: true,
-          }),
-        });
-        await expect(unassigned).toContainText(
-          "An adopted local workload may continue running",
-        );
-        await expect(unassigned).toContainText("waits without starting Vector");
-        await expect(unassigned).toContainText(
-          "An agent check-in alone does not confirm a running workload",
-        );
+        const unassigned = page
+          .locator(".device-pipeline")
+          .filter({ hasText: "No pipeline assigned" });
+        await expect(unassigned).toHaveCount(1);
+        await expect(unassigned).toContainText(says);
+        // Only Vector's reported state says a workload runs.
+        if (running !== true)
+          await expect(unassigned).not.toContainText("keeps running");
+        await expect(unassigned).not.toContainText("may still be running");
         await expect(unassigned).not.toContainText(
           "The agent keeps its existing",
         );
@@ -615,8 +777,17 @@ try {
         await settingsLink()
           .count()
           .then((count) => expect(count).toBe(1));
+        // The button opens the same dialog as the Deployments page, with this
+        // device already chosen; with nothing published the way on keeps it.
         await page
-          .getByRole("button", { name: "Choose pipeline", exact: true })
+          .getByRole("button", { name: "Deploy a pipeline", exact: true })
+          .click();
+        const picker = page.getByRole("dialog", {
+          name: "Deploy a pipeline to Synthetic edge",
+        });
+        await expect(picker).toBeVisible();
+        await picker
+          .getByRole("link", { name: "Start from a template", exact: true })
           .click();
         await expect(page).toHaveURL(
           new RegExp(`#/configurations\\?device=${id(1)}$`),
@@ -628,12 +799,116 @@ try {
     },
   );
   await check(
+    "the pipeline chooser on a device page has its own styles, without the Deployments page's stylesheet",
+    async () => {
+      await load({
+        role: "operator",
+        library: [
+          {
+            id: pipeline.id,
+            name: pipeline.name,
+            description: "",
+            revision: 1,
+            created_at: created,
+            updated_at: created,
+            archived: false,
+            archived_at: null,
+            component_counts: { sources: 1, transforms: 1, sinks: 1 },
+            latest_version: { id: version.id, number: 3, created_at: created },
+          },
+        ],
+      });
+      await deviceVisible();
+      await page
+        .getByRole("button", { name: "Deploy a pipeline", exact: true })
+        .click();
+      const picker = page.getByRole("dialog", {
+        name: "Deploy a pipeline to Synthetic edge",
+      });
+      const option = picker.locator(".deployment-picker-option");
+      await expect(option).toHaveCount(1);
+      await expect(option).toContainText("1 in, 1 transform, 1 out");
+      const styles = await option.evaluate((el) => {
+        const own = getComputedStyle(el);
+        const list = getComputedStyle(el.parentElement);
+        return {
+          display: own.display,
+          padding: own.padding,
+          cursor: own.cursor,
+          listBorder: list.borderTopWidth,
+          listHeight: list.maxHeight,
+        };
+      });
+      expect(styles).toEqual({
+        display: "flex",
+        padding: "12px 14px",
+        cursor: "pointer",
+        listBorder: "1px",
+        listHeight: "360px",
+      });
+      // Nothing from the Deployments page was loaded to get here.
+      expect(
+        await page.evaluate(() =>
+          [
+            ...document.querySelectorAll(
+              "style[data-vite-dev-id], link[rel=stylesheet]",
+            ),
+          ]
+            .map(
+              (el) =>
+                el.getAttribute("data-vite-dev-id") ||
+                el.getAttribute("href") ||
+                "",
+            )
+            .filter((source) => /deployments\.css/.test(source)),
+        ),
+      ).toEqual([]);
+      const file = resolve(output, "device-deploy-picker.png");
+      await page.screenshot({ path: file, animations: "disabled" });
+      screenshots.push(relative(repository, file));
+    },
+  );
+  await check(
+    "a revoked device says what its agent last verified running, not a pending assignment",
+    async () => {
+      await load({
+        device: {
+          ...baseDevice(),
+          status: "revoked",
+          running_version: {
+            id: version.id,
+            number: 3,
+            configuration_id: pipeline.id,
+            configuration_name: pipeline.name,
+            generation: 5,
+          },
+        },
+      });
+      await deviceVisible();
+      await expect(
+        page.getByText(/^Revoked · last verified running (v3|.+ v3)$/),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "This device's access is revoked, so it no longer checks in: what it runs now is unknown.",
+        ),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "The agent has not yet confirmed this assignment as active.",
+        ),
+      ).toHaveCount(0);
+    },
+  );
+  await check(
     "refresh keeps known context on error and ignores an older delayed binding response",
     async () => {
       await load();
       await deviceVisible();
       state.failNext = true;
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(page.getByRole("alert")).toContainText(
         "Synthetic device refresh failed",
       );
@@ -642,7 +917,9 @@ try {
         `#/deployments/${policyAssignmentId}?page=1`,
       );
       state.holdNext = true;
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect.poll(() => state.holds.length).toBe(1);
       state.device = {
         ...state.device,
@@ -650,16 +927,22 @@ try {
           id: id(83),
           priority: 300,
           reason: "Newer policy winner",
+          created_by_name: "Grace",
+          created_at: new Date().toISOString(),
+          policy_id: null,
+          policy_name: null,
         },
       };
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(settingsLink()).toHaveAttribute(
         "href",
         `#/deployments/${id(83)}?page=1`,
       );
       await expect(page.getByRole("alert")).toHaveCount(0);
       state.holds.shift()();
-      await expect(settings()).toContainText("priority 300");
+      await expect(settings()).toContainText("applied by Grace");
       await expect(settingsLink()).toHaveAttribute(
         "href",
         `#/deployments/${id(83)}?page=1`,
@@ -676,7 +959,14 @@ try {
           await expect(settingsLink()).toBeVisible();
           await pipelineLink().focus();
           await expect(pipelineLink()).toBeFocused();
-          await page.keyboard.press("Tab");
+          // The settings link sits in the side column; reach it by keyboard.
+          for (let step = 0; step < 60; step++) {
+            if (
+              await settingsLink().evaluate((n) => n === document.activeElement)
+            )
+              break;
+            await page.keyboard.press("Tab");
+          }
           await expect(settingsLink()).toBeFocused();
           const size = await page.evaluate(() => ({
             width: innerWidth,
@@ -714,6 +1004,111 @@ try {
         }
     },
   );
+  await check(
+    "the Components table spans the page below the cards from 1100 px, fits without scrolling from 1280 px with five numeric columns, and is cards on a phone",
+    async () => {
+      const component = (id, kind, type, over) => ({
+        id,
+        kind,
+        type,
+        received_events_per_second: 12.5,
+        events_per_second: 12.5,
+        errors_per_minute: 0,
+        dropped_per_minute: 0,
+        filtered_per_minute: 0,
+        buffer_utilization: 0.12,
+        utilization: 0.03,
+        ...over,
+      });
+      const components = [
+        component("demo", "source", "demo_logs", {
+          received_events_per_second: undefined,
+        }),
+        component("sample_rest", "transform", "sample", {
+          filtered_per_minute: 247,
+          events_per_second: 4.1,
+        }),
+        component("by_severity", "transform", "route", { utilization: 0.86 }),
+        component("archive", "sink", "file", {
+          errors_per_minute: 2,
+          dropped_per_minute: 3,
+          buffer_utilization: 0.93,
+        }),
+      ];
+      const reporting = {
+        ...baseDevice(),
+        telemetry: {
+          sampled_at: new Date().toISOString(),
+          events_per_second: 12.5,
+          events_out_per_second: 4.1,
+          errors_per_minute: 2,
+          uptime_seconds: 3600,
+          components,
+        },
+      };
+      for (const width of [1280, 1440]) {
+        await load({ device: reporting, width, collapsed: false });
+        await deviceVisible();
+        const card = page.locator(".device-components");
+        await expect(card).toBeVisible();
+        // Below the two columns, across the page.
+        const [layout, table] = await Promise.all([
+          page.locator(".device-layout").boundingBox(),
+          card.boundingBox(),
+        ]);
+        expect(table.y).toBeGreaterThanOrEqual(layout.y + layout.height - 1);
+        expect(table.width).toBeGreaterThanOrEqual(layout.width - 1);
+        // The component's name and no more than five numeric columns.
+        const headers = await card.locator("thead th").allInnerTexts();
+        expect(headers.length - 1, headers.join(" | ")).toBeLessThanOrEqual(5);
+        // It fits: nothing scrolls sideways, so no cue is needed.
+        const scrolls = await card
+          .locator(".component-scroll")
+          .evaluate((node) => node.scrollWidth > node.clientWidth + 1);
+        expect(scrolls, `${width}px`).toBe(false);
+        await expect(card.locator(".component-scroll-cue")).toBeHidden();
+        // What a filter or sample removed sits under Out / s.
+        await expect(card).toContainText("247/min filtered");
+        await expect(card).toContainText("3/min dropped");
+        // A buffer past 90% writes its fill; a calm one leaves it to the bar.
+        await expect(
+          card.locator(".component-meter-value", { hasText: "93%" }),
+        ).toBeVisible();
+        await expect(
+          card
+            .locator("tr", { hasText: "demo" })
+            .locator(".component-meter-value"),
+        ).toHaveCount(0);
+      }
+      // Narrower than 1100 px it is part of Operational metrics.
+      await load({ device: reporting, width: 1000, collapsed: false });
+      await deviceVisible();
+      await expect(page.locator(".device-components")).toHaveCount(0);
+      await expect(page.locator(".telemetry-components")).toContainText(
+        "247/min filtered",
+      );
+      // Where it has to scroll sideways it says so; where it fits it doesn't.
+      const narrow = page.locator(".telemetry-components");
+      const needsScroll = await narrow
+        .locator(".component-scroll")
+        .evaluate((node) => node.scrollWidth > node.clientWidth + 1);
+      if (needsScroll)
+        await expect(narrow.locator(".component-scroll-cue")).toBeVisible();
+      else await expect(narrow.locator(".component-scroll-cue")).toBeHidden();
+      // A phone reads each component as a card with every fact it reported.
+      await load({ device: reporting, width: 390, collapsed: false });
+      await deviceVisible();
+      const list = page.getByRole("list", {
+        name: "Component metrics",
+        exact: true,
+      });
+      await expect(list.getByRole("listitem")).toHaveCount(components.length);
+      const archive = list.getByRole("listitem").filter({ hasText: "archive" });
+      await expect(archive).toContainText("2 / min");
+      await expect(archive).toContainText("3 / min");
+      await expect(archive).toContainText("93%");
+    },
+  );
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   expect(requests.filter((request) => request.method !== "GET")).toEqual([]);
@@ -727,8 +1122,9 @@ try {
   const source_sha256 = {};
   for (const path of [
     "dashboard/src/Fleet.tsx",
+    "dashboard/src/DeviceDetail.tsx",
     "dashboard/src/deviceApplication.ts",
-    "dashboard/src/fleet.css",
+    "dashboard/src/devices.css",
     "dashboard/src/deploymentRouting.ts",
     "dashboard/src/api.ts",
     "dashboard/src/ui.tsx",

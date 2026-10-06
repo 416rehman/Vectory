@@ -1,0 +1,54 @@
+{
+  "accounts": [
+    {
+      "name": "you",
+      "reason": "The placeholder account in the documented sample paths (/home/you/Vectory) of the quickstart and the development guide."
+    },
+    {
+      "name": "alice",
+      "reason": "A fictional operator in the agent's redaction fixture; the path never existed."
+    },
+    {
+      "name": "op",
+      "reason": "A fictional macOS account in the process-inventory parsing fixtures."
+    },
+    {
+      "name": "ops",
+      "reason": "A fictional account in the fixture that checks which executable locations the installer refuses."
+    },
+    {
+      "name": "r",
+      "reason": "A fictional account in the process-listing parser fixture of the platform scripts."
+    },
+    {
+      "name": "runner",
+      "reason": "The hosted CI runner's own account, named by the mount-table and short-path fixtures."
+    }
+  ],
+  "entries": [
+    {
+      "paths": ["AGENTS.md", "docs/product-specification.md"],
+      "reason": "The maintainer's own documents: the ownership model and the binding contract. They are not rewritten by contributors."
+    },
+    {
+      "paths": [
+        "scripts/check-writing-rules.mjs",
+        "scripts/check-writing-rules.test.mjs",
+        "scripts/writing-rules-allow.json"
+      ],
+      "reason": "The rules, their test fixtures and this list have to spell out the words and shapes they forbid."
+    },
+    {
+      "paths": ["docs/evidence/source-inputs.json"],
+      "rules": ["workstream"],
+      "match": "\"path\": \"docs/WORKSTREAMS.md\"",
+      "reason": "The source inventory records the exact historical file path; renaming that path in the inventory would misidentify the input."
+    },
+    {
+      "paths": ["docs/internal/ACCEPTANCE.md", "docs/internal/HANDOFF-2026-09-27.md"],
+      "rules": ["reviewers-said"],
+      "match": "-critic.json",
+      "reason": "These dated records preserve literal evidence filenames, even though the evidence was not committed; rewriting a basename would falsify its provenance."
+    }
+  ]
+}

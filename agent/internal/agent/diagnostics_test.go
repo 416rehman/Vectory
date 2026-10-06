@@ -90,8 +90,16 @@ func TestLocalDiagnosticsExplainRejectedCandidateWithoutMutationOrSecrets(t *tes
 		t.Fatalf("not actionable: %+v", d)
 	}
 	output, err := json.Marshal(report)
-	if err != nil || bytes.Contains(output, []byte(secret)) || bytes.Contains(output, []byte("sink.example")) || bytes.Contains(output, []byte(secretPath)) {
-		t.Fatal("diagnostics exposed configuration, secret or binding path", err)
+	if err != nil || bytes.Contains(output, []byte(secret)) || bytes.Contains(output, []byte(secretPath)) {
+		t.Fatal("diagnostics exposed a secret or binding path", err)
+	}
+	// The refusal names the component and the published destination, with
+	// the host command that would permit it.
+	if issue := e.State.Error; issue == nil || len(issue.Diagnostics) != 1 ||
+		issue.Diagnostics[0].Code != "NETWORK_DESTINATION_DENIED" || issue.Diagnostics[0].ComponentID != "out" ||
+		issue.Diagnostics[0].Message != `Sink "out" (http) sends to sink.example:443, which this host hasn't approved.` ||
+		!strings.Contains(issue.Diagnostics[0].Hint, "vectory allow --network sink.example:443") {
+		t.Fatalf("refusal doesn't say what was refused: %+v", e.State.Error)
 	}
 	if after := snapshotDiagnosticFiles(t, e.Dir); !reflect.DeepEqual(before, after) {
 		t.Fatal("read-only diagnostics changed state, managed file, cache or recovery content")

@@ -11,6 +11,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
+use std::collections::HashMap;
 
 // Every supplied field is bound, including unknown fields. Reject duplicate keys
 // before canonicalization so two different parsers cannot bind different requests.
@@ -92,7 +93,118 @@ fn no_query(raw: Option<&str>) -> Result<()> {
     Ok(())
 }
 pub async fn list(state: AppState<State>, h: HeaderMap) -> Result<Json<Value>> {
-    api::list(state, h, Path("tokens".to_owned())).await
+    let s = state.0.clone();
+    let Json(tokens) = api::list(state, h, Path("tokens".to_owned())).await?;
+    let mut conn = s.pool.acquire().await?;
+    Ok(Json(usage(&mut conn, tokens).await?))
+}
+/// Adds who created each token, when it last enrolled a device and which
+/// devices it enrolled (most recent first, at most 20, plus the total).
+async fn usage(db: &mut SqliteConnection, tokens: Value) -> Result<Value> {
+    let Value::Array(mut tokens) = tokens else {
+        return Ok(tokens);
+    };
+    let users: HashMap<String, String> =
+        sqlx::query_as::<_, (String, String)>("SELECT id,name FROM users")
+            .fetch_all(&mut *db)
+            .await?
+            .into_iter()
+            .collect();
+    type Event = (Option<String>, Option<String>, String);
+    let created: Vec<Event> = sqlx::query_as(
+        "SELECT json_extract(data,'$.target'),json_extract(data,'$.actor'),created_at FROM records WHERE kind='audit' AND json_extract(data,'$.action')='token.create' AND json_extract(data,'$.outcome')='success'",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let authorized: Vec<Event> = sqlx::query_as(
+        "SELECT json_extract(data,'$.target'),json_extract(data,'$.actor'),created_at FROM records WHERE kind='audit' AND json_extract(data,'$.action')='device.recovery_authorize' AND json_extract(data,'$.outcome')='success' ORDER BY created_at",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let enrolled: Vec<(String, String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT e.token_id,d.id,d.name,d.revoked,json_extract(d.data,'$.created_at') AS enrolled_at FROM enrollments e JOIN devices d ON d.id=json_extract(e.response,'$.device_id') ORDER BY enrolled_at DESC,d.id",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    // Keep the first creation audit in the query's original order. Recovery
+    // authorizations are already ordered by time; retaining equal-time entries
+    // makes the last matching audit the same one the reverse scan selected.
+    let mut created_by_token = HashMap::new();
+    for (target, actor, _) in created {
+        if let Some(target) = target {
+            created_by_token.entry(target).or_insert(actor);
+        }
+    }
+    let mut authorized_by_device: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+    for (target, actor, when) in authorized {
+        if let Some(target) = target {
+            authorized_by_device
+                .entry(target)
+                .or_default()
+                .push((when, actor));
+        }
+    }
+    struct Usage {
+        count: usize,
+        last_used_at: Value,
+        devices: Vec<Value>,
+    }
+    let mut usage_by_token: HashMap<String, Usage> = HashMap::new();
+    for (token_id, device, name, revoked, at) in enrolled {
+        let usage = usage_by_token.entry(token_id).or_insert_with(|| Usage {
+            count: 0,
+            last_used_at: Value::Null,
+            devices: Vec::new(),
+        });
+        if usage.count == 0 {
+            usage.last_used_at = json!(at);
+        }
+        usage.count += 1;
+        if usage.devices.len() < 20 {
+            // A recovered device's old record keeps its name with a marker.
+            let name = name
+                .split_once("#retired-")
+                .map_or(name.as_str(), |(n, _)| n);
+            usage
+                .devices
+                .push(json!({"id":device,"name":name,"revoked":revoked != 0,"enrolled_at":at}));
+        }
+    }
+    let person = |actor: &Option<String>| {
+        actor.as_ref().map_or(
+            Value::Null,
+            |id| json!({"id":id,"name":users.get(id).map_or(Value::Null,|name|json!(name))}),
+        )
+    };
+    for token in tokens.iter_mut() {
+        let id = api::text(token, "id").to_owned();
+        let creator = if let Some(device) = token["recovery_device_id"].as_str() {
+            // Recovery tokens are issued by the administrator who authorized recovery.
+            let at = api::text(token, "created_at");
+            authorized_by_device.get(device).and_then(|events| {
+                events
+                    .get(
+                        events
+                            .partition_point(|(when, _)| when.as_str() <= at)
+                            .checked_sub(1)?,
+                    )
+                    .map(|(_, actor)| person(actor))
+            })
+        } else {
+            created_by_token.get(&id).map(person)
+        };
+        token["created_by"] = creator.unwrap_or(Value::Null);
+        if let Some(usage) = usage_by_token.get(&id) {
+            token["last_used_at"] = usage.last_used_at.clone();
+            token["device_count"] = json!(usage.count);
+            token["devices"] = json!(usage.devices);
+        } else {
+            token["last_used_at"] = Value::Null;
+            token["device_count"] = json!(0);
+            token["devices"] = json!([]);
+        }
+    }
+    Ok(Value::Array(tokens))
 }
 pub async fn post(
     AppState(s): AppState<State>,
@@ -103,8 +215,7 @@ pub async fn post(
     auth::authorize(&s, &h, &["operator"], true).await?;
     no_query(raw.as_deref())?;
     let v = parse(&body)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let out = create(&mut tx, &v, api::text(&actor, "id")).await?;
     tx.commit().await?;
@@ -122,7 +233,17 @@ async fn token(db: &mut SqliteConnection, id: &str) -> Result<Option<Value>> {
     raw.map(|raw| {
         let v=db::parse(&raw)?;
         // Do not leak future recovery-token extensions or arbitrary stored fields.
-        Ok(json!({"id":id,"name":v["name"],"expires_at":v["expires_at"],"uses":v["uses"],"max_uses":v["max_uses"],"name_prefix":v["name_prefix"],"revoked":v["revoked"],"created_at":v["created_at"]}))
+        let mut record = json!({"id":id,"name":v["name"],"expires_at":v["expires_at"],"uses":v["uses"],"max_uses":v["max_uses"],"name_prefix":v["name_prefix"],"revoked":v["revoked"],"created_at":v["created_at"]});
+        if v["device_name"].is_string() {
+            record["device_name"] = v["device_name"].clone();
+        }
+        // The creation scope, only when the token has one.
+        for key in ["allowed_names", "labels"] {
+            if !v[key].is_null() {
+                record[key] = v[key].clone();
+            }
+        }
+        Ok(record)
     }).transpose()
 }
 async fn status(db: &mut SqliteConnection, key: &str, e: &Entry) -> Result<Value> {
@@ -190,7 +311,37 @@ pub async fn create(db: &mut SqliteConnection, request: &Value, actor: &str) -> 
             "name_prefix must use lowercase letters, digits or hyphens",
         ));
     }
-    let record = json!({"id":db::id(),"name":db::string(&payload,"name",120)?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
+    // A token made for one typed device name (Add device) enrolls only that
+    // name, normalized the way enrollment normalizes it. Optional: servers
+    // before it ignored the field, and the receipt says whether it applied.
+    if !payload["device_name"].is_null() && !payload["device_name"].is_string() {
+        return Err(ApiError::invalid("device_name must be a string or null"));
+    }
+    let device_name = payload["device_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !device_name.is_empty()
+        && (device_name.len() > 100
+            || !device_name.as_bytes()[0].is_ascii_alphanumeric()
+            || !device_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)))
+    {
+        return Err(ApiError::invalid(
+            "device_name must be a device name: up to 100 letters, digits, dots, hyphens or underscores, starting with a letter or digit",
+        ));
+    }
+    if !device_name.is_empty() && !device_name.starts_with(prefix) {
+        return Err(ApiError::invalid("device_name must start with name_prefix"));
+    }
+    let scope = crate::enrollment_scope::parse(&payload, (!prefix.is_empty()).then_some(prefix))?;
+    let mut record = json!({"id":db::id(),"name":db::name(&payload,"name",120,"a token name")?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
+    scope.store(&mut record);
+    if !device_name.is_empty() {
+        record["device_name"] = json!(device_name);
+    }
     let secret = auth::random_secret();
     sqlx::query("INSERT INTO enrollment_tokens(id,verifier,data) VALUES(?,?,?)")
         .bind(api::text(&record, "id"))
@@ -224,8 +375,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let out = match entry(&mut tx, api::text(&actor, "id"), &key).await? {
         None => json!({"request_id":key,"request_correlation":true,"found":false}),
@@ -248,8 +398,7 @@ pub async fn cancel(
         ));
     }
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let actor = api::text(&actor, "id");
     let prior = entry(&mut tx, actor, &key).await?;

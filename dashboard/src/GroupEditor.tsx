@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   APIError,
@@ -8,10 +8,14 @@ import {
   type Device,
   type Group,
   type GroupRequestLookup,
+  type GroupSummary,
   type User,
 } from "./api";
-import { Button, ErrorBox, Field, Modal, SearchBox } from "./ui";
+import { Button, ErrorBox, Field, Modal, SearchBox, useResource } from "./ui";
 import { deploymentRoute } from "./deploymentRouting";
+import DevicePicker from "./DevicePicker";
+import GroupOverview from "./GroupOverview";
+import GroupMembershipEffects from "./GroupMembershipEffects";
 import {
   beginGroupOperation,
   finishGroupOperation,
@@ -19,34 +23,68 @@ import {
   useGroupOperations,
   type GroupOperation,
 } from "./groupRequests";
+import { setDifference, toggled, withIds } from "./deviceInventory";
+import {
+  conflictSentences,
+  parseMembershipConflicts,
+  readUnavailableMembers,
+  type MembershipConflicts,
+} from "./groupMembership";
 import "./group-editor.css";
+
+/** A group holds this many devices at most; the server refuses more. */
+const MAX_MEMBERS = 10000;
+/** Names listed in a comparison before "and N more". */
+const LISTED = 25;
 
 export default function GroupEditor({
   group,
   user,
-  devices,
-  deviceLoading,
-  deviceError,
   onClose,
   onSaved,
   onRefresh,
 }: {
-  group: Group | null;
+  /** A list row, which carries a member count; or a full group. */
+  group: Group | GroupSummary | null;
   user: User;
-  devices: Device[];
-  deviceLoading: boolean;
-  deviceError: string;
   onClose: () => void;
   onSaved: (group: Group) => void;
   onRefresh: () => void;
 }) {
-  const [base, setBase] = useState(group);
-  const [name, setName] = useState(group?.name || "");
-  const [description, setDescription] = useState(group?.description || "");
-  const [ids, setIds] = useState(group?.device_ids || []);
+  // A list row has a member count; only a full group has its members.
+  const full =
+    group && Array.isArray((group as Group).device_ids)
+      ? (group as Group)
+      : null;
+  // Lists carry counts, not members: an existing group's members are read
+  // when its editor opens.
+  const detail = useResource<Group | null>(
+    group && !full ? `/groups/${encodeURIComponent(group.id)}` : null,
+    null,
+    0,
+    { interval: 0 },
+  );
+  const [base, setBase] = useState<Group | null>(full);
+  // An existing group opens on what it is for; editing is one tab away.
+  const [tab, setTab] = useState<"overview" | "members">(
+    group ? "overview" : "members",
+  );
+  const [name, setName] = useState(full?.name || "");
+  const [description, setDescription] = useState(full?.description || "");
+  const [ids, setIds] = useState<ReadonlySet<string>>(
+    () => new Set(full?.device_ids),
+  );
   const [search, setSearch] = useState("");
+  // Names of the devices seen while choosing, for the comparison lists.
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+  // Saved members that are not devices any more: listed by id so they can go.
+  const [unavailable, setUnavailable] = useState<readonly string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The device and both assignments a refused save collided on.
+  const [conflicts, setConflicts] = useState<MembershipConflicts | null>(null);
+  // Why the preview says this edit can't be saved, or "".
+  const [blockedReason, setBlockedReason] = useState("");
   const [blockedByCanary, setBlockedByCanary] = useState(false);
   const [review, setReview] = useState<"conflict" | "uncertain" | null>(null);
   const [latest, setLatest] = useState<Group | null>(null);
@@ -60,15 +98,54 @@ export default function GroupEditor({
   const allowed = can(user, "operate");
   const recovery = useGroupOperations(user.id);
   const pendingCreate =
-    !base && (recovery.operations.length > 0 || recovery.errors.length > 0);
+    !base &&
+    !group &&
+    (recovery.operations.length > 0 || recovery.errors.length > 0);
   const compatible = !base || base.revision !== undefined;
+  // What is saved, as a set: every comparison below is one pass, never a scan
+  // of one list per member of the other.
+  const savedIds = useMemo(() => new Set(base?.device_ids), [base]);
+  const { added: addedIds, removed: removedIds } = useMemo(
+    () => setDifference(ids, savedIds),
+    [ids, savedIds],
+  );
   const changed =
     name !== (base?.name || "") ||
     description !== (base?.description || "") ||
-    ids.length !== (base?.device_ids.length || 0) ||
-    ids.some((id) => !base?.device_ids.includes(id));
+    addedIds.length > 0 ||
+    removedIds.length > 0;
+  const loadingMembers = !!group && !base && !detail.error;
+  const tooMany = ids.size > MAX_MEMBERS;
   const dirty = useRef(false);
   dirty.current = (changed || !!review) && !(!base && review === "uncertain");
+  // The read finished: start editing what the server holds now.
+  useEffect(() => {
+    if (base || !detail.data) return;
+    setBase(detail.data);
+    setName(detail.data.name);
+    setDescription(detail.data.description);
+    setIds(new Set(detail.data.device_ids));
+  }, [base, detail.data]);
+  // Members the server no longer knows sort last in its member list; the end
+  // of it finds them without listing a group of thousands.
+  useEffect(() => {
+    setUnavailable([]);
+    if (!base || base.device_ids.length === 0) return;
+    const controller = new AbortController();
+    readUnavailableMembers(
+      base.id,
+      new Set(base.device_ids).size,
+      controller.signal,
+    ).then(
+      (found) => {
+        if (!controller.signal.aborted) setUnavailable(found);
+      },
+      () => {
+        /* Saving still names anything the server refuses. */
+      },
+    );
+    return () => controller.abort();
+  }, [base]);
   useEffect(() => {
     mounted.current = true;
     const navigate = (event: Event) => {
@@ -154,11 +231,12 @@ export default function GroupEditor({
       review ||
       pendingCreate ||
       !name.trim() ||
-      deviceLoading ||
-      deviceError
+      loadingMembers ||
+      tooMany
     )
       return;
     setError("");
+    setConflicts(null);
     setBlockedByCanary(false);
     let operation: GroupOperation | null = null;
     try {
@@ -169,7 +247,7 @@ export default function GroupEditor({
           body: JSON.stringify({
             name: name.trim(),
             description,
-            device_ids: ids,
+            device_ids: [...ids],
             revision: base.revision,
           }),
         });
@@ -177,7 +255,7 @@ export default function GroupEditor({
         operation = beginGroupOperation(user.id, {
           name: name.trim(),
           description,
-          device_ids: ids,
+          device_ids: [...ids],
         });
         // A compatible, exact-key lookup proves the server supports recovery.
         // Never send a keyed request to an old server that could ignore its key.
@@ -277,307 +355,476 @@ export default function GroupEditor({
         failure.status !== 408
       ) {
         setError(failure.message);
+        setConflicts(
+          failure.code === "CONFLICT"
+            ? parseMembershipConflicts(failure.details, failure.detailsTotal)
+            : null,
+        );
         setBlockedByCanary(failure.code === "ACTIVE_CANARY_OVERLAP");
       } else setReview("uncertain");
     }
   }
+  // A device that isn't there is named by its exact id, never a shortened one.
+  const unavailableIds = useMemo(() => new Set(unavailable), [unavailable]);
   const deviceName = (id: string) =>
-    devices.find((device) => device.id === id)?.name || id;
-  const added = latest
-    ? ids.filter((id) => !latest.device_ids.includes(id))
-    : [];
-  const removed = latest
-    ? latest.device_ids.filter((id) => !ids.includes(id))
-    : [];
-  const knownIds = new Set(devices.map((device) => device.id));
-  const unknownIds = ids.filter((id) => !knownIds.has(id));
-  const members = devices
-    .filter((device) =>
-      `${device.name} ${device.os}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
+    names.get(id) ||
+    (unavailableIds.has(id) ? id : `Device ${id.slice(0, 8)}…`);
+  // Against the latest saved group, when its edits collide with yours.
+  const latestIds = useMemo(() => new Set(latest?.device_ids), [latest]);
+  const { added, removed } = useMemo(
+    () =>
+      latest
+        ? setDifference(ids, latestIds)
+        : { added: [] as string[], removed: [] as string[] },
+    [latest, ids, latestIds],
+  );
+  const editable =
+    allowed && compatible && !busy && !loadingMembers && !(!base && !!review);
+  const listed = (list: string[]) => (
+    <ul>
+      {list.slice(0, LISTED).map((id) => (
+        <li key={id}>{deviceName(id)}</li>
+      ))}
+      {list.length > LISTED && (
+        <li>and {(list.length - LISTED).toLocaleString()} more</li>
+      )}
+    </ul>
+  );
+  function keepNames(rows: Device[]) {
+    setNames((previous) => {
+      const next = new Map(previous);
+      for (const row of rows) next.set(row.id, row.name);
+      return next;
+    });
+  }
   return (
     <Modal
       open
+      wide={!!group}
       className="group-editor-modal"
       onClose={close}
-      title={
-        base ? (allowed ? `Edit ${base.name}` : base.name) : "Create group"
+      title={(base ?? group)?.name || "Create group"}
+      description={
+        group && tab === "overview"
+          ? (base ?? group).description ||
+            "Its members, what is assigned to them and recent rollouts."
+          : "Membership changes can update the pipelines and agent settings on these devices."
       }
-      description="Membership changes can update the pipelines and agent policies assigned to these devices."
     >
-      <form className="group-editor-form" onSubmit={save}>
-        <div className="modal-body fleet-group-form">
-          {!compatible && (
-            <ErrorBox message="Update the server to enable safe group editing. You can still view this group." />
-          )}
-          {pendingCreate && !review && !busy && (
-            <ErrorBox message="Review the pending group request on the Groups page before creating another group. Your existing group edits are still available." />
-          )}
-          {(error || deviceError) && (
-            <ErrorBox message={error || deviceError} />
-          )}
-          {blockedByCanary && (
-            <p className="group-blocked-help">
-              <a
-                href={`#/${deploymentRoute(false, null, { search: "", status: "active", page: 1 })}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Review active deployments
-                <span className="sr-only"> (opens in a new tab)</span>
-              </a>
-              <span>Your edits stay here while you review.</span>
-            </p>
-          )}
-          {review && (
-            <section
-              className="group-review"
-              ref={notice}
-              tabIndex={-1}
-              aria-label="Review group changes"
-            >
-              <h3>
-                {confirmedCreate
-                  ? "Group saved"
-                  : review === "conflict"
-                    ? "This group changed"
-                    : "Save could not be confirmed"}
-              </h3>
-              <p>
-                {confirmedCreate
-                  ? "This group was created successfully. You can close this form and open it from the saved request."
-                  : review === "conflict"
-                    ? "Your edits are still here. Compare them with the latest saved group before saving again."
-                    : !base
-                      ? "The server may have created this group. Its exact request is saved in this browser and stays available after closing or reloading. Review it from Groups before trying again."
-                      : "The request may have saved. Your edits are still here; check the saved group before trying again."}
-              </p>
-              {reviewError && <ErrorBox message={reviewError} />}
-              {!base ? (
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    onRefresh();
-                    onClose();
-                  }}
-                >
-                  Close and review request
-                </Button>
-              ) : !latest ? (
-                <Button
-                  variant="secondary"
-                  onClick={loadLatest}
-                  busy={busy}
-                  disabled={missing}
-                >
-                  Review saved group
-                </Button>
-              ) : (
-                <>
-                  {latest.name !== name && (
-                    <div className="group-review-value">
-                      <span>Latest saved name</span>
-                      <strong>{latest.name}</strong>
-                      <Button
-                        variant="ghost"
-                        onClick={() => setName(latest.name)}
-                      >
-                        Use latest name
-                      </Button>
-                    </div>
-                  )}
-                  {latest.description !== description && (
-                    <div className="group-review-value">
-                      <span>Latest saved description</span>
-                      <p>{latest.description || "No description"}</p>
-                      <Button
-                        variant="ghost"
-                        onClick={() => setDescription(latest.description)}
-                      >
-                        Use latest description
-                      </Button>
-                    </div>
-                  )}
-                  <div className="group-review-members">
-                    <strong>Membership compared with the saved group</strong>
-                    {added.length > 0 && (
-                      <div>
-                        <span>
-                          Your edits would add {added.length}{" "}
-                          {added.length === 1 ? "device" : "devices"}
-                        </span>
-                        <ul>
-                          {added.map((id) => (
-                            <li key={id}>{deviceName(id)}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {removed.length > 0 && (
-                      <div>
-                        <span>
-                          Your edits would remove {removed.length}{" "}
-                          {removed.length === 1 ? "device" : "devices"}
-                        </span>
-                        <ul>
-                          {removed.map((id) => (
-                            <li key={id}>{deviceName(id)}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {!added.length && !removed.length ? (
-                      <p>Your selection matches the saved membership.</p>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        onClick={() => setIds([...latest.device_ids])}
-                      >
-                        Use latest members
-                      </Button>
-                    )}
-                  </div>
-                  <p>
-                    Keep the edits shown below or use saved values above.
-                    Continuing does not save anything.
-                  </p>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setBase(latest);
-                      setLatest(null);
-                      setReview(null);
-                      setError("");
-                      nameInput.current?.focus();
-                    }}
-                  >
-                    Continue editing
-                  </Button>
-                </>
-              )}
-            </section>
-          )}
-          <Field label="Group name">
-            <input
-              ref={nameInput}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={120}
-              required
-              readOnly={!allowed || !compatible || (!base && !!review)}
-              disabled={busy}
-              placeholder="e.g. Production"
+      {group && (
+        <div className="group-tabs" role="tablist" aria-label="Group views">
+          <button
+            type="button"
+            role="tab"
+            id="group-tab-overview"
+            aria-selected={tab === "overview"}
+            aria-controls="group-panel"
+            onClick={() => setTab("overview")}
+          >
+            Overview
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="group-tab-members"
+            aria-selected={tab === "members"}
+            aria-controls="group-panel"
+            onClick={() => setTab("members")}
+          >
+            {allowed ? "Edit members" : "Members"}
+          </button>
+        </div>
+      )}
+      {group && tab === "overview" ? (
+        <div
+          className="group-editor-form"
+          id="group-panel"
+          role="tabpanel"
+          aria-labelledby="group-tab-overview"
+        >
+          <div className="modal-body">
+            <GroupOverview
+              group={base ?? group}
+              memberCount={
+                base
+                  ? base.device_ids.length
+                  : ((group as GroupSummary).member_count ?? null)
+              }
             />
-          </Field>
-          <Field label="Description (optional)">
-            <textarea
-              rows={2}
-              value={description}
-              maxLength={2000}
-              readOnly={!allowed || !compatible || (!base && !!review)}
-              disabled={busy}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </Field>
-          <div className="fleet-members-heading">
-            <h3>Devices</h3>
-            <span>{ids.length} selected</span>
           </div>
-          <SearchBox
-            value={search}
-            onChange={setSearch}
-            placeholder="Find a device"
-          />
-          {deviceLoading ? (
-            <p role="status">Loading devices…</p>
-          ) : (
-            <div className="fleet-members">
-              {members.map((device) => (
-                <label key={device.id}>
-                  <input
-                    type="checkbox"
-                    disabled={
-                      !allowed ||
-                      !compatible ||
-                      (!base && !!review) ||
-                      busy ||
-                      (device.status === "revoked" && !ids.includes(device.id))
-                    }
-                    checked={ids.includes(device.id)}
-                    onChange={() =>
-                      setIds((previous) =>
-                        previous.includes(device.id)
-                          ? previous.filter((id) => id !== device.id)
-                          : [...previous, device.id],
-                      )
-                    }
-                  />
-                  <span>
-                    <strong>{device.name}</strong>
-                    <small>
-                      {[device.os, device.arch].filter(Boolean).join(" / ") ||
-                        "Platform not reported"}
-                      {device.status === "revoked" ? " · Revoked" : ""}
-                    </small>
-                  </span>
-                </label>
-              ))}
-              {unknownIds.map((id) => (
-                <label key={id}>
-                  <input
-                    type="checkbox"
-                    checked
-                    disabled={
-                      !allowed || !compatible || busy || (!base && !!review)
-                    }
-                    onChange={() =>
-                      setIds((previous) =>
-                        previous.filter((value) => value !== id),
-                      )
-                    }
-                  />
-                  <span>
-                    <strong>{id}</strong>
-                    <small>Device unavailable</small>
-                  </span>
-                </label>
-              ))}
-              {!members.length && !unknownIds.length && (
-                <p>
-                  {search
-                    ? "No devices match your search."
-                    : "No enrolled devices. You can save an empty group."}
+          <div className="modal-footer">
+            <Button variant="secondary" onClick={close}>
+              Close
+            </Button>
+            {allowed && (
+              <Button onClick={() => setTab("members")}>Edit members</Button>
+            )}
+          </div>
+        </div>
+      ) : loadingMembers ? (
+        <div
+          className="group-editor-form"
+          id="group-panel"
+          role="tabpanel"
+          aria-labelledby="group-tab-members"
+        >
+          <div className="modal-body">
+            <p role="status">Loading members…</p>
+          </div>
+          <div className="modal-footer">
+            <Button variant="secondary" onClick={close}>
+              Close
+            </Button>
+          </div>
+        </div>
+      ) : group && !base ? (
+        <div
+          className="group-editor-form"
+          id="group-panel"
+          role="tabpanel"
+          aria-labelledby="group-tab-members"
+        >
+          <div className="modal-body">
+            <ErrorBox
+              message={detail.error || "The group's members couldn't load."}
+              retry={() => void detail.reload()}
+            />
+          </div>
+          <div className="modal-footer">
+            <Button variant="secondary" onClick={close}>
+              Close
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div
+          className="group-editor-form"
+          id={group ? "group-panel" : undefined}
+          role={group ? "tabpanel" : undefined}
+          aria-labelledby={group ? "group-tab-members" : undefined}
+        >
+          <form className="group-editor-form" onSubmit={save}>
+            <div className="modal-body fleet-group-form">
+              {!compatible && (
+                <ErrorBox message="Update the server to enable safe group editing. You can still view this group." />
+              )}
+              {pendingCreate && !review && !busy && (
+                <ErrorBox message="Review the pending group request on the Groups page before creating another group. Your existing group edits are still available." />
+              )}
+              {conflicts && base
+                ? conflictSentences(conflicts, base.id).map((line) => (
+                    <ErrorBox key={line} message={line} />
+                  ))
+                : error && <ErrorBox message={error} />}
+              {tooMany && (
+                <ErrorBox
+                  message={`A group holds up to ${MAX_MEMBERS.toLocaleString()} devices. Remove ${(ids.size - MAX_MEMBERS).toLocaleString()} to save.`}
+                />
+              )}
+              {blockedByCanary && (
+                <p className="group-blocked-help">
+                  <a
+                    href={`#/${deploymentRoute(false, null, { search: "", status: "active", page: 1 })}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Review active deployments
+                    <span className="sr-only"> (opens in a new tab)</span>
+                  </a>
+                  <span>Your edits stay here while you review.</span>
                 </p>
               )}
+              {review && (
+                <section
+                  className="group-review"
+                  ref={notice}
+                  tabIndex={-1}
+                  aria-label="Review group changes"
+                >
+                  <h3>
+                    {confirmedCreate
+                      ? "Group saved"
+                      : review === "conflict"
+                        ? "This group changed"
+                        : "Save could not be confirmed"}
+                  </h3>
+                  <p>
+                    {confirmedCreate
+                      ? "This group was created successfully. You can close this form and open it from the saved request."
+                      : review === "conflict"
+                        ? "Your edits are still here. Compare them with the latest saved group before saving again."
+                        : !base
+                          ? "The server may have created this group. Its exact request is saved in this browser and stays available after closing or reloading. Review it from Groups before trying again."
+                          : "The request may have saved. Your edits are still here; check the saved group before trying again."}
+                  </p>
+                  {reviewError && <ErrorBox message={reviewError} />}
+                  {!base ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        onRefresh();
+                        onClose();
+                      }}
+                    >
+                      Close and review request
+                    </Button>
+                  ) : !latest ? (
+                    <Button
+                      variant="secondary"
+                      onClick={loadLatest}
+                      busy={busy}
+                      disabled={missing}
+                    >
+                      Review saved group
+                    </Button>
+                  ) : (
+                    <>
+                      {latest.name !== name && (
+                        <div className="group-review-value">
+                          <span>Latest saved name</span>
+                          <strong>{latest.name}</strong>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setName(latest.name)}
+                          >
+                            Use latest name
+                          </Button>
+                        </div>
+                      )}
+                      {latest.description !== description && (
+                        <div className="group-review-value">
+                          <span>Latest saved description</span>
+                          <p>{latest.description || "No description"}</p>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setDescription(latest.description)}
+                          >
+                            Use latest description
+                          </Button>
+                        </div>
+                      )}
+                      <div className="group-review-members">
+                        <strong>
+                          Membership compared with the saved group
+                        </strong>
+                        {added.length > 0 && (
+                          <div>
+                            <span>
+                              Your edits would add {added.length}{" "}
+                              {added.length === 1 ? "device" : "devices"}
+                            </span>
+                            {listed(added)}
+                          </div>
+                        )}
+                        {removed.length > 0 && (
+                          <div>
+                            <span>
+                              Your edits would remove {removed.length}{" "}
+                              {removed.length === 1 ? "device" : "devices"}
+                            </span>
+                            {listed(removed)}
+                          </div>
+                        )}
+                        {!added.length && !removed.length ? (
+                          <p>Your selection matches the saved membership.</p>
+                        ) : (
+                          <Button
+                            variant="secondary"
+                            onClick={() => setIds(new Set(latest.device_ids))}
+                          >
+                            Use latest members
+                          </Button>
+                        )}
+                      </div>
+                      <p>
+                        Keep the edits shown below or use saved values above.
+                        Continuing does not save anything.
+                      </p>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setBase(latest);
+                          setLatest(null);
+                          setReview(null);
+                          setError("");
+                          nameInput.current?.focus();
+                        }}
+                      >
+                        Continue editing
+                      </Button>
+                    </>
+                  )}
+                </section>
+              )}
+              <Field label="Group name">
+                <input
+                  ref={nameInput}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  maxLength={120}
+                  required
+                  readOnly={!allowed || !compatible || (!base && !!review)}
+                  disabled={busy}
+                  placeholder="e.g. Production"
+                />
+              </Field>
+              <Field label="Description (optional)">
+                <textarea
+                  rows={2}
+                  value={description}
+                  maxLength={2000}
+                  readOnly={!allowed || !compatible || (!base && !!review)}
+                  disabled={busy}
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+              </Field>
+              <div className="fleet-members-heading">
+                <h3>Devices</h3>
+                <span>{ids.size.toLocaleString()} selected</span>
+              </div>
+              {base && (addedIds.length > 0 || removedIds.length > 0) && (
+                <p className="group-changes" aria-live="polite">
+                  <span>
+                    <strong>{addedIds.length.toLocaleString()}</strong> added ·{" "}
+                    <strong>{removedIds.length.toLocaleString()}</strong>{" "}
+                    removed since it was saved
+                  </span>
+                  <Button
+                    variant="ghost compact"
+                    disabled={!editable}
+                    onClick={() => setIds(new Set(base.device_ids))}
+                  >
+                    Undo device changes
+                  </Button>
+                </p>
+              )}
+              <SearchBox
+                value={search}
+                onChange={setSearch}
+                placeholder="Find a device"
+              />
+              <DevicePicker
+                label="Group devices"
+                search={search}
+                isChecked={(device) => ids.has(device.id)}
+                disabled={!editable}
+                onToggle={(device) =>
+                  setIds((previous) => toggled(previous, device.id))
+                }
+                onRows={keepNames}
+                onMatching={(found, rows) => {
+                  keepNames(rows);
+                  setIds((previous) => withIds(previous, found.ids));
+                }}
+                actions={
+                  <Button
+                    variant="ghost compact"
+                    disabled={!editable || ids.size === 0}
+                    onClick={() => setIds(new Set())}
+                  >
+                    Remove all
+                  </Button>
+                }
+              />
+              {unavailable.length > 0 && (
+                <section
+                  className="group-unavailable"
+                  aria-labelledby="group-unavailable-heading"
+                >
+                  <h4 id="group-unavailable-heading">
+                    Devices no longer available ({unavailable.length}
+                    {unavailable.length >= 500 ? "+" : ""})
+                  </h4>
+                  <p className="control-muted">
+                    These members aren&apos;t enrolled devices any more. Untick
+                    one to take it out of the group.
+                  </p>
+                  <ul>
+                    {unavailable.slice(0, LISTED).map((id) => (
+                      <li key={id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            disabled={!editable}
+                            checked={ids.has(id)}
+                            onChange={() =>
+                              setIds((previous) => toggled(previous, id))
+                            }
+                          />
+                          <span>
+                            <strong>{id}</strong>
+                            <small>Device unavailable</small>
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                  {unavailable.length > LISTED && (
+                    <p className="control-muted">
+                      and {(unavailable.length - LISTED).toLocaleString()} more
+                    </p>
+                  )}
+                  <Button
+                    variant="ghost compact"
+                    disabled={
+                      !editable || !unavailable.some((id) => ids.has(id))
+                    }
+                    onClick={() =>
+                      setIds((previous) => {
+                        const next = new Set(previous);
+                        for (const id of unavailable) next.delete(id);
+                        return next;
+                      })
+                    }
+                  >
+                    Remove all unavailable
+                  </Button>
+                </section>
+              )}
+              {base && allowed && compatible && !review && (
+                <GroupMembershipEffects
+                  group={base}
+                  ids={ids}
+                  onBlocked={setBlockedReason}
+                />
+              )}
             </div>
-          )}
+            <div className="modal-footer">
+              {allowed && blockedReason && (
+                <p className="group-save-blocked" id="group-save-blocked">
+                  {blockedReason}
+                </p>
+              )}
+              <Button variant="secondary" onClick={close} disabled={busy}>
+                {allowed && !(review === "uncertain" && !base)
+                  ? "Cancel"
+                  : "Close"}
+              </Button>
+              {allowed && (
+                <Button
+                  type="submit"
+                  busy={busy}
+                  aria-describedby={
+                    blockedReason ? "group-save-blocked" : undefined
+                  }
+                  disabled={
+                    !compatible ||
+                    pendingCreate ||
+                    !!review ||
+                    !name.trim() ||
+                    (base !== null && !changed) ||
+                    loadingMembers ||
+                    tooMany ||
+                    !!blockedReason
+                  }
+                >
+                  {base ? "Save changes" : "Create group"}
+                </Button>
+              )}
+            </div>
+          </form>
         </div>
-        <div className="modal-footer">
-          <Button variant="secondary" onClick={close} disabled={busy}>
-            {allowed && !(review === "uncertain" && !base) ? "Cancel" : "Close"}
-          </Button>
-          {allowed && (
-            <Button
-              type="submit"
-              busy={busy}
-              disabled={
-                !compatible ||
-                pendingCreate ||
-                !!review ||
-                !name.trim() ||
-                (base !== null && !changed) ||
-                deviceLoading ||
-                !!deviceError
-              }
-            >
-              {base ? "Save changes" : "Create group"}
-            </Button>
-          )}
-        </div>
-      </form>
+      )}
     </Modal>
   );
 }

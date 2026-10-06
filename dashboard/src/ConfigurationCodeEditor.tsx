@@ -62,6 +62,10 @@ export type ConfigurationCodeEditorProps = {
   label?: string;
   describedBy?: string;
   onFormat?: () => void;
+  /** Move the cursor to a text offset and focus the editor when `nonce` changes. */
+  reveal?: { offset: number; nonce: number } | null;
+  /** Wrap long lines instead of scrolling sideways (sample JSONL). */
+  wrap?: boolean;
 };
 
 const externalChange = Annotation.define<boolean>();
@@ -135,6 +139,8 @@ export default function ConfigurationCodeEditor({
   label = "Vector configuration code",
   describedBy,
   onFormat,
+  reveal,
+  wrap = false,
 }: ConfigurationCodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<{
@@ -176,6 +182,7 @@ export default function ConfigurationCodeEditor({
           highlightSelectionMatches(),
           search({ top: true }),
           lintGutter(),
+          wrap ? EditorView.lineWrapping : [],
           language.of(languageFor(format)),
           permissions.of([
             EditorState.readOnly.of(readOnly),
@@ -297,6 +304,21 @@ export default function ConfigurationCodeEditor({
     });
     view.dispatch(setDiagnostics(view.state, mapped));
   }, [diagnostics, value]);
+
+  useLayoutEffect(() => {
+    const view = editor.current?.view;
+    if (!view || !reveal) return;
+    const anchor = Math.min(
+      view.state.doc.length,
+      normalizeLines(value.slice(0, Math.max(0, reveal.offset))).length,
+    );
+    // Centered, so the place comes with the lines around it.
+    view.dispatch({
+      selection: { anchor },
+      effects: EditorView.scrollIntoView(anchor, { y: "center" }),
+    });
+    view.focus();
+  }, [reveal?.nonce]);
 
   return (
     <div

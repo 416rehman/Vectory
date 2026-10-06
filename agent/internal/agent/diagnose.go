@@ -1,0 +1,1315 @@
+package agent
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// Bounds for diagnostics that leave the host (heartbeat protocol limits). The
+// server refuses the whole heartbeat for a diagnostic past one of them, so the
+// agent never sends one: vector-catalog/fixtures/report-bounds.json holds the
+// numbers, and the server's tests read it too.
+const (
+	maxDiagnostics       = 10
+	maxDiagnosticBytes   = 512
+	maxDiagnosticMessage = 300
+	maxDiagnosticHint    = 200
+	maxDiagnosticField   = 128
+	// maxComponentIDBytes is the longest component ID a pipeline may name and a
+	// device may report.
+	maxComponentIDBytes = 128
+	// maxIssueMessage is the longest message of an apply attempt's error, in
+	// characters.
+	maxIssueMessage = 1000
+	redactedToken   = "«redacted»"
+	// Vector's built-in data_dir when a configuration sets none.
+	vectorDefaultDataDir = "/var/lib/vector/"
+)
+
+// Diagnostic is one structured finding from Vector's own output. Every text
+// field has passed redaction: a token may be echoed only when it appears in
+// the published, secret-free template (component IDs, paths, VRL text, field
+// names) or in this host's reported runtime settings.
+type Diagnostic struct {
+	Severity      string `json:"severity"`
+	Code          string `json:"code"`
+	ComponentKind string `json:"component_kind,omitempty"`
+	ComponentID   string `json:"component_id,omitempty"`
+	RouteOutput   string `json:"route_output,omitempty"`
+	Field         string `json:"field,omitempty"`
+	Line          int    `json:"line,omitempty"`
+	Column        int    `json:"column,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Message       string `json:"message"`
+	Hint          string `json:"hint,omitempty"`
+}
+
+// VectorFailure carries Vector's raw, bounded output for a failed native
+// step. The output never leaves the host: Engine turns it into redacted
+// Diagnostics and appends it to the private local Vector log.
+type VectorFailure struct {
+	Phase   string // validate, test, start, reload, timeout
+	Summary string // fixed, secret-free sentence
+	Output  []byte // text output (validate/test)
+	Records []vectorRecord
+	// Diagnostics prepared by the agent itself (not yet redacted).
+	Diagnostics []Diagnostic
+}
+
+func (f *VectorFailure) Error() string { return f.Summary }
+
+func asVectorFailure(err error) *VectorFailure {
+	var failure *VectorFailure
+	if errors.As(err, &failure) {
+		return failure
+	}
+	return nil
+}
+
+type componentRef struct{ Kind, Type string }
+
+// redactor knows which tokens are safe to echo and which values must never be.
+type redactor struct {
+	safe    map[string]bool
+	secrets []string
+	// apiAddress comes from the effective configuration, not Vector's log.
+	// Only a configured address may be echoed in an API bind diagnostic.
+	apiAddress string
+	// Credentials under four bytes can't be replaced wherever they appear
+	// without mangling ordinary text, so only whole words are redacted.
+	shortSecrets []string
+	labels       [][2]string
+	components   map[string]componentRef
+	// listen holds each component's configured socket addresses.
+	listen map[string][]string
+	// limit is the most diagnostics one parse returns; zero means maxDiagnostics.
+	limit int
+}
+
+// terminalSequence is an escape sequence a terminal acts on: a control sequence
+// (ESC [, parameters, intermediates, a final byte) or an operating-system
+// command such as a window title or a link (ESC ], text, then BEL or ESC \).
+// Vector colors its console output with the first.
+var terminalSequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
+var (
+	quotedText      = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)*\"|`[^`\n]*`|'[^'\n]*'")
+	wordPattern     = regexp.MustCompile(`\S+`)
+	ipAddress       = regexp.MustCompile(`^\[?[0-9a-fA-F:.]*\d[0-9a-fA-F:.]*\]?(?::\d+)?$`)
+	windowsPathLike = regexp.MustCompile(`^[A-Za-z]:\\`)
+	envReference    = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+	stageFile       = regexp.MustCompile(`[^\s"'\x60]*\.vectory-stage-[0-9a-f]+\.json|[^\s"'\x60]*host-runtime-stage-[0-9a-f]+\.json`)
+	trimPunctuation = "()[]{},;:.!?<>'\"`"
+)
+
+// Vector's own fixed vocabulary: event types and reserved output names.
+var vectorVocabulary = map[string]bool{"Log": true, "Metric": true, "Trace": true, "log": true, "metric": true, "trace": true, "_unmatched": true, "_default": true, "dropped": true}
+
+func newRedactor() *redactor {
+	r := &redactor{safe: map[string]bool{}, components: map[string]componentRef{}, listen: map[string][]string{}}
+	for word := range vectorVocabulary {
+		r.safe[word] = true
+	}
+	r.safe[vectorDefaultDataDir] = true
+	r.safe[strings.TrimSuffix(vectorDefaultDataDir, "/")] = true
+	r.safe["healthchecks.require_healthy"] = true
+	return r
+}
+
+func (r *redactor) allowText(value string) {
+	if value == "" || len(value) > 64*1024 {
+		return
+	}
+	r.safe[value] = true
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			r.safe[line] = true
+		}
+		for _, word := range strings.Fields(line) {
+			r.safe[word] = true
+			if core := strings.Trim(word, trimPunctuation); core != "" {
+				r.safe[core] = true
+			}
+		}
+	}
+}
+
+func (r *redactor) addSecret(value string) {
+	switch {
+	case len(value) >= 4:
+		r.secrets = append(r.secrets, value)
+	case value != "":
+		r.shortSecrets = append(r.shortSecrets, value)
+	}
+}
+
+func isWordRune(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) || c == '_' }
+
+// replaceWord replaces word only where it stands alone, not touching a letter,
+// digit or underscore on either side. It searches from an offset into the
+// original string, so a skipped match keeps its left context ("abab" is one
+// word, not "ab" followed by a standalone "ab").
+//
+// Two trade-offs of whole-word matching, for credentials under four bytes:
+//   - a credential of one to three digits redacts every standalone number
+//     equal to it, as in "line «redacted», column 12";
+//   - CJK text has no spaces, so a short credential inside it touches letters
+//     on both sides and is not redacted.
+func replaceWord(s, word, with string) string {
+	if word == "" {
+		return s
+	}
+	var out strings.Builder
+	copied := 0
+	for from := 0; ; {
+		i := strings.Index(s[from:], word)
+		if i < 0 {
+			break
+		}
+		i += from
+		end := i + len(word)
+		before, nb := utf8.DecodeLastRuneInString(s[:i])
+		after, na := utf8.DecodeRuneInString(s[end:])
+		if (nb > 0 && isWordRune(before)) || (na > 0 && isWordRune(after)) {
+			from = i + 1
+			continue
+		}
+		out.WriteString(s[copied:i])
+		out.WriteString(with)
+		copied, from = end, end
+	}
+	out.WriteString(s[copied:])
+	return out.String()
+}
+
+func containsWord(s, word string) bool {
+	return replaceWord(s, word, "") != s
+}
+
+func (r *redactor) addLabel(path, label string) {
+	if path != "" {
+		r.labels = append(r.labels, [2]string{path, label})
+	}
+}
+
+// learnConfiguration indexes an effective configuration. Its tokens become
+// echo-safe, except credential leaves, which are treated as secrets: every
+// field the agent's table lets hold a resolved local secret, plus the sink
+// auth fields Vectory has always treated as credentials, is never trusted.
+// A credential under four bytes is redacted as a whole word (addSecret).
+func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if decoder.Decode(&root) != nil {
+		return
+	}
+	if api, ok := root["api"].(map[string]any); ok {
+		r.apiAddress, _ = api["address"].(string)
+	}
+	for section, kind := range map[string]string{"sources": "source", "transforms": "transform", "sinks": "sink"} {
+		components, _ := root[section].(map[string]any)
+		for id, raw := range components {
+			component, _ := raw.(map[string]any)
+			typ, _ := component["type"].(string)
+			r.components[id] = componentRef{kind, typ}
+			r.listen[id] = listenAddresses(component)
+		}
+	}
+	credential := func(path []secretStep) bool {
+		at := locateSecretField(root, path)
+		if at.credential() {
+			return true
+		}
+		legacy := at.inComponent && at.section == "sinks" && len(at.field) == 2 && !at.field[1].item && at.field[0].key == "auth"
+		return legacy && (at.field[1].key == "user" || at.field[1].key == "password" || at.field[1].key == "token")
+	}
+	var walk func(any, string, []secretStep)
+	walk = func(value any, key string, path []secretStep) {
+		switch v := value.(type) {
+		case map[string]any:
+			for k, child := range v {
+				r.safe[k] = true
+				walk(child, strings.ToLower(k), append(path[:len(path):len(path)], secretStep{key: k}))
+			}
+		case []any:
+			for _, child := range v {
+				walk(child, key, append(path[:len(path):len(path)], secretStep{item: true}))
+			}
+		case string:
+			name, reference := strings.CutPrefix(v, secretPrefix)
+			if reference {
+				// A reference names a binding; the name is template text.
+				r.safe[name] = true
+			}
+			leaf := credential(path)
+			// An unresolved reference is template text, not a credential.
+			if leaf && !reference {
+				r.addSecret(v)
+			}
+			if !leaf && key != "user" && key != "password" && key != "token" {
+				r.allowText(v)
+			}
+			for _, match := range envReference.FindAllStringSubmatch(v, -1) {
+				if !leaf {
+					r.safe[match[1]] = true
+				}
+				if value, ok := os.LookupEnv(match[1]); ok && fullVector {
+					r.addSecret(value)
+				}
+			}
+		case json.Number:
+			r.safe[v.String()] = true
+		}
+	}
+	walk(root, "", nil)
+	sort.Slice(r.secrets, func(i, j int) bool { return len(r.secrets[i]) > len(r.secrets[j]) })
+}
+
+func (r *redactor) allowed(token string) bool {
+	return r.safe[token] || r.safe[strings.Trim(token, trimPunctuation)]
+}
+
+// listenAddresses are a component's configured socket addresses: "address"
+// itself, or one level down (the opentelemetry source's grpc and http).
+func listenAddresses(component map[string]any) []string {
+	var out []string
+	add := func(settings map[string]any) {
+		if address, ok := settings["address"].(string); ok && address != "" {
+			out = append(out, address)
+		}
+	}
+	add(component)
+	for _, value := range component {
+		if nested, ok := value.(map[string]any); ok {
+			add(nested)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unprivilegedPortStart is the lowest port an unprivileged process may listen
+// on: Linux's net.ipv4.ip_unprivileged_port_start, 1024 unless changed (a
+// container runtime may lower it). macOS and Windows have no privileged ports.
+var unprivilegedPortStart = func() int {
+	if runtime.GOOS != "linux" {
+		return 0
+	}
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_unprivileged_port_start")
+	if err != nil {
+		return 1024
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || n < 0 || n > 65536 {
+		return 1024
+	}
+	return n
+}
+
+// privilegedAddresses are the component's configured addresses on ports
+// below limit.
+func (r *redactor) privilegedAddresses(id string, limit int) []string {
+	var out []string
+	for _, address := range r.listen[id] {
+		_, port, err := net.SplitHostPort(address)
+		if n, e := strconv.Atoi(port); err == nil && e == nil && n > 0 && n < limit {
+			out = append(out, address)
+		}
+	}
+	return out
+}
+
+// bindFailure reports a listener that couldn't bind its socket. The syslog
+// and socket sources say so with error_code socket_bind; the HTTP-based ones
+// (http_server, opentelemetry, prometheus_exporter) with a TCP bind error.
+func bindFailure(rec vectorRecord) bool {
+	text := strings.ToLower(rec.Message + " " + rec.Error)
+	return rec.ErrorCode == "socket_bind" || strings.Contains(text, "tcpbind") || strings.Contains(text, "bind failed")
+}
+
+// sensitive reports tokens that could carry host or secret data when they do
+// not come from the template: long tokens, URLs, paths, addresses, emails.
+func sensitive(core string) bool {
+	if strings.Contains(core, redactedToken) || core == "" {
+		return false
+	}
+	return utf8.RuneCountInString(core) >= 24 || strings.Contains(core, "://") || strings.HasPrefix(core, "/") ||
+		strings.HasPrefix(core, `\\`) || strings.Contains(core, "@") || windowsPathLike.MatchString(core) ||
+		(strings.ContainsAny(core, ".:") && ipAddress.MatchString(core))
+}
+
+// text redacts free text. Secret values always go; known local paths become
+// labels; quoted content must be template-derived; unquoted sensitive tokens
+// must be template-derived.
+func (r *redactor) text(s string) string {
+	s = strings.ToValidUTF8(terminalSequence.ReplaceAllString(s, ""), "")
+	for _, secret := range r.secrets {
+		s = strings.ReplaceAll(s, secret, redactedToken)
+	}
+	for _, secret := range r.shortSecrets {
+		s = replaceWord(s, secret, redactedToken)
+	}
+	// Secrets are matched on the text as Vector wrote it. From here a control
+	// character separates words, as a space does: a path or a token behind one
+	// is still judged on its own.
+	s = strings.Map(spaceHostile, s)
+	for _, label := range r.labels {
+		s = strings.ReplaceAll(s, label[0], label[1])
+	}
+	s = stageFile.ReplaceAllStringFunc(s, func(path string) string {
+		if strings.Contains(path, "host-runtime-stage-") {
+			return "host runtime settings"
+		}
+		return "staged configuration"
+	})
+	s = quotedText.ReplaceAllStringFunc(s, func(q string) string {
+		inner := q[1 : len(q)-1]
+		if inner == "" || r.allowed(inner) || inner == "staged configuration" || inner == "managed configuration" || inner == "host runtime settings" {
+			return q
+		}
+		return q[:1] + redactedToken + q[len(q)-1:]
+	})
+	return wordPattern.ReplaceAllStringFunc(s, func(word string) string {
+		if strings.Contains(word, redactedToken) {
+			return word
+		}
+		core := strings.Trim(word, trimPunctuation)
+		if !sensitive(core) || r.allowed(core) || r.allowed(word) {
+			return word
+		}
+		return strings.Replace(word, core, redactedToken, 1)
+	})
+}
+
+// identifier returns a component ID or output name only if the server accepts it
+// in a report (reportableID) and it comes from the template; anything else is
+// dropped rather than echoed.
+func (r *redactor) identifier(value string) string {
+	if !reportableID(value) || !r.allowed(value) {
+		return ""
+	}
+	return value
+}
+
+// reportableID reports whether id may leave the host as a component ID or as the
+// name of a route's output. It is the server's rule for the IDs a device reports
+// (reported_component_id in server/src/validation.rs), which is the pipeline
+// validator's text rule: not empty, at most maxComponentIDBytes bytes of UTF-8,
+// and no "/" or "\", no control character and no drive letter and colon at the
+// start (componentIDProblem, which the policy check applies to a pipeline's IDs).
+// A report adds the characters that can't be shown safely in one line of text
+// and the byte order mark (refusedInName). A dot is allowed. A device that sent
+// an ID the server refuses would be refused its whole check-in, so a fixture
+// (vector-catalog/fixtures/component-ids.json) pins this function and the
+// server's to each other.
+func reportableID(id string) bool {
+	return id != "" && len(id) <= maxComponentIDBytes && utf8.ValidString(id) &&
+		componentIDProblem(id) == "" && strings.IndexFunc(id, refusedInName) < 0
+}
+
+// truncateText is value as one line of at most max characters: the text that
+// leaves the host holds no control character, line separator or text-direction
+// control (singleLine).
+func truncateText(value string, max int) string {
+	value = singleLine(value)
+	if utf8.RuneCountInString(value) <= max {
+		return value
+	}
+	runes := []rune(value)
+	return strings.TrimSpace(string(runes[:max-1])) + "…"
+}
+
+func capitalize(value string) string {
+	r, size := utf8.DecodeRuneInString(value)
+	if size == 0 {
+		return value
+	}
+	return string(unicode.ToUpper(r)) + value[size:]
+}
+
+// finalize redacts and bounds one diagnostic so it serializes to at most
+// maxDiagnosticBytes.
+func (r *redactor) finalize(d Diagnostic) Diagnostic {
+	if d.Severity != "warning" {
+		d.Severity = "error"
+	}
+	d.ComponentID = r.identifier(d.ComponentID)
+	d.RouteOutput = r.identifier(d.RouteOutput)
+	if ref, ok := r.components[d.ComponentID]; ok && d.ComponentKind == "" {
+		d.ComponentKind = ref.Kind
+	}
+	if d.ComponentKind != "source" && d.ComponentKind != "transform" && d.ComponentKind != "sink" {
+		d.ComponentKind = ""
+	}
+	if d.ComponentID == "" {
+		d.RouteOutput = ""
+	}
+	if d.Line < 0 || d.Line > 1_000_000 {
+		d.Line = 0
+	}
+	if d.Column < 0 || d.Column > 1_000_000 {
+		d.Column = 0
+	}
+	d.Message = truncateText(r.text(d.Message), maxDiagnosticMessage)
+	if first, _, _ := strings.Cut(d.Message, " "); r.components[strings.Trim(first, trimPunctuation)] == (componentRef{}) {
+		d.Message = capitalize(d.Message)
+	}
+	d.Hint = truncateText(r.text(d.Hint), maxDiagnosticHint)
+	if d.Hint == "" {
+		d.Hint = codeHints[d.Code]
+	}
+	d.Field = truncateText(r.text(d.Field), maxDiagnosticField)
+	if d.Message == "" {
+		d.Message = noPrintableDiagnostic
+	}
+	// A record that can't be made to fit comes back as small as it gets; the
+	// heartbeat leaves it out (cloneIssue).
+	d, _ = fitDiagnostic(d)
+	return d
+}
+
+// diagnosticBytes is the size of d as the server measures it: the record it
+// parsed, serialized again in compact form, which escapes only the quotation
+// mark, the backslash and the characters below U+0020 and writes everything else
+// as UTF-8. So "<", ">" and "&" count one byte each, where json.Marshal's
+// default writes six. (The encoder also escapes U+2028 and U+2029, which the
+// server writes as three bytes; no diagnostic holds one, because singleLine
+// replaced them.) The fixture vector-catalog/fixtures/report-bounds.json holds
+// records with the size the server measures for each.
+func diagnosticBytes(d Diagnostic) int {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(d)
+	return out.Len() - 1 // Encode ends the value with a newline
+}
+
+// shortestMessage is how many characters of a message are kept before the field
+// and the route's output name go instead.
+const shortestMessage = 60
+
+// fitDiagnostic makes d at most maxDiagnosticBytes as the server measures it, or
+// reports that it can't. The text goes first and the record last: the hint, then
+// the message down to shortestMessage characters, then the field, the route's
+// output name, the rest of the message and the component's ID. A record that
+// still doesn't fit (a code longer than the server accepts is the only way)
+// comes back as small as it got, with false.
+func fitDiagnostic(d Diagnostic) (Diagnostic, bool) {
+	fits := func() bool { return diagnosticBytes(d) <= maxDiagnosticBytes }
+	for _, step := range []func(){
+		func() { d.Hint = "" },
+		func() { d.Message = longestMessage(d, shortestMessage) },
+		func() { d.Field = "" },
+		func() { d.RouteOutput = "" },
+		func() { d.Message = longestMessage(d, 1) },
+		func() { d.ComponentID, d.RouteOutput = "", "" },
+	} {
+		if fits() {
+			return d, true
+		}
+		step()
+	}
+	return d, fits()
+}
+
+// longestMessage is the longest start of d's message, cut at a character and
+// ended with an ellipsis, that makes d fit, but never fewer than least
+// characters.
+func longestMessage(d Diagnostic, least int) string {
+	message := d.Message
+	if utf8.RuneCountInString(message) <= least {
+		return message
+	}
+	low, high, kept := least, utf8.RuneCountInString(message)-1, least
+	for low <= high {
+		middle := (low + high) / 2
+		trial := d
+		trial.Message = truncateText(message, middle)
+		if diagnosticBytes(trial) <= maxDiagnosticBytes {
+			kept, low = middle, middle+1
+		} else {
+			high = middle - 1
+		}
+	}
+	return truncateText(message, kept)
+}
+
+// codeHints are fixed, secret-free fixes for findings Vector reports without
+// a suggestion of its own. Each is at most maxDiagnosticHint characters.
+var codeHints = map[string]string{
+	"DATA_DIR_MISSING":       "Remove data_dir from the pipeline to use the device's own data directory, or create this directory on the device.",
+	"DATA_DIR_NOT_WRITABLE":  "Give the Vector service account write access, or remove data_dir from the pipeline to use the device's own data directory.",
+	"DATA_DIR_CONFLICT":      "Remove data_dir from the pipeline to use the device's own data directory.",
+	"HEALTHCHECK_FAILED":     "Vector still starts and retries delivery. Check the destination address, credentials and network access from the device.",
+	"HEALTHCHECK_REQUIRED":   "Fix the failing sink, or remove healthchecks.require_healthy so Vector starts while a destination is down.",
+	"ADDRESS_IN_USE":         "Stop the other process, or change this component's address.",
+	"INVALID_ADDRESS":        "Use host:port, for example 127.0.0.1:9598.",
+	"ENV_VAR_MISSING":        "Set it in the Vector service's environment on the device, or remove the reference from the pipeline.",
+	"INPUT_NOT_FOUND":        "Change inputs to the ID of an existing source or transform.",
+	"EVENT_TYPE_MISMATCH":    "Connect a component that emits the accepted event type, or convert events first (for example with log_to_metric).",
+	"TLS_FILE_UNREADABLE":    "Check that the certificate and key files exist on the device and that the Vector service account can read them.",
+	"FILE_NOT_FOUND":         "Check that the path exists on the device.",
+	"PERMISSION_DENIED":      "Give the Vector service account access to the path, or change the path.",
+	"PRIVILEGED_PORT":        "Use a port from 1024 up, such as 1514, and point senders there. Or allow it: sudo systemctl edit vectory.service, add [Service] AmbientCapabilities=CAP_NET_BIND_SERVICE, then restart.",
+	"UNKNOWN_FIELD":          "Remove the field or correct its name; check the component's reference for Vector " + VectorVersion + ".",
+	"UNKNOWN_COMPONENT_TYPE": "Use a component type that Vector " + VectorVersion + " supports.",
+	"MISSING_FIELD":          "Add the required field to this component.",
+	"VRL_E100":               "Handle the error case, for example with a fallback: to_int(.status) ?? 0.",
+	"OUTPUT_UNUSED":          "Connect it to a sink or transform, or remove it if unneeded.",
+	"TEST_FAILED":            "Fix the transform, or update the test's expected values.",
+	"VECTOR_TIMEOUT":         "Vector kept running the previous configuration. A destination whose health check never answers is the usual cause: check them from this device, then choose Retry application.",
+}
+
+// diagnosticSet dedupes, orders (errors first) and bounds diagnostics: at most
+// limit of them, or maxDiagnostics when limit is zero.
+type diagnosticSet struct {
+	items []Diagnostic
+	seen  map[string]int
+	limit int
+}
+
+// add keeps one record per finding. Vector repeats transform errors in its
+// "Transform errors" and "Component errors" sections, sometimes without the
+// route name, so duplicates merge into the most specific record.
+func (s *diagnosticSet) add(d Diagnostic) {
+	if s.seen == nil {
+		s.seen = map[string]int{}
+	}
+	key := strings.Join([]string{d.Severity, d.Code, d.ComponentID, strconv.Itoa(d.Line), strconv.Itoa(d.Column), d.Message}, "\x00")
+	if i, ok := s.seen[key]; ok {
+		existing := &s.items[i]
+		if existing.RouteOutput == "" && d.RouteOutput != "" {
+			existing.RouteOutput, existing.Field = d.RouteOutput, d.Field
+		}
+		if existing.Field == "" {
+			existing.Field = d.Field
+		}
+		if existing.Hint == "" {
+			existing.Hint = d.Hint
+		}
+		return
+	}
+	s.seen[key] = len(s.items)
+	s.items = append(s.items, d)
+}
+
+func (s *diagnosticSet) result() []Diagnostic {
+	sort.SliceStable(s.items, func(i, j int) bool {
+		return s.items[i].Severity == "error" && s.items[j].Severity != "error"
+	})
+	limit := s.limit
+	if limit <= 0 {
+		limit = maxDiagnostics
+	}
+	if len(s.items) > limit {
+		return s.items[:limit]
+	}
+	return s.items
+}
+
+// ---- Network error classification ----
+
+var httpStatus = regexp.MustCompile(`(?i)(?:status(?: code)?[: ]+|responded with (?:an error: )?|http )([1-5]\d\d)\b`)
+
+// windowsSocketReasons are Winsock error codes as Rust prints them after the
+// message ("... (os error 10061)"). Windows words the message in the system
+// language; the code is stable.
+var windowsSocketReasons = map[string]string{
+	"os error 10061": "connection_refused",
+	"os error 10060": "timeout",
+	"os error 10054": "connection_reset",
+	"os error 10051": "unreachable",
+	"os error 10065": "unreachable",
+	"os error 10048": "address_in_use",
+}
+
+var windowsSocketError = regexp.MustCompile(`os error 100\d\d`)
+
+// classifyNetwork maps an error chain to a bounded reason.
+func classifyNetwork(text string) string {
+	lower := strings.ToLower(text)
+	if reason := windowsSocketReasons[windowsSocketError.FindString(lower)]; reason != "" {
+		return reason
+	}
+	switch {
+	case strings.Contains(lower, "connection refused"):
+		return "connection_refused"
+	case strings.Contains(lower, "dns error") || strings.Contains(lower, "failed to lookup address") || strings.Contains(lower, "name or service not known") || strings.Contains(lower, "no such host") || strings.Contains(lower, "nodename nor servname"):
+		return "dns"
+	case strings.Contains(lower, "certificate") || strings.Contains(lower, "tls") || strings.Contains(lower, "ssl") || strings.Contains(lower, "handshake"):
+		return "tls"
+	case strings.Contains(lower, "timed out") || strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline"):
+		return "timeout"
+	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "broken pipe"):
+		return "connection_reset"
+	case strings.Contains(lower, "no route to host") || strings.Contains(lower, "network is unreachable"):
+		return "unreachable"
+	case strings.Contains(lower, "address already in use") || strings.Contains(lower, "addrinuse"):
+		return "address_in_use"
+	case strings.Contains(lower, "permission denied"):
+		return "permission_denied"
+	case strings.Contains(lower, "no such file or directory"):
+		return "not_found"
+	}
+	if m := httpStatus.FindStringSubmatch(text); m != nil {
+		return "http_" + m[1]
+	}
+	return ""
+}
+
+// reasonText says what a network reason means, in words.
+var reasonText = map[string]string{
+	"connection_refused": "the destination refused the connection",
+	"dns":                "the destination's host name could not be resolved",
+	"tls":                "the TLS handshake failed",
+	"timeout":            "the request timed out",
+	"connection_reset":   "the connection was reset",
+	"unreachable":        "the destination network is unreachable",
+	"permission_denied":  "permission denied",
+}
+
+// causeOf returns the most specific segment of a Vector error chain.
+func causeOf(chain string) string {
+	parts := strings.Split(chain, ": ")
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func healthDiagnostic(kind, id, chain string) Diagnostic {
+	reason := classifyNetwork(chain)
+	cause := reasonText[reason]
+	if strings.HasPrefix(reason, "http_") {
+		cause = "the destination answered HTTP " + strings.TrimPrefix(reason, "http_")
+	}
+	if cause == "" {
+		cause = causeOf(chain)
+	}
+	return Diagnostic{Severity: "warning", Code: "HEALTHCHECK_FAILED", ComponentKind: kind, ComponentID: id, Reason: reason, Message: "Health check failed: " + cause + "."}
+}
+
+// ---- VRL diagnostic blocks ----
+
+var (
+	vrlHeader   = regexp.MustCompile(`error\[(E\d{3})\]:\s*(.*)$`)
+	vrlPosition = regexp.MustCompile(`┌─\s*[^:\s]*:(\d+):(\d+)`)
+	vrlGutter   = regexp.MustCompile(`^\s*(\d+)?\s*│(.*)$`)
+	vrlNote     = regexp.MustCompile(`^\s*=\s?(.*)$`)
+)
+
+type vrlBlock struct {
+	code, title, suggestion string
+	line, column            int
+	labels                  []string
+}
+
+func parseVRLBlock(lines []string) (vrlBlock, bool) {
+	var b vrlBlock
+	start := -1
+	for i, line := range lines {
+		if m := vrlHeader.FindStringSubmatch(line); m != nil {
+			b.code, b.title, start = m[1], strings.TrimSpace(m[2]), i
+			break
+		}
+	}
+	if start < 0 {
+		return b, false
+	}
+	expectSuggestion, inTry := false, false
+	for _, line := range lines[start+1:] {
+		if m := vrlPosition.FindStringSubmatch(line); m != nil && b.line == 0 {
+			b.line, _ = strconv.Atoi(m[1])
+			b.column, _ = strconv.Atoi(m[2])
+			continue
+		}
+		if m := vrlGutter.FindStringSubmatch(line); m != nil {
+			if m[1] != "" {
+				continue // a source line; the dashboard shows it from the pipeline itself
+			}
+			content := strings.TrimSpace(strings.TrimLeft(m[2], " -^│|"))
+			if content == "" {
+				continue
+			}
+			if expectSuggestion && b.suggestion == "" {
+				b.suggestion = content
+				expectSuggestion = false
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(content), "or change this to") {
+				expectSuggestion = true
+				continue
+			}
+			if i := strings.Index(content, "expected one of"); i >= 0 {
+				content = strings.TrimSpace(content[:i])
+			}
+			if content != "" && len(b.labels) < 3 {
+				b.labels = append(b.labels, content)
+			}
+			continue
+		}
+		if m := vrlNote.FindStringSubmatch(line); m != nil {
+			note := strings.TrimSpace(m[1])
+			lower := strings.ToLower(note)
+			switch {
+			case strings.HasPrefix(lower, "try:"):
+				inTry = b.suggestion == ""
+			case note == "":
+			case strings.HasPrefix(lower, "see ") || strings.HasPrefix(lower, "learn more") || strings.HasPrefix(lower, "try your code"):
+				inTry = false
+			case inTry && b.suggestion == "":
+				b.suggestion = note
+			}
+		}
+	}
+	return b, true
+}
+
+// vrlField names the configuration field that holds the VRL program.
+func vrlField(ref componentRef, route string) string {
+	switch {
+	case route != "":
+		return "route." + route
+	case ref.Type == "remap":
+		return "source"
+	case ref.Type == "filter":
+		return "condition"
+	case ref.Type == "sample":
+		return "exclude"
+	}
+	return ""
+}
+
+var vrlParameter = regexp.MustCompile(`parameter "([a-z_][a-z0-9_]{0,31})"`)
+
+func (r *redactor) vrlDiagnostic(block vrlBlock, kind, id, route string) Diagnostic {
+	message := block.title
+	for i, label := range block.labels {
+		// VRL function parameter names are compiler vocabulary, not data.
+		for _, m := range vrlParameter.FindAllStringSubmatch(label, -1) {
+			r.safe[m[1]] = true
+		}
+		separator := "; "
+		if i == 0 {
+			separator = ": "
+		} else if strings.HasPrefix(label, "but ") || strings.HasPrefix(label, "and ") {
+			separator = " "
+		}
+		message += separator + label
+	}
+	d := Diagnostic{Code: "VRL_" + block.code, ComponentKind: kind, ComponentID: id, RouteOutput: route, Line: block.line, Column: block.column, Message: message}
+	if ref, ok := r.components[id]; ok {
+		d.ComponentKind = ref.Kind
+		d.Field = vrlField(ref, route)
+	}
+	if block.suggestion != "" {
+		d.Hint = "Try: " + block.suggestion
+	}
+	if block.code == "E000" {
+		d.Code = "VRL_RUNTIME_ERROR"
+	}
+	return d
+}
+
+// ---- `vector validate` text output ----
+
+var (
+	componentError  = regexp.MustCompile(`^(Source|Transform|Sink) "([^"]+)":\s*(?:route "([^"]+)":\s*)?(.*)$`)
+	componentPath   = regexp.MustCompile(`^(sources|transforms|sinks)\.([^:\s]+):\s*(.*)$`)
+	dataDirMissing  = regexp.MustCompile(`^data_dir "(.*)" does not exist$`)
+	dataDirReadonly = regexp.MustCompile(`^data_dir "(.*)" is not writable$`)
+	healthFailed    = regexp.MustCompile(`^Health check for "([^"]+)" failed:\s*(.*)$`)
+	typeMismatch    = regexp.MustCompile(`^Data type mismatch between (\S+) \((.*)\) and (\S+) \((.*)\)$`)
+	inputMissing    = regexp.MustCompile(`^Input "([^"]+)" for (sink|transform) "([^"]+)" doesn't match any components\.?$`)
+	envMissing      = regexp.MustCompile(`^Missing environment variable in config\. name = "([^"]+)"`)
+	noConsumers     = regexp.MustCompile(`^(?:Source|Transform) "([^"]+)" has no consumers$`)
+	textLogLine     = regexp.MustCompile(`^\d{4}-\d\d-\d\dT[\d:.]+Z\s+(?:TRACE|DEBUG|INFO|WARN|ERROR)\s`)
+	sectionHeader   = regexp.MustCompile(`^(Transform errors|Component errors|Failed to load \[|Loaded with warnings \[|-{3,}\s*$|\s+Validated\s*$)`)
+)
+
+func isOutputMarker(line string) bool {
+	return strings.HasPrefix(line, "x ") || strings.HasPrefix(line, "~ ") || strings.HasPrefix(line, "√ ") ||
+		sectionHeader.MatchString(line) || textLogLine.MatchString(line)
+}
+
+func singular(section string) string {
+	return strings.TrimSuffix(section, "s")
+}
+
+func (r *redactor) componentFailure(kind, id, text string) Diagnostic {
+	d := Diagnostic{ComponentKind: strings.ToLower(kind), ComponentID: id, Code: "COMPONENT_BUILD_FAILED", Message: text}
+	d.Reason = classifyNetwork(text)
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "certificate") || strings.Contains(lower, "private key") || strings.Contains(lower, "tls"):
+		d.Code, d.Field = "TLS_FILE_UNREADABLE", "tls"
+	case d.Reason == "address_in_use":
+		d.Code, d.Field = "ADDRESS_IN_USE", "address"
+	case d.Reason == "not_found":
+		d.Code = "FILE_NOT_FOUND"
+	case d.Reason == "permission_denied":
+		d.Code = "PERMISSION_DENIED"
+	}
+	return d
+}
+
+func (r *redactor) classifyValidationError(body string, block []string) Diagnostic {
+	if m := componentError.FindStringSubmatch(body); m != nil {
+		kind, id, route, rest := strings.ToLower(m[1]), m[2], m[3], strings.TrimSpace(m[4])
+		if vrl, ok := parseVRLBlock(append([]string{rest}, block...)); ok {
+			return r.vrlDiagnostic(vrl, kind, id, route)
+		}
+		return r.componentFailure(kind, id, rest)
+	}
+	if m := dataDirMissing.FindStringSubmatch(body); m != nil {
+		return Diagnostic{Code: "DATA_DIR_MISSING", Field: "data_dir", Message: "The data directory \"" + m[1] + "\" does not exist on this device."}
+	}
+	if m := dataDirReadonly.FindStringSubmatch(body); m != nil {
+		return Diagnostic{Code: "DATA_DIR_NOT_WRITABLE", Field: "data_dir", Message: "Vector cannot write to the data directory \"" + m[1] + "\"."}
+	}
+	if strings.HasPrefix(body, "conflicting values for 'data_dir'") {
+		return Diagnostic{Code: "DATA_DIR_CONFLICT", Field: "data_dir", Message: "The pipeline and this device set different data directories."}
+	}
+	if m := healthFailed.FindStringSubmatch(body); m != nil {
+		return healthDiagnostic("sink", m[1], m[2])
+	}
+	if m := typeMismatch.FindStringSubmatch(body); m != nil {
+		return Diagnostic{Code: "EVENT_TYPE_MISMATCH", ComponentID: m[3], Field: "inputs", Message: "Event types don't match: " + m[1] + " sends " + eventTypes(m[2]) + ", but " + m[3] + " accepts only " + eventTypes(m[4]) + "."}
+	}
+	if m := inputMissing.FindStringSubmatch(body); m != nil {
+		return Diagnostic{Code: "INPUT_NOT_FOUND", ComponentKind: m[2], ComponentID: m[3], Field: "inputs", Message: "Input \"" + m[1] + "\" does not match any component."}
+	}
+	if m := envMissing.FindStringSubmatch(body); m != nil {
+		return Diagnostic{Code: "ENV_VAR_MISSING", Message: "Environment variable \"" + m[1] + "\" is not set on this device."}
+	}
+	if m := componentPath.FindStringSubmatch(body); m != nil {
+		kind, id, rest := singular(m[1]), m[2], m[3]
+		d := Diagnostic{Code: "CONFIG_INVALID", ComponentKind: kind, ComponentID: id, Message: rest}
+		switch {
+		case strings.HasPrefix(rest, "unknown variant"):
+			d.Code, d.Field = "UNKNOWN_COMPONENT_TYPE", "type"
+			if i := strings.Index(rest, ", expected"); i >= 0 {
+				d.Message = rest[:i]
+			}
+		case strings.HasPrefix(rest, "unknown field"):
+			d.Code = "UNKNOWN_FIELD"
+			if i := strings.Index(rest, ", expected"); i >= 0 {
+				d.Message = rest[:i]
+			}
+		case strings.HasPrefix(rest, "missing field"):
+			d.Code = "MISSING_FIELD"
+		case strings.Contains(rest, "socket address"):
+			d.Code, d.Field = "INVALID_ADDRESS", "address"
+		}
+		return d
+	}
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "secret") {
+		return Diagnostic{Code: "SECRET_UNAVAILABLE", Message: body}
+	}
+	return Diagnostic{Code: "VALIDATION_ERROR", Message: body}
+}
+
+func eventTypes(list string) string {
+	var types []string
+	for _, t := range []string{"Log", "Metric", "Trace"} {
+		if strings.Contains(list, "\""+t+"\"") {
+			types = append(types, strings.ToLower(t)+"s")
+		}
+	}
+	if len(types) == 0 {
+		return "other events"
+	}
+	return strings.Join(types, " and ")
+}
+
+// parseValidateOutput turns `vector validate` text output into diagnostics.
+func (r *redactor) parseValidateOutput(output []byte) []Diagnostic {
+	lines := strings.Split(strings.ToValidUTF8(terminalSequence.ReplaceAllString(string(output), ""), ""), "\n")
+	set := diagnosticSet{limit: r.limit}
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \r")
+		switch {
+		case strings.HasPrefix(line, "x "):
+			j := i + 1
+			for j < len(lines) && !isOutputMarker(strings.TrimRight(lines[j], "\r")) {
+				j++
+			}
+			set.add(r.finalize(r.classifyValidationError(strings.TrimSpace(line[2:]), lines[i+1:j])))
+			i = j - 1
+		case strings.HasPrefix(line, "~ "):
+			body := strings.TrimSpace(line[2:])
+			if m := noConsumers.FindStringSubmatch(body); m != nil {
+				id, output, _ := strings.Cut(m[1], ".")
+				message := "Nothing reads the output of " + id + "."
+				if output != "" {
+					message = "Nothing reads the " + output + " output of " + id + "."
+				}
+				set.add(r.finalize(Diagnostic{Severity: "warning", Code: "OUTPUT_UNUSED", ComponentID: id, RouteOutput: output, Message: message}))
+			} else if !strings.HasPrefix(body, "Health checks are disabled") {
+				set.add(r.finalize(Diagnostic{Severity: "warning", Code: "VALIDATION_WARNING", Message: body}))
+			}
+		}
+	}
+	return set.result()
+}
+
+// ---- `vector test` output ----
+
+var (
+	testFailedLine = regexp.MustCompile(`^test (.+) \.\.\. failed$`)
+	testHeader     = regexp.MustCompile(`^test (.+):$`)
+	testCheck      = regexp.MustCompile(`^check\[\d+\] for (?:transforms|outputs) \[(.*)\] failed`)
+	testCondition  = regexp.MustCompile(`^condition\[\d+\]:\s*(.*)$`)
+	quotedID       = regexp.MustCompile(`"([^"]+)"`)
+)
+
+// parseTestOutput reports each failing `vector test` case with its first
+// failing condition. Output payloads are never included.
+func (r *redactor) parseTestOutput(output []byte) []Diagnostic {
+	set := diagnosticSet{limit: r.limit}
+	for _, finding := range r.testFindings(output) {
+		set.add(finding.diagnostic)
+	}
+	return set.result()
+}
+
+// testFinding is the diagnostic for one failing test, with the test's name.
+type testFinding struct {
+	name       string
+	diagnostic Diagnostic
+}
+
+// testFindings lists the failing `vector test` cases, in the order Vector
+// reports them, each with the diagnostic parseTestOutput returns for it.
+func (r *redactor) testFindings(output []byte) []testFinding {
+	lines := strings.Split(strings.ToValidUTF8(terminalSequence.ReplaceAllString(string(output), ""), ""), "\n")
+	var findings []testFinding
+	failing := map[string]bool{}
+	for _, line := range lines {
+		if m := testFailedLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			failing[m[1]] = true
+		}
+	}
+	current, component, reported := "", "", map[string]bool{}
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "output payloads from") {
+			current = ""
+			continue
+		}
+		if m := testHeader.FindStringSubmatch(line); m != nil && failing[m[1]] {
+			current, component = m[1], ""
+			continue
+		}
+		if current == "" || reported[current] {
+			continue
+		}
+		if m := testCheck.FindStringSubmatch(line); m != nil {
+			if ids := quotedID.FindStringSubmatch(m[1]); ids != nil {
+				component = ids[1]
+			}
+			if strings.Contains(line, "no events") {
+				reported[current] = true
+				findings = append(findings, testFinding{current, r.finalize(Diagnostic{Code: "TEST_FAILED", ComponentKind: "transform", ComponentID: component, Field: "tests", Message: "Test \"" + current + "\" failed: " + line})})
+			}
+			continue
+		}
+		if m := testCondition.FindStringSubmatch(line); m != nil {
+			j := i + 1
+			for j < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "output payloads from") && !testCondition.MatchString(strings.TrimSpace(lines[j])) && !testHeader.MatchString(strings.TrimSpace(lines[j])) {
+				j++
+			}
+			message := strings.TrimSuffix(strings.TrimSpace(m[1]), ":")
+			d := Diagnostic{Code: "TEST_FAILED", ComponentKind: "transform", ComponentID: component, Field: "tests"}
+			if vrl, ok := parseVRLBlock(lines[i+1 : j]); ok {
+				detail := vrl.title
+				if k := strings.Index(detail, "assertion failed"); k >= 0 {
+					detail = detail[k:]
+				}
+				d.Line, d.Column = vrl.line, vrl.column
+				message = detail
+			}
+			d.Message = "Test \"" + current + "\" failed: " + message
+			findings = append(findings, testFinding{current, r.finalize(d)})
+			reported[current] = true
+			i = j - 1
+		}
+	}
+	names := make([]string, 0, len(failing))
+	for name := range failing {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !reported[name] {
+			findings = append(findings, testFinding{name, r.finalize(Diagnostic{Code: "TEST_FAILED", Field: "tests", Message: "Test \"" + name + "\" failed."})})
+		}
+	}
+	return findings
+}
+
+// ---- Runtime JSON logs ----
+
+// vectorRecord is one parsed line of Vector's JSON internal log.
+type vectorRecord struct {
+	Level, Message, Target, Error, ErrorType, ErrorCode, Stage, Reason string
+	ComponentID, ComponentKind, ComponentType                          string
+	Address, ChangedFields, Version                                    string
+	Timestamp                                                          string
+}
+
+func jsonText(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case json.Number:
+		return t.String()
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	}
+	return ""
+}
+
+func parseVectorRecord(line []byte) (vectorRecord, bool) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 || line[0] != '{' {
+		return vectorRecord{}, false
+	}
+	var raw map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.UseNumber()
+	if decoder.Decode(&raw) != nil {
+		return vectorRecord{}, false
+	}
+	rec := vectorRecord{
+		// "Log level is enabled." repeats the level key with a quoted value.
+		Level: strings.ToUpper(strings.Trim(jsonText(raw["level"]), `"`)), Message: jsonText(raw["message"]), Target: jsonText(raw["target"]),
+		Error: jsonText(raw["error"]), ErrorType: jsonText(raw["error_type"]), ErrorCode: jsonText(raw["error_code"]), Stage: jsonText(raw["stage"]),
+		Reason: jsonText(raw["reason"]), Address: jsonText(raw["address"]), ChangedFields: jsonText(raw["changed_fields"]),
+		Version: jsonText(raw["version"]), Timestamp: jsonText(raw["timestamp"]),
+		ComponentID: jsonText(raw["component_id"]), ComponentKind: jsonText(raw["component_kind"]), ComponentType: jsonText(raw["component_type"]),
+	}
+	if rec.Message == "" {
+		rec.Message = jsonText(raw["msg"])
+	}
+	// Vector stores the component in the event (healthchecks), the span, or the span stack.
+	if rec.ComponentID == "" {
+		spans := []any{raw["span"]}
+		if stack, ok := raw["spans"].([]any); ok {
+			spans = append(spans, stack...)
+		}
+		for _, s := range spans {
+			span, _ := s.(map[string]any)
+			if id := jsonText(span["component_id"]); id != "" {
+				rec.ComponentID, rec.ComponentKind, rec.ComponentType = id, jsonText(span["component_kind"]), jsonText(span["component_type"])
+				break
+			}
+		}
+	}
+	return rec, rec.Level != "" && rec.Message != ""
+}
+
+// parseRuntimeRecords explains why Vector failed to start or reload, from
+// the JSON log records written during that attempt.
+func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
+	set := diagnosticSet{limit: r.limit}
+	addresses := map[string]string{}
+	for _, rec := range records {
+		if rec.Address != "" && rec.ComponentID != "" {
+			addresses[rec.ComponentID] = rec.Address
+		}
+	}
+	failedComponents := map[string]bool{}
+	for _, rec := range records {
+		// A pipeline's VRL log() output is event data, not Vector's verdict.
+		if strings.HasPrefix(rec.Target, "vrl::") {
+			continue
+		}
+		switch {
+		case rec.Message == "Configuration error." && rec.Error != "":
+			lines := strings.Split(rec.Error, "\n")
+			set.add(r.finalize(r.classifyValidationError(strings.TrimSpace(lines[0]), lines[1:])))
+		case rec.Level == "ERROR" && rec.Target == "vector::app" && rec.Message == "An error occurred that Vector couldn't handle." &&
+			strings.HasPrefix(rec.Error, "Failed to bind gRPC API server to ") && classifyNetwork(rec.Error) == "address_in_use":
+			// Vector 0.58 acknowledges startup before it tries to bind its API.
+			// The ensuing app error has no component ID, so the component rule
+			// below cannot explain the early exit.
+			message := "Another process is already listening on the Vector API address."
+			if r.apiAddress != "" && strings.Contains(rec.Error, "to "+r.apiAddress+":") {
+				message = "Another process is already listening on the Vector API address " + r.apiAddress + "."
+			}
+			set.add(r.finalize(Diagnostic{Code: "ADDRESS_IN_USE", Field: "api.address", Reason: "address_in_use", Message: message,
+				Hint: "Stop the other process, or change the Vector API address."}))
+		case rec.Message == "Healthcheck failed.":
+			set.add(r.finalize(healthDiagnostic(rec.ComponentKind, rec.ComponentID, rec.Error)))
+		case rec.Message == "Sinks unhealthy.":
+			set.add(r.finalize(Diagnostic{Code: "HEALTHCHECK_REQUIRED", Field: "healthchecks.require_healthy", Message: "Vector stopped because the pipeline requires healthy sinks at startup and a sink failed its health check."}))
+		case rec.Message == "Config reload rejected due to non-reloadable global options.":
+			set.add(r.finalize(Diagnostic{Severity: "warning", Code: "RELOAD_REJECTED", Field: rec.ChangedFields, Message: "Vector cannot reload a change to " + rec.ChangedFields + "; the agent restarted it instead."}))
+		case rec.Level == "ERROR" && rec.ComponentID != "" && !strings.HasPrefix(rec.Message, "An error occurred that Vector couldn't handle"):
+			failedComponents[rec.ComponentID] = true
+			text := rec.Message
+			if rec.Error != "" {
+				text += " " + rec.Error
+			}
+			d := r.componentFailure(rec.ComponentKind, rec.ComponentID, text)
+			d.Code = strings.Replace(d.Code, "COMPONENT_BUILD_FAILED", "COMPONENT_FAILED", 1)
+			switch {
+			case d.Code == "ADDRESS_IN_USE":
+				d.Message = "Another process is already listening on this component's address."
+				if address := addresses[rec.ComponentID]; address != "" {
+					d.Message = "Another process is already listening on " + address + "."
+				}
+			case d.Code == "PERMISSION_DENIED" && bindFailure(rec):
+				// A listener refused its port, not a path: on Linux, ports below
+				// 1024 need CAP_NET_BIND_SERVICE, which the service account lacks.
+				limit := unprivilegedPortStart()
+				if privileged := r.privilegedAddresses(rec.ComponentID, limit); len(privileged) > 0 {
+					d.Code, d.Field = "PRIVILEGED_PORT", "address"
+					// One apostrophe only: redaction reads a pair as a quotation.
+					d.Message = fmt.Sprintf("Vector can't listen on %s: ports below %d need a privilege the service account lacks.", strings.Join(privileged, " and "), limit)
+				}
+			}
+			set.add(r.finalize(d))
+		}
+	}
+	for _, rec := range records {
+		if rec.Level == "ERROR" && !strings.HasPrefix(rec.Target, "vrl::") && strings.HasPrefix(rec.Message, "An error occurred that Vector couldn't handle") && rec.ComponentID != "" && !failedComponents[rec.ComponentID] {
+			set.add(r.finalize(Diagnostic{Code: "COMPONENT_FAILED", ComponentKind: rec.ComponentKind, ComponentID: rec.ComponentID, Message: "The component stopped with an error Vector could not handle."}))
+		}
+	}
+	return set.result()
+}
+
+// ---- Engine integration ----
+
+// diagnoseFailure converts a native failure into redacted diagnostics. The
+// effective configuration seeds the echo-safe vocabulary; its credential
+// leaves and referenced environment values are scrubbed.
+func (e *Engine) diagnoseFailure(err error, effective []byte) []Diagnostic {
+	failure := asVectorFailure(err)
+	if failure == nil {
+		return nil
+	}
+	return e.redactorFor(effective).diagnose(failure)
+}
+
+// diagnose turns a native failure into redacted diagnostics, at most r's limit
+// of each kind.
+func (r *redactor) diagnose(failure *VectorFailure) []Diagnostic {
+	var out []Diagnostic
+	switch failure.Phase {
+	case "validate":
+		out = r.parseValidateOutput(failure.Output)
+	case "test":
+		out = r.parseTestOutput(failure.Output)
+	case "start", "reload":
+		out = r.parseRuntimeRecords(failure.Records)
+	case "timeout":
+		out = []Diagnostic{r.finalize(Diagnostic{Code: "VECTOR_TIMEOUT", Message: failure.Summary})}
+	}
+	for _, d := range failure.Diagnostics {
+		out = append(out, r.finalize(d))
+	}
+	if len(out) == 0 && failure.Phase != "timeout" && failure.Phase != "prepare" {
+		out = []Diagnostic{r.finalize(Diagnostic{Code: "VECTOR_" + strings.ToUpper(failure.Phase) + "_FAILED", Message: failure.Summary})}
+	}
+	return out
+}
+
+// policyDiagnostics explains a restricted-mode refusal: the component, the
+// resource and the allowance that would permit it. The resource comes from
+// the published pipeline, so it may be echoed unless it carries a secret.
+func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
+	var refusal *PolicyRefusal
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	r := e.redactorFor(effective)
+	// The field is a path of keys from the pipeline's own text, such as
+	// auth.auth.credentials_file, and is as safe to echo as the resource.
+	for _, token := range []string{refusal.Resource, refusal.Suggested, shortID(refusal.ComponentID), refusal.Field} {
+		if token != "" && !r.containsSecret(token) {
+			r.safe[token] = true
+		}
+	}
+	refused := *refusal
+	refused.StateDir = e.Dir
+	return []Diagnostic{r.finalize(refused.Diagnostic())}
+}
+
+// containsSecret reports whether text overlaps a secret value.
+func (r *redactor) containsSecret(text string) bool {
+	for _, secret := range r.secrets {
+		if strings.Contains(text, secret) || strings.Contains(secret, text) {
+			return true
+		}
+	}
+	for _, secret := range r.shortSecrets {
+		if containsWord(text, secret) {
+			return true
+		}
+	}
+	return false
+}
+
+// secretDiagnostics explains a failed typed secret reference by name and field.
+func (e *Engine) secretDiagnostics(err error, template []byte) []Diagnostic {
+	var ref *secretReferenceError
+	if !errors.As(err, &ref) {
+		return nil
+	}
+	return []Diagnostic{secretDiagnostic(ref, e.redactorFor(template))}
+}
+
+// secretDiagnostic is the diagnostic for one failed reference, redacted by r.
+func secretDiagnostic(ref *secretReferenceError, r *redactor) Diagnostic {
+	d := Diagnostic{Code: ref.code, ComponentKind: ref.kind, ComponentID: ref.id, Field: ref.field}
+	switch ref.code {
+	case "SECRET_BINDING_MISSING":
+		d.Message = "This device has no file bound to secret \"" + ref.name + "\"."
+		d.Hint = "Bind it on the host with configure-secrets while the agent is stopped."
+	case "SECRET_FILE_UNREADABLE":
+		d.Message = "The file bound to secret \"" + ref.name + "\" is missing, empty or not private to the agent account."
+		d.Hint = "Run configure-secrets on the host; it prints the exact fix."
+	case "SECRET_REFERENCE_REFUSED":
+		d.Message = "A vectory-secret reference is allowed only as the whole value of a credential field."
+		d.Hint = "Use vectory-secret:NAME alone in a password, token or key field."
+	default:
+		d.Message = "Secret \"" + ref.name + "\" contains interpolation syntax that full mode would expand."
+	}
+	if ref.field != "" {
+		// The field path is made of template keys; name it even when it is long.
+		r.safe[ref.field] = true
+	}
+	return r.finalize(d)
+}
+
+func (e *Engine) redactorFor(effective []byte) *redactor {
+	r := newRedactor()
+	r.learnConfiguration(effective, e.Settings.CapabilityPolicy.FullVectorConfig)
+	host := e.hostRuntime(effective)
+	if host.DataDir != "" {
+		r.safe[host.DataDir] = true
+	}
+	r.addLabel(e.Settings.ManagedConfig, "managed configuration")
+	r.addLabel(hostRuntimePath(e.Dir), "host runtime settings")
+	// A fix the agent prints names its own state directory (CommandFor).
+	if e.Dir != "" {
+		r.safe[e.Dir] = true
+	}
+	return r
+}

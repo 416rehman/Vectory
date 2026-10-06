@@ -92,7 +92,7 @@ try:
     api("/deployments/"+created_id+"/cancel",{})
     api("/deployments/"+rollback_id+"/cancel",{})
     other_password=os.urandom(32).hex()
-    api("/users",{"name":"Other synthetic operator","email":"other@example.invalid","password":other_password,"role":"operator"})
+    api("/users",{"name":"Other synthetic operator","email":"other@example.invalid","password":other_password,"role":"operator","current_password":password})
     other=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     other_csrf=api("/login",{"email":"other@example.invalid","password":other_password},opener=other,token="")["csrf_token"]
     def snapshot():

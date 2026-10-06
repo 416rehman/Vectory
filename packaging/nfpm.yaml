@@ -8,8 +8,10 @@ maintainer: Vectory maintainers
 description: Standalone outbound configuration management agent for Vector
 license: Apache-2.0
 contents:
+  # expand: nfpm substitutes ${VERSION} and ${GOARCH} in src only when asked.
   - src: ../artifacts/releases/vectory-${VERSION}-linux-${GOARCH}
     dst: /usr/bin/vectory
+    expand: true
     file_info:
       mode: 0755
   - src: systemd/vectory.service
@@ -18,5 +20,7 @@ contents:
     dst: /usr/share/doc/vectory/AGENT-INSTALL.md
   - src: ../LICENSE
     dst: /usr/share/doc/vectory/LICENSE
+  - src: ../NOTICE
+    dst: /usr/share/doc/vectory/NOTICE
 # Deliberately no install scripts: no secret enrollment, account privilege grants,
 # Vector replacement, or service startup occurs during package installation.

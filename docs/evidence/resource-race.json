@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-27T09:32:55.875Z",
+  "timestamp": "2026-09-29T19:14:43.995Z",
   "passed": true,
   "scope": "Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data",
   "checks": [
@@ -8,6 +8,11 @@
     "path change hides prior data",
     "late old-path response cannot overwrite new resource",
     "null path resets data and stops polling",
-    "unmount invalidates pending work and disables saved reload/poll"
+    "unmount invalidates pending work and disables saved reload/poll",
+    "a background tick while a read is in flight starts no second request",
+    "an interval change reschedules the poll without a read; interval 0 never polls",
+    "a refresh bump replaces the in-flight read and keeps loaded data without a loading flash",
+    "IDENTITY_MISMATCH drops the displayed record until a matching read",
+    "a browser network failure reads as a sentence and keeps the last good record"
   ]
 }

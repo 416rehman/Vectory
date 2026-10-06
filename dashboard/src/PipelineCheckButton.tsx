@@ -1,161 +1,144 @@
 import * as Popover from "@radix-ui/react-popover";
-import { CircleAlert, CircleCheck, CircleX, LoaderCircle } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  CircleX,
+  LoaderCircle,
+} from "lucide-react";
+import type { CheckStatus, Problem } from "./pipelineProblems";
 import { useHoverDisclosure } from "./useHoverDisclosure";
 
-type CheckResult = {
-  valid: boolean;
-  vector_validated: boolean;
-  errors: string[];
-  warnings: string[];
+const icons: Record<CheckStatus, typeof CircleCheck> = {
+  unchecked: CircleDashed,
+  stale: CircleDashed,
+  checking: LoaderCircle,
+  passed: CircleCheck,
+  device: CircleCheck,
+  partial: CircleAlert,
+  problems: CircleX,
+  unavailable: CircleAlert,
 };
 
+/**
+ * The status opens the cached findings; only a first check runs from here.
+ * Hover and keyboard focus reveal a short summary without changing the result.
+ */
 export default function PipelineCheckButton({
-  state,
+  status,
+  label,
   description,
+  problems,
+  hasCheckAttempt,
   feedbackId,
-  result,
-  checking,
   disabled,
   hidden,
+  onInspect,
   onCheck,
 }: {
-  state: "neutral" | "checking" | "passed" | "partial" | "failed" | "stale";
+  status: CheckStatus;
+  label: string;
   description: string;
+  problems: readonly Problem[];
+  hasCheckAttempt: boolean;
   feedbackId: string;
-  result: CheckResult | null;
-  checking: boolean;
   disabled: boolean;
   hidden: boolean;
+  onInspect: () => void;
   onCheck: () => void;
 }) {
-  const help = useHoverDisclosure();
-  const restoreKeyboardFocus = useRef(false);
-  const wasChecking = useRef(false);
+  const disclosure = useHoverDisclosure();
+  const Icon = icons[status];
+  const highlightedProblems = [...problems]
+    .sort((a, b) => {
+      const priority = (problem: Problem) =>
+        (problem.severity === "error" ? 0 : 2) +
+        (problem.origin === "vector" ? 0 : 1);
+      return priority(a) - priority(b);
+    })
+    .slice(0, 3);
+  const remainingProblems = problems.length - highlightedProblems.length;
   useEffect(() => {
-    if (!checking) return;
-    // Do not take focus back if the user deliberately moved on while checking.
-    const cancel = () => {
-      restoreKeyboardFocus.current = false;
-    };
-    document.addEventListener("pointerdown", cancel, true);
-    document.addEventListener("keydown", cancel, true);
-    return () => {
-      document.removeEventListener("pointerdown", cancel, true);
-      document.removeEventListener("keydown", cancel, true);
-    };
-  }, [checking]);
-  useEffect(() => {
-    const completed = wasChecking.current && !checking;
-    wasChecking.current = checking;
-    if (!completed) return;
-    const restore = restoreKeyboardFocus.current;
-    restoreKeyboardFocus.current = false;
-    // Validation temporarily makes the workspace inert. Restore keyboard
-    // focus only when that operation caused the blur, never after a mouse tap.
-    if (
-      restore &&
-      !disabled &&
-      !hidden &&
-      document.activeElement === document.body
-    )
-      help.triggerRef.current?.focus({ preventScroll: true });
-  }, [checking, disabled, hidden, help.triggerRef]);
-  useEffect(() => {
-    if (hidden) help.close();
-  }, [hidden, help.close]);
-  const Icon =
-    state === "checking"
-      ? LoaderCircle
-      : state === "failed"
-        ? CircleX
-        : state === "stale" || state === "partial"
-          ? CircleAlert
-          : CircleCheck;
-  const title = result
-    ? result.valid
-      ? result.vector_validated
-        ? result.warnings.length
-          ? "Checks passed with warnings"
-          : "Vector checks passed"
-        : "Device validation pending"
-      : "Pipeline needs attention"
-    : state === "checking"
-      ? "Checking pipeline…"
-      : "Check pipeline";
+    if (disabled || hidden) disclosure.close();
+  }, [disabled, hidden, disclosure.close]);
+  if (hidden) return null;
   return (
     <>
       <Popover.Root
-        open={help.open && !hidden}
-        onOpenChange={help.onOpenChange}
+        open={disclosure.open}
+        onOpenChange={disclosure.onOpenChange}
       >
         <Popover.Trigger asChild>
           <button
-            {...help.triggerProps}
-            ref={help.triggerRef}
             type="button"
-            className="icon-button editor-check-button"
-            aria-label="Check pipeline"
+            className="editor-check-button"
+            data-check-state={status}
+            ref={disclosure.triggerRef}
+            aria-label={`${hasCheckAttempt ? "Open Problems" : "Check pipeline"}: ${label}`}
             aria-describedby={feedbackId}
-            aria-busy={checking || undefined}
-            data-check-state={state}
+            aria-busy={status === "checking" || undefined}
             disabled={disabled}
+            {...disclosure.triggerProps}
             onClick={(event) => {
-              restoreKeyboardFocus.current =
-                event.detail === 0 &&
-                !(event.nativeEvent as PointerEvent).pointerType;
-              help.triggerProps.onClick(event);
-              onCheck();
+              event.preventDefault();
+              disclosure.close();
+              if (hasCheckAttempt) onInspect();
+              else onCheck();
             }}
           >
-            <Icon size={17} aria-hidden="true" />
+            <Icon size={15} aria-hidden="true" />
+            <span>{label}</span>
           </button>
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content
-            {...help.contentProps}
-            ref={help.contentRef}
-            className="editor-checks-popover"
-            aria-label="Pipeline check results"
+            ref={disclosure.contentRef}
+            className="editor-check-popover"
+            aria-label="Pipeline check summary"
             side="bottom"
             align="end"
-            sideOffset={8}
+            sideOffset={6}
             collisionPadding={12}
             tabIndex={-1}
+            {...disclosure.contentProps}
             onOpenAutoFocus={(event) => event.preventDefault()}
             onCloseAutoFocus={(event) => event.preventDefault()}
-            onEscapeKeyDown={help.onEscapeKeyDown}
+            onEscapeKeyDown={disclosure.onEscapeKeyDown}
           >
-            <strong>{title}</strong>
-            {!result && (
-              <p>
-                {state === "neutral"
-                  ? "Run checks for the current pipeline."
-                  : description}
-              </p>
-            )}
-            {result?.valid && !result.vector_validated && (
-              <p>
-                No errors were found in the checks available here. Each device
-                validates the full configuration before applying it.
-              </p>
-            )}
-            {result?.valid && result.vector_validated && (
-              <p>
-                Configuration checks passed. Devices verify their local
-                environment and permissions before applying the pipeline.
-              </p>
-            )}
-            {!!result?.errors?.length && (
+            <strong>{label}</strong>
+            <p>{description}</p>
+            {problems.length > 0 && (
               <ul>
-                {result.errors.map((message, index) => (
-                  <li key={index}>{message}</li>
+                {highlightedProblems.map((problem) => (
+                  <li
+                    key={problem.key}
+                    data-severity={problem.severity}
+                    data-stale={problem.stale || undefined}
+                  >
+                    {problem.component && <code>{problem.component}</code>}
+                    <span>
+                      {problem.message}
+                      {problem.stale && (
+                        <small className="editor-check-stale">
+                          From an earlier check
+                        </small>
+                      )}
+                    </span>
+                  </li>
                 ))}
               </ul>
             )}
-            {result?.warnings?.map((message, index) => (
-              <p key={index}>{message}</p>
-            ))}
+            {remainingProblems > 0 && (
+              <small>
+                {`${remainingProblems} more ${remainingProblems === 1 ? "finding" : "findings"} in Problems.`}
+              </small>
+            )}
+            <small>
+              {hasCheckAttempt
+                ? "Open Problems for details and Check again."
+                : "Select to check this pipeline with Vector."}
+            </small>
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>

@@ -69,7 +69,7 @@ func TestSettingsMaintenancePreservesUnrelatedFields(t *testing.T) {
 				err = ConfigureMetrics(f.dir, "http://127.0.0.1:9599/metrics")
 			case "secrets":
 				changedSettings["secret_files"] = true
-				secret := filepath.Join(t.TempDir(), "synthetic-secret")
+				secret := filepath.Join(privateTempDir(t), "synthetic-secret")
 				if err = AtomicWrite(secret, []byte("synthetic-placeholder")); err != nil {
 					t.Fatal(err)
 				}

@@ -114,7 +114,88 @@
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.rollback-exclusion-reason {
+.rollback-nothing {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 14px 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-hover);
+}
+.rollback-nothing strong {
+  font-size: 15px;
+}
+.rollback-nothing p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.rollback-shared-digest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  margin: 10px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+.rollback-shared-digest code {
+  font-size: 11px;
+}
+.rollback-local {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollback-nothing .rollback-nothing-devices {
+  color: var(--ink);
+  font-weight: 500;
+}
+.rollback-device-digest {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollback-story {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.rollback-story li {
+  overflow-wrap: anywhere;
+}
+.rollback-story + .rollback-review-effect {
+  margin: 10px 0 0;
+}
+.rollback-story li[data-tone="danger"] {
+  color: var(--danger-text);
+  font-weight: 500;
+}
+.rollback-cancel-first {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.rollback-cancel-first p {
+  margin: 0;
+}
+.rollback-device-detail {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.rollback-device-list li[data-tone="danger"] .rollback-device-detail {
+  color: var(--danger-text);
 }

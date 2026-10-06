@@ -1,130 +1,32 @@
-# Agent installation and adoption
+# Install the Vectory agent
 
-The agent manages an existing Vector 0.58 installation. It never installs or upgrades Vector. Check [COMPATIBILITY](COMPATIBILITY.md) first. Verify SHA256SUMS through a trusted release channel and, for a signed release, verify the checksum signature using the independently established release key before executing any downloaded binary. Unsigned development outputs are clearly labeled in the release catalog.
+The full guide is **Connect a device** in your Vectory server's Help center, at `https://<your-server>/help/installation/`, and in the source repository at [docs/user/installation.md](user/installation.md).
 
-Choose a private, absolute state directory, the absolute existing Vector executable, and an absolute sole managed JSON configuration path in a dedicated directory. The configuration directory must not contain unrelated files; installers must not transfer ownership of a shared `/etc/vector` tree. The agent identity must be able to write these managed paths and control only the adopted Vector process. Do not grant blanket sudo or make an arbitrary executable/service selectable from the dashboard.
+The fastest path is **Devices → Add device** in your dashboard: it builds one command for your server, operating system and token.
 
-```sh
-vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vector/vectory-managed/vector.json --adopt
-vectory enroll --state-dir /var/lib/vectory-agent --server https://vectory.example.com:8443 --ca-file /protected/server-ca.pem --id edge-01 --token-stdin
-vectory doctor --state-dir /var/lib/vectory-agent
-vectory run --state-dir /var/lib/vectory-agent
-```
+## Manual install on Linux
 
-The adoption flag is an explicit local decision. Coordinate shutdown of any independently supervised Vector instance first; starting a second process with the same ports/data directory is unsafe. `--ca-file` supplies trust obtained independently, not downloaded from an unverified enrollment endpoint. Use the single argument `--ca-file=` to deliberately select the operating system's trust store. Omitting the option preserves a previously saved trust path on agents with enrollment preflight protection. A bare IP must have a matching certificate IP SAN. TLS failures do not fall back to HTTP or skip verification.
-
-Installation defaults to **restricted** configuration capabilities. To use all configuration features supported by the adopted Vector build, the host operator explicitly opts in locally:
+You need Vector 0.58.0 on the host, an enrollment token from **Add device**, and outbound access to your server on port 8443.
 
 ```sh
-vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vector/vectory-managed/vector.json --adopt --allow-full-vector-config
+sudo install -m 0755 vectory /usr/local/bin/vectory
+sudo vectory install \
+  --vector-binary /usr/bin/vector \
+  --managed-config /etc/vectory/managed/vector.json \
+  --adopt
+sudo vectory enroll --server https://vectory.example.com:8443 --name web-01
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin vectory
+sudo vectory service-install --service-user vectory
+sudo vectory service-start
 ```
 
-Full mode trusts pipeline publishers with the Vector process's host permissions, including executable components/providers, external files, native environment references, enrichment tables and all native integrations available on that OS/build. Provision required accounts, credentials, files, environment and services on the device. The dashboard cannot grant this permission; it receives the locally reported `configuration_mode` during enrollment and heartbeats. Restricted mode retains its component/file/network allowlists; those allowlists do not constrain full mode.
+`enroll` asks for the token with hidden input. If your server's certificate comes from a private CA, add `--ca-file PATH` with the CA's public certificate.
 
-For an existing installation, stop the daemon and run `vectory install --state-dir /var/lib/vectory-agent --allow-full-vector-config`, then restart it. Existing binary/config paths and enrollment are retained. With native service registration use `vectory service-stop` and `vectory service-start`; with foreground operation stop and restart `vectory run`. Use the same absolute state path and service identity as the original install. `--allow-full-vector-config=false` returns to restricted mode; omission preserves the current mode. Install refuses a mode change while a daemon holds the state lock. Mode changes preserve generation counters and local pause, and permit reassessment of an earlier rejected pipeline. Prepare a restricted-compatible workload before downgrading, because a full-mode configuration may then fail startup policy.
+## Before you start, know that
 
-Full mode enables native environment interpolation and passes the service environment while filtering launcher/config-file override variables. Native `SECRET[backend.key]` references are left to Vector. Managed-file hashes describe the stored configuration, not provider-resolved values or environment state. The managed supervisor does not forward interactive stdin into pipelines. Before activation, the agent runs actual Vector validation and also `vector test` for nonempty top-level tests, using bounded time/output and suppressed diagnostics. Failed tests retain the running workload; native providers can access host resources during validation/tests. Full-mode executable integrations and process output are trusted, so observed startup is not an independent attestation against a malicious full-mode publisher. See [the full-mode reference](../agent/README.md#full-vector-configuration-mode).
+- The agent adopts an installed Vector 0.58.0 and never installs or upgrades it.
+- New installs use restricted mode. Only the host can enable full mode, with `--allow-full-vector-config`.
+- Enrolling never deploys a pipeline. Deploy one from the dashboard.
+- The agent only connects out, over TLS 1.3, and never skips certificate checks.
 
-Use interactive entry, `--token-stdin`, or a protected token file supported by the CLI. Do not save tokens in scripts, service definitions, URLs, or binaries. The compatibility form `vectory -ip <server> -id <name> -token <token>` exposes a secret to process listings and shell history; prefer stdin. A reusable token is enrollment-only and expires/revokes independently from per-device credentials. Leaked tokens may enroll additional devices within their name/use scope. New devices have no group membership or desired configuration until explicitly assigned.
-
-Use a verified agent artifact containing enrollment preflight protection; a shared development version label is not sufficient. Stop the agent and keep the same state directory for enrollment or explicit recovery. Invalid local input, an unreadable or invalid CA file, an already-enrolled identity, and incomplete identity or pending-request records are refused before changing existing connection settings or allocating a new enrollment identity. Preserve incomplete files for inspection rather than deleting a key, request, credential or recovery-origin record to make the command proceed. An ordinary `enroll` command does not repair an existing identity.
-
-After an interrupted request or server rejection, keep the original server, machine name, state directory and token. The pending request keeps its key and request ID; a response error does not establish that the server did nothing. Omit `--ca-file` to retain saved trust, supply `--ca-file /protected/correct-server-ca.pem` to deliberately repair it, or use `--ca-file=` for system trust. Trust correction does not authorize changing the pending server or machine name. A pending explicit recovery also retains its original token binding. Ask the administrator to inspect server and token state when the original token is no longer usable; do not clear local identity or counters as a retry shortcut.
-
-Local preflight is not a transaction across every enrollment file or a server rollback. A later filesystem failure can leave prepared settings, a key, a pending request, or a saved identity. In particular, an error that identity was saved but the durable state update is incomplete requires preserving those files and inspecting recovery before another attempt. Older builds may already have saved a wrong connection setting before reporting an error; upgrading cannot prove that such an earlier request never reached the server.
-
-Normal operation is `run` under a dedicated least-privileged identity. `run --once` is for diagnostics/tests, not a persistent service. `status` and `doctor` explain local credentials, trust, paths, and apply state. `pause` is a durable local emergency stop on reconciliation; remote resume cannot override it. `resume` clears the local pause. Neither should stop a healthy current Vector. `unenroll`/`uninstall` must be deliberate; uninstall preserves state unless explicitly purged.
-
-To remove the agent identity and local state, stop its supervisor and remove its service registration first. Then run `vectory uninstall --purge --state-dir <exact-installed-state-directory>` under the maintenance identity. Purge deletes that state directory, not the adopted Vector binary or the separate managed configuration. It verifies installed Vectory settings and writes a protected retry marker inside the state directory before deleting anything. Concurrent current-version Vectory operations are refused while purge runs. If deletion is interrupted, inspect any remaining files and retry with the same path and maintenance identity. The marker permits a retry even if `settings.json` has already been removed and rejects a different directory object at that path. If the process stops after removing the marker but before removing the now-empty directory, inspect and remove that empty directory manually. Stop older agent binaries and unrelated supervisors separately because they do not honor this lifecycle fence.
-
-## Maintain existing local settings
-
-Stop the agent through its existing supervisor before replacing local resource allowances, configuration mode, metrics or secret-file bindings. A sync pause leaves the process and its operation lock running. Use the existing absolute state directory and an authorized maintenance identity that can preserve the service account's access to it. Do not delete the lock file, broaden ACLs or re-enroll to work around a refusal.
-
-Existing-install updates retain unrelated settings, including unknown nested fields, and preserve the existing settings access controls. A semantic no-op retains the settings file's bytes. Changing mode or resource allowances deliberately clears failed-attempt suppression so the candidate can be reassessed; generation and secret counters, identity, pauses and other state remain intact. Repeating the same mode or allowances does not clear a later failure. Metrics and secret-binding updates do not themselves reset retry state. The supplied secret binding map replaces the complete map; an empty map removes bindings.
-
-An `install` command may supply allowances, mode, metrics and secret bindings together. All supplied inputs are checked before changing an existing installation; valid values are composed into one settings replacement under the operation lock. Omitted options preserve their existing values. Use `--allow-full-vector-config=false` to return to restricted mode, or a secret-binding file containing `{}` to remove bindings. Empty option values are rejected. A policy file's `full_vector_config` value does not grant or revoke full mode; only the explicit command-line mode option does so, including on a fresh install. Supplied JSON must be an object without duplicate keys; unknown policy fields are rejected, while unknown fields already saved in the installation remain preserved. Metrics URLs must use a literal loopback IP and a numeric port from 1 through 65535.
-
-Save capability-policy input as UTF-8 without a BOM. Malformed bytes and unpaired Unicode surrogate escapes must be corrected rather than normalized into a different allowance path. Valid Unicode names, including a literal U+FFFD character and correctly paired escapes, remain supported. Escape Windows backslashes in JSON. The supplied policy replaces all three allowance lists: a missing list, `null` list or `[]` means an empty list; root-level `null` is not a policy. Include all allowances still needed. Rejected input preserves the existing policy and suppression state; a successfully changed policy clears only the documented failed-attempt suppression. Repeating the same policy preserves later suppression and exact saved bytes. A file policy never independently grants full mode.
-
-Use a verified package containing the strict policy-input fix. If an older build already accepted malformed text, inspect its saved allowances before supplying a corrected complete policy; upgrading cannot recover the originally intended path. Keep the agent stopped during that review, and do not exercise an unintended allowance to diagnose the parser.
-
-Check every command's result before restarting. Access-preserving replacements are prepared before committing, but settings and retry state remain separate file commits. If the error says **settings were saved, but retry-suppression reset is incomplete**, keep the agent stopped, inspect the saved settings and `status`/`doctor`, and correct the reported file error. Use the separate `vectory retry --state-dir <existing-absolute-state-directory>` only after reviewing the intended next attempt. Do not restore old counters or delete state to force the reset. Input preflight is not a guarantee against a later filesystem failure: inspect the reported result before assuming that no local change occurred. Fresh-install input rejection precedes creation or protection of the state and managed directories; successful adoption still does not validate or activate a workload. If initial settings were saved but state initialization failed, preserve the files and keep the agent stopped for inspection. Repeating install against missing or unreadable state refuses rather than reconstructing identity or counters.
-
-These updates retain existing access grants; they cannot reconstruct a grant already lost by an older executable. Restore intended permissions from protected installation records. Verify that the installed package includes the preservation fix rather than relying on the development version string. Private qualification builds and rebuilt documentation do not replace published downloads. After a successful update, restart the same supervisor and verify the affected behavior under its actual service identity. A command succeeding under an administrator account does not establish service-account access, credential validity or pipeline activation.
-
-The current private Windows checks exercise owner/group/DACL and explicit mandatory integrity labels under the maintenance operator, including additional synthetic grants on settings, state, directory and lock files. They do not qualify SCM impersonation, auditing SACLs, arbitrary enterprise policy or Unix runtime behavior. Keep platform service acceptance separate from these local file-preservation checks.
-
-### Set or remove the local metrics endpoint
-
-With the agent stopped, use the existing state directory and choose exactly one metrics action. To save or replace a scrape URL:
-
-```sh
-vectory configure-metrics --state-dir /var/lib/vectory-agent --metrics-url http://127.0.0.1:9598/metrics
-```
-
-To deliberately remove it:
-
-```sh
-vectory configure-metrics --state-dir /var/lib/vectory-agent --clear-metrics-url
-```
-
-The URL must be HTTP with a literal loopback IP, explicit port from 1 through 65535, and `/metrics` path. Credentials, query strings, fragments, hostnames and other paths are rejected. An empty URL is not removal. Combining URL and clear, supplying `--clear-metrics-url=false`, or adding positional arguments is refused. These maintenance commands save settings without contacting the endpoint. They preserve unrelated raw settings, the operation lock's access controls, identity, pauses, counters and failed-attempt suppression. Repeating the same set or clear is a byte-preserving no-op.
-
-Existing-install maintenance also accepts `install --clear-metrics-url`, including with other valid local settings options. Omitting both metrics options preserves the current URL. A conflicting or invalid combined option rejects the requested changes before settings are saved; the separate-file and late filesystem error limits described above still apply.
-
-Check the result, then restart through the same supervisor. An empty local URL prevents collection on that next run even when the remote telemetry policy permits it. The clearing command does not stop or remove the pipeline exporter, modify its listener allowance, erase saved state or dashboard history, or establish fresh workload health. The next poll refreshes local telemetry; previously reported dashboard samples remain historical. Remove exporter components through a separately reviewed pipeline change if the listener should also be retired. Disabling remote telemetry instead retains the URL for later use.
-
-Confirm that the installed executable's `help` lists `configure-metrics`; older packages may support only setting through `install --metrics-url`. Use a verified artifact containing the lifecycle command rather than editing protected settings or relying on a reused development version label. The private qualification candidate and rebuilt help do not update published packages.
-
-## Upgrade an existing agent binary
-
-Upgrading is an explicit operation on the device. The dashboard does not replace the agent or Vector. Compare the downloaded agent's SHA256 with a trusted release checksum; development binaries can share the same `0.1.0-dev` version string while containing different code. Verify signatures through the established release key when using a signed release. The available catalog checksum identifies the download, not the executable currently running on the device.
-
-1. Record the existing executable path, state directory, service identity and device UUID. Pause reconciliation with `vectory pause --state-dir <existing-absolute-state-directory>`, then stop its existing service or foreground supervisor. Plan for workload interruption: stopping the agent can stop its adopted Vector process. Do not start a second agent or Vector instance.
-2. While stopped, preserve the old executable and a protected backup of the complete state directory, managed configuration and last-good/recovery files. These files can contain credentials. Keep their existing ownership and permissions; do not upload their contents to the dashboard or a diagnostic report.
-3. Extract the verified archive and replace only the agent executable at the same path used by the existing service/supervisor. Preserve the required owner and ACL or executable permissions. Keep the same state directory, adopted Vector binary, managed-config path and capability policy. Do not enroll again, uninstall, purge state or reset generation counters as part of an upgrade.
-4. Run the new executable's `status --state-dir <existing-absolute-state-directory>` and `doctor --state-dir <existing-absolute-state-directory>` under the same identity. Confirm the existing device UUID, enrollment, paths and local pause. If installation metadata must be checked, `install --state-dir <existing-absolute-state-directory>` without replacement paths or policy flags is idempotent; it does not establish activation.
-5. Restart the existing supervisor with the new executable, initially still paused. Confirm local health and a fresh heartbeat for the same device identity. Resume reconciliation explicitly with `vectory resume --state-dir <existing-absolute-state-directory>` only after reviewing the current assignment. Check its verified generation and application result; a downloaded file, successful command or new heartbeat alone is not proof that the assigned pipeline is active.
-
-A protected backup is recovery material, not permission to restore old identity or generation counters after the server advances. Stop and investigate a failed upgrade; there is no general guarantee that an older binary can read newer state. The current Windows qualification uses stopped foreground processes and isolated state; it does not establish native service replacement, reboot recovery, MSI upgrades, or Linux/macOS upgrade compatibility. See [ACCEPTANCE](ACCEPTANCE.md) for the exact tested scope.
-
-## Approve a deliberately replaced Vector binary
-
-Vectory pins the adopted Vector executable's SHA256. A changed or inaccessible binary is refused before validation or startup; `doctor` also refuses to execute its version probe. Repeating `install --adopt` is not approval of replacement bytes. Do not edit `vector_binary_sha256` in protected settings to bypass this check.
-
-First check that your installed agent's `vectory help` lists `re-adopt`. Existing published downloads may predate this command; a matching development version label does not identify the executable's code. If it is absent, obtain and verify a package that includes it, then follow the separate agent-upgrade procedure without changing the existing state. A private qualification build or rebuilt help page does not update the published agent downloads.
-
-Use `re-adopt` only after the host operator has deliberately obtained and verified a replacement through a trusted release channel. This release still requires Vector **0.58.0**; re-adoption does not add support for another Vector version. Verify the release archive first, then calculate the SHA256 of its approved extracted executable for the command below. The expected checksum identifies that executable, not its archive. Computing a checksum from an unexplained replacement does not establish that it is trustworthy.
-
-1. Record the existing Vector path, managed configuration, state directory and service identity. Plan a maintenance window and stop the existing agent supervisor and its owned Vector process. Do not run another Vector instance against the same configuration, ports or data directory. A local pause alone does not release the agent's state lock.
-2. Preserve the prior approved executable and a protected backup of settings, state, managed configuration and recovery files while stopped. Keep ownership and access permissions intact. Recovery files may contain secrets. Do not reset counters, re-enroll or restore an old state snapshot as an upgrade shortcut.
-3. Place the independently verified Vector executable at the intended local path. Run the following command under the same operating-system identity and environment used by the agent. Omit `--vector-binary` when replacing the bytes at the already adopted path; supply it only for an intentional local path change.
-
-```sh
-approved_vector_sha256='REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-vectory re-adopt --state-dir /var/lib/vectory-agent --expected-sha256 "$approved_vector_sha256"
-```
-
-```powershell
-$approvedVectorSha256 = 'REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-vectory re-adopt --state-dir 'C:\ProgramData\Vectory' --expected-sha256 $approvedVectorSha256 --vector-binary 'C:\Program Files\Vector\bin\vector.exe'
-```
-
-The command checks the expected digest before executing the candidate, requires the pinned Vector version and validates available managed and last-good configurations under the existing capability policy. A missing managed file is allowed only when no workload was previously established and no last-good configuration is recorded; in that case no workload was validated. Validation and configured tests can access resources or native providers permitted by that policy; use the actual service environment and review those dependencies first. The command does not install Vector, change the managed configuration path, grant full configuration mode, start a workload or confirm a deployment.
-
-Re-adoption preserves enrollment, credential/trust files, generation and secret counters, local and remote pause, failed-attempt suppression, managed content and last-good files. Its settings change is limited to the approved binary path and digest. It preserves existing settings access protections and refuses a replacement when it cannot do so; use a maintenance identity with the required existing rights. Windows paths must use a local drive, without UNC, device or alternate-stream syntax. If a recovery journal is pending, restore the prior approved binary and complete the existing recovery before re-adopting; preserve the journal rather than deleting it. Any refusal requires resolving the reported condition before another deliberate attempt.
-
-4. Run `doctor --state-dir <existing-state-directory>` and inspect `status`, then restart the existing supervisor. Check workload health and the dashboard's current verification. A successful re-adoption or doctor command does not prove activation. Resume only a pause you deliberately set; a previously failed candidate still requires the separate reviewed retry procedure after its cause is fixed.
-
-Current qualification uses private Windows foreground CLI fixtures and different bytes of the same supported Vector build. It verifies preservation and validation, not a different upstream release, SCM service-account execution, reboot recovery or Linux/macOS native behavior. Audit SACL policies and other platform-specific metadata need their own qualification; preserving the tested access descriptor is not a full service lifecycle test.
-
-The `packaging/systemd` and `packaging/launchd` files are reviewable examples, not proof of native service acceptance. Create the dedicated account and scope writable paths to the adopted instance. Native `service-install`, `service-start`, `service-stop` and `service-uninstall` commands are also available; verify their options with `vectory help` before installing and use one registration approach. On macOS use `/Library/Application Support/Vectory` and concrete paths without symlink ancestors; `/var` commonly resolves through `/private/var` and is intentionally rejected by strict path checks. Windows service registration requires an administrator but steady-state rights should remain limited. The MSI path installs only the binary; it does not enroll or auto-adopt. Reboot, service install/remove and upgrade-preserving-identity gates remain in ACCEPTANCE.md.
-
-Keep private key/state files inaccessible to the Vector process whenever the identity model permits. The local capability policy controls file roots, network/listen destinations and supported component capabilities; dashboard content cannot change it. If local policy denies a pipeline, review the requested capability and change local policy explicitly rather than weakening it remotely. Pin/protect the Vector binary so another local user cannot swap the executable after adoption.
-
-For Vectory-managed device-local credentials, publish only an exact reference such as `vectory-secret:API_TOKEN` in `auth.user`, `auth.password`, or `auth.token` of an `http`, `loki`, or `elasticsearch` sink. While the agent is stopped, supply a local JSON map of names to absolute protected files using `vectory configure-secrets --state-dir /var/lib/vectory-agent --secret-files /protected/bindings.json`; installation also accepts `--secret-files`. This Vectory-specific reference mechanism rejects references in URLs, VRL or other fields, embedded interpolation and executable bindings in both modes. Full mode separately permits Vector's native providers. The server receives the reference template only.
-
-Both commands require a bounded UTF-8 JSON object without a BOM, duplicate names, invalid Unicode escapes or trailing content. Values must be paths expressed as strings; malformed bytes must not be converted into another file's name. `configure-secrets` requires a nonempty `--secret-files` path and rejects positional arguments. A valid map replaces all existing bindings; include every name still needed. Only an explicit `{}` removes all bindings: JSON `null`, an empty file and a missing flag are errors. An unchanged map is a byte-preserving no-op. Input validation, a held agent lock or a refused settings replacement leaves the existing bindings intact; resolve the reported problem before another deliberate attempt. These checks require a package containing the strict-input fix; older builds may silently interpret null or duplicate keys differently.
-
-Each bound file must be private, regular, single-link, owned by the agent account or system administrator, and contain at most 16 KiB of UTF-8 text without NUL. Provision these permissions for the actual service identity. The agent reads through checked pinned handles, inserts literal JSON strings, then repeats local capability and real Vector validation. Replacing the protected local file triggers a new effective attempt on the next authorized unpaused poll, even at the same desired generation. Failed attempts retain the verified last-good workload. Rendered managed files and private recovery copies contain the credentials; protect their backups too. Status and heartbeat carry template/effective hashes and monotonic revision counters, never resolved values. These hashes are not password-strength protection; use high-entropy credentials. See [the agent reference](../agent/README.md#device-local-credential-references) for exact bounds and recovery semantics.
+Agent commands: `vectory --help`, or **Agent CLI** in the Help center.

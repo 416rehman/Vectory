@@ -1,19 +1,17 @@
 import { expect, type Page } from "@playwright/test";
 
-/** Open the real account menu, including its mobile navigation container. */
+/**
+ * Open the real account menu. The sidebar's account button and the phone
+ * header's avatar share a name and exist at every width, but only one is shown.
+ */
 export async function openAccountMenu(page: Page) {
-  if (await page.getByRole("menu").isVisible()) return;
-  const trigger = page.getByRole("button", {
-    name: "Your account",
-    exact: true,
-    includeHidden: true,
-  });
-  await expect(trigger).toBeAttached();
-  if (!(await trigger.isVisible()))
-    await page
-      .getByRole("button", { name: "Toggle navigation", exact: true })
-      .click();
-  await trigger.click();
+  const menu = page.getByRole("menu", { name: "Your account", exact: true });
+  if (await menu.isVisible()) return;
+  await page
+    .locator("button.account-button:visible, button.mobile-avatar:visible")
+    .first()
+    .click();
+  await expect(menu).toBeVisible();
 }
 
 export async function setAppearance(page: Page, value: string) {
@@ -26,9 +24,7 @@ export async function setAppearance(page: Page, value: string) {
     .click();
   if (await page.getByRole("menu").isVisible())
     await page.keyboard.press("Escape");
-  const close = page.getByRole("button", {
-    name: "Close navigation",
-    exact: true,
-  });
-  if (await close.isVisible()) await close.click();
+  // On a phone the account menu lives in the navigation drawer.
+  const close = page.locator("button.sidebar-close:visible");
+  if (await close.count()) await close.click();
 }

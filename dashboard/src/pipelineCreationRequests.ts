@@ -1,8 +1,68 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { assertExactNumbers } from "./configurationNumbers";
+import { APIError } from "./api";
+import {
+  credentialPreflightMessage,
+  findPlainCredential,
+} from "./credentialFields";
+
+// Only a plaintext credential refusal proves the exact immutable payload can
+// never be accepted, including by an earlier same-key POST in another tab.
+// Other refusals describe this attempt, not necessarily that earlier one.
+export function isDefinitivePipelineCreationRejection(
+  failure: unknown,
+  sent: boolean,
+): failure is APIError {
+  return (
+    sent &&
+    failure instanceof APIError &&
+    failure.serverRejection &&
+    failure.status === 400 &&
+    failure.code === "INVALID_INPUT" &&
+    failure.reason === "plaintext_credential"
+  );
+}
+
+export type PipelineCreationRefusalProblem = {
+  path: string;
+  message: string;
+};
+
+/** Only project bounded, field-level diagnostics from the server refusal. */
+export function pipelineCreationRefusalProblems(
+  failure: unknown,
+): PipelineCreationRefusalProblem[] {
+  if (!(failure instanceof APIError) || !Array.isArray(failure.problems))
+    return [];
+  return failure.problems
+    .slice(0, 20)
+    .filter(
+      (problem): problem is Record<string, unknown> =>
+        !!problem && typeof problem === "object" && !Array.isArray(problem),
+    )
+    .filter(
+      (problem) =>
+        typeof problem.path === "string" &&
+        problem.path.length <= 300 &&
+        typeof problem.message === "string" &&
+        problem.message.length <= 500,
+    )
+    .map((problem) => ({
+      path: problem.path as string,
+      message: problem.message as string,
+    }));
+}
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
+/** The server limits the saved pipeline name by UTF-8 bytes, not input characters. */
+export function pipelineNameError(name: string): string {
+  const savedName = name.trim();
+  if (!savedName) return "Enter a pipeline name to create a draft.";
+  if (bytes(savedName) > 120)
+    return "This name is too long. Shorten it to fit within 120 UTF-8 bytes.";
+  return "";
+}
 export function pipelineCopyName(name: string) {
   let prefix = "";
   for (const point of name) {
@@ -31,6 +91,13 @@ const metadata = {
     ),
 };
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const variableDeclaration = z
+  .object({
+    name: z.string(),
+    path: z.string(),
+    type: z.enum(["string", "integer", "boolean"]),
+  })
+  .strict();
 const createFields = {
   ...metadata,
   config: z.custom<Record<string, any>>(
@@ -42,6 +109,7 @@ const createFields = {
       edges: z.array(z.unknown()).max(5000),
     })
     .strict(),
+  variables: z.array(variableDeclaration).max(64).optional(),
 };
 const duplicateFields = { ...metadata, revision };
 const inputSchema = z.discriminatedUnion("operation", [
@@ -287,6 +355,16 @@ export function beginPipelineCreationOperation(
       input.error.issues[0]?.message ||
         "Review the pipeline details before creating it.",
     );
+  const payload = input.data.request;
+  const credential =
+    findPlainCredential(payload.name, ["name"]) ||
+    findPlainCredential(payload.description, ["description"]) ||
+    (input.data.operation === "create"
+      ? findPlainCredential(input.data.request.config) ||
+        findPlainCredential(input.data.request.graph, ["graph"]) ||
+        findPlainCredential(input.data.request.variables || [], ["variables"])
+      : null);
+  if (credential) throw Error(credentialPreflightMessage(credential));
   if (!actorSchema.safeParse(actor).success)
     throw Error("Sign in again before creating a pipeline.");
   const id = crypto.randomUUID();

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   root = resolve(dashboard, "..");
 const output = resolve(
@@ -22,6 +22,9 @@ const sources = [
   "dashboard/src/api.ts",
   "dashboard/src/App.tsx",
   "dashboard/src/pipelineCreationRequests.ts",
+  "dashboard/src/PipelineStartChoice.tsx",
+  "dashboard/src/credentialFields.ts",
+  "dashboard/src/configurationSource.ts",
   "dashboard/src/PipelineCreationRecovery.tsx",
   "dashboard/src/pipeline-creation-recovery.css",
   "dashboard/src/ui.tsx",
@@ -150,6 +153,7 @@ async function start(f = state(), options = {}) {
     ({ theme, seed, failStorage, prefix }) => {
       localStorage.setItem("vectory-theme", theme);
       localStorage.setItem("vectory-sidebar-collapsed", "true");
+      localStorage.setItem("vectory.editor.auto-check", "off");
       for (const [k, v] of Object.entries(seed || {}))
         localStorage.setItem(k, v);
       window.fixture = {
@@ -476,6 +480,27 @@ async function start(f = state(), options = {}) {
       if (mode === "before-loss") return route.abort("failed");
       if (mode === "invalid")
         return error("INVALID_INPUT", "Synthetic input rejected", 400);
+      if (mode === "credential")
+        return reply(
+          {
+            error: {
+              code: "INVALID_INPUT",
+              message: "Synthetic credential refusal",
+              reason: "plaintext_credential",
+              problems: [
+                {
+                  code: "plaintext_credential",
+                  path: "description",
+                  field: "description",
+                  message:
+                    "Description holds what looks like a credential. Remove the value and try again.",
+                  fix: "Remove the value and try again.",
+                },
+              ],
+            },
+          },
+          400,
+        );
       const old = f.registry.get(actor + ":" + body.request_id);
       let record;
       if (old) {
@@ -569,11 +594,8 @@ async function start(f = state(), options = {}) {
   };
 }
 async function run(name, fn) {
-  if (
-    process.env.VECTORY_PIPELINE_CREATION_FOCUS &&
-    !name.includes(process.env.VECTORY_PIPELINE_CREATION_FOCUS)
-  )
-    return;
+  const focus = process.env.VECTORY_PIPELINE_CREATION_FOCUS || process.argv[2];
+  if (focus && !name.includes(focus)) return;
   const begin = Date.now();
   try {
     await fn();
@@ -785,6 +807,40 @@ try {
     },
   );
   await run(
+    "Multibyte pipeline names show the server limit before creating a saved request",
+    async () => {
+      const s = await start();
+      try {
+        const dialog = await openForm(s.page, "create"),
+          name = dialog.getByLabel("Pipeline name", { exact: true }),
+          create = dialog.getByRole("button", {
+            name: "Create pipeline",
+            exact: true,
+          });
+        await name.fill("é".repeat(61));
+        await expect(dialog.getByRole("alert")).toContainText(
+          "120 UTF-8 bytes",
+        );
+        await expect(name).toHaveAttribute("aria-invalid", "true");
+        await create.click();
+        expect(s.f.lookups).toHaveLength(0);
+        expect(s.f.posts).toHaveLength(0);
+        expect(await storage(s.page)).toEqual({});
+        await name.fill("é".repeat(60));
+        await expect(dialog.getByRole("alert")).toHaveCount(0);
+        await create.click();
+        await expect(
+          s.page.getByRole("region", { name: "Pipeline canvas", exact: true }),
+        ).toBeVisible();
+        expect(s.f.posts).toHaveLength(1);
+        expect(s.f.posts[0].body.name).toBe("é".repeat(60));
+        clean(s.f);
+      } finally {
+        await s.close();
+      }
+    },
+  );
+  await run(
     "A shared preflight failure cannot erase an operation explicitly retried and committed by another tab",
     async () => {
       for (const kind of ["create", "duplicate"]) {
@@ -882,20 +938,146 @@ try {
       for (const kind of ["create", "duplicate"]) {
         const s = await start(state({ createMode: "invalid" }));
         try {
-          await submit(s.page, kind);
-          await uncertain(s.page, kind);
+          const dialog = await submit(s.page, kind);
+          await expect(dialog.getByRole("alert")).toContainText(
+            "Synthetic input rejected",
+          );
+          await expect(dialog).toContainText("needs confirmation");
+          await expect(
+            dialog.getByRole("button", {
+              name:
+                kind === "create" ? "Create pipeline" : "Duplicate pipeline",
+              exact: true,
+            }),
+          ).toBeDisabled();
+          await expect(
+            dialog.getByLabel("Pipeline name", { exact: true }),
+          ).toHaveValue("Synthetic recovered " + kind);
           const key = storageKey(s.f.posts[0].body.request_id);
           expect((await storage(s.page))[key]).toBeTruthy();
           expect(s.f.documents).toHaveLength(1);
-          await closeForm(s.page, kind);
-          await openRecovery(s.page);
-          await expect(
-            s.page.getByRole("button", {
-              name: "Retry same request",
+          await dialog
+            .getByRole("button", {
+              name: "Close and review request",
               exact: true,
-            }),
-          ).toBeEnabled();
+            })
+            .click();
+          await expect(form(s.page, kind)).toHaveCount(0);
+          await expect(
+            s.page.getByRole("dialog", { name: "Saved pipeline requests" }),
+          ).toBeVisible();
           expect(s.f.posts).toHaveLength(1);
+          clean(s.f);
+        } finally {
+          await s.close();
+        }
+      }
+    },
+  );
+  await run(
+    "Credential import stays in Create and structured refusal shows the field without uncertain recovery on mobile",
+    async () => {
+      const s = await start(state({ createMode: "credential" }), {
+        width: 390,
+        theme: "dark",
+      });
+      try {
+        const dialog = await openForm(s.page, "create");
+        await dialog
+          .getByLabel("Pipeline name", { exact: true })
+          .fill("Synthetic credential check");
+        await dialog
+          .getByText("Import a Vector config", { exact: true })
+          .click();
+        await dialog.getByRole("button", { name: "Paste instead" }).click();
+        await dialog
+          .getByLabel("Vector configuration", { exact: true })
+          .fill(
+            "sources:\n  demo:\n    type: demo_logs\n    format: json\nsinks:\n  out:\n    type: http\n    inputs: [demo]\n    uri: https://example.test/ingest\n    request:\n      headers:\n        Authorization: Bearer synthetic-only\n    encoding:\n      codec: json\n",
+          );
+        await dialog
+          .getByRole("button", { name: "Use this configuration" })
+          .click();
+        await expect(
+          dialog.locator(".pipeline-start-import-result[role=alert]"),
+        ).toContainText("Line 12: sinks.out.request.headers.Authorization");
+        expect(s.f.posts).toHaveLength(0);
+        await expect(dialog).not.toContainText("needs confirmation");
+
+        await dialog.getByText("Build a pipeline", { exact: true }).click();
+        await dialog
+          .getByRole("button", { name: "Create pipeline", exact: true })
+          .click();
+        await expect(dialog.getByRole("alert")).toContainText(
+          "The server refused this configuration",
+        );
+        await expect(
+          dialog.getByRole("list", { name: "Configuration problems" }),
+        ).toContainText(/description/i);
+        await expect(
+          dialog.getByLabel("Pipeline name", { exact: true }),
+        ).toBeEnabled();
+        await expect(dialog).not.toContainText("needs confirmation");
+        expect(s.f.posts).toHaveLength(1);
+        expect(
+          (await storage(s.page))[storageKey(s.f.posts[0].body.request_id)],
+        ).toBeUndefined();
+        expect(
+          await s.page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        const scan = await new AxeBuilder({ page: s.page }).analyze();
+        expect(scan.violations).toEqual([]);
+        await s.page.screenshot({
+          path: resolve(output, "pipeline-creation-credential-390-dark.png"),
+          animations: "disabled",
+        });
+        clean(s.f);
+      } finally {
+        await s.close();
+      }
+    },
+  );
+  await run(
+    "Credential-shaped creation and duplicate metadata never reaches browser storage or POST",
+    async () => {
+      for (const kind of ["create", "duplicate"]) {
+        const s = await start(state());
+        try {
+          const dialog = await openForm(s.page, kind);
+          await dialog
+            .getByLabel("Pipeline name", { exact: true })
+            .fill("ghp_syntheticcredential123");
+          await dialog
+            .getByRole("button", {
+              name:
+                kind === "create" ? "Create pipeline" : "Duplicate pipeline",
+              exact: true,
+            })
+            .click();
+          await expect(dialog.getByRole("alert")).toContainText("name");
+          expect(s.f.posts).toHaveLength(0);
+          expect(await storage(s.page)).toEqual({});
+          await dialog
+            .getByLabel("Pipeline name", { exact: true })
+            .fill("Synthetic safe name");
+          await dialog
+            .getByLabel(
+              kind === "create" ? "Description (optional)" : "Description",
+              { exact: true },
+            )
+            .fill("https://collector.example/?api_key=short");
+          await dialog
+            .getByRole("button", {
+              name:
+                kind === "create" ? "Create pipeline" : "Duplicate pipeline",
+              exact: true,
+            })
+            .click();
+          await expect(dialog.getByRole("alert")).toContainText("description");
+          expect(s.f.posts).toHaveLength(0);
+          expect(await storage(s.page)).toEqual({});
           clean(s.f);
         } finally {
           await s.close();
@@ -1438,6 +1620,9 @@ try {
       try {
         await s.page.locator('.react-flow__node[data-id="sample"]').click();
         await s.page.getByLabel("One in every", { exact: true }).fill("21");
+        // Drafts save explicitly (there is no autosave); the duplicate below
+        // must wait for this held save to finish.
+        await s.page.keyboard.press("ControlOrMeta+s");
         await expect.poll(() => s.f.puts.length).toBe(1);
         await s.page.locator(".editor-tools-menu > summary").click();
         await s.page

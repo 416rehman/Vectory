@@ -1,7 +1,7 @@
 // Actual App/editor, isolated synthetic API. Never contacts preview or devices.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -136,6 +136,7 @@ async function load({
   await context.addInitScript((collapsed) => {
     localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
     localStorage.setItem("vectory-theme", "light");
+    localStorage.setItem("vectory.editor.auto-check", "off");
   }, collapsed);
   await context.route("**/*", async (route) => {
     const request = route.request(),
@@ -491,8 +492,8 @@ try {
     "Hover spotlights one exact named edge and its endpoint nodes, including parallel edges, without edits or check invalidation",
     async () => {
       await load({ document: spotlightDocument() });
-      await button("Check pipeline").click();
-      await expect(button("Check pipeline")).toHaveAttribute(
+      await page.locator(".editor-check-button").click();
+      await expect(page.locator(".editor-check-button")).toHaveAttribute(
         "data-check-state",
         "partial",
       );
@@ -526,7 +527,7 @@ try {
       await page.mouse.click(point.x, point.y);
       await page.mouse.move(0, 0);
       await idle();
-      await expect(button("Check pipeline")).toHaveAttribute(
+      await expect(page.locator(".editor-check-button")).toHaveAttribute(
         "data-check-state",
         "partial",
       );

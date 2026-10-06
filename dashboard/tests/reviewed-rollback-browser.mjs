@@ -1,7 +1,7 @@
 // Actual App reviewed rollback and durable recovery; isolated synthetic API only.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -154,8 +154,16 @@ const preview = (changes = {}) => ({
   previous_configuration_name: "Synthetic logs",
   priority: 101,
   eligible_devices: [
-    { device_id: id(1), device_name: "Synthetic live alpha", artifact_sha256: "a".repeat(64) },
-    { device_id: id(3), device_name: "Synthetic offline beta", artifact_sha256: "b".repeat(64) },
+    {
+      device_id: id(1),
+      device_name: "Synthetic live alpha",
+      artifact_sha256: "a".repeat(64),
+    },
+    {
+      device_id: id(3),
+      device_name: "Synthetic offline beta",
+      artifact_sha256: "b".repeat(64),
+    },
   ],
   excluded_devices: [
     {
@@ -189,6 +197,8 @@ function fixture(changes = {}) {
     rollbackMode: "normal",
     lookupMode: "normal",
     rollbacks: [],
+    cancels: [],
+    afterCancel: null,
     lookups: [],
     committed: [],
     reviews: new Map(),
@@ -308,6 +318,17 @@ async function start(
         });
       return respond(result);
     }
+    if (method === "POST" && path === `/deployments/${f.summary.id}/cancel`) {
+      expect(req.headers()["x-csrf-token"]).toBe("synthetic-csrf");
+      f.cancels.push(path);
+      f.summary = {
+        ...f.summary,
+        status: "cancelled",
+        cancelled_at: "2026-09-27T00:05:00Z",
+      };
+      if (f.afterCancel) f.preview = f.afterCancel;
+      return respond(f.summary);
+    }
     if (method !== "GET") {
       f.errors.push("Unexpected mutation " + method + " " + path);
       return route.fulfill({
@@ -361,6 +382,17 @@ async function start(
       });
     if (path === "/deployments/history")
       return respond({ items: [f.summary], total: 1, page: 1, page_size: 12 });
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${id(200)}/summary`)
       return respond(
         deployment(200, {
@@ -444,11 +476,11 @@ async function open(page) {
     .getByRole("link", { name: "Synthetic reviewed rollback", exact: true })
     .click();
   await expect(
-    page.getByRole("dialog", { name: "Deployment details" }),
+    page.getByRole("region", { name: "Deployment details", exact: true }),
   ).toBeVisible();
 }
 const dialog = (page) =>
-  page.getByRole("dialog", { name: "Deployment details" });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const table = (page) =>
   dialog(page).getByRole("table", { name: "Device results" });
 async function noWrites(f) {
@@ -486,11 +518,15 @@ const operations = (page) =>
       .filter((k) => k.startsWith("vectory:deployment-operation:"))
       .map((k) => JSON.parse(localStorage.getItem(k))),
   );
+async function chooseRollBack(page) {
+  await dialog(page)
+    .getByRole("button", { name: /^(Stop rollout|Roll back or remove)$/ })
+    .click();
+  await page.getByRole("menuitem", { name: "Roll back", exact: true }).click();
+}
 async function begin(page) {
   await open(page);
-  await dialog(page)
-    .getByRole("button", { name: "Roll back", exact: true })
-    .click();
+  await chooseRollBack(page);
   await expect(review(page)).toBeVisible();
   await expect(dialog(page)).toHaveCount(0);
 }
@@ -522,22 +558,38 @@ try {
         const { page } = app;
         await begin(page);
         await ready(page);
-        await expect(review(page)).toContainText("Synthetic logs · Version 2");
+        await expect(
+          review(page).locator(".rollback-review-heading strong"),
+        ).toHaveText("Synthetic logs v2");
+        await expect(
+          review(page).getByRole("list", { name: "What changes" }),
+        ).toContainText(
+          "Synthetic live alpha and Synthetic offline beta return to Synthetic logs v2.",
+        );
+        // A completed rollout has nothing left to stop.
+        await expect(review(page)).not.toContainText("The rollout stops here.");
         await expect(review(page)).toContainText(
-          "stops further releases from the original rollout",
+          "The restored version takes over one priority above this rollout.",
         );
         await expect(review(page)).toContainText(
-          "Offline devices remain included.",
+          "Offline ones stay included and apply it when they reconnect.",
         );
+        // Rows name devices; the identity is on the name, never a raw UUID line.
+        for (const n of [1, 3])
+          await expect(
+            review(page)
+              .getByRole("list", { name: "Included devices" })
+              .locator(`strong[title="${id(n)}"]`),
+          ).toBeVisible();
         await expect(
           review(page).getByRole("list", { name: "Included devices" }),
-        ).toContainText(id(1));
+        ).not.toContainText(id(1));
+        // The row shows a short digest; the exact one is on the element.
         await expect(
-          review(page).getByRole("list", { name: "Included devices" }),
-        ).toContainText(id(3));
-        await expect(
-          review(page).getByRole("list", { name: "Included devices" }),
-        ).toContainText("Prior artifact SHA-256: " + "a".repeat(64));
+          review(page)
+            .getByRole("list", { name: "Included devices" })
+            .locator(`code[data-digest="${"a".repeat(64)}"]`),
+        ).toHaveAttribute("title", "a".repeat(64));
         await review(page)
           .getByRole("button", { name: "Excluded (2)", exact: true })
           .click();
@@ -546,9 +598,9 @@ try {
         ).toContainText("Device revoked");
         await expect(
           review(page).getByRole("list", { name: "Excluded devices" }),
-        ).toContainText("No longer targeted");
+        ).toContainText("No longer follows it");
         await expect(review(page)).toContainText(
-          "Replacement identities are not added automatically.",
+          "The rollback leaves them out; each one says what it runs afterwards.",
         );
         expect(await operations(page)).toEqual([]);
         expect(f.rollbacks).toEqual([]);
@@ -562,6 +614,205 @@ try {
           .toBe(true);
         expect(f.rollbacks).toEqual([]);
         await clean(f);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+  await check(
+    "A live canary rolls back in one reviewed step naming who returns and who keeps what; a blocked one offers Cancel rollout, then review rollback",
+    async () => {
+      const edge = {
+        configuration_name: "Edge syslog processing",
+        version_number: 1,
+      };
+      const canary = (changes = {}) =>
+        deployment(100, {
+          rollback_idempotency: true,
+          rollback_review: true,
+          request_correlation: true,
+          status: "active",
+          rollout: {
+            kind: "canary",
+            canary_size: 1,
+            batch_size: 1,
+            observation_seconds: 900,
+            failure_threshold: 0,
+          },
+          target_count: 3,
+          verified_count: 1,
+          state_counts: { verified_applied: 1, pending: 2 },
+          ...changes,
+        });
+      const observing = (changes = {}) =>
+        preview({
+          source_status: "active",
+          previous_configuration_name: "Edge syslog processing",
+          previous_version_number: 1,
+          eligible_devices: [
+            {
+              device_id: id(1),
+              device_name: "edge-nyc-02",
+              artifact_sha256: "a".repeat(64),
+            },
+          ],
+          excluded_devices: [
+            {
+              device_id: id(2),
+              device_name: "edge-fra-01",
+              reason: "not_released",
+              effect: "unchanged",
+              current: edge,
+              next: null,
+            },
+            {
+              device_id: id(3),
+              device_name: "edge-nyc-01",
+              reason: "not_released",
+              effect: "unchanged",
+              current: edge,
+              next: null,
+            },
+          ],
+          ...changes,
+        });
+      let f = fixture({ summary: canary(), preview: observing() }),
+        app = await start(f);
+      try {
+        const { page } = app;
+        // The Overview's Roll back asks (in memory only) for this review; the
+        // rollout page opens it once it loads, still unconfirmed.
+        await page.evaluate(
+          (id) =>
+            import("/src/deploymentStatus.ts").then((m) =>
+              m.requestRollbackReview(id),
+            ),
+          f.summary.id,
+        );
+        await page
+          .getByRole("link", {
+            name: "Synthetic reviewed rollback",
+            exact: true,
+          })
+          .click();
+        await expect(review(page)).toBeVisible();
+        expect(f.rollbacks).toEqual([]);
+        const story = review(page).getByRole("list", { name: "What changes" });
+        await expect(story).toContainText(
+          "edge-nyc-02 returns to Edge syslog processing v1.",
+        );
+        await expect(story).toContainText(
+          "edge-fra-01 and edge-nyc-01 never received Synthetic logs v3 and keep Edge syslog processing v1 (no change).",
+        );
+        await expect(story).toContainText("The rollout stops here.");
+        await expect(confirm(page)).toHaveText("Roll back 1 device");
+        await expect(confirm(page)).toBeEnabled();
+        await review(page)
+          .getByRole("button", { name: "Excluded (2)", exact: true })
+          .click();
+        await expect(
+          review(page).getByRole("list", { name: "Excluded devices" }),
+        ).toContainText(
+          "Never received Synthetic logs v3 · keeps Edge syslog processing v1 (no change)",
+        );
+        await confirm(page).click();
+        await expect(receipt(page)).toBeVisible();
+        expect(f.rollbacks).toHaveLength(1);
+        expect(f.cancels).toEqual([]);
+        await clean(f);
+      } finally {
+        await app.close();
+      }
+      // Blocked: a device it never reached would switch once it stops.
+      const web = { configuration_name: "Web access logs", version_number: 2 };
+      f = fixture({
+        summary: canary(),
+        preview: observing({
+          ready: false,
+          excluded_devices: [
+            {
+              device_id: id(2),
+              device_name: "edge-fra-01",
+              reason: "not_released",
+              effect: "fallback",
+              current: edge,
+              next: web,
+            },
+          ],
+          blockers: [
+            {
+              code: "UNSAFE_SOURCE_REMOVAL",
+              reason:
+                "Stopping this rollout would also switch edge-fra-01 to Web access logs v2, which this rollback doesn't cover. Cancel the rollout first, then review the rollback.",
+            },
+          ],
+        }),
+        afterCancel: observing({
+          source_status: "cancelled",
+          review_token: "e".repeat(64),
+          excluded_devices: [
+            {
+              device_id: id(2),
+              device_name: "edge-fra-01",
+              reason: "not_released",
+              effect: null,
+              current: null,
+              next: null,
+            },
+          ],
+        }),
+      });
+      app = await start(f, { width: 390, theme: "dark" });
+      try {
+        const { page } = app;
+        await begin(page);
+        await expect(
+          review(page).getByRole("list", { name: "What changes" }),
+        ).toContainText(
+          "edge-fra-01 never received Synthetic logs v3 but would switch to Web access logs v2 once the rollout stops.",
+        );
+        await expect(review(page)).toContainText("Rollback isn't ready");
+        await expect(review(page)).toContainText(
+          "Cancel keeps edge-nyc-02 on Synthetic logs v3 until you roll it back.",
+        );
+        await expect(confirm(page)).toBeDisabled();
+        const scan = await new AxeBuilder({ page }).analyze();
+        expect(scan.violations).toEqual([]);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        const file = resolve(
+          output,
+          "reviewed-rollback-cancel-first-390-dark.png",
+        );
+        await page.screenshot({ path: file });
+        screenshots.push(file);
+        expect(f.rollbacks).toEqual([]);
+        await review(page)
+          .getByRole("button", {
+            name: "Cancel rollout, then review rollback",
+            exact: true,
+          })
+          .click();
+        // The review reads again for the stopped rollout: nothing blocks.
+        await expect(confirm(page)).toBeEnabled();
+        await expect(review(page)).not.toContainText("Rollback isn't ready");
+        await expect(review(page)).not.toContainText("The rollout stops here.");
+        expect(f.cancels).toHaveLength(1);
+        expect(f.rollbacks).toEqual([]);
+        await confirm(page).click();
+        await expect(receipt(page)).toBeVisible();
+        expect(f.rollbacks).toHaveLength(1);
+        expect(f.rollbacks[0].body.review_token).toBe("e".repeat(64));
+        expect(f.errors).toEqual([]);
+        expect(
+          f.calls.filter((c) => c.method !== "GET").map((c) => c.path),
+        ).toEqual([
+          `/deployments/${f.summary.id}/cancel`,
+          `/deployments/${f.summary.id}/rollback`,
+        ]);
       } finally {
         await app.close();
       }
@@ -631,15 +882,14 @@ try {
         await recovery(page)
           .getByRole("button", { name: "Dismiss reminder", exact: true })
           .click();
-        await page.getByRole("dialog", { name: "Dismiss this reminder?" })
+        await page
+          .getByRole("dialog", { name: "Dismiss this reminder?" })
           .getByRole("button", { name: /checked history$/ })
           .click();
         expect(await operations(page)).toEqual([]);
         f.preview = { ...f.preview, review_token: "b".repeat(64) };
         f.rollbackMode = "normal";
-        await dialog(page)
-          .getByRole("button", { name: "Roll back", exact: true })
-          .click();
+        await chooseRollBack(page);
         await ready(page);
         expect(f.rollbacks).toHaveLength(1);
         await confirm(page).click();
@@ -704,7 +954,11 @@ try {
             ...f.preview,
             review_token: "c".repeat(64),
             eligible_devices: [
-              { device_id: id(4), device_name: "Changed scope", artifact_sha256: "a".repeat(64) },
+              {
+                device_id: id(4),
+                device_name: "Changed scope",
+                artifact_sha256: "a".repeat(64),
+              },
             ],
           };
           f.lookupMode = "normal";
@@ -745,7 +999,8 @@ try {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await dialog(page)
-          .getByRole("button", { name: "Close dialog", exact: true })
+          .getByRole("navigation", { name: "Breadcrumb" })
+          .getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         f.role = "viewer";
         await page.reload();
@@ -1114,6 +1369,73 @@ try {
       }
     },
   );
+  await check(
+    "A rollout that released nothing says so in the server's words, with no restore story and nothing to confirm",
+    async () => {
+      const sentence =
+        "Nothing was released, so there is nothing to roll back.";
+      for (const [width, theme] of [
+        [899, "light"],
+        [390, "dark"],
+      ]) {
+        const f = fixture({
+          preview: preview({
+            source_status: "cancelled",
+            previous_version_id: null,
+            previous_version_number: null,
+            previous_configuration_id: null,
+            previous_configuration_name: null,
+            eligible_devices: [],
+            excluded_devices: [
+              {
+                device_id: id(1),
+                device_name: "Synthetic live alpha",
+                reason: "not_released",
+              },
+            ],
+            blockers: [{ code: "NOTHING_RELEASED", reason: sentence }],
+            ready: false,
+          }),
+        });
+        const app = await start(f, { width, theme });
+        try {
+          const { page } = app;
+          await begin(page);
+          await expect(review(page)).toContainText("Nothing to roll back");
+          await expect(review(page)).toContainText(sentence);
+          await expect(review(page)).not.toContainText("Restores");
+          await expect(
+            review(page).getByRole("list", { name: "What changes" }),
+          ).toHaveCount(0);
+          await expect(
+            review(page).getByRole("button", {
+              name: "Roll back",
+              exact: true,
+            }),
+          ).toBeDisabled();
+          const axe = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            width,
+            theme,
+            view: "nothing released",
+            violations: axe.violations.map((v) => ({
+              id: v.id,
+              impact: v.impact,
+              nodes: v.nodes.map((n) => n.target),
+            })),
+          });
+          expect(axe.violations).toEqual([]);
+          const file = `rollback-nothing-released-${width}-${theme}.png`;
+          await page.screenshot({ path: resolve(output, file) });
+          screenshots.push(file);
+          expect(f.rollbacks).toEqual([]);
+          await clean(f);
+        } finally {
+          await app.close();
+        }
+      }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -1123,9 +1445,9 @@ try {
     scope:
       "Actual App with intercepted synthetic rollback preview, commit and lookup. No live API, native transition or agent activation executed.",
     passed:
-      results.length === 8 &&
+      results.length === 10 &&
       results.every((r) => r.passed) &&
-      accessibility.length === 4 &&
+      accessibility.length === 6 &&
       accessibility.every((s) => !s.violations.length),
     results,
     accessibility,

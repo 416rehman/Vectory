@@ -14,6 +14,7 @@ use vectory_server::{
 };
 
 const VARIABLE_VERSION: &str = "00000000-0000-4000-8000-000000000803";
+const STRING_VARIABLE_VERSION: &str = "00000000-0000-4000-8000-000000000804";
 
 async fn variable_version(state: &State) {
     let config = json!({"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"],"buffer":{"max_events":500,"type":"memory"}}}});
@@ -21,6 +22,39 @@ async fn variable_version(state: &State) {
     let artifact = validation::render(&config).unwrap();
     let mut conn = state.pool.acquire().await.unwrap();
     db::insert(&mut conn,"version",&json!({"id":VARIABLE_VERSION,"configuration_id":"00000000-0000-4000-8000-000000000800","number":3,"config":config,"variables":[{"name":"max_events","path":"/sinks/out/buffer/max_events","type":"integer"}],"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+}
+
+#[tokio::test]
+async fn token_shaped_public_variable_binding_is_refused_before_deployment_storage() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    let config = json!({"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}});
+    assert_eq!(validation::validate(&config)["valid"], true);
+    let artifact = validation::render(&config).unwrap();
+    let mut conn = state.pool.acquire().await.unwrap();
+    db::insert(&mut conn,"version",&json!({"id":STRING_VARIABLE_VERSION,"configuration_id":"00000000-0000-4000-8000-000000000800","number":4,"config":config,"variables":[{"name":"format","path":"/sources/in/format","type":"string"}],"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+    drop(conn);
+
+    let candidate = "ghp_syntheticbindingtoken123";
+    let mut request = request(STRING_VARIABLE_VERSION, &ids[..1], "snapshot");
+    request["variable_bindings"] = json!({"defaults":{"format":candidate},"devices":{}});
+    for path in ["/api/v1/deployments/preview", "/api/v1/deployments"] {
+        let (status, refused) = call(&app, path, request.clone(), &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {refused}");
+        assert_eq!(refused["error"]["code"], "INVALID_INPUT");
+        assert!(!refused.to_string().contains(candidate));
+    }
+    let deployments: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE kind='deployment'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(deployments, 0);
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+        .bind(format!("%{candidate}%"))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0);
 }
 
 #[tokio::test]
@@ -262,6 +296,7 @@ async fn fixture() -> (
         releases_dir: temp.path().join("releases"),
         instance_name: "Synthetic compatibility fixture".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -314,7 +349,11 @@ async fn fixture() -> (
         ),
         (
             RESTRICTED_VERSION,
-            json!({"sources":{"in":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}),
+            // Unit tests add no capability: restricted devices accept them,
+            // sample data included.
+            json!({"sources":{"in":{"type":"demo_logs"}},"transforms":{"t":{"type":"remap","inputs":["in"],"source":".x = 1"}},"sinks":{"out":{"type":"blackhole","inputs":["t"]}},
+                "tests":[{"name":"sets x","inputs":[{"insert_at":"t","type":"log","log_fields":{"message":"GET https://example.com/$HOME"}}],
+                    "outputs":[{"extract_from":"t","conditions":[{"type":"vrl","source":"assert_eq!(.x, 1)"}]}]}]}),
         ),
     ] {
         let artifact = format!("{}\n", serde_json::to_string_pretty(&config).unwrap());
@@ -564,6 +603,17 @@ async fn creation_rechecks_mode_and_version_after_a_clean_preview() {
         StatusCode::CONFLICT
     );
     assert_eq!(deployment_count(&state).await, 0);
+    // A patch release of the pinned series is compatible.
+    set_device(&state, &ids[0], "full", "0.58.2").await;
+    let (status, created) = call(
+        &app,
+        "/api/v1/deployments",
+        request(FULL_VERSION, &[ids[0].clone()], "snapshot"),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
 }
 
 #[tokio::test]
@@ -582,6 +632,50 @@ async fn restricted_safe_configuration_can_be_admitted_on_restricted_device() {
     assert_eq!(preview["blockers"], json!([]));
     let (status, saved) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
+}
+
+#[tokio::test]
+async fn a_pipeline_that_opens_vectors_local_api_needs_full_mode() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    // Vector's API has no authentication, so a restricted device is never
+    // offered a pipeline that turns it on, even on the loopback address.
+    let version = "00000000-0000-4000-8000-000000000804";
+    let config = json!({"sources":{"in":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}},
+        "api":{"enabled":true,"address":"127.0.0.1:8686"}});
+    let artifact = format!("{}\n", serde_json::to_string_pretty(&config).unwrap());
+    let mut conn = state.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "version",
+        &json!({"id":version,"configuration_id":"00000000-0000-4000-8000-000000000800",
+            "number":2,"config":config,"artifact":artifact,"sha256":db::hash(&artifact),
+            "size":artifact.len(),"created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    let body = request(version, &ids, "snapshot");
+    let (status, preview) = call(
+        &app,
+        "/api/v1/deployments/preview",
+        body.clone(),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let blockers = preview["blockers"].as_array().unwrap();
+    assert_eq!(blockers.len(), 1, "{preview}");
+    assert_eq!(blockers[0]["code"], "FULL_VECTOR_MODE_REQUIRED");
+    assert_eq!(blockers[0]["device_ids"], json!([ids[1]]));
+    let (status, rejected) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
+    assert_eq!(deployment_count(&state).await, 0);
+    // Devices in full mode are offered it as before.
+    let body = request(version, &[ids[0].clone()], "snapshot");
+    let (status, preview) = call(&app, "/api/v1/deployments/preview", body, &cookie, &csrf).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["blockers"], json!([]));
 }
 
 #[tokio::test]
@@ -684,4 +778,409 @@ async fn later_canary_wave_rechecks_version_before_releasing_pending_target() {
             .await
             .unwrap();
     assert_eq!(pending_generation, 0);
+}
+
+/// The object an AWS sink reads its keys from. Elasticsearch flattens them into
+/// `auth`; the shared HTTP authentication of the other sinks nests them one
+/// level down, in `auth.auth`.
+fn aws_auth(typ: &str, strategy: &str, credential: &Value) -> Value {
+    if typ == "elasticsearch" {
+        let mut auth = credential.clone();
+        auth["strategy"] = json!(strategy);
+        auth
+    } else {
+        json!({"strategy": strategy, "service": "es", "auth": credential})
+    }
+}
+
+/// A pipeline of one sink of the given type, with `auth` unless it is null.
+fn aws_pipeline(typ: &str, auth: Value) -> Value {
+    let mut sink = match typ {
+        "elasticsearch" => {
+            json!({"type": typ, "inputs": ["in"], "endpoints": ["https://search.example.net"], "aws": {"region": "us-east-1"}})
+        }
+        "http" => {
+            json!({"type": typ, "inputs": ["in"], "uri": "https://ingest.example.net/events", "encoding": {"codec": "json"}})
+        }
+        "loki" => {
+            json!({"type": typ, "inputs": ["in"], "endpoint": "https://loki.example.net", "labels": {"job": "vector"}, "encoding": {"codec": "json"}})
+        }
+        _ => json!({"type": typ, "inputs": ["in"], "address": "127.0.0.1:9598"}),
+    };
+    if !auth.is_null() {
+        sink["auth"] = auth;
+    }
+    let source = if typ == "prometheus_exporter" {
+        json!({"type": "internal_metrics"})
+    } else {
+        json!({"type": "demo_logs", "format": "json"})
+    };
+    json!({"sources": {"in": source}, "sinks": {"out": sink}})
+}
+
+/// Pipelines of one sink type, each with whether a restricted device can run it.
+/// A restricted device refuses two things no allowance can permit: an AWS
+/// credentials file, and the AWS strategy without explicit keys, which signs
+/// with the host's own identity.
+fn aws_cases(typ: &str) -> Vec<(&'static str, Value, bool)> {
+    let keys = json!({"access_key_id": "vectory-secret:AWS_KEY_ID", "secret_access_key": "vectory-secret:AWS_SECRET_KEY"});
+    let with = |extra: Value| {
+        let mut credential = keys.clone();
+        credential
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        credential
+    };
+    let aws = |credential: Value| aws_pipeline(typ, aws_auth(typ, "aws", &credential));
+    let mut cases = vec![
+        ("both keys", aws(keys.clone()), false),
+        (
+            "both keys, a region and a session token",
+            aws(with(
+                json!({"region": "eu-west-1", "session_token": "vectory-secret:AWS_SESSION_TOKEN"}),
+            )),
+            false,
+        ),
+        (
+            "both keys and a role that is not set",
+            aws(with(json!({"assume_role": null}))),
+            false,
+        ),
+        (
+            "both keys, the strategy in capitals",
+            aws_pipeline(typ, aws_auth(typ, "AWS", &keys)),
+            false,
+        ),
+        (
+            "basic authentication",
+            aws_pipeline(
+                typ,
+                json!({"strategy": "basic", "user": "vectory-secret:USER", "password": "vectory-secret:PASSWORD"}),
+            ),
+            false,
+        ),
+        ("no authentication", aws_pipeline(typ, Value::Null), false),
+        ("no keys", aws(json!({})), true),
+        (
+            "no keys, the strategy in capitals",
+            aws_pipeline(typ, aws_auth(typ, "AWS", &json!({}))),
+            true,
+        ),
+        (
+            "only the access key ID",
+            aws(json!({"access_key_id": "vectory-secret:AWS_KEY_ID"})),
+            true,
+        ),
+        (
+            "only the secret access key",
+            aws(json!({"secret_access_key": "vectory-secret:AWS_SECRET_KEY"})),
+            true,
+        ),
+        (
+            "an empty secret access key",
+            aws(json!({"access_key_id": "vectory-secret:AWS_KEY_ID", "secret_access_key": ""})),
+            true,
+        ),
+        (
+            "both keys and a role to assume",
+            aws(with(
+                json!({"assume_role": "arn:aws:iam::123456789012:role/vector"}),
+            )),
+            true,
+        ),
+        (
+            "both keys and the metadata client",
+            aws(with(json!({"imds": {"max_attempts": 2}}))),
+            true,
+        ),
+        (
+            "both keys and a profile",
+            aws(with(json!({"profile": "vector"}))),
+            true,
+        ),
+        (
+            "a credentials file",
+            aws(json!({"credentials_file": "/srv/aws/credentials", "profile": "vector"})),
+            true,
+        ),
+        (
+            "a credentials file beside both keys",
+            aws(with(json!({"credentials_file": "/srv/aws/credentials"}))),
+            true,
+        ),
+        (
+            "a credentials file deeper below auth",
+            aws(with(
+                json!({"more": {"still": {"credentials_file": "/srv/aws/credentials"}}}),
+            )),
+            true,
+        ),
+        (
+            "a credentials file in a list below auth",
+            aws(with(
+                json!({"more": [{"credentials_file": "/srv/aws/credentials"}]}),
+            )),
+            true,
+        ),
+    ];
+    if typ != "elasticsearch" {
+        cases.push((
+            "bearer authentication",
+            aws_pipeline(
+                typ,
+                json!({"strategy": "bearer", "token": "vectory-secret:TOKEN"}),
+            ),
+            false,
+        ));
+    }
+    cases
+}
+
+async fn add_version(state: &State, config: &Value) -> String {
+    assert_eq!(validation::validate(config)["valid"], true, "{config}");
+    let id = db::id();
+    let artifact = validation::render(config).unwrap();
+    let mut conn = state.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "version",
+        &json!({"id":id,"configuration_id":"00000000-0000-4000-8000-000000000800",
+            "number":1,"config":config,"artifact":artifact,"sha256":db::hash(&artifact),
+            "size":artifact.len(),"created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn a_credentials_file_or_the_hosts_own_aws_identity_needs_full_mode() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    let (full, restricted) = (&ids[0], &ids[1]);
+    let mut priority = 100;
+    let mut created = 0;
+    for typ in ["http", "loki", "prometheus_exporter", "elasticsearch"] {
+        for (name, config, needs_full) in aws_cases(typ) {
+            let label = format!("{typ}, {name}");
+            let version = add_version(&state, &config).await;
+            priority += 1;
+            // The preview blocks a restricted device for the two shapes, and
+            // never a device in full mode.
+            let mut both = request(&version, &[restricted.clone(), full.clone()], "snapshot");
+            both["priority"] = json!(priority);
+            let (status, preview) =
+                call(&app, "/api/v1/deployments/preview", both, &cookie, &csrf).await;
+            assert_eq!(status, StatusCode::OK, "{label}: {preview}");
+            let blockers = &preview["blockers"];
+            if needs_full {
+                assert_eq!(
+                    blockers.as_array().map(Vec::len),
+                    Some(1),
+                    "{label}: {blockers}"
+                );
+                assert_eq!(blockers[0]["code"], "FULL_VECTOR_MODE_REQUIRED", "{label}");
+                assert_eq!(blockers[0]["device_ids"], json!([restricted]), "{label}");
+            } else {
+                assert_eq!(*blockers, json!([]), "{label}");
+            }
+            // Starting it for the restricted device is refused, with nothing
+            // written, or accepted, as the preview showed.
+            let mut body = request(&version, &[restricted.clone()], "snapshot");
+            body["priority"] = json!(priority);
+            let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+            if needs_full {
+                assert_eq!(status, StatusCode::CONFLICT, "{label}: {reply}");
+                assert!(
+                    reply["error"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("requires full Vector mode")),
+                    "{label}: {reply}"
+                );
+            } else {
+                assert_eq!(status, StatusCode::OK, "{label}: {reply}");
+                created += 1;
+            }
+            assert_eq!(deployment_count(&state).await, created, "{label}");
+            // A device in full mode runs it either way.
+            let mut body = request(&version, &[full.clone()], "snapshot");
+            body["priority"] = json!(priority);
+            let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+            assert_eq!(status, StatusCode::OK, "{label}: {reply}");
+            created += 1;
+        }
+    }
+}
+
+/// A pipeline whose one remap step runs `program`, with `tests` when it has any.
+fn vrl_pipeline(program: &str, tests: Value) -> Value {
+    let mut config = json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"t": {"type": "remap", "inputs": ["in"], "source": program}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["t"]}},
+    });
+    if !tests.is_null() {
+        config["tests"] = tests;
+    }
+    config
+}
+
+/// A unit test of the step whose condition is `condition`.
+fn vrl_test(condition: &str) -> Value {
+    json!([{"name": "t",
+        "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x.example.com"}}],
+        "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": condition}]}]}])
+}
+
+/// Pipelines that call `parse_groks` or `parse_etld`, each with whether a
+/// restricted device can run it. Vector opens the file a call passes when it
+/// compiles the program, so a call that passes one needs a full-mode device:
+/// the file is any the service account can read, and no file root covers it.
+/// Without a file, both functions are ordinary. The grok patterns hold no `%{`,
+/// which restricted mode refuses anywhere, so the file is what is judged.
+fn vrl_file_cases() -> Vec<(&'static str, Value, bool)> {
+    let groks = |arguments: &str| {
+        vrl_pipeline(
+            &format!(".x = parse_groks!(.message, [\"[a-z]+\"]{arguments})"),
+            Value::Null,
+        )
+    };
+    let etld = |arguments: &str| {
+        vrl_pipeline(
+            &format!(".x = parse_etld!(.message{arguments})"),
+            Value::Null,
+        )
+    };
+    vec![
+        (
+            "parse_groks, alias_sources by name",
+            groks(r#", alias_sources: ["/etc/vector/aliases.json"]"#),
+            true,
+        ),
+        (
+            "parse_groks, alias_sources as the fourth argument",
+            groks(r#", {}, ["/etc/vector/aliases.json"]"#),
+            true,
+        ),
+        (
+            "parse_groks, alias_sources beside aliases",
+            groks(r#", aliases: {"A": "[a-z]+"}, alias_sources: ["/etc/vector/aliases.json"]"#),
+            true,
+        ),
+        (
+            "parse_etld, psl by name",
+            etld(r#", psl: "/etc/vector/list.dat""#),
+            true,
+        ),
+        (
+            "parse_etld, psl as the third argument",
+            etld(r#", 1, "/etc/vector/list.dat""#),
+            true,
+        ),
+        (
+            "parse_etld, a file after a quote that one reading of the text could not end",
+            etld(r#", r'\', psl: "/etc/vector/list.dat""#),
+            true,
+        ),
+        (
+            "a call after a clean one",
+            vrl_pipeline(
+                ".a = parse_etld!(.message)\n.b = parse_etld!(.message, psl: \"/etc/vector/list.dat\")",
+                Value::Null,
+            ),
+            true,
+        ),
+        (
+            "a call in the condition of a unit test",
+            vrl_pipeline(
+                ".x = 1",
+                vrl_test(r#"parse_etld!(.message, psl: "/etc/vector/list.dat").etld == "x""#),
+            ),
+            true,
+        ),
+        (
+            "parse_groks without a file",
+            groks(r#", aliases: {"A": "[a-z]+"}"#),
+            false,
+        ),
+        ("parse_groks with the patterns only", groks(""), false),
+        ("parse_etld with the value only", etld(""), false),
+        ("parse_etld with plus_parts", etld(", plus_parts: 1"), false),
+        (
+            "parse_etld with plus_parts as the second argument",
+            etld(", 1"),
+            false,
+        ),
+        (
+            "names that only look alike",
+            vrl_pipeline(
+                ".parse_etld = 1\n.note = \"parse_groks and psl: are words\"\n.y = my_parse_etld(.message, 1, \"x\")",
+                Value::Null,
+            ),
+            false,
+        ),
+        (
+            "a unit test of a call without a file",
+            vrl_pipeline(
+                ".x = parse_etld!(.message)",
+                vrl_test(r#"parse_etld!(.message, plus_parts: 1).etld == "x""#),
+            ),
+            false,
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn a_vrl_call_that_passes_a_file_needs_full_mode() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    let (full, restricted) = (&ids[0], &ids[1]);
+    let mut priority = 100;
+    let mut created = 0;
+    for (name, config, needs_full) in vrl_file_cases() {
+        let version = add_version(&state, &config).await;
+        priority += 1;
+        // The preview blocks a restricted device for such a call, and never a
+        // device in full mode.
+        let mut both = request(&version, &[restricted.clone(), full.clone()], "snapshot");
+        both["priority"] = json!(priority);
+        let (status, preview) =
+            call(&app, "/api/v1/deployments/preview", both, &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {preview}");
+        let blockers = &preview["blockers"];
+        if needs_full {
+            assert_eq!(
+                blockers.as_array().map(Vec::len),
+                Some(1),
+                "{name}: {blockers}"
+            );
+            assert_eq!(blockers[0]["code"], "FULL_VECTOR_MODE_REQUIRED", "{name}");
+            assert_eq!(blockers[0]["device_ids"], json!([restricted]), "{name}");
+        } else {
+            assert_eq!(*blockers, json!([]), "{name}");
+        }
+        // Starting it for the restricted device is refused with nothing
+        // written, or accepted, as the preview showed.
+        let mut body = request(&version, &[restricted.clone()], "snapshot");
+        body["priority"] = json!(priority);
+        let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+        if needs_full {
+            assert_eq!(status, StatusCode::CONFLICT, "{name}: {reply}");
+            assert!(
+                reply["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("requires full Vector mode")),
+                "{name}: {reply}"
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{name}: {reply}");
+            created += 1;
+        }
+        assert_eq!(deployment_count(&state).await, created, "{name}");
+        // A device in full mode runs it either way.
+        let mut body = request(&version, &[full.clone()], "snapshot");
+        body["priority"] = json!(priority);
+        let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {reply}");
+        created += 1;
+    }
 }

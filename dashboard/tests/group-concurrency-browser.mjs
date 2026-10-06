@@ -1,12 +1,13 @@
 // Actual Groups/GroupEditor UI, intercepted synthetic transport only.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
@@ -17,6 +18,8 @@ const output = resolve(
 await mkdir(output, { recursive: true });
 const sourceFiles = [
   "dashboard/src/GroupEditor.tsx",
+  "dashboard/src/GroupMembershipEffects.tsx",
+  "dashboard/src/groupMembership.ts",
   "dashboard/src/GroupRecovery.tsx",
   "dashboard/src/groupRequests.ts",
   "dashboard/src/group-recovery.css",
@@ -123,10 +126,88 @@ function fixture(initial = group()) {
     commits: 0,
     releases: [],
     nextError: null,
+    // Answers a membership preview from its request body instead of "ready".
+    previewReply: null,
     replyMode: null,
     detailError: null,
     holdWrite: false,
     errors: [],
+  };
+}
+const CONFLICT_SENTENCE =
+  "Group membership creates conflicting equal-priority assignments";
+/**
+ * What the server names when adding these devices to the group collides:
+ * each already follows saved agent settings applied by hand, and the group
+ * is followed by other settings at the same priority.
+ */
+function collisions(numbers, total = numbers.length) {
+  const settings = (over) => ({
+    id: id(200),
+    name: null,
+    resource: "policy",
+    priority: 100,
+    target_mode: "snapshot",
+    status: "active",
+    created_at: null,
+    version_id: null,
+    version_number: null,
+    configuration_id: null,
+    configuration_name: null,
+    policy: {
+      heartbeat_seconds: 15,
+      sync_paused: false,
+      telemetry_enabled: true,
+    },
+    policy_id: null,
+    policy_name: null,
+    targets: "devices",
+    groups: [],
+    ...over,
+  });
+  return {
+    details: numbers.map((n) => ({
+      device_id: id(n),
+      device_name: "Synthetic edge " + n,
+      resource: "policy",
+      priority: 100,
+      assignments: [
+        settings({ id: id(200), policy_name: "Fast check-in" }),
+        settings({
+          id: id(201),
+          policy_name: "Group defaults",
+          target_mode: "persistent",
+          targets: "group",
+          groups: [{ id: id(10), name: group().name }],
+        }),
+      ],
+    })),
+    details_total: total,
+  };
+}
+/** The preview the server gives a colliding edit: blocked, with the simulation stopped. */
+function blockedPreview(body, numbers) {
+  const unchanged = {
+    changed: false,
+    before: null,
+    after: null,
+    pending: null,
+  };
+  return {
+    group_id: body.group_id,
+    revision: body.revision,
+    stale: false,
+    ready: false,
+    blockers: [
+      { code: "CONFLICT", reason: CONFLICT_SENTENCE, ...collisions(numbers) },
+    ],
+    devices: numbers.map((n) => ({
+      device_id: id(n),
+      device_name: "Synthetic edge " + n,
+      change: "added",
+      configuration: unchanged,
+      policy: unchanged,
+    })),
   };
 }
 const browser = await chromium.launch();
@@ -190,8 +271,13 @@ async function start(f, options = {}) {
       return response;
     };
   });
-  const reject = (route, status, code, message) =>
-    route.fulfill({ status, json: { error: { code, message } } });
+  const reject = (route, status, code, message, fields = {}) =>
+    route.fulfill({ status, json: { error: { code, message, ...fields } } });
+  const fleet = fleetReplies({
+    devices: () => f.devices,
+    groups: () => [...f.groups.values()],
+    groupById: false,
+  });
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -203,8 +289,29 @@ async function start(f, options = {}) {
     const path = url.pathname.slice(7),
       method = request.method();
     f.requests.push({ path, method });
+    // Pages of devices, one device, and the groups without their members.
+    if (await fulfillFleetRead(fleet, route)) return;
     if (method === "GET" && path === "/devices")
       return route.fulfill({ json: f.devices });
+    // The group overview lists assignments; member edits preview their effects.
+    if (method === "GET" && path === "/deployments/history")
+      return route.fulfill({
+        json: { items: [], total: 0, page: 1, page_size: 12 },
+      });
+    if (method === "POST" && path === "/groups/membership-preview") {
+      const body = request.postDataJSON();
+      if (f.previewReply) return route.fulfill({ json: f.previewReply(body) });
+      return route.fulfill({
+        json: {
+          group_id: body.group_id,
+          revision: body.revision,
+          stale: false,
+          ready: true,
+          blockers: [],
+          devices: [],
+        },
+      });
+    }
     if (method === "GET" && path === "/groups")
       return route.fulfill({ json: [...f.groups.values()] });
     if (method === "GET" && path.startsWith("/groups/requests/")) {
@@ -258,9 +365,10 @@ async function start(f, options = {}) {
         revision: old ? old.revision + 1 : 1,
         created_at: old?.created_at || "2026-09-27T00:00:00Z",
       };
+      // A write that is held has not committed yet.
+      if (f.holdWrite) await new Promise((resolve) => f.releases.push(resolve));
       f.groups.set(saved.id, structuredClone(saved));
       f.commits++;
-      if (f.holdWrite) await new Promise((resolve) => f.releases.push(resolve));
       const mode = f.replyMode;
       f.replyMode = null;
       if (mode === "drop") return route.abort("failed");
@@ -315,6 +423,7 @@ async function edit(page) {
     .getByRole("button", { name: /Synthetic production group/ })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("tab", { name: /^(Edit members|Members)$/ }).click();
 }
 const save = (page) =>
   page.getByRole("button", { name: "Save changes", exact: true }).click();
@@ -340,6 +449,8 @@ async function check(name, run) {
     });
   }
   console.log((results.at(-1).passed ? "PASS " : "FAIL ") + name);
+  if (!results.at(-1).passed)
+    console.log(results.at(-1).error.split("\n").slice(0, 12).join("\n"));
 }
 
 try {
@@ -496,16 +607,19 @@ try {
         const page = await app.page();
         await edit(page);
         await changeDescription(page);
+        // Opening the editor read the group's members; a definite conflict
+        // reads nothing more.
+        const groupReads = () =>
+          f.requests.filter(
+            (r) => r.path === "/groups/" + id(10) && r.method === "GET",
+          ).length;
+        const opened = groupReads();
         f.nextError = [409, "CONFLICT", "Assignments conflict"];
         await save(page);
         await expect(page.getByRole("alert")).toContainText(
           "Assignments conflict",
         );
-        expect(
-          f.requests.filter(
-            (r) => r.path === "/groups/" + id(10) && r.method === "GET",
-          ),
-        ).toHaveLength(0);
+        expect(groupReads()).toBe(opened);
         f.groups.set(id(10), { ...f.groups.get(id(10)), revision: 2 });
         f.detailError = 503;
         await save(page);
@@ -699,10 +813,19 @@ try {
           (user) => fixture.setUser(user),
           actor("operator", 91),
         );
-        await expect(
-          page.getByRole("textbox", { name: "Description (optional)" }),
-        ).toHaveValue("Original description");
+        // A new actor starts over from the group's overview.
         await expect(review(page)).toHaveCount(0);
+        // The session settles in more than one step; each step remounts. The
+        // group is read afresh: the held write had already committed, so the
+        // new actor sees the server's group, not the old actor's screen.
+        await expect(async () => {
+          await page
+            .getByRole("tab", { name: "Edit members", exact: true })
+            .click({ timeout: 2000 });
+          await expect(
+            page.getByRole("textbox", { name: "Description (optional)" }),
+          ).toHaveValue("My local description", { timeout: 1000 });
+        }).toPass({ timeout: 20000 });
         expect(f.writes).toHaveLength(1);
         expect(f.errors).toEqual([]);
       } finally {
@@ -721,9 +844,15 @@ try {
           (user) => fixture.setUser(user),
           actor("viewer", 91),
         );
-        await expect(
-          page.getByRole("textbox", { name: "Description (optional)" }),
-        ).toHaveValue("Original description");
+        // A viewer starts on the overview and reads members on their tab.
+        await expect(async () => {
+          await page
+            .getByRole("tab", { name: "Members", exact: true })
+            .click({ timeout: 2000 });
+          await expect(
+            page.getByRole("textbox", { name: "Description (optional)" }),
+          ).toHaveValue("Original description", { timeout: 1000 });
+        }).toPass({ timeout: 20000 });
         for (const release of pending.releases) release();
         await expect(
           page.getByRole("button", { name: "Save changes" }),
@@ -869,6 +998,162 @@ try {
         }
     },
   );
+
+  const sentence =
+    "Synthetic edge 2 already follows “Fast check-in” (agent settings, priority 100), and “Group defaults” follows Synthetic production group at the same priority. Give one of them another priority, or remove Synthetic edge 2 from the targets of “Fast check-in”, then add it to the group.";
+  const effects = (page) =>
+    page.getByRole("region", { name: "What changes when you save" });
+
+  await check(
+    "A colliding member is named before saving, Save waits with its reason, and nothing says it changes nothing",
+    async () => {
+      const f = fixture(),
+        app = await start(f);
+      f.previewReply = (body) =>
+        body.device_ids.includes(id(2))
+          ? blockedPreview(body, [2])
+          : {
+              group_id: body.group_id,
+              revision: body.revision,
+              stale: false,
+              ready: true,
+              blockers: [],
+              devices: [],
+            };
+      try {
+        const page = await app.page();
+        await edit(page);
+        await page.getByRole("checkbox", { name: /Synthetic edge 2/ }).check();
+        await expect(effects(page)).toContainText(sentence);
+        // The simulation stopped at the collision: no device is said to be
+        // unchanged, and the server's bare sentence is not shown instead.
+        await expect(effects(page)).not.toContainText("changes nothing");
+        await expect(effects(page)).not.toContainText(CONFLICT_SENTENCE);
+        const saveButton = page.getByRole("button", {
+          name: "Save changes",
+          exact: true,
+        });
+        await expect(saveButton).toBeDisabled();
+        const reason = page.locator("#group-save-blocked");
+        await expect(reason).toHaveText(
+          "Saving is blocked until the conflict above is resolved.",
+        );
+        await expect(saveButton).toHaveAttribute(
+          "aria-describedby",
+          "group-save-blocked",
+        );
+        expect(f.writes).toEqual([]);
+        // Taking the device out clears the block and the reason.
+        await page
+          .getByRole("checkbox", { name: /Synthetic edge 2/ })
+          .uncheck();
+        await page.getByRole("checkbox", { name: /Synthetic edge 3/ }).check();
+        await expect(reason).toHaveCount(0);
+        await expect(saveButton).toBeEnabled();
+        expect(f.errors).toEqual([]);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  await check(
+    "A refused save names the device and both assignments, keeps the edits, and says how many more there are",
+    async () => {
+      const f = fixture(),
+        app = await start(f);
+      // The preview is unavailable or raced; the server refuses the save.
+      f.nextError = [409, "CONFLICT", CONFLICT_SENTENCE, collisions([2], 3)];
+      try {
+        const page = await app.page();
+        await edit(page);
+        await page.getByRole("checkbox", { name: /Synthetic edge 2/ }).check();
+        await save(page);
+        const alerts = page.getByRole("alert");
+        await expect(alerts.first()).toContainText(sentence);
+        await expect(alerts.last()).toContainText(
+          "2 more conflicts aren't listed here.",
+        );
+        await expect(page.getByRole("dialog")).not.toContainText(
+          CONFLICT_SENTENCE,
+        );
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await expect(
+          page.getByRole("checkbox", { name: /Synthetic edge 2/ }),
+        ).toBeChecked();
+        expect(f.writes).toHaveLength(1);
+        expect(f.commits).toBe(0);
+        // An older server that names nothing still says what it said.
+        f.nextError = [409, "CONFLICT", CONFLICT_SENTENCE];
+        await save(page);
+        await expect(page.getByRole("alert").first()).toHaveText(
+          CONFLICT_SENTENCE,
+        );
+        expect(f.errors).toEqual([]);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  await check(
+    "The collision reads well in light, dark and phone layouts",
+    async () => {
+      for (const width of [899, 390])
+        for (const theme of ["light", "dark"]) {
+          const f = fixture(),
+            app = await start(f, { viewport: { width, height: 900 }, theme });
+          f.previewReply = (body) => blockedPreview(body, [2, 3]);
+          try {
+            const page = await app.page();
+            await edit(page);
+            await page
+              .getByRole("checkbox", { name: /Synthetic edge 2/ })
+              .check();
+            await page
+              .getByRole("checkbox", { name: /Synthetic edge 3/ })
+              .check();
+            await expect(effects(page)).toContainText(
+              "Synthetic edge 2 and Synthetic edge 3 already follow “Fast check-in”",
+            );
+            await expect(effects(page)).toContainText(
+              "remove those devices from the targets of “Fast check-in”, then add them to the group.",
+            );
+            await expect(page.locator("#group-save-blocked")).toBeVisible();
+            await expect(
+              page.getByRole("button", { name: "Save changes", exact: true }),
+            ).toBeDisabled();
+            expect(
+              await page.evaluate(
+                () => document.documentElement.scrollWidth <= innerWidth,
+              ),
+            ).toBe(true);
+            const dialog = await page.getByRole("dialog").boundingBox();
+            expect(dialog.x).toBeGreaterThanOrEqual(0);
+            expect(dialog.x + dialog.width).toBeLessThanOrEqual(width + 1);
+            const result = await new AxeBuilder({ page }).analyze();
+            scans.push({
+              width,
+              theme,
+              view: "collision",
+              violations: result.violations.map((v) => ({
+                id: v.id,
+                impact: v.impact,
+                nodes: v.nodes.map((n) => n.target),
+              })),
+            });
+            expect(result.violations).toEqual([]);
+            const filename = "group-collision-" + width + "-" + theme + ".png";
+            await effects(page).scrollIntoViewIfNeeded();
+            await page.screenshot({ path: resolve(output, filename) });
+            screenshots.push(filename);
+            expect(f.errors).toEqual([]);
+          } finally {
+            await app.close();
+          }
+        }
+    },
+  );
 } finally {
   await browser.close();
   await server.close();
@@ -878,9 +1163,9 @@ try {
     scope:
       "Actual Groups/GroupEditor components in Chromium, synthetic shared API transport with fault injection and controlled 30-second deadlines. Does not execute server authorization, database reconciliation, real assignments, or live preview writes.",
     passed:
-      results.length === 9 &&
+      results.length === 12 &&
       results.every((r) => r.passed) &&
-      scans.length === 4 &&
+      scans.length === 8 &&
       scans.every((s) => !s.violations.length),
     results,
     accessibility: scans,

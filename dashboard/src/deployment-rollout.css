@@ -1,0 +1,654 @@
+/* Rollout state marks alias the shared status tokens (tokens.css), so a
+   rollout's green, amber and red are the same everywhere. The in-flight pair
+   is one ordinal blue ramp; failures sit at the far end of every stack.
+   Labels and icons always accompany color. */
+:root {
+  --rollout-verified: var(--mark-success);
+  --rollout-attention: var(--mark-warning);
+  --rollout-applying: var(--series-1);
+  --rollout-waiting: #86b6ef;
+  --rollout-queued: var(--mark-empty);
+  --rollout-failed: var(--mark-danger);
+  --rollout-success-ink: var(--success-text);
+  --rollout-success-soft: var(--success-bg);
+  --rollout-danger-ink: var(--danger-text);
+  --rollout-danger-soft: var(--danger-bg);
+  --rollout-warning-ink: var(--warning-text);
+  --rollout-warning-soft: var(--warning-bg);
+  --rollout-info-ink: var(--info-text);
+  --rollout-info-soft: var(--info-bg);
+  --rollout-neutral-ink: var(--neutral-text);
+  --rollout-neutral-soft: var(--neutral-bg);
+}
+[data-theme="dark"] {
+  --rollout-waiting: #2a6fcb;
+}
+
+/* Stacked state bar: one baseline, 2px surface gaps, 4px rounded ends. */
+.rollout-bar {
+  display: grid;
+  gap: 12px;
+}
+.rollout-bar-track {
+  display: flex;
+  gap: 2px;
+  height: 14px;
+  border-radius: 4px;
+}
+.rollout-bar[data-variant="mini"] .rollout-bar-track {
+  height: 6px;
+  width: 100%;
+  max-width: 180px;
+  border-radius: 3px;
+}
+.rollout-bar-segment {
+  position: relative;
+  min-width: 3px;
+  background: var(--rollout-queued);
+  transition:
+    flex-grow 420ms var(--ease),
+    filter 120ms ease;
+}
+.rollout-bar-segment:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.rollout-bar-segment:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.rollout-bar-segment:only-child {
+  border-radius: 4px;
+}
+.rollout-bar-empty {
+  flex: 1;
+  border-radius: 4px;
+  background: var(--line);
+}
+[data-segment="verified"] {
+  --rollout-mark: var(--rollout-verified);
+}
+[data-segment="attention"] {
+  --rollout-mark: var(--rollout-attention);
+}
+[data-segment="applying"] {
+  --rollout-mark: var(--rollout-applying);
+}
+[data-segment="waiting"] {
+  --rollout-mark: var(--rollout-waiting);
+}
+[data-segment="queued"] {
+  --rollout-mark: var(--rollout-queued);
+}
+[data-segment="failed"] {
+  --rollout-mark: var(--rollout-failed);
+}
+.rollout-bar-segment[data-segment] {
+  background: var(--rollout-mark);
+}
+.rollout-bar[data-variant="full"] .rollout-bar-segment:hover {
+  filter: brightness(1.08) saturate(1.05);
+}
+.rollout-tip {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  display: none;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.rollout-tip strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+.rollout-tip small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.rollout-bar-segment:hover .rollout-tip,
+.rollout-dot:hover .rollout-tip,
+.rollout-dot:focus-visible .rollout-tip {
+  display: grid;
+}
+.rollout-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+.rollout-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rollout-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--rollout-mark);
+}
+.rollout-legend-count {
+  color: var(--ink);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stage lanes */
+.rollout-lanes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(190px, 1fr);
+  gap: 12px;
+  margin: 0;
+  padding: 2px 2px 6px;
+  list-style: none;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+.rollout-lane {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 8px;
+  min-height: 150px;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  scroll-snap-align: start;
+}
+.rollout-lane:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 26px;
+  right: -12px;
+  width: 12px;
+  height: 1px;
+  background: var(--line-strong);
+}
+.rollout-lane[aria-current="step"] {
+  border-color: color-mix(in srgb, var(--rollout-applying) 55%, var(--line));
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--rollout-applying) 12%, transparent);
+}
+.rollout-lane[data-state="failed"] {
+  border-color: color-mix(in srgb, var(--rollout-failed) 55%, var(--line));
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--rollout-failed) 10%, transparent);
+}
+.rollout-lane[data-state="queued"],
+.rollout-lane[data-state="stopped"] {
+  background: color-mix(in srgb, var(--surface) 55%, var(--bg));
+}
+@media (max-width: 639px) {
+  /* Stack stages top to bottom on a phone instead of scrolling sideways. */
+  .rollout-lanes {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow: visible;
+  }
+  .rollout-lane {
+    min-height: 0;
+  }
+  .rollout-lane:not(:last-child)::after {
+    top: auto;
+    right: auto;
+    bottom: -12px;
+    left: 26px;
+    width: 1px;
+    height: 12px;
+  }
+}
+.rollout-lane header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rollout-lane header strong {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+.rollout-lane-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollout-lane-count span {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 650;
+}
+.rollout-dots {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rollout-dot {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--rollout-queued);
+  box-shadow: 0 0 0 2px var(--surface);
+  outline-offset: 2px;
+}
+.rollout-dot::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
+.rollout-dot[data-tone="success"] {
+  background: var(--rollout-verified);
+}
+.rollout-dot[data-tone="danger"] {
+  background: var(--rollout-failed);
+}
+.rollout-dot[data-tone="warning"] {
+  background: var(--rollout-attention);
+}
+.rollout-dot[data-tone="info"] {
+  background: var(--rollout-applying);
+}
+.rollout-dot[data-tone="neutral"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--line-strong);
+}
+.rollout-dot .rollout-tip {
+  bottom: calc(100% + 10px);
+}
+.rollout-dots-more {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 14px;
+}
+.rollout-lane footer {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.rollout-lane footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* The canary lane that shows what its devices deliver is two lanes wide. */
+.rollout-lane[data-watch] {
+  grid-column: span 2;
+  grid-template-rows: auto auto auto 1fr auto;
+}
+@media (max-width: 639px) {
+  .rollout-lane[data-watch] {
+    grid-column: auto;
+  }
+}
+.rollout-watch {
+  min-width: 0;
+  align-self: start;
+}
+.rollout-watch table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.rollout-watch caption {
+  padding-bottom: 6px;
+  text-align: left;
+}
+.rollout-watch caption strong,
+.rollout-watch caption span {
+  display: block;
+}
+.rollout-watch caption strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+.rollout-watch caption span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.rollout-watch th,
+.rollout-watch td {
+  padding: 6px 8px 6px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  background: transparent;
+  vertical-align: top;
+  text-align: left;
+  white-space: normal;
+}
+.rollout-watch thead th {
+  border-top: 0;
+  padding-block: 2px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.rollout-watch tbody th {
+  min-width: 84px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.rollout-watch tbody th a {
+  color: inherit;
+}
+.rollout-watch small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.rollout-watch td strong {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rollout-watch-missing {
+  color: var(--muted);
+}
+.rollout-watch-more {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.rollout-lane-early {
+  color: var(--ink);
+}
+
+.rollout-countdown {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rollout-countdown svg {
+  width: 34px;
+  height: 34px;
+  transform: rotate(-90deg);
+}
+.rollout-countdown circle {
+  fill: none;
+  stroke-width: 3;
+}
+.rollout-countdown-track {
+  stroke: var(--line);
+}
+.rollout-countdown-fill {
+  stroke: var(--rollout-applying);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 250ms linear;
+}
+.rollout-countdown span {
+  display: grid;
+}
+.rollout-countdown small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.rollout-countdown strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Failures grouped by reason */
+.rollout-failures h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+.rollout-failures ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rollout-failures li {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--rollout-failed) 30%, var(--line));
+  border-left: 3px solid var(--rollout-failed);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.rollout-failure-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.rollout-failure-reason {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.rollout-failure-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rollout-failure-actions a.button {
+  text-decoration: none;
+}
+.rollout-failure-origin {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  overflow-wrap: anywhere;
+}
+.rollout-failure-origin code {
+  font-size: 12px;
+  color: var(--ink);
+}
+/* What a retry does, inside the card that offers one. */
+.rollout-failure-footer {
+  margin: 4px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+/* A device still runs the version and isn't delivering. */
+.rollout-delivery-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--rollout-failed) 40%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--rollout-failed) 7%, var(--surface));
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.rollout-delivery-banner > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--rollout-failed);
+}
+.rollout-delivery-banner > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rollout-delivery-banner strong {
+  font-weight: 600;
+}
+.rollout-delivery-banner span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.rollout-delivery {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  /* Table cells don't wrap by default. */
+  white-space: normal;
+}
+.rollout-delivery strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.rollout-delivery > span {
+  color: var(--muted);
+}
+.rollout-delivery-label {
+  margin-right: 6px;
+  font-weight: 600;
+}
+.rollout-failure-fix {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.rollout-failure-fix strong {
+  margin-right: 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.rollout-failure-detail,
+.rollout-failure-devices {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.rollout-failure-devices a {
+  color: var(--accent-ink);
+  text-underline-offset: 3px;
+}
+
+/* Per-device progress */
+/* Six steps, the device page's: they share the width they get; on a phone
+   card they take two rows of three rather than overflow or break words. */
+.rollout-timeline {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  min-width: min(100%, 420px);
+  list-style: none;
+}
+.rollout-timeline li {
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+  padding: 16px 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+@media (max-width: 639px) {
+  .rollout-timeline {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 10px;
+  }
+  .rollout-timeline li:nth-child(3)::before {
+    right: auto;
+    width: 6px;
+  }
+}
+.rollout-timeline li::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--line);
+}
+.rollout-timeline li:first-child::before {
+  left: 6px;
+}
+.rollout-timeline li:last-child::before {
+  right: auto;
+  width: 6px;
+}
+.rollout-timeline li[data-state="done"]::before {
+  background: var(--rollout-verified);
+}
+.rollout-timeline-mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  background: var(--surface);
+  box-sizing: border-box;
+}
+.rollout-timeline li[data-state="done"] .rollout-timeline-mark {
+  border-color: var(--rollout-verified);
+  background: var(--rollout-verified);
+}
+.rollout-timeline li[data-state="current"] .rollout-timeline-mark {
+  border-color: var(--rollout-applying);
+  animation: rollout-pulse 1.6s ease-in-out infinite;
+}
+.rollout-timeline li[data-state="failed"] .rollout-timeline-mark {
+  border-color: var(--rollout-failed);
+  background: var(--rollout-failed);
+}
+.rollout-timeline li[data-state="done"],
+.rollout-timeline li[data-state="current"] {
+  color: var(--ink);
+}
+.rollout-timeline li[data-state="failed"] {
+  color: var(--rollout-danger-ink);
+  font-weight: 600;
+}
+.rollout-timeline time {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes rollout-pulse {
+  50% {
+    box-shadow: 0 0 0 4px
+      color-mix(in srgb, var(--rollout-applying) 22%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rollout-timeline li[data-state="current"] .rollout-timeline-mark {
+    animation: none;
+  }
+  .rollout-bar-segment,
+  .rollout-countdown-fill {
+    transition: none;
+  }
+}

@@ -1,58 +1,99 @@
+<div align="center">
+
 # Vectory
 
-An open-source, self-hosted control plane for [Vector](https://vector.dev/). Build pipelines visually, publish immutable versions, and roll them out to explicitly enrolled devices. Rust API, React/TypeScript dashboard, SQLite persistence, and a portable Go agent. Apache 2.0.
+**Design, ship and roll back Vector pipelines across your fleet, from one self-hosted dashboard.**
 
-![Vectory dashboard](docs/screenshots/overview.png)
+[Quickstart](docs/user/quickstart.md) · [Download 0.1.0](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) · [Docs](docs/user/getting-started.md) · [How it works](#how-it-works) · [Project status](#project-status)
 
-**Development build, with working native integration.** This repository includes the product, tests, packaging and operational guides. Production qualification remains open: native service/reboot/upgrade checks on the declared operating systems, clean Docker deployment, signed distribution, and sustained load/fault testing. See [executed evidence and release gates](docs/ACCEPTANCE.md), [compatibility](docs/COMPATIBILITY.md), and the measured [capacity boundary](docs/CAPACITY.md).
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-editor-dark.png">
+  <img src="docs/screenshots/product-editor.png" alt="Vectory's pipeline editor showing the demo pipeline: it parses synthetic syslog events with VRL, routes errors, samples the rest and exports Vector's own metrics" width="880">
+</picture>
 
-## What works
+</div>
 
-- Secure first-administrator bootstrap, local role-based accounts, MFA/recovery codes, CSRF-protected cookie sessions, and audit export.
-- Fleet, static groups, enrollment/downloads, policies, deployments, schedules, issues and device recovery. No default credentials or fake release links.
-- Full-page visual pipeline editor with a right-hand component inspector, 128 versioned source/transform/sink entries, schema-driven controls, YAML/TOML/JSON editing, native pipeline and VRL sample tests, explicit draft saving with revision conflict protection, immutable history and diffs. Global options, enrichment tables and secret providers are editable alongside component settings. See [catalog coverage](vector-catalog/README.md).
-- Explicit selector previews, priorities/conflicts, durable scheduled snapshots, persistent group targeting, canary/batch observation gates, rollback, retry, unassignment and local/remote pause.
-- Outbound TLS enrollment and mTLS heartbeats, device-bound signed manifests, active revocation, key renewal, monotonic state, actual-file drift detection, journaled apply/verified rollback and local capability restrictions.
-- Real native Vector activation, device-local secret references and journaled rotation at the same configuration generation. Secret values stay on the managed host. Host operators can explicitly enable full Vector mode for native components, providers, environment references and device resources; remote policy cannot widen that local permission.
-- Optional bounded loopback metrics with component counters and persisted minute history. Unavailable telemetry stays unavailable. The server does not ingest your pipeline events.
+Vectory is an open-source control plane for [Vector](https://vector.dev/). Build a pipeline in your browser, publish it as an immutable version, and roll it out to the hosts you choose, with previews, canaries, schedules and rollback. A small agent on each host applies the change and reports what Vector is actually running.
 
-The dashboard has four main destinations: Overview, Pipelines, Devices and Activity. Warm neutral surfaces, self-hosted Instrument Sans, charcoal actions and cobalt selection give the interface a consistent visual language. Device details are separate pages; advanced settings are disclosed when needed. It includes responsive layouts, a dark theme, keyboard controls and automated accessibility checks. The bundled Help center provides full-text search, task guides, troubleshooting and administration procedures. Links beside unfamiliar terms open exact explanations without disturbing the editor. The API reference is a separate developer appendix. No external font/CDN, analytics, billing, hosted identity, license server or cloud account is required.
+## Why Vectory
 
-## Run it
-
-Use the [Compose quickstart](docs/QUICKSTART.md) for the server deployment and [agent installation guide](docs/AGENT-INSTALL.md) for managed hosts. Compose packages the dashboard with the API, a TLS proxy, SQLite state and an isolated pinned Vector validation worker. TLS keys and the bootstrap secret are provided locally. The agent listener uses verified TLS on port 8443.
-
-For development on this Windows workspace, see [local demonstration](docs/LOCAL-DEMO.md). The demonstration uses explicitly synthetic events, a private loopback server, a separately trusted test CA and an already-downloaded official Vector binary. It does not register a system service or change the OS trust store.
-
-Vector is never silently installed, replaced or upgraded. Adoption requires the host operator to identify and stop the old instance, inventory its effective configuration, and explicitly authorize one managed file and fixed executable. Read the [agent security boundary](agent/README.md) before adoption.
-
-## Repository and verification
-
-| Directory | Contents |
+| | |
 | --- | --- |
-| `server/` | Axum/Tokio API, SQLx SQLite migrations, device listener, validation worker, maintenance CLI |
-| `dashboard/` | React/TypeScript UI, unit and real-server Playwright tests |
-| `help-center/` | Bundled Astro Starlight platform documentation, local Pagefind search and browser acceptance |
-| `agent/` | Go agent, native adapters, protocol/recovery and real Vector tests |
-| `contracts/` | Shared JSON Schema, generated OpenAPI, protocol/state contract |
-| `vector-catalog/` | Versioned component metadata and actual Vector validation fixtures |
-| `deploy/`, `packaging/` | Compose, container/service definitions, unsigned offline development archives, backup/release tools |
-| `tests/`, `docs/` | Independent TLS/security/load checks, evidence, architecture and operator guides |
+| **A visual editor for real Vector** | Schema-driven settings for all 128 component types of Vector 0.58, eight starter pipelines that pass Vector 0.58.0's own validation, VRL with sample tests, and YAML, TOML or JSON import and export. Publication checks the pipeline structure and uses an isolated Vector 0.58 validator where safe; configuration providers and other device-only checks run on each device before it applies. |
+| **Rollouts you can trust** | Immutable versions with diffs, device and group targeting with a preview, canaries that advance only when devices confirm, schedules and one-step rollback. |
+| **Outbound-only agents** | The agent dials out over TLS 1.3 with mutual TLS. Nothing on your hosts listens for Vectory. |
+| **Your data stays yours** | Events flow from Vector to your destinations, never through Vectory. Supported credential fields use device-local `vectory-secret:NAME` references; headers and URLs cannot use them in this preview. |
+| **Guardrails built in** | Roles, two-factor sign-in and an exportable audit log. Signed per-device configurations. A local policy on each host that the server can't widen. |
+| **Self-hosted, no strings** | Docker Compose and SQLite. No cloud account, analytics or outside CDN. Apache-2.0. |
 
-```sh
-cd help-center
-npm ci
-cd ../dashboard
-npm ci
-npm run build
-npm test
-cd ../server
-cargo test --locked
-cd ../agent
-go test ./...
-go vet ./...
+## How it works
+
+```mermaid
+flowchart LR
+  B["Your browser"] -->|"HTTPS 443"| P["TLS proxy"]
+  subgraph S["Vectory server (Docker Compose)"]
+    P --> V["vectory-server<br/>dashboard · API · help<br/>agent listener :8443<br/>SQLite"]
+    V -->|"internal network only"| W["Validator<br/>isolated Vector 0.58"]
+  end
+  subgraph H["Each device"]
+    A["vectory agent<br/>outbound HTTPS 8443<br/>mutual TLS"] -->|"starts · verifies · rolls back"| X["Vector 0.58"]
+  end
+  A --> V
+  X -->|"your events"| D[("Your destinations")]
 ```
 
-Native tests additionally require an independently verified Vector binary; browser and live-contract checks require the isolated demonstration. [Testing instructions](docs/LOCAL-DEMO.md) distinguish these checks. Cross-compilation is not native compatibility evidence. Checksums are not release signatures.
+1. **Build** a pipeline in the dashboard. An isolated Vector validates it.
+2. **Publish** an immutable version and **deploy** it to devices or groups: all at once, as a canary, or on a schedule.
+3. The **agent** fetches its signed configuration, validates it with Vector, applies it and confirms Vector is running it. If it fails, the agent restores the last working version.
 
-Read [threat model](docs/THREAT-MODEL.md), [security review](docs/SECURITY-REVIEW.md), [backup/restore](docs/BACKUP-RESTORE.md), [troubleshooting](docs/TROUBLESHOOTING.md), [contribution guide](CONTRIBUTING.md) and [security reporting](SECURITY.md). The full [implementation specification](docs/product-specification.md) and [architecture decision](docs/adr/0001-architecture.md) remain in the repository for review.
+## Get started
+
+- **Try it on one machine:** download the prebuilt Linux x86-64 preview kit and run `./start.sh` with Docker Compose. The [Quickstart](docs/user/quickstart.md) walks through administrator setup and connecting a test device. No Rust, Go, Node, or source build is required.
+- **Self-host the developer preview:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
+- **Understand the guarantees:** [Security model](docs/user/security.md).
+- **Create or inspect a configuration in your browser:** the [Vector configuration designer](https://vectory.ahmadz.ai/designer/) imports YAML, JSON, and TOML, reuses Vectory's diagram components, and exports the result without an account.
+
+The [0.1.0 release page](https://github.com/416rehman/Vectory/releases/tag/v0.1.0) has the unsigned agent packages, Docker image archives, checksums and SBOMs. Check [platform coverage](docs/user/compatibility.md) before choosing a download.
+
+The same guides ship inside every server as a searchable, offline Help center at `/help/`.
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/product-devices.png" alt="Devices: each demo agent with its connection and pipeline status"></td>
+    <td width="33%"><img src="docs/screenshots/product-rollout.png" alt="A deployment's details: every device applied and verified the new version"></td>
+    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: Linux and restricted mode selected, ready to create an install command"></td>
+  </tr>
+  <tr>
+    <td align="center">Every device, and what it runs</td>
+    <td align="center">Rollouts you can follow</td>
+    <td align="center">Guided setup for each device</td>
+  </tr>
+</table>
+
+## Project status
+
+Vectory is a **0.1 developer preview**. Its downloadable release artifacts are unsigned; device configurations and opt-in agent-update builds have their own runtime signatures. The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents on Linux, macOS and Windows. On every change CI runs the agent's native tests with Vector 0.58.0 on all three, a browser suite, and the Compose server stack on a clean runner. A second workflow, run on demand, installs the agent as a real operating-system service (systemd, launchd and the Windows service), runs the loop through it, restarts, kills and stops it, updates it to a newer build through a rollout and shows it taking back a build that fails; it also runs the first-use flows in Firefox and WebKit.
+
+The release supplies unsigned packages and Docker image archives as downloads, but there is no package repository or container registry yet. Also not done: signed release artifacts, reboot and upgrade tests, service tests on distributions other than Ubuntu 24.04, and tests on Arm64 hardware. Agent updates are built in and off until an administrator turns them on: a host agrees to them once, in the command that installs or upgrades it, and after that the dashboard rolls out signed builds with a canary first and an automatic rollback on each host. Any other agent is upgraded on its host, one command per device. See [Compatibility](docs/user/compatibility.md) for minimums and what is tested where, the [roadmap](docs/ROADMAP.md) for what's next, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the test behind each requirement.
+
+## Develop
+
+Vectory is a Rust (Axum, SQLite) server, a React and TypeScript dashboard, a Go agent and an Astro Starlight Help center. [CONTRIBUTING.md](CONTRIBUTING.md) lists the toolchain and how to run every test; [docs/dev/DEVELOPMENT.md](docs/dev/DEVELOPMENT.md) covers the local preview and the demo fleet.
+
+| Folder | Contents |
+| --- | --- |
+| `server/` | API, agent listener, validator and `vectory-admin` |
+| `dashboard/` | The web app and its browser tests |
+| `agent/` | The `vectory` agent |
+| `help-center/` | Help center build; its pages live in `docs/user/` |
+| `contracts/` | OpenAPI and agent protocol contracts |
+| `vector-catalog/` | Vector 0.58 component metadata and fixtures |
+| `deploy/`, `packaging/` | Docker Compose, container images and release tooling |
+
+## Contributing, security and license
+
+Contributions are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). For project or business inquiries, contact [416rehman@ahmadz.ai](mailto:416rehman@ahmadz.ai). Vectory's own code is licensed under [Apache-2.0](LICENSE).
+
+Third-party components retain their licenses and copyright notices in [NOTICE](NOTICE). The compiled documentation search includes GPL-covered code; its corresponding source and provenance are included in the release downloads and under `/help/legal/` in the installed Help center. These source materials are optional for rebuilding. Installation uses the prebuilt kits.
+
+Vectory is an independent project. It is not affiliated with or endorsed by Datadog or the Vector project.

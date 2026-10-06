@@ -91,7 +91,7 @@ pub async fn execute(
     let mut configuration = if let Some(source) = source {
         crate::pipelines::action(conn, source, "duplicate", &payload, actor).await?
     } else {
-        let name = db::string(&payload, "name", 120)?;
+        let name = db::name(&payload, "name", 120, "a pipeline name")?;
         api::validate_draft(&payload)?;
         let variables = crate::variables::declarations(
             &payload["config"],
@@ -128,8 +128,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["editor"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["editor"], false).await?;
     let prior:Option<(String,Option<String>,Option<i64>,String)>=sqlx::query_as("SELECT operation,source_configuration_id,source_revision,configuration_id FROM pipeline_requests WHERE actor_id=? AND request_id=?").bind(api::text(&actor,"id")).bind(&key).fetch_optional(&mut *tx).await?;
     Ok(Json(match prior {
@@ -150,8 +149,7 @@ pub async fn history(
     let input = crate::deployment_history::query(raw.as_deref(), parsed)?;
     let (_, page, size, offset) =
         crate::deployment_history::bounds(None, input.page, input.page_size)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["editor"], false).await?;
     let actor = api::text(&actor, "id");
     let total: i64 = sqlx::query_scalar("SELECT count(*) FROM pipeline_requests WHERE actor_id=?")

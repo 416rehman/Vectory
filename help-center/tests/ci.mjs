@@ -35,10 +35,16 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "vectory-help-ci-"));
 await fs.chmod(temporary, 0o700);
 const data = path.join(temporary, "data");
 const storage = path.join(data, "browser-auth.json");
+// VECTORY_HELP_CI_PORT pins the port, for example to stay inside a port range
+// shared with other local runs; otherwise the system picks a free one.
 const reservation = net.createServer();
 await new Promise((resolve, reject) => {
   reservation.once("error", reject);
-  reservation.listen(0, "127.0.0.1", resolve);
+  reservation.listen(
+    Number(process.env.VECTORY_HELP_CI_PORT) || 0,
+    "127.0.0.1",
+    resolve,
+  );
 });
 const port = reservation.address().port;
 await new Promise((resolve, reject) =>
@@ -92,6 +98,7 @@ const childEnvironment = {
   VECTORY_HELP_URL: origin,
   VECTORY_UI_URL: origin,
   VECTORY_HELP_STORAGE_STATE: storage,
+  ...(includeAccounts ? { VECTORY_PREVIEW_DIR: temporary } : {}),
   VECTORY_HELP_TEST_OUTPUT: output,
   VECTORY_HELP_EVIDENCE: path.join(output, "public-help.json"),
   VECTORY_HELP_ARTIFACTS: path.join(output, "public-artifacts"),
@@ -150,18 +157,33 @@ try {
       false,
       "Fixture must start with an empty private database",
     );
+    const bootstrapPassword = randomBytes(32).toString("hex");
     const response = await api.post("/api/v1/bootstrap", {
       data: {
         bootstrap_secret: bootstrap,
         name: "Synthetic help reviewer",
         email: "help-ci@example.test",
-        password: randomBytes(32).toString("hex"),
+        password: bootstrapPassword,
       },
     });
     assert(
       response.ok(),
       `Fixture bootstrap failed: HTTP ${response.status()}`,
     );
+    if (includeAccounts) {
+      // Account lifecycle checks reauthenticate as this isolated seed user.
+      // Keep its credentials inside the disposable fixture, never in artifacts.
+      const credentials = path.join(temporary, "credentials.json");
+      await fs.writeFile(
+        credentials,
+        JSON.stringify({
+          email: "help-ci@example.test",
+          password: bootstrapPassword,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.chmod(credentials, 0o600);
+    }
     // The server has already protected its state directory; store only this test's session there.
     await api.storageState({ path: storage });
     await fs.chmod(storage, 0o600);

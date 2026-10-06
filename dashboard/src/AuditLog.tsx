@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Download, ExternalLink, X } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  ScrollText,
+} from "lucide-react";
 import {
   api,
   post,
@@ -11,35 +17,54 @@ import {
 import {
   Button,
   DateCell,
+  EmptyState,
   ErrorBox,
+  FilterChips,
   Modal,
   PageHeader,
-  RefreshButton,
+  PageToolbar,
   SearchBox,
+  SegmentedControl,
+  Skeleton,
   Spinner,
+  StatusBadge,
   useResource,
+  type FilterChip,
+  CopyButton,
 } from "./ui";
 import {
   auditActions,
   auditActionLabel,
+  auditChanges,
   auditDateError,
+  auditEventLabel,
   auditFamilies,
   auditFilterParams,
   auditFilterSummary,
   auditHistoryPath,
   auditOutcomeLabel,
-  auditOutcomes,
   auditResourceRoute,
   auditRoute,
+  auditScopes,
+  auditScopeSummary,
   defaultAuditQuery,
+  deviceResultsSummary,
+  effectiveAuditScope,
+  groupDeviceResults,
   isAuditId,
   normalizeAuditQuery,
   type AuditQuery,
+  type AuditScope,
 } from "./auditModel";
 export type { AuditQuery } from "./auditModel";
+import { exactLocal, exactUtc, shortLocal } from "./time";
 import "./audit.css";
-import { DataTable, type TableColumn } from "./DataTable";
+import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import DocLink from "./DocLink";
+import { describeAgent, refusal } from "./enrollmentActivity";
+import { auditOutcomes } from "./status";
+import { deviceDisplay } from "./deviceName";
+import { RetiredName } from "./RetiredBadge";
 
 const emptyPage: AuditHistoryPage = {
   items: [],
@@ -64,7 +89,9 @@ function ResourceLink({
   navigate: Navigate;
 }) {
   const route = auditResourceRoute(kind, id);
-  return route ? (
+  // A device that a recovery replaced shows the name it had, and says so.
+  const shown = deviceDisplay(name);
+  const label = route ? (
     <a
       href={`#/${route}`}
       onClick={(event) => {
@@ -80,28 +107,17 @@ function ResourceLink({
         navigate(route);
       }}
     >
-      {name}
+      {shown.name}
     </a>
   ) : (
-    <span>{name}</span>
+    <span>{shown.name}</span>
   );
+  return shown.retired ? <RetiredName>{label}</RetiredName> : label;
 }
 
 function Result({ outcome }: { outcome: string }) {
-  const tone = ["success", "verified_applied"].includes(outcome)
-    ? "positive"
-    : [
-          "failure",
-          "failed",
-          "denied",
-          "conflict",
-          "missed",
-          "incompatible",
-        ].includes(outcome)
-      ? "negative"
-      : "neutral";
   return (
-    <span className={`audit-result ${tone}`}>{auditOutcomeLabel(outcome)}</span>
+    <StatusBadge domain="audit" value={outcome} className="audit-result" />
   );
 }
 
@@ -114,13 +130,78 @@ function Loading({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Second-precision local time, with the exact local and UTC time on hover. */
 function EventTime({ value }: { value: string | null }) {
   return value ? (
-    <DateCell value={value} />
+    <time
+      dateTime={value}
+      title={`${exactLocal(value)} · ${exactUtc(value)}`}
+      className="audit-time"
+    >
+      {shortLocal(value)}
+    </time>
   ) : (
     <span className="audit-muted">Time unavailable</span>
   );
 }
+
+const systemActors: Record<string, string> = {
+  scheduler: "Scheduler (automatic)",
+  "local-admin": "Local administrator",
+  anonymous: "Unauthenticated request",
+};
+function actorLabel(item: Pick<AuditSummary, "actor" | "actor_kind">) {
+  return (
+    (item.actor_kind === "system" && systemActors[item.actor]) ||
+    item.actor ||
+    "Unknown actor"
+  );
+}
+const kindLabels: Record<string, string> = {
+  deployment: "Deployment",
+  configuration: "Pipeline",
+  device: "Device",
+  issue: "Issue",
+  group: "Group",
+  policy: "Agent settings",
+  token: "Enrollment token",
+  user: "Person",
+  agent_release: "Agent release",
+  agent_update_rollout: "Agent update rollout",
+};
+/** A readable target: its name, else its kind and short ID, never a raw compound key. */
+function targetLabel(
+  item: Pick<
+    AuditSummary,
+    "target" | "target_id" | "target_kind" | "target_name"
+  >,
+) {
+  if (item.target_name) return item.target_name;
+  // A refused enrollment never created a device.
+  if (item.target === "unregistered") return "Unregistered device";
+  // A release key is named by its fingerprint; its short ID is the name.
+  if (
+    item.target_kind === "agent_release_key" &&
+    /^[0-9a-f]{64}$/.test(item.target)
+  )
+    return `Release key ${item.target.slice(0, 16)}`;
+  const kind = kindLabels[item.target_kind];
+  if (kind && item.target_id && isAuditId(item.target_id))
+    return `${kind} ${item.target_id.slice(0, 8)}`;
+  return item.target;
+}
+
+/** A target's name in a line of details, with a badge when it is a retired identity. */
+function TargetName({ label }: { label: string }) {
+  const shown = deviceDisplay(label);
+  return shown.retired ? <RetiredName>{shown.name}</RetiredName> : shown.name;
+}
+
+const scopeHints: Record<AuditScope, string> = {
+  changes: "Sign-ins are hidden. Account and settings changes still show.",
+  security: "Only sign-ins, account, authenticator and signing-key events.",
+  all: "Every recorded event, including sign-ins.",
+};
 
 export function AuditLog({
   navigate = defaultNavigate,
@@ -148,7 +229,7 @@ export function AuditLog({
   const [filterDraft, setFilterDraft] = useState(query);
   const [localId, setLocalId] = useState<string | null>(null);
   const [exportQuery, setExportQuery] = useState<AuditQuery | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const priorRoute = useRef(routeKey);
   const controlled = selectedAuditId !== undefined;
   const detailId =
@@ -190,10 +271,11 @@ export function AuditLog({
     previousId.current = detailId;
   }, [detailId]);
   const dateError = auditDateError(query.from, query.to);
-  const { data, loading, error, reload } = useResource<AuditHistoryPage>(
+  const events = useResource<AuditHistoryPage>(
     dateError ? null : auditHistoryPath(query),
     emptyPage,
   );
+  const { data, loading, error, reload } = events;
   useEffect(() => {
     if (
       !loading &&
@@ -209,9 +291,11 @@ export function AuditLog({
   }, [loading, error, dateError, query.page, data.total]);
   const summary = auditFilterSummary(query);
   function openDetail(id: string, element: HTMLElement) {
-    opener.current = element;
+    // Return focus to the row's event link, the keyboard path to this dialog.
+    opener.current =
+      element.querySelector<HTMLElement>(".audit-event-title") ?? element;
     if (controlled) {
-      history.replaceState(history.state, "", `#/${auditRoute(null, query)}`);
+      keepListRoute(query);
       navigate(auditRoute(id, query));
     } else setLocalId(id);
   }
@@ -227,20 +311,136 @@ export function AuditLog({
     if (controlled && detailId) navigate(auditRoute(null, next));
     else setLocalId(null);
   }
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await reload();
-    } finally {
-      setRefreshing(false);
-    }
-  }
   const filterError = auditDateError(filterDraft.from, filterDraft.to);
   const filterSelection = query.action
     ? `action:${query.action}`
     : query.family
       ? `family:${query.family}`
       : "";
+  const actorName =
+    data.items.find((item) => item.actor_id === query.actor_id)?.actor ||
+    query.actor_id;
+  const chips: FilterChip[] = [
+    query.search && {
+      id: "search",
+      label: `Search: ${query.search}`,
+      text: `search ${query.search}`,
+      onRemove: () => applyScope({ search: "" }),
+    },
+    (query.action || query.family) && {
+      id: "event",
+      label: query.action
+        ? auditActionLabel(query.action)
+        : `${auditFamilies[query.family] || query.family} events`,
+      text: "event",
+      onRemove: () => applyScope({ action: "", family: "" }),
+    },
+    query.outcome && {
+      id: "outcome",
+      label: `Result: ${auditOutcomeLabel(query.outcome)}`,
+      text: "result",
+      onRemove: () => applyScope({ outcome: "" }),
+    },
+    query.from && {
+      id: "from",
+      label: `From: ${query.from}`,
+      text: "start date",
+      onRemove: () => applyScope({ from: "" }),
+    },
+    query.to && {
+      id: "to",
+      label: `Through: ${query.to}`,
+      text: "end date",
+      onRemove: () => applyScope({ to: "" }),
+    },
+    query.device_id && {
+      id: "device",
+      label: `Device ${query.device_id}`,
+      text: "device",
+      onRemove: () => applyScope({ device_id: "" }),
+    },
+    query.actor_id && {
+      id: "actor",
+      label: `Actor ${actorName}`,
+      text: "actor",
+      onRemove: () => applyScope({ actor_id: "" }),
+    },
+    query.target_id && {
+      id: "target",
+      label: `Target ${query.target_id}`,
+      text: "target",
+      onRemove: () => applyScope({ target_id: "" }),
+    },
+  ].filter(Boolean) as FilterChip[];
+  const eventFilter = !!(query.action || query.family);
+  // The event name is the keyboard path to its details; rows and cards also
+  // open them on click.
+  const eventLink = (item: AuditSummary) => (
+    <a
+      className="audit-event-title"
+      href={`#/${auditRoute(item.id, query)}`}
+      onClick={(event) => {
+        if (
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        openDetail(item.id, event.currentTarget);
+      }}
+    >
+      {auditEventLabel(item)}
+    </a>
+  );
+  // Per-device apply results collapse into one row in the default view, so
+  // edits and rollouts stay visible. Filters and other sorts show every row.
+  const grouping =
+    !eventFilter &&
+    !query.device_id &&
+    !query.target_id &&
+    query.sort === "created_at";
+  const results = new Map<string, AuditSummary[]>();
+  const members = new Set<string>();
+  const rows: AuditSummary[] = [];
+  for (const row of grouping
+    ? groupDeviceResults(data.items)
+    : data.items.map((item) => ({ kind: "event" as const, item }))) {
+    if (row.kind === "event") {
+      rows.push(row.item);
+      continue;
+    }
+    results.set(row.key, row.items);
+    rows.push({ ...row.items[0], id: row.key });
+    if (expanded.has(row.key))
+      for (const item of row.items) {
+        members.add(item.id);
+        rows.push(item);
+      }
+  }
+  const toggleResults = (key: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  const resultsToggle = (key: string, items: AuditSummary[]) => (
+    <button
+      type="button"
+      className="audit-results-toggle"
+      aria-expanded={expanded.has(key)}
+      onClick={() => toggleResults(key)}
+    >
+      <ChevronRight
+        size={14}
+        aria-hidden="true"
+        className="audit-results-chevron"
+      />
+      {deviceResultsSummary(items).title}
+    </button>
+  );
   const columns: TableColumn<AuditSummary>[] = [
     {
       id: "action",
@@ -248,7 +448,7 @@ export function AuditLog({
       value: (item) => item.action,
       filter: {
         manual: true,
-        active: !!(query.action || query.family),
+        active: eventFilter,
         onClear: () => applyScope({ action: "", family: "" }),
         content: (
           <div className="audit-column-fields">
@@ -290,47 +490,42 @@ export function AuditLog({
                   )}
               </select>
             </label>
-            <p className="audit-muted">Sorting uses the event type code.</p>
+            <p className="audit-muted">
+              An event filter shows matching events of any kind. Sorting uses
+              the event type code.
+            </p>
           </div>
         ),
       },
-      cell: (item) => (
-        <>
-          <a
-            className="audit-event-title"
-            href={`#/${auditRoute(item.id, query)}`}
-            onClick={(event) => {
-              if (
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              )
-                return;
-              event.preventDefault();
-              openDetail(item.id, event.currentTarget);
-            }}
-          >
-            {auditActionLabel(item.action)}
-          </a>
-          {(item.target_name || item.target) && (
-            <div className="audit-target">
-              <ResourceLink
-                kind={item.target_kind}
-                id={item.target_exists === false ? null : item.target_id}
-                name={item.target_name || item.target}
-                navigate={navigate}
-              />
-            </div>
-          )}
-        </>
-      ),
+      cell: (item) =>
+        results.has(item.id) ? (
+          <span className="audit-event">
+            {resultsToggle(item.id, results.get(item.id)!)}
+            <span className="audit-target">
+              {deviceResultsSummary(results.get(item.id)!).devices}
+            </span>
+          </span>
+        ) : (
+          <span className="audit-event">
+            {eventLink(item)}
+            {(item.target_name || item.target) && (
+              <span className="audit-target">
+                <ResourceLink
+                  kind={item.target_kind}
+                  id={item.target_exists === false ? null : item.target_id}
+                  name={targetLabel(item)}
+                  navigate={navigate}
+                />
+              </span>
+            )}
+          </span>
+        ),
     },
     {
       id: "actor",
       header: "By",
       value: (item) => item.actor,
+      width: "20%",
       filter: query.actor_id
         ? {
             manual: true,
@@ -338,39 +533,40 @@ export function AuditLog({
             onClear: () => applyScope({ actor_id: "" }),
             content: (
               <p className="audit-muted" title={query.actor_id}>
-                Showing activity by{" "}
-                <strong>
-                  {data.items.find((item) => item.actor_id === query.actor_id)
-                    ?.actor || query.actor_id}
-                </strong>
-                .
+                Showing activity by <strong>{actorName}</strong>.
               </p>
             ),
           }
         : undefined,
-      cell: (item) => (
-        <ResourceLink
-          kind={item.actor_kind}
-          id={item.actor_id}
-          name={item.actor || "Unknown actor"}
-          navigate={navigate}
-        />
-      ),
+      cell: (item) =>
+        results.has(item.id) ? (
+          <span className="audit-muted">Each device's agent</span>
+        ) : (
+          <span className="audit-actor">
+            <ResourceLink
+              kind={item.actor_kind}
+              id={item.actor_id}
+              name={actorLabel(item)}
+              navigate={navigate}
+            />
+          </span>
+        ),
     },
     {
       id: "outcome",
       header: "Result",
       value: (item) => item.outcome,
+      width: 176,
       filter: {
         manual: true,
         value: query.outcome,
         allLabel: "All results",
         options: [
-          ...Object.entries(auditOutcomes).map(([value, label]) => ({
+          ...Object.entries(auditOutcomes).map(([value, { label }]) => ({
             value,
             label: value === "failure" ? `${label} (request)` : label,
           })),
-          ...(query.outcome && !auditOutcomes[query.outcome]
+          ...(query.outcome && !Object.hasOwn(auditOutcomes, query.outcome)
             ? [
                 {
                   value: query.outcome,
@@ -381,12 +577,26 @@ export function AuditLog({
         ],
         onChange: (outcome) => applyScope({ outcome }),
       },
-      cell: (item) => <Result outcome={item.outcome} />,
+      cell: (item) => {
+        if (!results.has(item.id)) return <Result outcome={item.outcome} />;
+        const run = deviceResultsSummary(results.get(item.id)!);
+        // One device's run says its last state like any single event; several
+        // devices count their last states.
+        return run.last ? (
+          <Result outcome={run.last} />
+        ) : (
+          <span className="audit-muted audit-results-outcomes">
+            {run.outcomes}
+          </span>
+        );
+      },
     },
     {
       id: "created_at",
       header: "Time",
       value: (item) => item.created_at,
+      width: 168,
+      defaultDirection: "desc",
       filter: {
         manual: true,
         active: !!(query.from || query.to),
@@ -442,21 +652,8 @@ export function AuditLog({
       },
       cell: (item) => <EventTime value={item.created_at} />,
     },
-    {
-      id: "details",
-      header: <span className="sr-only">Details</span>,
-      label: "Details",
-      cell: (item) => (
-        <Button
-          variant="secondary compact"
-          aria-label={`Details: ${auditActionLabel(item.action)}`}
-          onClick={(event) => openDetail(item.id, event.currentTarget)}
-        >
-          Details
-        </Button>
-      ),
-    },
   ];
+  const filtered = summary.length > 0;
   return (
     <div className="audit-page" ref={container}>
       <PageHeader
@@ -466,6 +663,17 @@ export function AuditLog({
           section: "review-and-export-audit-events",
         }}
         description="Changes, access and device events across your workspace."
+        live={
+          dateError
+            ? undefined
+            : {
+                updatedAt: events.updatedAt,
+                error,
+                loading,
+                refreshing: events.refreshing,
+                onRefresh: () => void reload(),
+              }
+        }
       >
         <Button
           variant="secondary"
@@ -478,131 +686,178 @@ export function AuditLog({
           Export results
         </Button>
       </PageHeader>
-      <div className="audit-toolbar">
-        <SearchBox
-          value={search}
-          onChange={(value) =>
-            setSearch(Array.from(value).slice(0, 200).join(""))
-          }
-          placeholder="Search activity"
+      <PageToolbar
+        search={
+          <SearchBox
+            value={search}
+            onChange={(value) =>
+              setSearch(Array.from(value).slice(0, 200).join(""))
+            }
+            placeholder="Search activity"
+            shortcut
+          />
+        }
+        count={
+          !events.updatedAt
+            ? undefined
+            : `${data.total.toLocaleString()} ${data.total === 1 ? "event" : "events"}`
+        }
+        filters={
+          <FilterChips
+            chips={chips}
+            onClearAll={() =>
+              applyScope({ ...defaultAuditQuery, scope: query.scope })
+            }
+            clearLabel="Clear filters"
+            clearFrom={1}
+          />
+        }
+      >
+        <SegmentedControl
+          label="Event scope"
+          options={auditScopes}
+          value={eventFilter ? "all" : query.scope}
+          onChange={(scope) => applyScope({ scope })}
+          disabled={eventFilter}
+          hint="An event filter is selected, so matching events of any kind are shown."
         />
-        <RefreshButton
-          busy={refreshing}
-          disabled={loading || !!dateError}
-          onClick={refresh}
-        >
-          Refresh
-        </RefreshButton>
-      </div>
-      {(summary.length > 0 || !!dateError) && (
-        <div className="audit-scope">
-          {query.device_id && (
-            <span className="audit-scope-chip">
-              Device {query.device_id}
-              <button
-                aria-label="Remove device filter"
-                onClick={() => applyScope({ device_id: "" })}
-              >
-                <X size={14} />
-              </button>
-            </span>
+      </PageToolbar>
+      {!eventFilter && query.scope !== "all" && (
+        <p className="audit-scope-note">
+          {scopeHints[query.scope]}{" "}
+          {query.scope === "changes" ? (
+            <button
+              type="button"
+              className="audit-text-button"
+              onClick={() => applyScope({ scope: "security" })}
+            >
+              Show security events
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="audit-text-button"
+              onClick={() => applyScope({ scope: "changes" })}
+            >
+              Show changes
+            </button>
           )}
-          {query.actor_id && (
-            <span className="audit-scope-chip" title={query.actor_id}>
-              Actor{" "}
-              {data.items.find((item) => item.actor_id === query.actor_id)
-                ?.actor || query.actor_id}
-              <button
-                aria-label="Remove actor filter"
-                onClick={() => applyScope({ actor_id: "" })}
-              >
-                <X size={14} />
-              </button>
-            </span>
-          )}
-          {query.target_id && (
-            <span className="audit-scope-chip">
-              Target {query.target_id}
-              <button
-                aria-label="Remove target filter"
-                onClick={() => applyScope({ target_id: "" })}
-              >
-                <X size={14} />
-              </button>
-            </span>
-          )}
-          {summary
-            .filter((value) => !/^(Device|Actor|Target):/.test(value))
-            .map((value) => (
-              <span key={value}>{value}</span>
-            ))}
-          <button
-            className="audit-text-button"
-            onClick={() => applyScope(defaultAuditQuery)}
-          >
-            Clear filters
-          </button>
-        </div>
-      )}
-      {(error || dateError) && (
-        <ErrorBox
-          message={dateError || error}
-          retry={dateError ? undefined : reload}
-        />
-      )}
-      {error && data.items.length > 0 && (
-        <p className="audit-muted">
-          Previously loaded events are shown. Refresh to check for new activity.
         </p>
       )}
-      <DataTable
-        data={dateError ? [] : data.items}
-        columns={columns}
-        rowKey={(item) => item.id}
-        label="Audit events"
-        className="audit-table"
-        loading={loading}
-        manualSorting
-        sort={{ column: query.sort, direction: query.direction }}
-        onSortChange={(sort) =>
-          applyScope({
-            sort: (sort?.column || "created_at") as AuditQuery["sort"],
-            direction: sort?.direction || "desc",
-          })
-        }
-        pagination={{
-          page: query.page,
-          size: 12,
-          total: dateError ? 0 : data.total,
-          onPage: (page) => setQuery((current) => ({ ...current, page })),
-        }}
-        empty={
-          error ? (
-            "Activity could not be loaded."
-          ) : dateError ? (
-            "Choose a valid date range."
-          ) : (
-            <div className="audit-empty">
-              <h2>
-                {summary.length ? "No matching events" : "No activity recorded"}
-              </h2>
-              <p>
-                {summary.length
-                  ? "Change or clear the filters to see more activity."
-                  : "Account changes, enrollments and deployments will appear here."}
-              </p>
-              {summary.length > 0 && (
-                <Button
-                  variant="secondary"
-                  onClick={() => applyScope(defaultAuditQuery)}
-                >
-                  Clear filters
-                </Button>
-              )}
-            </div>
-          )
-        }
-      />
+      {dateError && <ErrorBox message={dateError} />}
+      <TableCard>
+        <DataTable
+          data={dateError ? [] : rows}
+          columns={columns}
+          rowKey={(item) => item.id}
+          rowClassName={(item) =>
+            results.has(item.id)
+              ? "audit-row-results"
+              : members.has(item.id)
+                ? "audit-row-member"
+                : ""
+          }
+          label="Audit events"
+          className="audit-table"
+          error={
+            error && !dateError
+              ? {
+                  title: events.updatedAt
+                    ? "Couldn't refresh the audit log."
+                    : "Couldn't load the audit log.",
+                  message: error,
+                  updatedAt: events.updatedAt,
+                  retry: () => void reload(),
+                  retrying: events.refreshing,
+                }
+              : null
+          }
+          loading={loading && !events.updatedAt}
+          skeletonRows={8}
+          manualSorting
+          sort={{ column: query.sort, direction: query.direction }}
+          onSortChange={(sort) =>
+            applyScope({
+              sort: (sort?.column || "created_at") as AuditQuery["sort"],
+              direction: sort?.direction || "desc",
+            })
+          }
+          onRowClick={(item, event) =>
+            results.has(item.id)
+              ? toggleResults(item.id)
+              : openDetail(item.id, event.currentTarget)
+          }
+          pagination={{
+            page: query.page,
+            size: 12,
+            total: dateError ? 0 : data.total,
+            onPage: (page) => setQuery((current) => ({ ...current, page })),
+            noun: "events",
+          }}
+          mobileCard={(item) => {
+            if (results.has(item.id)) {
+              const run = deviceResultsSummary(results.get(item.id)!);
+              return {
+                title: resultsToggle(item.id, results.get(item.id)!),
+                status: run.last ? <Result outcome={run.last} /> : undefined,
+                meta: [run.devices, run.last ? null : run.outcomes],
+              };
+            }
+            return {
+              title: eventLink(item),
+              status: <Result outcome={item.outcome} />,
+              meta: [
+                <TargetName key="target" label={targetLabel(item)} />,
+                actorLabel(item) === targetLabel(item)
+                  ? null
+                  : actorLabel(item),
+                item.created_at
+                  ? shortLocal(item.created_at)
+                  : "Time unavailable",
+              ],
+            };
+          }}
+          empty={
+            dateError ? (
+              <EmptyState
+                variant="filtered"
+                title="Choose a valid date range"
+              />
+            ) : filtered ? (
+              <EmptyState
+                variant="filtered"
+                title="No matching events"
+                action={
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      applyScope({ ...defaultAuditQuery, scope: query.scope })
+                    }
+                  >
+                    Clear filters
+                  </Button>
+                }
+              >
+                Change or clear the filters to see more activity.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                variant="quiet"
+                icon={ScrollText}
+                title={
+                  query.scope === "security"
+                    ? "No security events recorded"
+                    : "No activity recorded"
+                }
+              >
+                {query.scope === "security"
+                  ? "Sign-ins, account and authenticator changes will appear here."
+                  : "Pipeline changes, enrollments and deployments will appear here."}
+              </EmptyState>
+            )
+          }
+        />
+      </TableCard>
       {detailId && (
         <AuditInspector
           key={detailId}
@@ -624,43 +879,40 @@ export function AuditLog({
   );
 }
 
-function AuditPermalink({ route }: { route: string }) {
-  const [state, setState] = useState<"idle" | "copying" | "copied" | "manual">(
-    "idle",
+/** Keep the list route under the dialog so closing returns to this view. */
+function keepListRoute(query: AuditQuery) {
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `#/${auditRoute(null, query)}`,
   );
+}
+
+function AuditPermalink({ route }: { route: string }) {
+  const [manual, setManual] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = `#/${route}`;
   const link = url.href;
   useEffect(() => {
-    if (state === "manual") {
+    if (manual) {
       input.current?.focus();
       input.current?.select();
     }
-  }, [state]);
-  async function copy() {
-    setState("copying");
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error();
-      await navigator.clipboard.writeText(link);
-      setState("copied");
-    } catch {
-      setState("manual");
-    }
-  }
+  }, [manual]);
   return (
     <div className="audit-permalink">
       <div className="audit-actions">
-        <Button
-          variant="secondary compact"
-          icon={Copy}
-          busy={state === "copying"}
-          onClick={copy}
-          aria-label="Copy event link"
-        >
-          {state === "copied" ? "Copied" : "Copy link"}
-        </Button>
+        <CopyButton
+          text={link}
+          label="Copy link"
+          ariaLabel="Copy event link"
+          copiedMessage="Event link copied."
+          failedMessage=""
+          onCopied={() => setManual(false)}
+          onFailed={() => setManual(true)}
+        />
         <a href={link} target="_blank" rel="noopener noreferrer">
           Open in new tab{" "}
           <ExternalLink
@@ -670,7 +922,7 @@ function AuditPermalink({ route }: { route: string }) {
           />
         </a>
       </div>
-      {state === "manual" && (
+      {manual && (
         <label className="audit-link-fallback">
           Event link
           <input ref={input} readOnly value={link} />
@@ -679,9 +931,6 @@ function AuditPermalink({ route }: { route: string }) {
           </span>
         </label>
       )}
-      <span className="sr-only" role="status">
-        {state === "copied" ? "Event link copied." : ""}
-      </span>
     </div>
   );
 }
@@ -724,6 +973,32 @@ const detailLabels: Record<string, string> = {
   replacement_device_id: "Replacement device ID",
   previous_signing_key_id: "Previous signing key ID",
   signing_key_id: "Signing key ID",
+  reason_code: "Refusal reason",
+  name: "Device name",
+  token_id: "Enrollment token ID",
+  agent_os: "Agent operating system",
+  agent_arch: "Agent architecture",
+  agent_version: "Agent version",
+  configuration_mode: "Configuration mode",
+  client_address: "Client address",
+  custody: "Key custody",
+  fingerprint: "Key fingerprint",
+  from_fingerprint: "Previous key fingerprint",
+  source: "Signature source",
+  version: "Release version",
+  counter: "Release counter",
+  manifest_sha256: "Release manifest digest",
+  release_id: "Release ID",
+  rollout_id: "Rollout ID",
+  stage: "Stage",
+  gate_state: "Gate",
+  released_count: "Devices released",
+  verified_count: "Devices updated",
+  withdrawn_releases: "Releases withdrawn",
+  cancelled_rollouts: "Rollouts cancelled",
+  from_version: "Updated from",
+  to_version: "Updated to",
+  code: "Agent code",
 };
 
 function AuditInspector({
@@ -744,29 +1019,46 @@ function AuditInspector({
     valid ? `/audit/${id}` : null,
     null,
   );
+  const changes = data ? auditChanges(data.details) : [];
   return (
     <Modal
       open
       onClose={onClose}
       title="Event details"
       description="The recorded action and its associated identities."
+      size="lg"
     >
       <div className="modal-body audit-inspector">
         {!valid ? (
           <p role="alert">This event link has an invalid identifier.</p>
         ) : loading ? (
-          <Loading>Loading event…</Loading>
+          <div className="audit-inspector-loading" aria-busy="true">
+            <Loading>Loading event…</Loading>
+            <Skeleton width="60%" height={14} />
+            <Skeleton width="80%" height={12} />
+          </div>
         ) : error ? (
           <ErrorBox message={error} retry={reload} />
         ) : (
           data && (
             <>
               <div className="audit-detail-title">
-                <h2>{auditActionLabel(data.action)}</h2>
+                <h2>{auditEventLabel(data)}</h2>
                 <Result outcome={data.outcome} />
               </div>
-              <p className="audit-muted">
-                <EventTime value={data.created_at} />
+              <p className="audit-detail-time">
+                {data.created_at ? (
+                  <>
+                    <time dateTime={data.created_at}>
+                      {exactLocal(data.created_at)}
+                    </time>
+                    <span className="audit-muted">
+                      {exactUtc(data.created_at)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="audit-muted">Time unavailable</span>
+                )}
               </p>
               <AuditPermalink route={auditRoute(id, query)} />
               <dl className="audit-detail-list">
@@ -776,7 +1068,7 @@ function AuditInspector({
                     <ResourceLink
                       kind={data.actor_kind}
                       id={data.actor_id}
-                      name={data.actor || "Unknown actor"}
+                      name={actorLabel(data)}
                       navigate={navigate}
                     />
                     {data.actor_id && (
@@ -798,7 +1090,7 @@ function AuditInspector({
                         id={
                           data.target_exists === false ? null : data.target_id
                         }
-                        name={data.target_name || data.target}
+                        name={targetLabel(data)}
                         navigate={navigate}
                       />
                     </dd>
@@ -811,16 +1103,29 @@ function AuditInspector({
                       <ResourceLink
                         kind="device"
                         id={data.device_id}
-                        name={data.device_id}
+                        name={data.device_name || data.device_id}
                         navigate={navigate}
                       />
                     </dd>
                   </div>
                 )}
+                {data.action === "device.enroll" && (
+                  <EnrollmentAttempt detail={data} />
+                )}
                 {typeof data.details?.reason === "string" && (
                   <div>
                     <dt>Reason</dt>
                     <dd className="audit-reason">{data.details.reason}</dd>
+                  </div>
+                )}
+                {typeof data.details?.summary === "string" && (
+                  <div>
+                    <dt>
+                      {data.action === "notification.channel.test"
+                        ? "Result"
+                        : "Change"}
+                    </dt>
+                    <dd className="audit-reason">{data.details.summary}</dd>
                   </div>
                 )}
                 {data.action === "group.update" && (
@@ -838,6 +1143,46 @@ function AuditInspector({
                   </>
                 )}
               </dl>
+              {changes.length > 0 && (
+                <section
+                  className="audit-changes"
+                  aria-labelledby="audit-changes-title"
+                >
+                  <h3 id="audit-changes-title">What changed</h3>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Field</th>
+                        <th scope="col">Before</th>
+                        <th scope="col">
+                          <span className="sr-only">Changed to</span>
+                        </th>
+                        <th scope="col">After</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {changes.map((change) => (
+                        <tr key={change.label}>
+                          <th scope="row">{change.label}</th>
+                          <td
+                            className={
+                              change.before === undefined
+                                ? "audit-muted"
+                                : undefined
+                            }
+                          >
+                            {change.before ?? "Not recorded"}
+                          </td>
+                          <td aria-hidden="true" className="audit-change-arrow">
+                            <ArrowRight size={13} />
+                          </td>
+                          <td>{change.after}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
               <details className="audit-technical">
                 <summary>Technical details</summary>
                 <dl className="audit-detail-list">
@@ -882,7 +1227,12 @@ function AuditInspector({
                     )
                     .map(([key, value]) => (
                       <div key={key}>
-                        <dt>{detailLabels[key]}</dt>
+                        <dt>
+                          {key === "name" &&
+                          data.action.startsWith("notification.")
+                            ? "Channel name"
+                            : detailLabels[key]}
+                        </dt>
                         <dd>{String(value)}</dd>
                       </div>
                     ))}
@@ -898,6 +1248,59 @@ function AuditInspector({
         </Button>
       </div>
     </Modal>
+  );
+}
+
+/** Who tried to enroll, from where, and why a refusal happened. */
+function EnrollmentAttempt({ detail }: { detail: AuditDetail }) {
+  const d = detail.details;
+  const refused = detail.outcome !== "success";
+  const why = refused && d.reason_code ? refusal(d) : null;
+  const agent = describeAgent(d);
+  return (
+    <>
+      {d.name && (
+        <div>
+          <dt>{refused ? "Attempted name" : "Device name"}</dt>
+          <dd>{d.name}</dd>
+        </div>
+      )}
+      {why && (
+        <div>
+          <dt>Why it was refused</dt>
+          <dd className="audit-reason">
+            <span className="audit-reason-title">
+              {why.title.replace(/^./, (c) => c.toUpperCase())}.
+            </span>{" "}
+            {why.fix}
+          </dd>
+        </div>
+      )}
+      {d.client_address && (
+        <div>
+          <dt>From</dt>
+          <dd>{d.client_address}</dd>
+        </div>
+      )}
+      {agent && (
+        <div>
+          <dt>Agent</dt>
+          <dd>{agent}</dd>
+        </div>
+      )}
+      {d.configuration_mode && (
+        <div>
+          <dt>Mode</dt>
+          <dd>
+            {d.configuration_mode === "full"
+              ? "Full Vector"
+              : d.configuration_mode === "restricted"
+                ? "Restricted"
+                : d.configuration_mode}
+          </dd>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -919,7 +1322,10 @@ function exportDownloadPath(file: AuditExport) {
 function ExportScope({ filters }: { filters: AuditExport["filters"] }) {
   // Export metadata already contains normalized UTC timestamps. It is display-only:
   // never pass it through the day-input-to-timestamp request converter.
-  const scope = auditFilterSummary({ ...defaultAuditQuery, ...filters });
+  const scope = [
+    auditScopeSummary(filters.scope),
+    ...auditFilterSummary({ ...defaultAuditQuery, ...filters, scope: "all" }),
+  ].filter(Boolean);
   return scope.length ? (
     <ul className="audit-export-scope">
       {scope.map((value) => (
@@ -954,13 +1360,15 @@ function ExportAudit({
     error: retainedError,
     reload: reloadRetained,
   } = useResource<AuditExport[]>("/audit/exports", []);
-  const summary = auditFilterSummary(query);
+  // Exports record the scope they apply; event filters include every kind.
+  const summary = [
+    auditScopeSummary(effectiveAuditScope(query)),
+    ...auditFilterSummary(query),
+  ].filter(Boolean);
   useEffect(() => {
     active.current = true;
-    const timer = setInterval(() => setNow(performance.now()), 1000);
     return () => {
       active.current = false;
-      clearInterval(timer);
     };
   }, []);
   const lifetime = file
@@ -971,6 +1379,13 @@ function ExportAudit({
     (!Number.isFinite(lifetime) ||
       lifetime <= 0 ||
       now - receivedAt.current >= lifetime);
+  // The expiry clock runs only while a prepared file can still be downloaded.
+  const counting = !!file && !expired;
+  useEffect(() => {
+    if (!counting) return;
+    const timer = setInterval(() => setNow(performance.now()), 1000);
+    return () => clearInterval(timer);
+  }, [counting]);
   // Accept only the backend's exact same-origin download resource, never an arbitrary URL.
   const downloadPath = file ? exportDownloadPath(file) : null;
   async function prepare() {

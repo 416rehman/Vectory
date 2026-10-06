@@ -12,10 +12,15 @@ import { post } from "./api";
 import { vectorSchema } from "./catalog";
 import { resolveSchema, type Schema } from "./pipelineSchema";
 import PipelineSchemaFields from "./PipelineSchemaFields";
+import { FieldProblemsContext } from "./PipelineSchemaFields";
+import { vectorApiExposure } from "./hostRequirements";
 import DocLink, { ExternalDocLink } from "./DocLink";
 import { Button, ErrorBox, Modal } from "./ui";
 import TabLabel from "./TabLabel";
 import PipelineVariables from "./PipelineVariables";
+import PipelineTestResults, {
+  type PipelineTestRun,
+} from "./PipelineTestResults";
 import "./pipeline-globals.css";
 import type { PipelineSection } from "./pipelineDestination";
 
@@ -46,7 +51,8 @@ const sections = [
     id: "variables",
     title: "Variables",
     icon: Braces,
-    description: "Choose fields that can have a different value on each device.",
+    description:
+      "Choose fields that can have a different value on each device.",
     link: "",
   },
   {
@@ -72,7 +78,9 @@ export default function PipelineGlobals({
   onVariablesChange,
   onClose,
   editable,
+  codeChangesPending = false,
   initialSection = "general",
+  initialTest,
 }: {
   config: Config;
   variables: VariableDeclaration[];
@@ -80,19 +88,53 @@ export default function PipelineGlobals({
   onVariablesChange: (next: VariableDeclaration[]) => void;
   onClose: () => void;
   editable: boolean;
+  codeChangesPending?: boolean;
   initialSection?: PipelineSection;
+  /** Opens the Tests section on this test (1-based), as a review found it failing. */
+  initialTest?: number;
 }) {
   const [section, setSection] = useState<string>(initialSection),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [result, setResult] = useState<{
-      valid: boolean;
-      errors: string[];
-      output?: string;
-      deferred?: boolean;
-    } | null>(null);
+    [result, setResult] = useState<PipelineTestRun | null>(null);
   const pending = useRef(new Set<string>()),
     request = useRef(0);
+  // Select the test a review sent you to: scroll to it and put the cursor in
+  // it. The dialog focuses its first field as it opens, so wait for the list.
+  useEffect(() => {
+    if (!initialTest || initialSection !== "tests") return;
+    let frames = 0,
+      frame = 0;
+    const seek = () => {
+      // The first list in the section is the tests; the lists inside each
+      // test come after it.
+      const entry = document
+        .querySelector(".pipeline-global-body .pipeline-schema-array")
+        ?.querySelectorAll<HTMLElement>(":scope > .schema-array-entry")[
+        initialTest - 1
+      ];
+      if (!entry) {
+        if (++frames < 30) frame = requestAnimationFrame(seek);
+        return;
+      }
+      entry.scrollIntoView({ block: "center" });
+      entry
+        .querySelector<HTMLElement>(
+          'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled), select:not(:disabled)',
+        )
+        ?.focus({ preventScroll: true });
+      entry.dataset.selected = "true";
+      entry.addEventListener(
+        "focusout",
+        () => {
+          delete entry.dataset.selected;
+        },
+        { once: true },
+      );
+    };
+    frame = requestAnimationFrame(seek);
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const pendingChange = useCallback((id: string, dirty: boolean) => {
     if (dirty) pending.current.add(id);
     else pending.current.delete(id);
@@ -126,6 +168,20 @@ export default function PipelineGlobals({
     }
   }
   const root = resolveSchema(vectorSchema, vectorSchema, config);
+  const apiExposure = vectorApiExposure(config);
+  const fieldProblems = useCallback(
+    (path: string) =>
+      path === "api.enabled" && apiExposure
+        ? [
+            {
+              key: "vector-api-exposure",
+              severity: "warning" as const,
+              message: apiExposure,
+            },
+          ]
+        : [],
+    [apiExposure],
+  );
   const details = sections.find((item) => item.id === section)!;
   const names =
     section === "general"
@@ -153,7 +209,14 @@ export default function PipelineGlobals({
           ...root.properties[name],
           _metadata: {
             ...root.properties[name]?._metadata,
-            "docs::hidden": false,
+            // Show what Vector's reference hides because the section has a
+            // page of its own here. An option Vector replaced (`expire_metrics`,
+            // which reads the same as `expire_metrics_secs`) stays hidden
+            // unless this draft still sets it.
+            "docs::hidden":
+              !!root.properties[name]?.deprecated &&
+              !Object.hasOwn(config, name),
+            "vectory::page": section !== "general",
             "vectory::entry_label":
               name === "secret"
                 ? "Backend"
@@ -175,6 +238,7 @@ export default function PipelineGlobals({
     onChange(next);
   }
   async function runTests() {
+    if (codeChangesPending) return;
     if (pending.current.size) {
       setError("Resolve or apply pending field edits before running tests.");
       return;
@@ -184,12 +248,9 @@ export default function PipelineGlobals({
     setError("");
     setResult(null);
     try {
-      const response = await post<{
-        valid: boolean;
-        errors: string[];
-        output?: string;
-        deferred?: boolean;
-      }>("/configurations/test", { config });
+      const response = await post<PipelineTestRun>("/configurations/test", {
+        config,
+      });
       if (current === request.current) setResult(response);
     } catch (failure) {
       if (current === request.current) setError((failure as Error).message);
@@ -228,77 +289,95 @@ export default function PipelineGlobals({
         <div
           className={`pipeline-global-body ${section !== "general" ? "global-specific" : ""}`}
         >
+          {codeChangesPending && (
+            <p role="status">
+              Apply or discard your Code changes before editing Pipeline
+              settings.
+            </p>
+          )}
           <h3>{details.title}</h3>
           <p>
             {details.description}{" "}
-            {section !== "variables" && <DocLink
+            <DocLink
               topic={section === "general" ? "pipelines" : "resources"}
               section={
                 {
                   general: "global-settings",
                   enrichment_tables: "enrich-events-with-local-data",
                   secret: "use-native-vector-secret-providers",
+                  variables: "values-that-differ-by-device",
                   tests: "test-transformations",
                   provider: "configuration-providers",
                 }[section]
               }
             >
               How this works
-            </DocLink>}
+            </DocLink>
           </p>
-          {section === "variables" ? <PipelineVariables
-            config={config}
-            variables={variables}
-            editable={editable}
-            onChange={onVariablesChange}
-          /> : <PipelineSchemaFields
-            key={section}
-            schema={schema}
-            root={vectorSchema}
-            component={config}
-            exclude={Object.keys(config).filter((key) => !names.includes(key))}
-            onChange={update}
-            editable={editable}
-            onPendingChange={pendingChange}
-          />}
           {section === "tests" && (
             <div className="pipeline-test-run">
-              <Button
-                variant="secondary"
-                busy={busy}
-                disabled={
-                  !Array.isArray(config.tests) || config.tests.length === 0
-                }
-                onClick={runTests}
-              >
-                Run pipeline tests
-              </Button>
+              <div className="pipeline-test-run-bar">
+                <strong>
+                  {Array.isArray(config.tests) && config.tests.length
+                    ? `${config.tests.length} ${config.tests.length === 1 ? "test" : "tests"}`
+                    : "No tests yet"}
+                </strong>
+                <Button
+                  variant="secondary compact"
+                  busy={busy}
+                  disabled={
+                    codeChangesPending ||
+                    !Array.isArray(config.tests) ||
+                    config.tests.length === 0
+                  }
+                  onClick={runTests}
+                >
+                  Run pipeline tests
+                </Button>
+              </div>
               {error && <ErrorBox message={error} />}
               {result && (
-                <div role="status">
-                  <strong>
-                    {result.deferred
-                      ? "These tests need the device environment"
-                      : result.valid
-                        ? "Pipeline tests passed"
-                        : "Pipeline tests failed"}
-                  </strong>
-                  {result.errors?.length > 0 && (
-                    <ErrorBox message={result.errors.join("\n")} />
-                  )}{" "}
-                  {result.output && (
-                    <pre className="code-preview">{result.output}</pre>
-                  )}
-                </div>
+                <PipelineTestResults
+                  run={result}
+                  expected={
+                    Array.isArray(config.tests) ? config.tests.length : 0
+                  }
+                  steps={Object.keys(config.transforms || {})}
+                />
               )}
             </div>
           )}
-          {section !== "variables" && <ExternalDocLink
-            className="pipeline-global-docs"
-            href={`https://vector.dev/docs/reference/configuration/${details.link}/`}
-          >
-            Vector reference for {details.title.toLowerCase()}
-          </ExternalDocLink>}
+          {section === "variables" ? (
+            <PipelineVariables
+              config={config}
+              variables={variables}
+              editable={editable}
+              onChange={onVariablesChange}
+            />
+          ) : (
+            <FieldProblemsContext.Provider value={fieldProblems}>
+              <PipelineSchemaFields
+                key={section}
+                schema={schema}
+                root={vectorSchema}
+                component={config}
+                exclude={Object.keys(config).filter(
+                  (key) => !names.includes(key),
+                )}
+                onChange={update}
+                editable={editable}
+                onPendingChange={pendingChange}
+              />
+            </FieldProblemsContext.Provider>
+          )}
+          {section !== "variables" && (
+            <ExternalDocLink
+              className="pipeline-global-docs"
+              href={`https://vector.dev/docs/reference/configuration/${details.link}/`}
+            >
+              Vector reference for {details.title.toLowerCase()}
+            </ExternalDocLink>
+          )}
         </div>
       </div>
       <div className="modal-footer">

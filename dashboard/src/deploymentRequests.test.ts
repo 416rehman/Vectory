@@ -167,13 +167,62 @@ describe("durable deployment request registry", () => {
     previous_configuration_id: otherActor,
     previous_configuration_name: "Prior pipeline",
     priority: 6,
-    eligible_devices: [{ device_id: otherActor, device_name: "Included", artifact_sha256: "a".repeat(64) }],
+    eligible_devices: [
+      {
+        device_id: otherActor,
+        device_name: "Included",
+        artifact_sha256: "a".repeat(64),
+      },
+    ],
     excluded_devices: [
       { device_id: actor, device_name: "Excluded", reason: "revoked" },
     ],
     blockers: [],
     review_token: "a".repeat(64),
     ready: true,
+  });
+
+  it("refuses token-shaped and credential-URL bindings before a durable request exists", async () => {
+    const local = new BrowserStorage();
+    const tab = await browserTab(local);
+    for (const value of [
+      "ghp_syntheticcredential123",
+      "https://collector.example/?api_key=short",
+    ]) {
+      expect(() =>
+        tab.run((r) =>
+          r.beginDeploymentOperation(
+            actor,
+            {
+              ...request,
+              variable_bindings: {
+                defaults: { MY_VALUE: value },
+                devices: {},
+              },
+            },
+            true,
+            "Synthetic deployment",
+          ),
+        ),
+      ).toThrow(/variable_bindings\.defaults\.MY_VALUE/);
+      expect(local.data.size).toBe(0);
+    }
+    expect(() =>
+      tab.run((r) =>
+        r.beginDeploymentOperation(
+          actor,
+          {
+            ...request,
+            variable_bindings: {
+              defaults: { MY_VALUE: "ordinary-nonsecret-value" },
+              devices: {},
+            },
+          },
+          true,
+          "Synthetic deployment",
+        ),
+      ),
+    ).not.toThrow();
   });
 
   it("preserves the exact reviewed token and device/version context after tab reload", async () => {

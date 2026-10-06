@@ -6,11 +6,15 @@ import {
   pipelineCopyName,
   dismissPipelineCreationStorageIssue,
   finishPipelineCreationOperation,
+  isDefinitivePipelineCreationRejection,
+  pipelineCreationRefusalProblems,
+  pipelineNameError,
   pipelineCreationOperationAvailable,
   readPipelineCreationOperations,
   subscribePipelineCreationOperations,
   type PipelineCreationOperation,
 } from "./pipelineCreationRequests";
+import { APIError } from "./api";
 
 class BrowserStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -94,6 +98,123 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("durable pipeline creation registry", () => {
+  it("never stores credential-shaped metadata or graph data even when called directly", () => {
+    for (const unsafe of [
+      {
+        ...request,
+        request: { ...request.request, name: "ghp_syntheticcredential123" },
+      },
+      {
+        ...request,
+        request: {
+          ...request.request,
+          description: "https://collector.example/?api_key=short",
+        },
+      },
+      {
+        ...request,
+        request: {
+          ...request.request,
+          graph: {
+            nodes: [{ id: "in", data: { note: "ghp_syntheticcredential123" } }],
+            edges: [],
+          },
+        },
+      },
+    ]) {
+      expect(() => beginPipelineCreationOperation(actor, unsafe)).toThrow(
+        /credential/i,
+      );
+      expect(storage.length).toBe(0);
+    }
+    expect(() =>
+      beginPipelineCreationOperation(actor, {
+        operation: "duplicate",
+        source_configuration_id: source,
+        request: {
+          name: "Safe name",
+          description: "https://collector.example/?api_key=short",
+          revision: 7,
+        },
+      }),
+    ).toThrow(/credential/i);
+    expect(storage.length).toBe(0);
+  });
+  it("validates the trimmed creation name against the server's UTF-8 byte limit", () => {
+    expect(pipelineNameError("   ")).toBe(
+      "Enter a pipeline name to create a draft.",
+    );
+    expect(pipelineNameError("é".repeat(60))).toBe("");
+    expect(pipelineNameError("é".repeat(61))).toMatch(/120 UTF-8 bytes/);
+    expect(pipelineNameError(`  ${"é".repeat(60)}  `)).toBe("");
+    expect(pipelineNameError("🙂".repeat(30))).toBe("");
+    expect(pipelineNameError("🙂".repeat(31))).toMatch(/120 UTF-8 bytes/);
+  });
+  it("only clears reminders for a payload-invariant credential rejection", () => {
+    for (const [code, status] of [
+      ["INVALID_INPUT", 400],
+      ["FORBIDDEN", 403],
+      ["PAYLOAD_TOO_LARGE", 413],
+      ["VALIDATION_FAILED", 422],
+    ] as const) {
+      const rejected = new APIError(code, "Rejected", status, true);
+      expect(isDefinitivePipelineCreationRejection(rejected, true)).toBe(false);
+      expect(isDefinitivePipelineCreationRejection(rejected, false)).toBe(
+        false,
+      );
+      expect(
+        isDefinitivePipelineCreationRejection(
+          new APIError(code, "Unverified", status),
+          true,
+        ),
+      ).toBe(false);
+    }
+    expect(
+      isDefinitivePipelineCreationRejection(
+        new APIError("STALE_REVISION", "Source changed", 409, true),
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      isDefinitivePipelineCreationRejection(
+        new APIError("NETWORK_UNAVAILABLE", "Connection lost", 0),
+        true,
+      ),
+    ).toBe(false);
+  });
+  it("projects field problems from an authoritative refusal without changing uncertainty", () => {
+    const rejected = new APIError(
+      "INVALID_INPUT",
+      "Credential refused",
+      400,
+      true,
+      undefined,
+      "plaintext_credential",
+      undefined,
+      undefined,
+      [
+        {
+          code: "plaintext_credential",
+          path: "sinks.out.request.headers.Authorization",
+          message: "This field holds what looks like a credential.",
+          fix: "Use a device secret where supported.",
+        },
+      ],
+    );
+    expect(pipelineCreationRefusalProblems(rejected)).toEqual([
+      {
+        path: "sinks.out.request.headers.Authorization",
+        message: "This field holds what looks like a credential.",
+      },
+    ]);
+    expect(isDefinitivePipelineCreationRejection(rejected, true)).toBe(true);
+    expect(
+      isDefinitivePipelineCreationRejection(
+        new APIError("IDEMPOTENCY_CONFLICT", "Unknown result", 409, true),
+        true,
+      ),
+    ).toBe(false);
+  });
   it("fits a default copy name within the UTF-8 byte limit without splitting Unicode", () => {
     expect(pipelineCopyName("Logs")).toBe("Logs copy");
     expect(pipelineCopyName("\u{1f600}".repeat(30))).toBe(
@@ -123,6 +244,47 @@ describe("durable pipeline creation registry", () => {
       operation,
     ]);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("retains variable declarations in a separate pipeline request and rejects credential-shaped declarations", () => {
+    const variables = [
+      {
+        name: "interval",
+        path: "/sources/in/interval",
+        type: "integer" as const,
+      },
+    ];
+    const operation = beginPipelineCreationOperation(actor, {
+      ...request,
+      request: { ...request.request, variables },
+    });
+    if (operation.operation !== "create")
+      throw Error("Expected a create request");
+    expect(operation.request.variables).toEqual(variables);
+    expect(
+      JSON.parse(storage.getItem(key(operation))!).request.variables,
+    ).toEqual(variables);
+    const restored = readPipelineCreationOperations(actor).operations[0];
+    if (restored.operation !== "create")
+      throw Error("Expected a create request");
+    expect(restored.request.variables).toEqual(variables);
+    finishPipelineCreationOperation(operation);
+    expect(() =>
+      beginPipelineCreationOperation(actor, {
+        ...request,
+        request: {
+          ...request.request,
+          variables: [
+            {
+              name: "ghp_syntheticcredential123",
+              path: "/sources/in/interval",
+              type: "integer",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/credential/i);
+    expect(storage.length).toBe(0);
   });
 
   it("refreshes storage directly across independent tabs and never erases a peer record", async () => {

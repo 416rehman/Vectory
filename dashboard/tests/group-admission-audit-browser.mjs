@@ -1,12 +1,13 @@
 // Actual Groups/GroupEditor, AuditLog and destination App; synthetic transport only.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
@@ -196,6 +197,11 @@ async function start(f, options = {}) {
   });
   const reject = (route, status, code, message) =>
     route.fulfill({ status, json: { error: { code, message } } });
+  const fleet = fleetReplies({
+    devices: () => f.devices,
+    groups: () => [...f.groups.values()],
+    groupById: false,
+  });
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -237,8 +243,24 @@ async function start(f, options = {}) {
     if (method === "GET" && path === "/audit/" + f.audit?.id)
       return route.fulfill({ json: f.audit });
 
+    // Pages of devices, one device, and the groups without their members.
+    if (await fulfillFleetRead(fleet, route)) return;
     if (method === "GET" && path === "/devices")
       return route.fulfill({ json: f.devices });
+    // The group overview lists assignments; member edits preview their effects.
+    if (method === "POST" && path === "/groups/membership-preview") {
+      const body = request.postDataJSON();
+      return route.fulfill({
+        json: {
+          group_id: body.group_id,
+          revision: body.revision,
+          stale: false,
+          ready: true,
+          blockers: [],
+          devices: [],
+        },
+      });
+    }
     if (method === "GET" && path === "/groups")
       return route.fulfill({ json: [...f.groups.values()] });
     if (method === "GET" && path.startsWith("/groups/")) {
@@ -348,6 +370,7 @@ async function edit(page) {
     .getByRole("button", { name: /Synthetic production group/ })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("tab", { name: /^(Edit members|Members)$/ }).click();
 }
 const save = (page) =>
   page.getByRole("button", { name: "Save changes", exact: true }).click();
@@ -373,6 +396,8 @@ async function check(name, run) {
     });
   }
   console.log((results.at(-1).passed ? "PASS " : "FAIL ") + name);
+  if (!results.at(-1).passed)
+    console.log(results.at(-1).error.split("\n").slice(0, 12).join("\n"));
 }
 
 const admissionMessage =
@@ -395,9 +420,7 @@ const auditEvent = (details = {}) => ({
   details,
 });
 async function openAudit(page) {
-  await page
-    .getByRole("button", { name: "Details: Group updated", exact: true })
-    .click();
+  await page.getByRole("link", { name: "Group updated", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "Event details" }),
   ).toBeVisible();
@@ -446,6 +469,13 @@ try {
         await edit(page);
         await changeDescription(page);
         await page.getByRole("checkbox", { name: /Synthetic edge 2/ }).check();
+        // Opening the editor read the group's members; the refusal reads
+        // nothing more.
+        const groupReads = () =>
+          f.requests.filter(
+            (r) => r.method === "GET" && r.path === "/groups/" + id(10),
+          ).length;
+        const readsAtOpen = groupReads();
         f.nextError = [409, "ACTIVE_CANARY_OVERLAP", admissionMessage];
         await save(page);
         await expect(page.getByRole("alert")).toContainText(admissionMessage);
@@ -462,11 +492,7 @@ try {
         expect(f.writes).toHaveLength(1);
         expect(f.commits).toBe(0);
         expect(f.writes[0].body.revision).toBe(1);
-        expect(
-          f.requests.filter(
-            (r) => r.method === "GET" && r.path === "/groups/" + id(10),
-          ),
-        ).toHaveLength(0);
+        expect(groupReads()).toBe(readsAtOpen);
         const link = page.getByRole("link", {
           name: "Review active deployments (opens in a new tab)",
           exact: true,
@@ -484,12 +510,18 @@ try {
         ).toBeVisible();
         const popupUrl = new URL(popup.url());
         expect(popupUrl.hash).toBe("#/deployments?status=active&page=1");
-        expect(
-          f.requests.filter((r) => r.path === "/deployments/history"),
-        ).toHaveLength(1);
-        expect(
-          f.requests.find((r) => r.path === "/deployments/history").query,
-        ).toMatchObject({ status: "active", page: "1", page_size: "12" });
+        // The new tab asks for the list as its page opens, which can be after the
+        // heading renders.
+        const listReads = () =>
+          f.requests.filter(
+            (r) => r.path === "/deployments/history" && !r.query.group_id,
+          );
+        await expect.poll(() => listReads().length).toBe(1);
+        expect(listReads()[0].query).toMatchObject({
+          status: "active",
+          page: "1",
+          page_size: "12",
+        });
         await popup.close();
         await expect(
           page.getByRole("textbox", { name: "Description (optional)" }),

@@ -1,0 +1,39 @@
+{
+  "description": "Overlap is compared by path segment: a sibling sharing a prefix with the state directory is fine.",
+  "host": {
+    "state_dir": "/var/lib/vectory-agent",
+    "managed_config_dir": "/etc/vectory/managed"
+  },
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "file",
+        "include": [
+          "/var/lib/vectory-agent-logs/*.log"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/lib/vectory-agent-logs"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

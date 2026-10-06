@@ -1,0 +1,464 @@
+/* Effective configuration on the device page: the offered text, its drift
+   line, the changes since the previous offer and the device's own values. */
+.effective-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.effective-config > .device-card-head {
+  margin-bottom: 0;
+}
+.effective-config > .inline-error {
+  margin: 0;
+}
+.effective-config-loading {
+  display: grid;
+  gap: var(--space-3);
+}
+.effective-config-viewer-skeleton {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-height: 168px;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+/* ---------- Drift line ---------- */
+.effective-config-drift {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--neutral-border);
+  border-radius: var(--radius-md);
+  background: var(--neutral-bg);
+  color: var(--neutral-text);
+}
+.effective-config-drift > svg {
+  margin-top: 2px;
+}
+.effective-config-drift[data-tone="success"] {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+.effective-config-drift[data-tone="warning"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+.effective-config-drift[data-tone="info"] {
+  border-color: var(--info-border);
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+.effective-config-drift p {
+  margin: 0;
+}
+.effective-config-drift-headline {
+  color: var(--text);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-weight: var(--weight-medium);
+}
+.effective-config-drift-detail {
+  margin-top: var(--space-0-5) !important;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.effective-config-drift code {
+  font-size: 11.5px;
+}
+.effective-config-drift .doc-term-link {
+  display: inline-block;
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+/* ---------- Picker and summary ---------- */
+.effective-config-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.effective-config-picker label {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.effective-config-picker .select {
+  min-width: 0;
+  max-width: 100%;
+}
+.effective-config-picker-note {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.effective-config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.effective-config-summary > :first-child {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+.effective-config-summary a {
+  text-decoration: none;
+}
+.effective-config-summary a:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.effective-config-summary code {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.effective-config-tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* ---------- Panels ---------- */
+.effective-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.effective-config-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+}
+.effective-config-toolbar > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.effective-config-toolbar .button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface-selected);
+}
+.effective-config-measure {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.effective-config-saved {
+  min-height: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.effective-config-saved:empty {
+  display: none;
+}
+.effective-config-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+}
+.effective-config-note strong {
+  color: var(--text);
+}
+.effective-config-note code {
+  font-size: 12px;
+}
+.effective-config-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-md);
+  background: var(--info-bg);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.effective-config-banner > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--info-text);
+}
+
+/* ---------- Variables ---------- */
+.effective-config-variables {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.effective-config-variables li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.effective-config-variables li:first-child {
+  border-top: 0;
+}
+.effective-config-variable-name {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.effective-config-variable-name strong {
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+.effective-config-variable-name span {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.effective-config-variable-value {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.effective-config-variable-value code {
+  color: var(--text);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.effective-config-source {
+  justify-self: end;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+/* ---------- Digests ---------- */
+.effective-config-digests > .disclosure-body dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.effective-config-digests dl > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.effective-config-digests dt {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.effective-config-digests dd {
+  margin: 0;
+  min-width: 0;
+}
+.effective-config-digests code {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.effective-config-digests p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+
+/* ---------- Changes ---------- */
+.effective-config-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.effective-config-changes-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+.effective-config-changes-head h3 {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-weight: var(--weight-semibold);
+}
+.effective-config-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-0-5) 0 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.effective-config-counts [data-kind="added"] {
+  color: var(--success-text);
+}
+.effective-config-counts [data-kind="removed"] {
+  color: var(--danger-text);
+}
+.effective-config-counts [data-kind="changed"] {
+  color: var(--warning-text);
+}
+.effective-config-hunk {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.effective-config-hunk > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-hover);
+  font-size: var(--text-sm);
+}
+.effective-config-hunk > header code {
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.effective-config-hunk > header span {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.effective-config-hunk ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+}
+.effective-config-hunk li {
+  display: grid;
+  grid-template-columns: 4ch 4ch 2ch minmax(0, 1fr);
+  gap: 0 var(--space-1);
+  padding: 0 var(--space-3) 0 var(--space-2);
+}
+.effective-config-hunk li code {
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.effective-config-line-number {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+.effective-config-mark {
+  text-align: center;
+  user-select: none;
+}
+.effective-config-hunk li[data-kind="added"] {
+  background: var(--success-bg);
+}
+.effective-config-hunk li[data-kind="added"] .effective-config-mark {
+  color: var(--success-text);
+}
+.effective-config-hunk li[data-kind="removed"] {
+  background: var(--danger-bg);
+}
+.effective-config-hunk li[data-kind="removed"] .effective-config-mark {
+  color: var(--danger-text);
+}
+.effective-config-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+
+/* ---------- Phones ---------- */
+@media (max-width: 639px) {
+  .effective-config-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .effective-config-picker .button {
+    justify-self: start;
+  }
+  .effective-config-picker-note {
+    grid-column: 1;
+  }
+  .effective-config-variables li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .effective-config-variable-name {
+    grid-column: 1 / -1;
+  }
+  .effective-config-digests dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-0-5);
+  }
+  .effective-config-hunk li {
+    grid-template-columns: 4ch 2ch minmax(0, 1fr);
+    padding: 0 var(--space-2) 0 var(--space-1);
+  }
+  /* One number a line: the new text's, and for a removed line the old text's. */
+  .effective-config-hunk li > .effective-config-line-number:first-child {
+    display: none;
+  }
+  .effective-config-hunk
+    li[data-kind="removed"]
+    > .effective-config-line-number:first-child {
+    display: block;
+  }
+  .effective-config-hunk
+    li[data-kind="removed"]
+    > .effective-config-line-number:nth-child(2) {
+    display: none;
+  }
+  .effective-config-toolbar .button {
+    padding-inline: var(--space-2);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .effective-config * {
+    transition: none !important;
+  }
+}

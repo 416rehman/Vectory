@@ -9,7 +9,7 @@
   "transforms": {
     "process": {
       "type": "remap",
-      "source": ".environment = \"development\"",
+      "source": "# Runs once for every event; \".\" is the event.\n# Set a field:      .environment = \"production\"\n# Remove a field:   del(.password)\n# Parse JSON text:  . = merge(., object!(parse_json!(.message)))\n.environment = \"development\"\n",
       "inputs": [
         "demo"
       ]

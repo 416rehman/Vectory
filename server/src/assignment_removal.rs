@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_TARGETS: usize = 10_000;
 const MAX_SAFE: i64 = 9_007_199_254_740_991;
-const CONFIG: &str = "json_object('assignment_id',d.assignment_id,'version_id',d.desired_version_id,'generation',d.desired_generation,'policy',NULL)";
-const POLICY: &str = "json_object('assignment_id',d.policy_assignment_id,'version_id',NULL,'generation',d.policy_generation,'policy',json(d.policy))";
+pub(crate) const CONFIG: &str = "json_object('assignment_id',d.assignment_id,'version_id',d.desired_version_id,'generation',d.desired_generation,'policy',NULL)";
+pub(crate) const POLICY: &str = "json_object('assignment_id',d.policy_assignment_id,'version_id',NULL,'generation',d.policy_generation,'policy',json(d.policy))";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,8 +48,7 @@ pub async fn post_preview(
         serde_json::from_slice::<PreviewRequest>(&body)
             .map_err(|_| ApiError::invalid("Assignment removal preview accepts an empty object"))?;
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = crate::auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let result = preview(&mut tx, &id, actor["id"].as_str().unwrap()).await?;
     tx.rollback().await?;
@@ -71,8 +70,7 @@ pub async fn post_commit(
     let request: CommitRequest = serde_json::from_slice(&body).map_err(|_| {
         ApiError::invalid("Provide only one required assignment-removal review_token")
     })?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = crate::auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let result = commit(
         &mut tx,
@@ -126,7 +124,7 @@ fn validate_state(value: &Value) -> Result<()> {
     }
     Ok(())
 }
-async fn decorate(db: &mut SqliteConnection, value: &Value) -> Result<Value> {
+pub(crate) async fn decorate(db: &mut SqliteConnection, value: &Value) -> Result<Value> {
     if value.is_null() {
         return Ok(Value::Null);
     }

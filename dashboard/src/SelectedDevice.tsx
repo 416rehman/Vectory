@@ -1,6 +1,9 @@
 import type { Device } from "./api";
 import { Button, Spinner, useResource } from "./ui";
-import type { PipelineDestination } from "./pipelineDestination";
+import {
+  destinationQuery,
+  type PipelineDestination,
+} from "./pipelineDestination";
 
 export function pipelineRoute(
   id?: string,
@@ -9,10 +12,7 @@ export function pipelineRoute(
 ) {
   const query = new URLSearchParams();
   if (device) query.set("device", device);
-  if (destination) {
-    query.set("panel", destination.panel);
-    if (destination.section) query.set("section", destination.section);
-  }
+  if (destination) destinationQuery(destination, query);
   return `configurations${id ? `/${encodeURIComponent(id)}` : ""}${query.size ? `?${query}` : ""}`;
 }
 

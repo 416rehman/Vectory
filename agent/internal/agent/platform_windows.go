@@ -8,12 +8,151 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/sys/windows"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"unsafe"
 )
+
+// openNoFollow is not available on Windows; SafePath refuses a link before the open.
+const openNoFollow = 0
+
+// The places the agent makes directories and its executable. A folder made inside
+// C:\ProgramData without an access list of its own inherits what ProgramData passes
+// on: full control for CREATOR OWNER (whichever account made what is inside), and
+// the Users' right to create files and folders in it and in every folder below it,
+// and an object made by an account takes that account's default owner. So each place
+// the agent makes a directory under ProgramData, and the install directory and
+// the executable, is made with a protected list and an owner of its own, written when
+// it is created (SECURITY_ATTRIBUTES). A process that can't make such a list (it is
+// not elevated, so it can't make the Administrators the owner of what it makes)
+// makes the directory with what its parent passes on, and the path check judges it
+// when the update step looks.
+
+// processUserSID is the account this process runs as.
+func processUserSID() (string, error) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return "", err
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
+}
+
+// makeSharedDirectory makes one directory above a private one. The directory the
+// agent keeps its own directories in under ProgramData (the update root: the state
+// directory and the managed configuration are made in it, and the policy and the step
+// after them) is made closed to every account but root, before anything is made in
+// it, so that no local account can make the update directories first. Any other
+// directory is made with what its parent passes on.
+//
+// ensureStateRoot has already made and judged the update root for a process that can
+// write what root owns, before anything above a private directory is made. This is
+// for a caller that comes this way without it, and it judges what is there when it
+// is done: a directory that another account made first is refused, not taken for the
+// one this call made. A process that can't make the Administrators the owner (it isn't
+// elevated) makes the directory with what ProgramData gives a new folder, as it always
+// did, and the path check judges it when the update step looks.
+func makeSharedDirectory(dir string) error {
+	if root, ok := updateRootFor(dir); ok && strings.EqualFold(root, dir) && canWriteRootOwned() {
+		if action, owner, err := closeRoot(dir, updateRootSDDL(ServiceName)); err == nil {
+			if action == stateRootRefuse {
+				return &stateRootError{Path: dir, Owner: ownerName(owner)}
+			}
+			return nil
+		}
+	}
+	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(dir, 0755)
+}
+
+// makePrivateDirectory makes a private directory with the list that keeps it private
+// (privateDirectorySDDL) at once, where MkdirAll makes it with what its parent gives
+// and protect closes it a moment later. What is missing above it is made by
+// makeTraversable first.
+func makePrivateDirectory(path string) error {
+	if info, err := os.Lstat(path); err == nil {
+		if !info.IsDir() {
+			return &fs.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+		}
+		return nil
+	}
+	if user, err := processUserSID(); err == nil && makeDirectory(path, privateDirectorySDDL(user)) == nil {
+		return nil
+	}
+	return os.MkdirAll(path, 0700)
+}
+
+// makeInstallDirectory makes the directory the agent is installed in, and what is
+// missing above it as MkdirAll does. The directory itself has the list of a directory
+// root keeps programs in (rootExecutable), owned by the Administrators: what the
+// update step trusts doesn't depend on what the parent passes on. Under Program Files
+// it gives the same accounts the same access as the parent would have passed on.
+func makeInstallDirectory(dir string) error {
+	if info, err := os.Lstat(dir); err == nil {
+		if !info.IsDir() {
+			return &fs.PathError{Op: "mkdir", Path: dir, Err: syscall.ENOTDIR}
+		}
+		return nil
+	}
+	if parent := filepath.Dir(dir); parent != dir {
+		if err := os.MkdirAll(parent, 0755); err != nil {
+			return err
+		}
+	}
+	if makeDirectory(dir, windowsSDDL(rootExecutable, true, ServiceName)) == nil {
+		return nil
+	}
+	return os.MkdirAll(dir, 0755)
+}
+
+// createInstallTemp makes the file the new agent is written to before it takes the
+// place of the installed one by a rename: it has the list of an executable root keeps
+// (rootExecutable) and the Administrators as owner, which is what the update step
+// trusts the installed file to have.
+func createInstallTemp(dir string) (*os.File, error) {
+	if file := createInstallTempWithList(dir); file != nil {
+		return file, nil
+	}
+	return os.CreateTemp(dir, ".vectory-install-*")
+}
+
+// createInstallTempWithList is createInstallTemp with the list, or nil when the file
+// can't be made with it.
+func createInstallTempWithList(dir string) *os.File {
+	sa, err := securityAttributes(windowsSDDL(rootExecutable, false, ServiceName))
+	if err != nil {
+		return nil
+	}
+	for attempt := 0; attempt < 8; attempt++ {
+		suffix, err := randomSuffix(8)
+		if err != nil {
+			return nil
+		}
+		path := filepath.Join(dir, ".vectory-install-"+suffix)
+		name, err := windows.UTF16PtrFromString(path)
+		if err != nil {
+			return nil
+		}
+		handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		if err == nil {
+			return os.NewFile(uintptr(handle), path)
+		}
+		if !errors.Is(err, windows.ERROR_FILE_EXISTS) {
+			return nil
+		}
+	}
+	return nil
+}
 
 func protect(path string, dir bool) error {
 	t, e := windows.OpenCurrentProcessToken()
@@ -29,7 +168,10 @@ func protect(path string, dir bool) error {
 	if dir {
 		flags = "OICI"
 	}
-	sd, e := windows.SecurityDescriptorFromString("D:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;" + u.User.Sid.String() + ")")
+	// SYSTEM, the administrators of this machine and the writing account. The
+	// service writes its own files as its virtual account, so without the
+	// administrators an elevated `vectory status` could not read them.
+	sd, e := windows.SecurityDescriptorFromString("D:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;BA)(A;" + flags + ";FA;;;" + u.User.Sid.String() + ")")
 	if e != nil {
 		return e
 	}
@@ -38,6 +180,34 @@ func protect(path string, dir bool) error {
 		return e
 	}
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, u.User.Sid, nil, acl, nil)
+}
+
+// Private-file checks that failed, for privateFileProblem.
+var (
+	errPrivateFileLinks  = errors.New("private file must be a regular file without links")
+	errPrivateFileAlias  = errors.New("private file traverses an alias or reparse point")
+	errPrivateFileOwner  = errors.New("secret owner is not trusted")
+	errPrivateFileShared = errors.New("secret grants access to another principal")
+)
+
+// privateFileProblem says which check made openPrivateFile refuse path, and
+// how to fix it.
+func privateFileProblem(path string, openErr error) (problem, fix string) {
+	switch {
+	case errors.Is(openErr, windows.ERROR_FILE_NOT_FOUND), errors.Is(openErr, windows.ERROR_PATH_NOT_FOUND):
+		return "doesn't exist", ""
+	case errors.Is(openErr, windows.ERROR_ACCESS_DENIED):
+		return "can't be read by this account", "Run the command from an elevated PowerShell."
+	case errors.Is(openErr, windows.ERROR_SHARING_VIOLATION):
+		return "is open in another program", "Close it, then run the command again."
+	case errors.Is(openErr, errPrivateFileLinks):
+		return "isn't a regular file with a single name", "Save the token in a new file."
+	case errors.Is(openErr, errPrivateFileAlias):
+		return "is reached through a link or alias", "Pass the file's real path."
+	case errors.Is(openErr, errPrivateFileOwner):
+		return "belongs to another account", "Save the token in a new file from an elevated PowerShell."
+	}
+	return "is readable by other accounts", "Allow only Administrators and SYSTEM to read it (Properties > Security), then run the command again."
 }
 
 // Inspect the opened object, never an independently looked-up pathname. Denying
@@ -62,7 +232,7 @@ func openPrivateFile(path string) (*os.File, error) {
 		return fail(err)
 	}
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 || info.NumberOfLinks != 1 {
-		return fail(errors.New("private file must be a regular file without links"))
+		return fail(errPrivateFileLinks)
 	}
 	buf := make([]uint16, 32768)
 	n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
@@ -71,7 +241,7 @@ func openPrivateFile(path string) (*os.File, error) {
 	}
 	resolved := strings.TrimPrefix(windows.UTF16ToString(buf[:n]), `\\?\`)
 	if !strings.EqualFold(filepath.Clean(resolved), path) {
-		return fail(errors.New("private file traverses an alias or reparse point"))
+		return fail(errPrivateFileAlias)
 	}
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil || sd == nil {
@@ -95,7 +265,7 @@ func checkPrivateDescriptor(sd *windows.SECURITY_DESCRIPTOR) error {
 	allowed := map[string]bool{user.User.Sid.String(): true, "S-1-5-18": true, "S-1-5-32-544": true}
 	owner, _, err := sd.Owner()
 	if err != nil || owner == nil || !allowed[owner.String()] {
-		return errors.New("secret owner is not trusted")
+		return errPrivateFileOwner
 	}
 	acl, _, err := sd.DACL()
 	if err != nil || acl == nil {
@@ -114,7 +284,7 @@ func checkPrivateDescriptor(sd *windows.SECURITY_DESCRIPTOR) error {
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if !allowed[sid.String()] && ace.Mask != 0 {
-			return errors.New("secret grants access to another principal")
+			return errPrivateFileShared
 		}
 	}
 	return nil
@@ -126,6 +296,15 @@ func checkPrivateFile(path string) error {
 	}
 	return f.Close()
 }
+
+// keepOwner does nothing on Windows: the replacement carries its own protected
+// access list (protect), which names SYSTEM, the administrators and the writing
+// account.
+func keepOwner(tmp, path string) {}
+
+// ownedLikeParent does nothing on Windows: a file created in the state
+// directory inherits its access list, which names the service account.
+func ownedLikeParent(path string) error { return nil }
 func rejectPlatformLink(path string) error {
 	p, e := windows.UTF16PtrFromString(path)
 	if e != nil {
@@ -305,7 +484,12 @@ func lockAgentFile(dir string) (func(), error) {
 	var o windows.Overlapped
 	if e = windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &o); e != nil {
 		f.Close()
-		return nil, errors.New("another agent operation is running")
+		return nil, lockHeld(dir)
 	}
-	return func() { windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &o); f.Close() }, nil
+	recordLockOwner(f)
+	return func() {
+		clearLockOwner(f)
+		windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &o)
+		f.Close()
+	}, nil
 }

@@ -1,5 +1,10 @@
 package agent
 
+import (
+	"strings"
+	"unicode/utf8"
+)
+
 // selectAttempt is called only for a successfully authenticated manifest (or
 // by Reconcile after its caller has persisted that manifest). Old installations
 // do not infer an attempt from FailedGeneration or a generic startup error.
@@ -35,12 +40,62 @@ func cloneAttempt(a *ConfigurationAttempt) *ConfigurationAttempt {
 	copy.Error = cloneIssue(a.Error)
 	return &copy
 }
+
+// cloneIssue copies an issue for a heartbeat or for the state. The server
+// refuses a whole heartbeat for a report past one of its bounds, so what the
+// state holds, whichever build wrote it, never reaches a heartbeat unless the
+// server accepts it: the message is at most maxIssueMessage characters, there
+// are at most maxDiagnostics diagnostics, and each is one the server accepts
+// (reportableDiagnostic). A diagnostic that can't be made to fit is left out.
 func cloneIssue(issue *Issue) *Issue {
 	if issue == nil {
 		return nil
 	}
 	copy := *issue
+	copy.Message = limitMessage(issue.Message, maxIssueMessage)
+	copy.Diagnostics = nil
+	for _, d := range issue.Diagnostics {
+		if d, ok := reportableDiagnostic(d); ok {
+			copy.Diagnostics = append(copy.Diagnostics, d)
+		}
+		if len(copy.Diagnostics) == maxDiagnostics {
+			break
+		}
+	}
 	return &copy
+}
+
+// reportableDiagnostic is d as the server accepts it in a heartbeat, or false
+// when no part of it fits. A state file an earlier build wrote can hold
+// diagnostics from before the agent replaced control characters in them, from
+// before the bounds below, or with an ID the server's rule refuses, so every
+// text goes through truncateText (one line, within its bound) and every ID
+// through reportableID again, and the record's size is measured as the server
+// measures it (fitDiagnostic).
+func reportableDiagnostic(d Diagnostic) (Diagnostic, bool) {
+	d.Message = truncateText(d.Message, maxDiagnosticMessage)
+	d.Hint = truncateText(d.Hint, maxDiagnosticHint)
+	d.Field = truncateText(d.Field, maxDiagnosticField)
+	if d.Message == "" {
+		d.Message = noPrintableDiagnostic
+	}
+	if !reportableID(d.ComponentID) {
+		d.ComponentID = ""
+	}
+	if d.ComponentID == "" || !reportableID(d.RouteOutput) {
+		d.RouteOutput = ""
+	}
+	return fitDiagnostic(d)
+}
+
+// limitMessage is text without NUL, which the server refuses, and at most max
+// characters, the last an ellipsis when it cut.
+func limitMessage(text string, max int) string {
+	text = strings.ReplaceAll(text, "\x00", "")
+	if utf8.RuneCountInString(text) <= max {
+		return text
+	}
+	return string([]rune(text)[:max-1]) + "…"
 }
 func (e *Engine) currentAttempt() *ConfigurationAttempt {
 	a, d := e.State.ConfigurationAttempt, e.State.Desired
@@ -63,8 +118,13 @@ func (e *Engine) attemptOutcome(attempt *ConfigurationAttempt, state string, iss
 	}
 }
 func (e *Engine) failAttempt(code, stage, message string) error {
-	e.attemptOutcome(e.currentAttempt(), "failed", &Issue{code, stage, message})
-	return e.fail(code, stage, message)
+	return e.failAttemptWith(code, stage, message, nil)
+}
+
+// failAttemptWith records a candidate failure with redacted diagnostics.
+func (e *Engine) failAttemptWith(code, stage, message string, diagnostics []Diagnostic) error {
+	e.attemptOutcome(e.currentAttempt(), "failed", &Issue{Code: code, Stage: stage, Message: message, Diagnostics: diagnostics})
+	return e.failWith(code, stage, message, diagnostics)
 }
 func (e *Engine) pauseAttempt() {
 	e.State.ApplyState = "paused"

@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { assertExactNumbers, stringifyExactJSON } from "./configurationNumbers";
+import type { DataPlaneSummary } from "./status";
+import {
+  assertExactNumbers,
+  parseLosslessJSON,
+  stringifyExactJSON,
+} from "./configurationNumbers";
+
+/** Sample and test runs echo event payloads: keep big integers exact. */
+const EVENT_PAYLOAD_ROUTES = ["/vrl/test", "/configurations/test"];
 import { RollbackPreviewSchema } from "./rollbackReview";
 import { AssignmentRemovalPreviewSchema } from "./assignmentRemovalModel";
 import { ScheduledAssignmentRefreshPreviewSchema } from "./scheduledAssignmentRefreshModel";
@@ -9,6 +17,32 @@ import {
   MfaSetupSchema,
   MfaStatusSchema,
 } from "./mfaActionModel";
+import {
+  AttemptPageSchema,
+  ChannelListSchema,
+  ChannelSchema,
+  DetectionSchema,
+  PreviewSchema,
+  TestResultSchema,
+} from "./notificationsModel";
+import {
+  ConfigurationTelemetrySchema,
+  DiagnosticSchema,
+  DiagnosticsSchema,
+  HostRuntimeSchema,
+  TelemetryHistorySchema,
+  TelemetrySummarySchema,
+  VectorLogSummarySchema,
+  VersionTelemetrySchema,
+  type HostRuntime,
+  type TelemetrySample,
+  type VectorLogSummary,
+} from "./runtimeModel";
+import {
+  agentUpdateResponseSchema,
+  DeviceAgentUpdateSchema,
+  type DeviceAgentUpdate,
+} from "./agentUpdateModel";
 
 export class APIError extends Error {
   constructor(
@@ -16,9 +50,28 @@ export class APIError extends Error {
     message: string,
     public status: number,
     public serverRejection = false,
+    /** Seconds from a 429 response's Retry-After header. */
+    public retryAfter?: number,
+    /** GET /session 401 only: why this browser's session ended. */
+    public reason?: string,
+    /** What a refusal names (the colliding assignments of a group edit): unchecked. */
+    public details?: unknown,
+    /** How many there are in all when `details` lists only the first few. */
+    public detailsTotal?: unknown,
+    /** Field-level reasons for an authoritative configuration refusal. */
+    public problems?: unknown,
+    public truncated?: unknown,
   ) {
     super(message);
   }
+}
+/** A protected read or write stopped because the browser session ended. */
+export function isSessionInterruption(error: unknown) {
+  return (
+    error instanceof APIError &&
+    (error.code === "SESSION_ENDED" ||
+      (error.status === 401 && error.code === "UNAUTHENTICATED"))
+  );
 }
 // Shape validation cannot establish which record a singleton response belongs
 // to. Check the raw envelope even when a caller supplies a projection schema.
@@ -28,10 +81,17 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
   let field = "id";
   let resource = "device details";
   if (method === "GET") {
-    match = route.match(/^\/devices\/([^/]+)(\/telemetry)?$/);
+    // The inventory is a list, not the device with ID "inventory".
+    match =
+      route === "/devices/inventory"
+        ? null
+        : route.match(
+            /^\/devices\/([^/]+)(\/telemetry|\/configuration(?:\/diff)?)?$/,
+          );
     if (match?.[2]) {
       field = "device_id";
-      resource = "device metrics";
+      resource =
+        match[2] === "/telemetry" ? "device metrics" : "device configuration";
     }
     if (!match) {
       match = route.match(/^\/versions\/([^/]+)$/);
@@ -48,8 +108,33 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
       match = route.match(/^\/configurations\/([^/]+)$/);
       resource = "pipeline details";
     }
+    if (!match) {
+      match = route.match(/^\/device-validations\/([^/]+)$/);
+      resource = "device check";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-releases\/([^/]+)$/);
+      resource = "agent release details";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-update-rollouts\/([^/]+)$/);
+      resource = "update rollout details";
+    }
   } else if (method === "POST") {
     match = route.match(/^\/devices\/([^/]+)\/retry$/);
+    if (!match) {
+      match = route.match(
+        /^\/agent-update-rollouts\/([^/]+)\/(?:pause|resume|cancel)$/,
+      );
+      resource = "update rollout";
+    }
+    if (!match) {
+      match = route.match(/^\/agent-releases\/([^/]+)\/withdraw$/);
+      resource = "agent release";
+    }
+  } else if (method === "PUT") {
+    match = route.match(/^\/agent-releases\/([^/]+)\/signature$/);
+    resource = "agent release";
   }
   if (!match) return;
   let expected: string | undefined;
@@ -126,6 +211,31 @@ export function setCSRF(value: string) {
     }
   }
 }
+/**
+ * A browser network failure ("Failed to fetch", "Load failed", "NetworkError
+ * when attempting to fetch resource.") in words people can act on. It is never
+ * a server rejection: a change sent before the connection failed may or may
+ * not have been saved. An abort keeps its own reason.
+ */
+function networkFailure(failure: unknown, method: string, signal: AbortSignal) {
+  if (!(failure instanceof TypeError) || signal.aborted) return failure;
+  return new APIError(
+    "NETWORK_UNAVAILABLE",
+    method === "GET"
+      ? "Vectory didn't answer. It may be restarting, or the network is down."
+      : "Vectory didn't answer, so it isn't known whether this change was saved. It may be restarting, or the network is down.",
+    0,
+  );
+}
+let changes = 0;
+/**
+ * How many changes this browser has started or finished sending. A read that
+ * began before the latest change may not show it, so shared reads use this to
+ * keep a later reader from joining such a read.
+ */
+export function changeCount() {
+  return changes;
+}
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -140,6 +250,8 @@ export async function api<T = unknown>(
     "/login/mfa",
     "/bootstrap",
     "/password-reset",
+    "/invite/preview",
+    "/invite/accept",
   ].includes(route);
   if (!publicRoute && !sessionValid) throw sessionFailure();
   const sentCSRF = csrf;
@@ -158,22 +270,32 @@ export async function api<T = unknown>(
   options.signal?.addEventListener("abort", parentAborted, { once: true });
   if (!publicRoute) sessionInterruptions.add(interrupt);
   async function execute(): Promise<T> {
-    const response = await fetch(`/api/v1${path}`, {
-      credentials: "same-origin",
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(sentCSRF ? { "X-CSRF-Token": sentCSRF } : {}),
-        ...options.headers,
-      },
-    });
-    const text = await response.text();
+    let response: Response, text: string;
+    try {
+      response = await fetch(`/api/v1${path}`, {
+        credentials: "same-origin",
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(sentCSRF ? { "X-CSRF-Token": sentCSRF } : {}),
+          ...options.headers,
+        },
+      });
+      text = await response.text();
+    } catch (failure) {
+      throw networkFailure(failure, method, controller.signal);
+    }
     if (!publicRoute && (!sessionValid || sentEpoch !== sessionEpoch))
       throw sessionFailure();
+    const events = EVENT_PAYLOAD_ROUTES.includes(route);
     let data: any;
     try {
-      data = text ? JSON.parse(text) : null;
+      data = text
+        ? events
+          ? parseLosslessJSON(text)
+          : JSON.parse(text)
+        : null;
     } catch {
       throw new APIError(
         "INVALID_RESPONSE",
@@ -184,7 +306,14 @@ export async function api<T = unknown>(
     try {
       assertExactNumbers(data, "response");
     } catch (failure) {
-      throw new APIError("UNSAFE_NUMBER", (failure as Error).message, 422);
+      const message = (failure as Error).message;
+      throw new APIError(
+        "UNSAFE_NUMBER",
+        events
+          ? `${message.split(":")[0]}: Vector returned a whole number larger than this browser can show exactly. Nothing was changed.`
+          : message,
+        422,
+      );
     }
     if (!response.ok) {
       if (
@@ -192,21 +321,33 @@ export async function api<T = unknown>(
         data?.error?.code === "UNAUTHENTICATED" &&
         sentCSRF &&
         sentCSRF === csrf &&
-        !["/login", "/login/mfa", "/bootstrap", "/password-reset"].includes(
-          route,
-        )
+        ![
+          "/login",
+          "/login/mfa",
+          "/bootstrap",
+          "/password-reset",
+          "/invite/preview",
+          "/invite/accept",
+        ].includes(route)
       ) {
         // Keep this request's authoritative401 error, while interrupting every
         // other protected request, including work stalled in response.text().
         sessionInterruptions.delete(interrupt);
         invalidateSession();
       }
+      const retryAfter = Number(response.headers.get("retry-after"));
       throw new APIError(
         data?.error?.code || "REQUEST_FAILED",
         data?.error?.message || `Request failed (${response.status}).`,
         response.status,
         typeof data?.error?.code === "string" &&
           typeof data?.error?.message === "string",
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+        typeof data?.error?.reason === "string" ? data.error.reason : undefined,
+        data?.error?.details,
+        data?.error?.details_total,
+        data?.error?.problems,
+        data?.error?.truncated,
       );
     }
     const expected = schema || responseSchema(path, method);
@@ -224,9 +365,12 @@ export async function api<T = unknown>(
     assertResponseIdentity(path, method, data);
     return data;
   }
+  const changing = method !== "GET" && method !== "HEAD";
+  if (changing) changes++;
   try {
     return await Promise.race([execute(), interrupted]);
   } finally {
+    if (changing) changes++;
     sessionInterruptions.delete(interrupt);
     options.signal?.removeEventListener("abort", parentAborted);
   }
@@ -297,7 +441,27 @@ export const UserSchema = z.object({
 export const SessionSchema = z.object({
   user: UserSchema,
   csrf_token: z.string(),
+  /** When this sign-in ends; absent from older servers. */
+  expires_at: z.string().optional(),
 });
+/** GET /users rows: the account plus its sign-in security state. */
+export const PersonSchema = UserSchema.extend({
+  status: z.enum(["invited", "active", "disabled"]).optional(),
+  mfa_enabled: z.boolean().optional(),
+  last_login_at: z.string().nullable().optional(),
+  invite_expires_at: z.string().nullable().optional(),
+});
+export type Person = z.infer<typeof PersonSchema>;
+export const SessionSummarySchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{32}$/),
+  current: z.boolean(),
+  created_at: z.string().nullable(),
+  last_seen_at: z.string().nullable(),
+  expires_at: z.string(),
+  user_agent: z.string().nullable(),
+  client_address: z.string().nullable(),
+});
+export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export const LoginChallengeSchema = z.object({
   mfa_required: z.literal(true),
   challenge_token: z.string().regex(/^[a-f0-9]{64}$/),
@@ -357,11 +521,15 @@ export const PublishReceiptSchema = z
     source_revision: publishRevision,
     graph: z.object({ nodes: z.array(z.any()), edges: z.array(z.any()) }),
     config: z.record(z.string(), z.any()),
-    variables: z.array(z.object({
-      name: z.string(),
-      path: z.string(),
-      type: z.enum(["string", "integer", "boolean"]),
-    })).optional(),
+    variables: z
+      .array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.enum(["string", "integer", "boolean"]),
+        }),
+      )
+      .optional(),
     artifact: z.string(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     size: z.number().int().nonnegative().max(1048576),
@@ -392,7 +560,6 @@ export const PublishRequestLookupSchema = z
     (result) =>
       !result.found || result.request_id === result.version.request_id,
   );
-export type PublishRequestLookup = z.infer<typeof PublishRequestLookupSchema>;
 export const PublishRequestPageSchema = z
   .object({
     items: z
@@ -415,19 +582,89 @@ export const PublishRequestPageSchema = z
   })
   .strict();
 export type PublishRequestPage = z.infer<typeof PublishRequestPageSchema>;
-export type Assignment = { id: string; priority: number; reason: string };
+export type Assignment = {
+  id: string;
+  priority: number;
+  reason: string;
+  /** Display provenance; absent on older servers. */
+  name?: string | null;
+  target_mode?: string;
+  status?: string;
+  policy_id?: string | null;
+  policy_name?: string | null;
+  created_at?: string | null;
+  created_by_name?: string | null;
+};
+/** Names and numbers for an assignment; never selectors, targets or values. */
+export type AssignmentDescription = {
+  id: string;
+  name: string | null;
+  resource: "configuration" | "policy";
+  priority: number;
+  target_mode: string;
+  status: string;
+  created_at: string | null;
+  version_id: string | null;
+  version_number: number | null;
+  configuration_id: string | null;
+  configuration_name: string | null;
+  policy: Policy | null;
+  policy_id: string | null;
+  policy_name: string | null;
+  created_by_name?: string | null;
+  /** A rollback: the deployment it rolled back. */
+  rollback_of?: string | null;
+};
 export type DeploymentPreviewOutcome = {
   device_id: string;
   resource: "configuration" | "policy";
-  outcome: "requested" | "higher_priority" | "conflict";
+  outcome: "requested" | "higher_priority" | "conflict" | "replace";
   assignment?: Assignment;
+  winner?: AssignmentDescription;
+  replaces?: AssignmentDescription;
+};
+export type PreviewConflict = {
+  device_id: string;
+  assignment_ids: string[];
+  priority: number;
+  resource: "configuration" | "policy";
+  assignments?: AssignmentDescription[];
+};
+export type PreviewReplacement = {
+  assignment: AssignmentDescription;
+  device_ids: string[];
+  retires_assignment?: boolean;
+};
+/** Who a canary rollout releases first, in order, and why. */
+export type CanaryPlan = {
+  size: number;
+  chosen_by_you: boolean;
+  device_ids: string[];
+  devices: {
+    device_id: string;
+    device_name: string | null;
+    chosen: boolean;
+    readiness: "ready" | "no_metrics" | "failing" | "paused" | "away";
+    reason: string;
+  }[];
 };
 export type DeploymentPreview = {
   request_correlation?: boolean;
+  /** Canary rollouts only: null for others, absent on older servers. */
+  canary?: CanaryPlan | null;
+  /** The previewed version's pipeline name; older servers omit it. */
+  configuration_name?: string | null;
   devices: Device[];
-  conflicts: unknown[];
+  conflicts: PreviewConflict[];
   warnings: string[];
   outcomes?: DeploymentPreviewOutcome[];
+  replacements?: PreviewReplacement[];
+  suggested_replaces?: PreviewReplacement[];
+  suggested_priority?: number | null;
+  /** Everything, at any tier, that keeps a reviewed device from the request. */
+  replacements_needed?: PreviewReplacement[];
+  winning_priority?: number | null;
+  paused_device_ids?: string[];
   create_idempotency?: boolean;
   artifact_previews?: {
     device_id: string;
@@ -444,6 +681,10 @@ export type DeploymentPreview = {
       | "VECTOR_VERSION_INCOMPATIBLE";
     reason: string;
   }[];
+  /** A preview that asked for a check on devices, when one device was asked. */
+  validation_id?: string;
+  /** More devices were reviewed than the check addressed. */
+  validation_truncated?: boolean;
 };
 export type Device = {
   retry_preconditions?: boolean;
@@ -468,18 +709,145 @@ export type Device = {
   applied_template_sha256?: string;
   secret_revision?: number;
   uses_local_secrets?: boolean;
+  /** Device secret names bound on the host, from its last check-in. Names only. */
+  secret_names?: string[];
   apply_state: string;
   sync_paused: boolean;
   local_paused?: boolean;
   pause_acknowledged: boolean;
-  telemetry?: {
-    sampled_at: string;
-    events_per_second?: number | null;
-    errors?: number | null;
-  };
+  telemetry?: TelemetrySample | null;
+  host_runtime?: HostRuntime;
+  vector_log_summary?: VectorLogSummary;
   assignment?: Assignment;
   policy_assignment?: Assignment;
   created_at: string;
+  /** Current check-in interval; the longer one until a change is acknowledged. */
+  check_in_seconds?: number;
+  desired_version?: VersionLabel | null;
+  /** Last verified managed version; null means the adopted local config. */
+  running_version?: (VersionLabel & { generation?: number }) | null;
+  /** Data-plane health measured on the running version (newer servers). */
+  data_plane?: DataPlaneSummary | null;
+  /**
+   * What keeps the agent running: a service manager, or none (after setup's
+   * single check-in, nothing until the operator runs it). Newer agents.
+   */
+  service_manager?: "systemd" | "launchd" | "windows" | "none";
+  /** Whether Vector runs, from the latest check-in; absent when unknown. */
+  vector_running?: boolean;
+  /**
+   * Its newest version failed, but it verifiably keeps running an earlier one
+   * and delivers on it. Present only then; `status` stays what the agent
+   * reported.
+   */
+  held_on_previous_version?: boolean;
+  /** `GET /devices/{id}?include=groups` only: its groups by name, at most 100. */
+  groups?: DeviceGroups;
+  /** `GET /devices/{id}` from servers offering wake-ups. */
+  wake?: WakeProjection;
+  /** SHA-256 of the running agent build, from the latest check-in. */
+  agent_sha256?: string;
+  /** The agent's state directory on the host, from the latest check-in. */
+  state_dir?: string;
+  /**
+   * What the agent last reported about updates, while updates are on and it
+   * sent a report. Absent means "Not reported", never "off".
+   */
+  agent_update?: DeviceAgentUpdate | null;
+};
+/**
+ * Whether the device's agent holds a wait right now, so a change reaches it
+ * within seconds. What the server knows at that instant; never delivery.
+ */
+export type WakeProjection = { listening: boolean };
+export type VersionLabel = {
+  id: string;
+  number: number | null;
+  configuration_id: string | null;
+  configuration_name: string | null;
+};
+/** One generation a device was offered (`GET /devices/{id}/configuration`). */
+export type OfferedGeneration = {
+  generation: number;
+  version: VersionLabel;
+  sha256: string;
+  /** Null for a generation assigned before artifacts were stored per generation. */
+  offered_at: string | null;
+};
+export type ConfigurationVariable = {
+  name: string;
+  /** RFC 6901 pointer to the declared field. */
+  path: string;
+  type: "string" | "integer" | "boolean";
+  /** What the offered bytes hold there; null when it is never shown. */
+  value: string | number | boolean | null;
+  /** `group` is reserved and not sent yet; null when nothing explains the value. */
+  source: "device" | "group" | "default" | null;
+};
+/** What the agent reports about its managed file, beside the offered artifact. */
+export type RunningConfiguration = {
+  sha256: string | null;
+  template_sha256: string | null;
+  /** Null: nothing to compare (no digest, nothing offered, or revoked). */
+  matches: boolean | null;
+  /** Another generation the report is, never a claim about a local file. */
+  matches_generation: number | null;
+  reported_at: string | null;
+};
+/** What a device was offered, exactly as stored, with the agent's report. */
+export type DeviceConfiguration = {
+  device_id: string;
+  generation: number;
+  current: boolean;
+  offered_at: string | null;
+  version: VersionLabel | null;
+  sha256: string | null;
+  size: number | null;
+  format: "json" | "yaml" | null;
+  content: string | null;
+  uses_local_secrets: boolean;
+  variables: ConfigurationVariable[];
+  running: RunningConfiguration;
+  previous: {
+    generation: number;
+    version: VersionLabel;
+    sha256: string;
+  } | null;
+  generations: { total: number; items: OfferedGeneration[] };
+};
+export type ConfigurationDiffLine = {
+  kind: "context" | "removed" | "added";
+  old_line: number | null;
+  new_line: number | null;
+  text: string;
+};
+export type ConfigurationDiffHunk = {
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  /** Dotted keys around the first changed line; null at the top level. */
+  section: string | null;
+  lines: ConfigurationDiffLine[];
+};
+export type ConfigurationDiffSide = {
+  generation: number;
+  version: VersionLabel;
+  sha256: string;
+  size: number;
+  offered_at: string | null;
+};
+export type DeviceConfigurationDiff = {
+  device_id: string;
+  from: ConfigurationDiffSide | null;
+  to: ConfigurationDiffSide;
+  identical: boolean;
+  counts: { added: number; removed: number; changed: number };
+  hunks: ConfigurationDiffHunk[];
+  unified: string;
+  truncated: boolean;
+  total_lines: number;
+  approximate: boolean;
 };
 export type Group = {
   id: string;
@@ -488,6 +856,8 @@ export type Group = {
   device_ids: string[];
   revision?: number;
   request_id?: string;
+  /** Group lists from newer servers. */
+  member_count?: number;
 };
 export const GroupSchema = z
   .object({
@@ -670,6 +1040,8 @@ export type Deployment = {
     batch_size: number;
     observation_seconds: number;
     failure_threshold: number;
+    /** The devices the request chose to release first, when it chose any. */
+    canary_device_ids?: string[];
   };
 };
 const deploymentUUID = z.string().uuid();
@@ -733,6 +1105,7 @@ export const DeploymentReceiptSchema = z
       batch_size: z.number().int().min(1).max(10000),
       observation_seconds: z.number().int().min(0).max(86400),
       failure_threshold: z.number().int().min(0).max(10000),
+      canary_device_ids: z.array(deploymentUUID).max(100).optional(),
     }),
     rollback_review: z.boolean().optional(),
     rollback_idempotency: z.boolean().optional(),
@@ -791,7 +1164,42 @@ export type DeploymentSummary = Omit<
   target_count: number;
   verified_count: number;
   state_counts: Record<string, number>;
+  /** Applied but not delivering (newer servers); state_counts keeps them as applied. */
+  degraded?: number;
   canary_gate?: unknown;
+  created_by_name?: string | null;
+  policy_id?: string | null;
+  policy_name?: string | null;
+  rollback_available?: boolean;
+  completed_at?: string | null;
+  failed_at?: string | null;
+  failure_reason?: string | null;
+  cancelled_at?: string | null;
+  removed_at?: string | null;
+  status_before_removal?: string | null;
+  status_before_rollback?: string | null;
+  rolled_back_at?: string | null;
+  rolled_back_by?: string | null;
+  rolled_back_to_version?: number | null;
+  /** The pipeline the rollback restored; often not this deployment's own. */
+  rolled_back_to_configuration_name?: string | null;
+  rollback_of?: string | null;
+  rollback_of_version?: number | null;
+  rollback_of_configuration_name?: string | null;
+  replaced_by?: {
+    deployment_id: string;
+    device_count: number;
+    at: string;
+    version_number: number | null;
+    configuration_name?: string | null;
+  }[];
+  replaces?: {
+    deployment_id: string;
+    version_number: number | null;
+    configuration_name?: string | null;
+    /** The replaced assignment is itself a rollback, running what it restored. */
+    rollback?: boolean;
+  }[];
 };
 export type DeploymentPage = {
   request_history?: boolean;
@@ -848,6 +1256,196 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   device_name: string | null;
   error: string | null;
   original: boolean;
+  released_at?: string | null;
+  verified_at?: string | null;
+  last_seen?: string | null;
+  replaced_by?: string | null;
+  diagnostic?: string | null;
+  /** The agent's reported failure stage ("validation", "rollback", …). */
+  failure_stage?: string | null;
+  check_in_seconds?: number | null;
+  timeline?: { state: string; at: string }[];
+  /** Target pages from servers offering wake-ups (see WakeProjection). */
+  wake?: WakeProjection | null;
+  /** Verified, but an open data-plane issue says it isn't delivering. */
+  delivery?: {
+    code: string;
+    title: string;
+    message?: string | null;
+    hint?: string | null;
+  } | null;
+};
+export type RolloutLane = {
+  kind: "canary" | "batch" | "all" | "added" | "not_released";
+  index: number;
+  state: "verified" | "in_progress" | "failed" | "queued" | "stopped";
+  released_at: string | null;
+  verified_at: string | null;
+  /** Someone released this stage before the one ahead of it finished. */
+  released_early?: { by_name: string | null; at: string } | null;
+  size: number;
+  counts: Record<string, number>;
+  devices: { device_id: string; device_name: string | null; state: string }[];
+  more: number;
+};
+/** What a canary device delivers: events per second, errors per minute, buffer fill. */
+export type CanaryWatchReading = {
+  events_in_per_second: number | null;
+  events_out_per_second: number | null;
+  errors_per_minute: number | null;
+  buffer_utilization: number | null;
+};
+export type CanaryWatchDevice = {
+  device_id: string;
+  device_name: string | null;
+  released_at: string;
+  /** Why the gate is not counting this device as verified; null when it is. */
+  gate_reason: string | null;
+  /** Its latest sample; null when it reports no fresh telemetry. */
+  now: (CanaryWatchReading & { sampled_at: string }) | null;
+  /** Averages over the minutes before its release; null when there are none. */
+  baseline: (CanaryWatchReading & { minutes: number }) | null;
+  /** Delivery checks so far against the number the gate needs. */
+  samples: { measured: number; needed: number } | null;
+};
+export type CanaryWatch = {
+  window_seconds: number;
+  evaluated_at: string;
+  devices: CanaryWatchDevice[];
+  /** Canary devices beyond the ones listed. */
+  more: number;
+};
+export type RolloutFailure = {
+  state: string;
+  message: string | null;
+  diagnostic: string | null;
+  /** Degraded groups: what to do about the delivery problem. */
+  fix?: string | null;
+  /** The leading finding's code (ADDRESS_IN_USE, VRL_E100, DATA_PLANE_…). */
+  code?: string | null;
+  /** The component and field it names, when it names them. */
+  component_id?: string | null;
+  field?: string | null;
+  /** Degraded groups: that component's buffer fill (0–1), when reported. */
+  buffer_utilization?: number | null;
+  count: number;
+  /** Every device in the group (bounded); `devices` names the first few. */
+  device_ids?: string[];
+  devices: { device_id: string; device_name: string | null }[];
+};
+export type RolloutLanes = {
+  deployment_id: string;
+  status: string;
+  evaluated_at: string;
+  stages: RolloutLane[];
+  failures: RolloutFailure[];
+  removed_count: number;
+  check_in_seconds: number | null;
+  next_admission_at: string | null;
+  /** Canary rollouts with a released canary; absent on older servers. */
+  canary_watch?: CanaryWatch | null;
+};
+export type SavedPolicyListItem = SavedPolicy & {
+  revision?: number;
+  updated_at?: string;
+  applied_device_count?: number;
+  /** Given this template before its latest edit; still on the earlier values. */
+  outdated_device_count?: number;
+  applied_devices?: { id: string; name: string }[];
+};
+export type GroupMembershipState = {
+  assignment_id: string | null;
+  assignment_name: string | null;
+  version_id: string | null;
+  configuration_name: string | null;
+  version_number: number | null;
+  generation: number;
+  policy: Policy | null;
+} | null;
+export type GroupMembershipPreview = {
+  group_id: string;
+  revision: number;
+  stale: boolean;
+  ready: boolean;
+  blockers: {
+    code: string;
+    reason: string;
+    /** A conflict blocker: the devices and assignments it names (unchecked). */
+    details?: unknown;
+    details_total?: number;
+  }[];
+  devices: {
+    device_id: string;
+    device_name: string | null;
+    change: "added" | "removed";
+    configuration: {
+      changed: boolean;
+      before: GroupMembershipState;
+      after: GroupMembershipState;
+      pending: AssignmentDescription | null;
+    };
+    policy: {
+      changed: boolean;
+      before: GroupMembershipState;
+      after: GroupMembershipState;
+      pending: AssignmentDescription | null;
+    };
+  }[];
+};
+const membershipState = z
+  .object({ assignment_id: z.string().nullable() })
+  .passthrough()
+  .nullable();
+const membershipPart = z
+  .object({
+    changed: z.boolean(),
+    before: membershipState,
+    after: membershipState,
+    pending: z.object({ id: z.string() }).passthrough().nullable(),
+  })
+  .passthrough();
+const GroupMembershipPreviewSchema = z
+  .object({
+    group_id: z.string(),
+    revision: z.number().int().nonnegative(),
+    stale: z.boolean(),
+    ready: z.boolean(),
+    blockers: z.array(
+      z.object({
+        code: z.string(),
+        reason: z.string(),
+        details: z.unknown().optional(),
+        details_total: z.number().int().nonnegative().optional(),
+      }),
+    ),
+    devices: z
+      .array(
+        z
+          .object({
+            device_id: z.string(),
+            device_name: z.string().nullable(),
+            change: z.enum(["added", "removed"]),
+            configuration: membershipPart,
+            policy: membershipPart,
+          })
+          .passthrough(),
+      )
+      .max(10000),
+  })
+  .passthrough() as unknown as z.ZodType<GroupMembershipPreview>;
+/** Values each device already uses for a new version of the same pipeline. */
+export type BindingSuggestions = {
+  devices: Record<string, Record<string, string | number | boolean>>;
+  sources: Record<
+    string,
+    {
+      deployment_id: string;
+      version_number: number | null;
+      /** The pipeline it came from, which may be the one this was duplicated from. */
+      configuration_id?: string;
+      configuration_name?: string | null;
+    }
+  >;
 };
 export type DeploymentTargetPage = {
   items: DeploymentTarget[];
@@ -867,6 +1465,7 @@ export type Audit = {
   target_kind?: string;
   target_exists?: boolean;
   device_id?: string | null;
+  device_name?: string | null;
   issue_revision?: number;
   reason?: string;
   outcome: string;
@@ -892,15 +1491,23 @@ export const AuditSummarySchema = z.object({
     "issue",
     "signing_key",
     "server",
+    "agent_release_key",
+    "agent_release",
+    "agent_update_rollout",
     "unknown",
   ]),
   target_name: z.string().nullable(),
   device_id: z.string().nullable(),
+  // The current name of device_id; older servers omit it, and it is null
+  // when no device has that ID.
+  device_name: z.string().nullable().optional(),
   outcome: z.string(),
   created_at: z.string().nullable(),
   request_id: z.string().nullable(),
 });
 const auditNumber = z.number().int().nonnegative();
+const soft = <T extends z.ZodType>(schema: T) =>
+  schema.optional().catch(undefined);
 export const AuditDetailsSchema = z.object({
   reason: z.string().optional(),
   previous_group_revision: auditNumber.max(Number.MAX_SAFE_INTEGER).optional(),
@@ -928,6 +1535,44 @@ export const AuditDetailsSchema = z.object({
   deployment_id: z.string().optional(),
   previous_signing_key_id: z.string().optional(),
   signing_key_id: z.string().optional(),
+  // Enrollment attempts, refused ones included (bounded by the server).
+  reason_code: z.string().max(64).optional(),
+  name: z.string().max(100).optional(),
+  token_id: z.string().max(128).optional(),
+  agent_os: z.string().max(64).optional(),
+  agent_arch: z.string().max(64).optional(),
+  agent_version: z.string().max(64).optional(),
+  configuration_mode: z.string().max(16).optional(),
+  client_address: z.string().max(64).optional(),
+  // Notification channel and detection threshold changes, in words. The
+  // server cuts it at 500 characters (code points, not UTF-16 units).
+  summary: z
+    .string()
+    .refine((value) => Array.from(value).length <= 500)
+    .optional(),
+  // Agent updates: versions, digests, counters, fingerprints and codes, never
+  // key material. The event view only displays them, so one that doesn't fit
+  // its shape is left out instead of hiding the event.
+  custody: soft(z.enum(["server", "offline"])),
+  fingerprint: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  from_fingerprint: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  source: soft(z.enum(["server", "upload"])),
+  version: soft(z.string().max(64)),
+  counter: soft(z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)),
+  manifest_sha256: soft(z.string().regex(/^[a-f0-9]{64}$/)),
+  release_id: soft(z.string().max(128)),
+  rollout_id: soft(z.string().max(128)),
+  stage: soft(z.string().max(32)),
+  gate_state: soft(z.string().max(32)),
+  released_count: soft(auditNumber),
+  verified_count: soft(auditNumber),
+  withdrawn_releases: soft(auditNumber),
+  cancelled_rollouts: soft(auditNumber),
+  from_version: soft(z.string().max(128)),
+  to_version: soft(z.string().max(64)),
+  code: soft(z.string().max(64)),
+  state: soft(z.string().max(32)),
+  device_ids: soft(z.array(z.string().max(128)).max(100)),
 });
 export const AuditDetailSchema = AuditSummarySchema.extend({
   details: AuditDetailsSchema,
@@ -965,6 +1610,7 @@ export const AuditExportFiltersSchema = z.object({
     .regex(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i)
     .optional(),
   target_id: auditFilterText(256).optional(),
+  scope: z.enum(["changes", "security"]).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
 });
@@ -991,12 +1637,33 @@ export const IssueSchema = z.object({
   device_revoked: z.boolean().nullable(),
   code: z.string(),
   stage: z.string(),
+  // Rendered by the server from the code and first diagnostic.
+  title: z.string().max(120).optional(),
   message: z.string(),
+  diagnostics: DiagnosticsSchema.default([]),
+  // Distinct failed attempts; `reports` counts every check-in.
   count: z.number().int().nonnegative(),
+  reports: z.number().int().nonnegative().optional(),
   first_seen: z.string().nullable(),
   last_seen: z.string().nullable(),
   desired_version_id: z.string().nullable(),
+  version_number: z.number().int().positive().nullable().optional(),
+  configuration_id: z.string().nullable().optional(),
+  configuration_name: z.string().nullable().optional(),
+  deployment_id: z.string().nullable().optional(),
   resolved: z.boolean(),
+  resolved_reason: z
+    .enum([
+      "verified",
+      "unassigned",
+      "healthy",
+      "superseded",
+      "unmonitored",
+      "revoked",
+    ])
+    .nullable()
+    .optional(),
+  resolved_at: z.string().nullable().optional(),
   revision: z.number().int().positive(),
   acknowledged: z.boolean(),
   acknowledged_at: z.string().nullable(),
@@ -1013,6 +1680,34 @@ export const IssueHistoryPageSchema = z.object({
   page_size: z.number().int().min(1).max(50),
 });
 export type IssueHistoryPage = z.infer<typeof IssueHistoryPageSchema>;
+/** Issues of one version failing with one code, across devices. */
+export const IssueGroupSchema = z.object({
+  key: z.string(),
+  code: z.string(),
+  title: z.string(),
+  message: z.string(),
+  diagnostics: DiagnosticsSchema,
+  version_id: z.string().nullable(),
+  version_number: z.number().int().positive().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+  deployment_ids: z.array(z.string()).max(50),
+  device_count: z.number().int().nonnegative(),
+  issue_count: z.number().int().nonnegative(),
+  attempts: z.number().int().nonnegative(),
+  reports: z.number().int().nonnegative(),
+  first_seen: z.string().nullable(),
+  last_seen: z.string().nullable(),
+  devices: z.array(IssueSchema).max(50),
+});
+export type IssueGroup = z.infer<typeof IssueGroupSchema>;
+export const IssueGroupPageSchema = z.object({
+  items: z.array(IssueGroupSchema).max(50),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(50),
+});
+export type IssueGroupPage = z.infer<typeof IssueGroupPageSchema>;
 export type Token = {
   id: string;
   name: string;
@@ -1020,8 +1715,28 @@ export type Token = {
   uses: number;
   max_uses?: number | null;
   name_prefix?: string | null;
+  /** Set when the token enrolls only this device name (newer servers). */
+  device_name?: string;
   revoked: boolean;
   created_at: string;
+  /** Preapproved device names, each of which can enroll once. */
+  allowed_names?: string[];
+  /** Token list only: preapproved names that already enrolled. */
+  enrolled_names?: string[];
+  /** Labels every device the token enrolls receives. */
+  labels?: Record<string, string>;
+  recovery_device_id?: string;
+  recovery_name?: string;
+  /** Usage added by the token list: who created it and what it enrolled. */
+  created_by?: { id: string; name: string | null } | null;
+  last_used_at?: string | null;
+  device_count?: number;
+  devices?: {
+    id: string;
+    name: string;
+    revoked: boolean;
+    enrolled_at: string | null;
+  }[];
 };
 export type Release = {
   name: string;
@@ -1032,7 +1747,87 @@ export type Release = {
   size: number;
   url: string;
   signed: boolean;
+  /** "bundled" with the server image, or from the operator "mirror". */
+  source?: "bundled" | "mirror";
 };
+const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
+// Values reach copyable shell commands, so every field is checked strictly.
+const ReleaseSchema = z.object({
+  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,149}$/),
+  os: z.enum(["linux", "darwin", "windows"]),
+  arch: z.enum(["amd64", "arm64"]),
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/),
+  sha256: sha256Hex,
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  url: z.string().regex(/^\/api\/v1\/releases\/[A-Za-z0-9._-]+$/),
+  signed: z.boolean(),
+  source: z.enum(["bundled", "mirror"]).optional(),
+});
+const agentOrigin = z
+  .string()
+  .regex(
+    /^https:\/\/(?:[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?|\[[0-9a-f:.]+\])(?::\d{1,5})?$/,
+  );
+export const AgentInstallSchema = z.object({
+  agent_url: agentOrigin.nullable(),
+  agent_url_configured: z.boolean(),
+  listener_enabled: z.boolean(),
+  dashboard_url: z.string().nullable(),
+  certificate: z
+    .object({
+      available: z.boolean(),
+      publicly_trusted: z.boolean(),
+      ca_sha256: sha256Hex.nullable(),
+      ca_fingerprint: z.string().max(95).nullable().optional(),
+      // Public, like the fingerprint. Only base64 lines between the markers,
+      // so a command can carry it in single quotes.
+      ca_pem: z
+        .string()
+        .max(16384)
+        .regex(
+          /^-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]{1,76}\n)+-----END CERTIFICATE-----\n?$/,
+        )
+        .nullable()
+        .optional(),
+      ca_name: z.string().max(200).nullable().optional(),
+      ca_issuer: z.string().max(200).nullable().optional(),
+      ca_not_after: z.string().nullable().optional(),
+      problem: z.string().max(1000).nullable(),
+    })
+    .nullable(),
+  downloads_enabled: z.boolean(),
+  installer: z
+    .object({
+      url: z.string(),
+      sha256: sha256Hex,
+      platforms: z.array(z.string()),
+    })
+    .nullable(),
+  default_install_dir: z.string(),
+  releases: z.array(ReleaseSchema).max(100),
+  catalog_problems: z.array(z.string()).max(200),
+});
+export type AgentInstall = z.infer<typeof AgentInstallSchema>;
+const boundedText = (max: number) => z.string().max(max).nullable();
+export const EnrollmentEventSchema = z.object({
+  id: boundedText(128),
+  created_at: boundedText(64),
+  outcome: z.enum(["success", "failure"]),
+  reason_code: boundedText(64),
+  device_id: boundedText(128),
+  device_name: boundedText(100),
+  token_id: boundedText(128),
+  agent_os: boundedText(64),
+  agent_arch: boundedText(64),
+  agent_version: boundedText(64),
+  configuration_mode: boundedText(16),
+  client_address: boundedText(64),
+});
+export type EnrollmentEvent = z.infer<typeof EnrollmentEventSchema>;
+export const EnrollmentActivitySchema = z.object({
+  events: z.array(EnrollmentEventSchema).max(50),
+  now: z.string(),
+});
 export const ConfigurationAttemptSchema = z
   .object({
     generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
@@ -1061,6 +1856,7 @@ export const ConfigurationAttemptSchema = z
         code: z.string().min(1).max(128),
         stage: z.string().min(1).max(128),
         message: z.string().max(1000),
+        diagnostics: DiagnosticsSchema.optional(),
       })
       .strict()
       .optional(),
@@ -1085,6 +1881,7 @@ export const DeviceSchema = z
         priority: z.number().int(),
         reason: z.string(),
       })
+      .passthrough()
       .optional(),
     policy_assignment: z
       .object({
@@ -1092,17 +1889,247 @@ export const DeviceSchema = z
         priority: z.number().int(),
         reason: z.string(),
       })
+      .passthrough()
       .optional(),
     name: z.string(),
     status: z.string(),
     apply_state: z.string(),
     reported_apply_state: z.string().optional(),
     configuration_attempt: ConfigurationAttemptSchema.optional(),
+    host_runtime: HostRuntimeSchema.optional(),
+    vector_log_summary: VectorLogSummarySchema.optional(),
     desired_generation: z.number(),
     reported_generation: z.number(),
-    desired_sha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+    desired_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .optional(),
+    agent_update: DeviceAgentUpdateSchema.nullish(),
   })
   .passthrough();
+const artifactDigest = z.string().regex(/^[a-f0-9]{64}$/);
+const generationNumber = z
+  .number()
+  .int()
+  .positive()
+  .max(Number.MAX_SAFE_INTEGER);
+const OfferedVersionSchema = z.object({
+  id: z.string(),
+  number: z.number().int().positive().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+});
+const OfferedGenerationSchema = z
+  .object({
+    generation: generationNumber,
+    version: OfferedVersionSchema,
+    sha256: artifactDigest,
+    offered_at: z.string().nullable(),
+  })
+  .passthrough();
+/** What a device was offered and what its agent reports running. */
+export const DeviceConfigurationSchema = z
+  .object({
+    device_id: z.string(),
+    generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    current: z.boolean(),
+    offered_at: z.string().nullable(),
+    version: OfferedVersionSchema.nullable(),
+    sha256: artifactDigest.nullable(),
+    size: z.number().int().positive().max(1_048_576).nullable(),
+    format: z.enum(["json", "yaml"]).nullable(),
+    content: z.string().max(1_048_576).nullable(),
+    uses_local_secrets: z.boolean(),
+    variables: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            path: z.string(),
+            type: z.enum(["string", "integer", "boolean"]),
+            value: z.union([z.string(), z.number(), z.boolean()]).nullable(),
+            source: z.enum(["device", "group", "default"]).nullable(),
+          })
+          .passthrough(),
+      )
+      .max(64),
+    running: z
+      .object({
+        sha256: artifactDigest.nullable(),
+        template_sha256: artifactDigest.nullable(),
+        matches: z.boolean().nullable(),
+        matches_generation: generationNumber.nullable(),
+        reported_at: z.string().nullable(),
+      })
+      .passthrough(),
+    previous: z
+      .object({
+        generation: generationNumber,
+        version: OfferedVersionSchema,
+        sha256: artifactDigest,
+      })
+      .passthrough()
+      .nullable(),
+    generations: z
+      .object({
+        total: z.number().int().nonnegative(),
+        items: z.array(OfferedGenerationSchema).max(50),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+const DiffSideSchema = z
+  .object({
+    generation: generationNumber,
+    version: OfferedVersionSchema,
+    sha256: artifactDigest,
+    size: z.number().int().positive().max(1_048_576),
+    offered_at: z.string().nullable(),
+  })
+  .passthrough();
+/** A bounded comparison of two offered generations. */
+export const DeviceConfigurationDiffSchema = z
+  .object({
+    device_id: z.string(),
+    from: DiffSideSchema.nullable(),
+    to: DiffSideSchema,
+    identical: z.boolean(),
+    counts: z.object({
+      added: z.number().int().nonnegative(),
+      removed: z.number().int().nonnegative(),
+      changed: z.number().int().nonnegative(),
+    }),
+    hunks: z
+      .array(
+        z
+          .object({
+            old_start: z.number().int().nonnegative(),
+            old_lines: z.number().int().nonnegative(),
+            new_start: z.number().int().nonnegative(),
+            new_lines: z.number().int().nonnegative(),
+            section: z.string().max(200).nullable(),
+            lines: z
+              .array(
+                z.object({
+                  kind: z.enum(["context", "removed", "added"]),
+                  old_line: z.number().int().positive().nullable(),
+                  new_line: z.number().int().positive().nullable(),
+                  text: z.string(),
+                }),
+              )
+              .max(1997),
+          })
+          .passthrough(),
+      )
+      .max(1000),
+    unified: z.string(),
+    truncated: z.boolean(),
+    total_lines: z.number().int().nonnegative(),
+    approximate: z.boolean(),
+  })
+  .passthrough();
+/**
+ * One device's answer to "Check on devices": its state and, once it answered,
+ * the redacted findings, its test results and the names (never values) of the
+ * device secrets it hasn't bound. Without an answer the arrays are empty.
+ */
+const DeviceValidationDeviceSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    state: z.enum([
+      "pending",
+      "passed",
+      "failed",
+      "offline",
+      "expired",
+      "unsupported",
+    ]),
+    valid: z.boolean().optional(),
+    diagnostics: z.array(DiagnosticSchema).max(20),
+    tests: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(200),
+            passed: z.boolean(),
+            not_run: z.boolean().optional(),
+            message: z.string().max(512).optional(),
+          })
+          .passthrough(),
+      )
+      .max(100),
+    secrets_missing: z.array(z.string().min(1).max(64)).max(64),
+    duration_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+/** `GET /device-validations/{id}`: every addressed device, in name order. */
+export const DeviceValidationSchema = z
+  .object({
+    id: z.string(),
+    state: z.enum(["running", "complete"]),
+    created_at: z.string(),
+    expires_at: z.string(),
+    truncated: z.boolean(),
+    run_tests: z.boolean(),
+    devices: z.array(DeviceValidationDeviceSchema).max(50),
+  })
+  .passthrough();
+export type DeviceValidation = z.infer<typeof DeviceValidationSchema>;
+export type DeviceValidationDevice = DeviceValidation["devices"][number];
+export type DeviceValidationTest = DeviceValidationDevice["tests"][number];
+/** The check a preview started: null when no device could be asked. */
+export type DeviceValidationStart = { id: string | null; truncated: boolean };
+/**
+ * Asks the devices a preview reviews to check the version on their own hosts.
+ * `body` is a deployment preview request plus `device_validation` and
+ * `run_tests`; the preview itself changes nothing. The deadline stops waiting,
+ * it doesn't say whether the check was created.
+ */
+export function requestDeviceValidation(
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<DeviceValidationStart> {
+  return withRequestDeadline(
+    async (deadline) => {
+      const preview = await api<DeploymentPreview>("/deployments/preview", {
+        method: "POST",
+        body: stringifyExactJSON(body),
+        signal: deadline,
+      });
+      const id = preview?.validation_id;
+      if (id === undefined || id === null)
+        return { id: null, truncated: false };
+      if (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))
+        throw new APIError(
+          "CONTRACT_MISMATCH",
+          "The server response does not match this dashboard version.",
+          502,
+        );
+      return { id, truncated: preview.validation_truncated === true };
+    },
+    30000,
+    signal,
+  );
+}
+/** One read of a check; the answers arrive over time. */
+export function readDeviceValidation(id: string, signal?: AbortSignal) {
+  return withRequestDeadline(
+    (deadline) =>
+      api<DeviceValidation>(`/device-validations/${encodeURIComponent(id)}`, {
+        signal: deadline,
+      }),
+    15000,
+    signal,
+  );
+}
 export const ConfigurationSchema = z
   .object({
     id: z.string(),
@@ -1111,11 +2138,15 @@ export const ConfigurationSchema = z
     archived: z.boolean().default(false),
     archived_at: z.string().nullable().optional(),
     config: z.record(z.string(), z.unknown()),
-    variables: z.array(z.object({
-      name: z.string(),
-      path: z.string(),
-      type: z.enum(["string", "integer", "boolean"]),
-    })).optional(),
+    variables: z
+      .array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.enum(["string", "integer", "boolean"]),
+        }),
+      )
+      .optional(),
     graph: z.object({
       nodes: z.array(z.unknown()),
       edges: z.array(z.unknown()),
@@ -1204,7 +2235,6 @@ export const PipelineRequestPageSchema = z
   })
   .strict();
 export type PipelineRequestPage = z.infer<typeof PipelineRequestPageSchema>;
-export const listSchema = (schema: z.ZodType) => z.array(schema);
 export const PipelineSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1224,8 +2254,22 @@ export const PipelineSummarySchema = z.object({
       id: z.string(),
       number: z.number().int().positive(),
       created_at: z.string(),
+      // Additive: absent from servers before the library status fields.
+      author: z.string().nullable().optional(),
+      draft_changed: z.boolean().optional(),
     })
     .nullable(),
+  assigned_devices: z.number().int().nonnegative().optional(),
+  // Additive: devices grouped by the version of this pipeline they last verified.
+  running_versions: z
+    .array(
+      z.object({
+        id: z.string(),
+        number: z.number().int().positive(),
+        devices: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
 });
 export const PipelineLibraryPageSchema = z.object({
   items: z.array(PipelineSummarySchema).max(50),
@@ -1235,34 +2279,193 @@ export const PipelineLibraryPageSchema = z.object({
 });
 export type PipelineSummary = z.infer<typeof PipelineSummarySchema>;
 export type PipelineLibraryPage = z.infer<typeof PipelineLibraryPageSchema>;
-const metricSchema = z.number().min(0).max(1e15).nullable().optional();
-const telemetrySchema = z
-  .object({
-    sampled_at: z.string(),
-    events_per_second: metricSchema,
-    errors: metricSchema,
-    uptime_seconds: metricSchema,
-    memory_bytes: metricSchema,
-    cpu_seconds: metricSchema,
-    discarded_events: metricSchema,
-    buffer_bytes: metricSchema,
-    components: z
-      .array(
-        z.object({
-          id: z.string().max(100),
-          type: z.string().max(100).optional(),
-          events_per_second: metricSchema,
-          errors: metricSchema,
-          discarded_events: metricSchema,
-          buffer_bytes: metricSchema,
-        }),
-      )
-      .max(50)
-      .optional(),
-  })
-  .passthrough();
+
+/* Fleet-scale reads: paged devices, member-free groups, the Overview's fleet numbers. */
+const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const rate = z.number().nonnegative().nullable();
+export const GroupRefSchema = z.object({ id: z.string(), name: z.string() });
+const groupRefs = (limit: number) =>
+  z.object({ total: count, items: z.array(GroupRefSchema).max(limit) });
+export type DeviceGroups = z.infer<ReturnType<typeof groupRefs>>;
+/** The Devices page's status filter values (healthBucket), plus revoked. */
+export const inventoryStatuses = [
+  "applied",
+  "degraded",
+  "held",
+  "updating",
+  "check",
+  "failed",
+  "offline",
+  "paused",
+  "unmanaged",
+  "revoked",
+] as const;
+/** Quick views; `not_on_desired` is the page's "drift". */
+export const inventoryViews = [
+  "failing",
+  "not_on_desired",
+  "offline",
+  "paused",
+  "no_telemetry",
+] as const;
+export const DeviceInventoryCountsSchema = z.object({
+  status: z.object(
+    Object.fromEntries(inventoryStatuses.map((s) => [s, count])) as Record<
+      (typeof inventoryStatuses)[number],
+      typeof count
+    >,
+  ),
+  views: z.object(
+    Object.fromEntries(inventoryViews.map((v) => [v, count])) as Record<
+      (typeof inventoryViews)[number],
+      typeof count
+    >,
+  ),
+});
+export const DeviceInventoryPageSchema = z.object({
+  items: z.array(DeviceSchema).max(100),
+  total: count,
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(100),
+  counts: DeviceInventoryCountsSchema,
+  device_groups: z.record(z.string(), groupRefs(10)),
+});
+export const DeviceInventoryIdsSchema = z.object({
+  ids: z.array(z.string()).max(10000),
+  total: count,
+  truncated: z.boolean(),
+});
+export type DeviceInventoryCounts = z.infer<typeof DeviceInventoryCountsSchema>;
+export type DeviceInventoryPage = z.infer<typeof DeviceInventoryPageSchema>;
+export type DeviceInventoryIds = z.infer<typeof DeviceInventoryIdsSchema>;
+/** `GET /groups?slim=1` rows: the group without device_ids. */
+export const GroupSummarySchema = GroupSchema.omit({ device_ids: true }).extend(
+  { member_count: count },
+);
+export const GroupMemberPageSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string().nullable(),
+        status: z.string(),
+      }),
+    )
+    .max(100),
+  total: count,
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(100),
+});
+export type GroupSummary = z.infer<typeof GroupSummarySchema>;
+export type GroupMemberPage = z.infer<typeof GroupMemberPageSchema>;
+export const OverviewCountsSchema = z.object({
+  total: count,
+  health: z.object(
+    Object.fromEntries(
+      inventoryStatuses.filter((s) => s !== "revoked").map((s) => [s, count]),
+    ) as Record<
+      Exclude<(typeof inventoryStatuses)[number], "revoked">,
+      typeof count
+    >,
+  ),
+  connection: z.object({ online: count, offline: count, never: count }),
+  checked_in: count,
+  waiting_device: z.object({ id: z.string(), name: z.string() }).nullable(),
+  telemetry: z.object({
+    eligible: count,
+    reporting: count,
+    stale: count,
+    disabled: count,
+    events_in_per_second: rate,
+    events_in_devices: count,
+    events_out_per_second: rate,
+    events_out_devices: count,
+    errors: rate,
+    errors_per_minute: rate,
+    newest_sample_at: z.string().nullable(),
+  }),
+});
+export const OverviewAttentionDeviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  cause: z.enum([
+    "degraded",
+    "failed",
+    "rolled_back",
+    "check_required",
+    "held",
+    "offline",
+  ]),
+  status: z.string(),
+  reason: z.string().nullable(),
+  title: z.string().nullable(),
+  fix: z.string().nullable(),
+  code: z.string().nullable(),
+  component_id: z.string().nullable(),
+  since: z.string().nullable(),
+  version_id: z.string().nullable(),
+  version_number: z.number().int().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+});
+export const OverviewBusyDeviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  events_in_per_second: z.number().nonnegative(),
+  events_out_per_second: rate,
+});
+export const OverviewRunningSchema = z.object({
+  configuration_id: z.string(),
+  configuration_name: z.string().nullable(),
+  version_id: z.string(),
+  version: z.number().int().nullable(),
+  device_count: count,
+  devices_reporting: count,
+  groups: z
+    .array(z.object({ id: z.string(), name: z.string(), device_count: count }))
+    .max(3),
+  more_groups: count,
+  events_in_per_second: rate,
+  events_out_per_second: rate,
+  state: z.enum(["running", "canary", "not_delivering"]),
+  not_delivering: count,
+  canary: z
+    .object({
+      deployment_id: z.string(),
+      phase: z.enum(["observing", "measuring", "waiting"]),
+      device_count: count,
+      device_names: z.array(z.string()).max(5),
+    })
+    .nullable(),
+});
+/** What `GET /overview` adds for a fleet; `slim=1` also leaves `devices` out. */
+export const OverviewFleetSchema = z.object({
+  counts: OverviewCountsSchema,
+  attention_devices: z.array(OverviewAttentionDeviceSchema).max(20),
+  attention_devices_total: count,
+  busiest: z.array(OverviewBusyDeviceSchema).max(5),
+  running: z.array(OverviewRunningSchema).max(20),
+  running_total: count,
+});
+export type OverviewCounts = z.infer<typeof OverviewCountsSchema>;
+export type OverviewAttentionDevice = z.infer<
+  typeof OverviewAttentionDeviceSchema
+>;
+export type OverviewBusyDevice = z.infer<typeof OverviewBusyDeviceSchema>;
+export type OverviewRunning = z.infer<typeof OverviewRunningSchema>;
+export type OverviewFleet = z.infer<typeof OverviewFleetSchema>;
+
 function responseSchema(path: string, method: string): z.ZodType | undefined {
+  const slim = /(?:^|&)slim=(?:1|true)(?:&|$)/.test(path.split("?")[1] || "");
   path = path.split("?")[0];
+  const update = agentUpdateResponseSchema(path, method);
+  if (update) return update;
+  if (method === "GET") {
+    if (path === "/devices/inventory") return DeviceInventoryPageSchema;
+    if (path === "/devices/inventory/ids") return DeviceInventoryIdsSchema;
+    if (/^\/groups\/[^/]+\/members$/.test(path)) return GroupMemberPageSchema;
+    if (path === "/groups" && slim) return z.array(GroupSummarySchema);
+  }
   if (path === "/policies/requests" && method === "GET")
     return PolicyRequestPageSchema;
   if (/^\/policies\/requests\/[^/]+$/.test(path) && method === "GET")
@@ -1286,6 +2489,8 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return GroupRequestLookupSchema;
   if (path === "/groups")
     return method === "POST" ? GroupSchema : z.array(GroupSchema);
+  if (path === "/groups/membership-preview" && method === "POST")
+    return GroupMembershipPreviewSchema;
   if (/^\/groups\/[^/]+$/.test(path)) return GroupSchema;
   if (path === "/login") return LoginSchema;
   if (path === "/mfa" && method === "GET") return MfaStatusSchema;
@@ -1302,6 +2507,7 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return AuditDetailSchema;
   if (/^\/issues\/[^/]+\/(acknowledge|reopen)$/.test(path)) return IssueSchema;
   if (path === "/issues/history") return IssueHistoryPageSchema;
+  if (path === "/issues/groups") return IssueGroupPageSchema;
   if (path === "/issues") return z.array(IssueSchema);
   if (/^\/issues\/[^/]+$/.test(path)) return IssueSchema;
   if (
@@ -1337,15 +2543,32 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return AssignmentRemovalPreviewSchema;
   if (method === "POST" && /^\/deployments\/[^/]+\/refresh-preview$/.test(path))
     return ScheduledAssignmentRefreshPreviewSchema;
+  if (path === "/notifications/channels")
+    return method === "POST" ? ChannelSchema : ChannelListSchema;
+  if (/^\/notifications\/channels\/[^/]+\/test$/.test(path))
+    return TestResultSchema;
+  if (/^\/notifications\/channels\/[^/]+$/.test(path))
+    return method === "DELETE"
+      ? z.object({ ok: z.literal(true) })
+      : ChannelSchema;
+  if (path === "/notifications/preview") return PreviewSchema;
+  if (path === "/notifications/deliveries") return AttemptPageSchema;
+  if (path === "/detection") return DetectionSchema;
   if (method !== "GET") return undefined;
   if (/^\/deployments\/requests\/[^/]+$/.test(path))
     return DeploymentRequestLookupSchema;
   if (path === "/devices") return z.array(DeviceSchema);
-  if (/^\/devices\/[^/]+\/telemetry$/.test(path))
-    return z.object({
-      device_id: z.string(),
-      samples: z.array(telemetrySchema).max(120),
-    });
+  if (/^\/devices\/[^/]+\/telemetry$/.test(path)) return TelemetryHistorySchema;
+  if (/^\/devices\/[^/]+\/configuration$/.test(path))
+    return DeviceConfigurationSchema;
+  if (/^\/devices\/[^/]+\/configuration\/diff$/.test(path))
+    return DeviceConfigurationDiffSchema;
+  if (/^\/device-validations\/[^/]+$/.test(path)) return DeviceValidationSchema;
+  if (path === "/telemetry/summary") return TelemetrySummarySchema;
+  if (/^\/versions\/[^/]+\/telemetry$/.test(path))
+    return VersionTelemetrySchema;
+  if (/^\/configurations\/[^/]+\/telemetry$/.test(path))
+    return ConfigurationTelemetrySchema;
   if (/^\/devices\/[^/]+$/.test(path)) return DeviceSchema;
   if (path === "/configurations") return z.array(ConfigurationSchema);
   if (path === "/configurations/library") return PipelineLibraryPageSchema;
@@ -1378,7 +2601,9 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
       })
       .passthrough();
   if (/^\/configurations\/[^/]+$/.test(path)) return ConfigurationSchema;
-  if (path === "/users") return z.array(UserSchema);
+  if (path === "/users") return z.array(PersonSchema);
+  if (path === "/account/sessions" && method === "GET")
+    return z.object({ sessions: z.array(SessionSummarySchema) });
   const record = z.object({ id: z.string() }).passthrough();
   if (
     ["/deployments", "/policies", "/tokens", "/issues", "/audit"].includes(path)
@@ -1421,22 +2646,20 @@ export function when(value?: string | null) {
         minute: "2-digit",
       });
 }
-export function ago(value?: string | null) {
-  if (!value) return "Never connected";
-  const diff = Math.max(0, Date.now() - new Date(value).getTime());
-  return diff < 60000
-    ? "Just now"
-    : diff < 3600000
-      ? `${Math.floor(diff / 60000)}m ago`
-      : diff < 86400000
-        ? `${Math.floor(diff / 3600000)}h ago`
-        : `${Math.floor(diff / 86400000)}d ago`;
-}
+/**
+ * Save `content` as a file. The link is attached while it is clicked and the
+ * blob URL outlives the click: some browsers cancel a download whose URL is
+ * revoked, or whose link is detached, before the save starts. This starts a
+ * save; it cannot know whether the file was kept.
+ */
 export function download(name: string, content: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
+  a.hidden = true;
+  document.body.append(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }

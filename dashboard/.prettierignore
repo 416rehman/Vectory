@@ -1,0 +1,3 @@
+# Written byte for byte by the repository's scripts/generate-vector-catalog.mjs
+# and scripts/generate-vrl-functions.mjs, whose drift checks compare them exactly.
+src/generated/

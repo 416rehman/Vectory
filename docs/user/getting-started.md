@@ -1,59 +1,93 @@
-# Get started
+# What is Vectory?
 
-Vectory manages Vector configurations across your devices. Build a pipeline, publish an immutable version, then choose the devices that should run it. Your logs and metrics flow through Vector; Vectory receives configuration status and the operational metrics you enable.
+Vectory is a self-hosted control plane for [Vector](https://vector.dev/). Build a pipeline in your browser, publish it as an immutable version, and roll it out to the hosts you choose. A small agent on each host applies the change and reports what Vector is actually running.
 
-## Open your workspace
+## How it works
 
-Use your instance's dashboard address and sign in with your email and password. If two-factor authentication is enabled, enter an authenticator code or an unused recovery code when asked. A new instance instead asks for its provisioned setup secret and the first administrator's details.
+<!-- diagram: architecture -->
+```mermaid
+flowchart LR
+  B["Your browser"] -->|"HTTPS 443"| P["TLS proxy"]
+  subgraph S["Vectory server"]
+    P --> V["vectory-server<br/>dashboard · API · help<br/>agent listener :8443<br/>SQLite"]
+    V -->|"internal network only"| W["Validator<br/>sandboxed Vector 0.58"]
+  end
+  subgraph H["Each device"]
+    A["vectory agent<br/>outbound HTTPS 8443<br/>mutual TLS"] -->|"starts · verifies · rolls back"| X["Vector 0.58"]
+  end
+  A --> V
+  X -->|"your events"| D[("Your destinations")]
+```
 
-If loading stalls, use **Retry connection**. Each connection or sign-in attempt stops waiting after 30 seconds. A lost sign-in response does not mean the sign-in failed: use **Check sign-in status** to check this browser's current session without sending your password or verification code again. During first-time setup, use **Check setup status** before trying another setup. See [Recover an interrupted sign-in](#/docs/troubleshooting#loading-or-sign-in-does-not-finish) for the available next steps. Documentation remains available while the dashboard connects.
+1. **Build** a pipeline in the dashboard. A sandboxed copy of Vector checks it before you can publish.
+2. **Publish** an immutable version, then **deploy** it to devices or groups: all at once, on a schedule, or as a canary.
+3. The **agent** on each device downloads its signed configuration, validates it with Vector, starts it and confirms Vector is running it. If the new version fails, the agent restores the last working one.
 
-If a page fails to open after sign-in, its recovery view keeps navigation available and offers **Reload page**. A stalled page download stops waiting after 30 seconds. See [Recover a page that cannot load](#/docs/troubleshooting#a-page-is-blank-or-cannot-load) for next steps and the limits of recovering unsaved work.
+Your events flow from Vector straight to your destinations. They never pass through Vectory.
 
-## Your first deployment
+## Key terms in two minutes
 
-1. Open [**Devices → Add device**](/#/enrollment). Download the agent for the device's operating system and architecture. Vector 0.58.0 must already be installed.
-2. Follow the [installation guide](#/docs/installation) to adopt one Vector process, choose restricted or full configuration mode, and enroll the device. Enrollment does not assign a pipeline.
-3. Open [**Pipelines**](/#/configurations) and create a pipeline or import an existing Vector configuration. Add a source, any transforms you need, and a sink. Connect them in the graph.
-4. Configure each component. Run validation, fix reported errors, and save the draft. Use [pipeline tests](#/docs/resources) when you need to verify event transformation behavior.
-5. Publish a version. Open its deployment action, select a device or group, and preview the exact target list before confirming.
-6. Open [**Activity → Deployments**](/#/deployments) to watch progress. On the device page, wait for **Applied**: a downloaded or written file alone does not mean Vector is running it.
+| Term | What it means |
+| --- | --- |
+| **Pipeline** | A Vector configuration: sources, transforms and sinks connected in a graph. |
+| **Draft** | The editable copy of a pipeline. Saving changes only the draft. |
+| **Version** | An immutable snapshot of a draft. Devices only ever run published versions. |
+| **Deployment** | One version assigned to a set of devices, with a rollout plan. |
+| **Device** | A host that runs Vector and the Vectory agent. |
+| **Agent** | The `vectory` program on a device. It manages one Vector process and one configuration file. |
+| **Group** | A named set of devices that you can target together. |
+| **Agent settings** | Check-in interval, configuration sync and metrics collection for a set of devices. |
+| **Restricted or full mode** | A choice made on each device. Restricted allows a reviewed set of components and locally approved resources. Full allows everything the device's Vector can do. |
+| **Applied** | The agent saw Vector start with the new configuration and keep running. A download alone is not applied. |
+
+The [Glossary](glossary.md) has the rest.
 
 ## Know which action you are taking
 
-**Save** updates the editable draft. **Publish** freezes that draft as a version. **Deploy** creates an assignment for selected devices. Editing a draft after publication does not change a running deployment.
+**Save** updates the draft. **Publish** freezes the draft as a version. **Deploy** sends a version to devices.
 
-You can [roll back](#/docs/deployments) to an earlier published version. A rollback creates a new desired generation so devices can accept it without weakening their protection against stale messages.
+Editing a draft never changes what devices run. To go back, deploy an earlier version: see [Roll back deliberately](deployments.md#roll-back-deliberately).
 
 ## Navigate your workspace
 
-Hover over the sidebar to reveal the arrow on its right edge. Click it to collapse the sidebar or expand its labels; Vectory remembers your choice in this browser. The arrow also appears when reached with the keyboard. On a phone, open navigation from the menu button. The instance name is available in [**Settings**](/#/settings).
+The sidebar has four destinations:
 
-Select your name or avatar at the bottom of navigation to open the account menu. It contains [**Settings**](/#/settings), Vectory documentation and **Sign out**. Open Settings, then the [**People & security**](/#/users) tab to manage account security and workspace access. Choose **Light**, **Dark** or **Auto** for appearance; Auto follows your system's current theme. Escape dismisses the menu without leaving the page.
+| Destination | What you do there |
+| --- | --- |
+| [**Overview**](/#/overview) | See fleet health, what runs where, what needs attention and recent activity. |
+| [**Pipelines**](/#/configurations) | Build, check and publish pipelines. |
+| [**Devices**](/#/devices) | Find and select devices, add them, organize groups and apply agent settings. |
+| [**Activity**](/#/deployments) | Follow deployments and schedules, review issues and read the audit log. |
 
-Use **Find a page**, or press **Ctrl K** (**⌘ K** on Mac), to jump to a workspace page. Search by its name or a related task, such as “install”, “deployments” or “MFA”. Use the up/down arrows to choose a result and Enter to open it; Escape closes search and returns focus. The current page is marked, and Help center opens in a separate tab. Navigation still protects unfinished pipeline edits.
+Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device, group or pipeline from anywhere. It searches devices on the server, so it finds one in a fleet of any size. Add a verb to a name to act on it: **pause**, **cancel** or **roll back** a rollout, **deploy** or **duplicate** a pipeline, or **show issues** for a device. Each opens the same review or dialog as the page, so nothing changes until you confirm there, and you only see the verbs your role allows. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), **Single-key shortcuts**, **Keyboard shortcuts**, **Help center** (this site) and **Sign out**.
 
-In [**Overview**](/#/overview), a resource name under **Recent activity** opens that pipeline, device or deployment. A person's name opens their activity history. Select the event title to read its audit entry.
+When you aren't typing in a field, single keys act on the page: **R** refreshes its data, **/** goes to its search box (or opens the command palette on a page without one), **?** lists every shortcut, **[** collapses the sidebar, and **G** then a letter goes to a page (**G** then **D** opens Devices). If you use speech input or type with a switch, turn off **Single-key shortcuts** in your account menu so a stray word doesn't refresh or leave the page. This browser remembers the choice. **Ctrl K** and **Ctrl S** (**⌘ K**, **⌘ S**) keep working.
 
-## Sign out of your workspace
+Help links open beside your work in a new tab, so an unsaved pipeline stays exactly as you left it.
 
-Open your account menu and choose **Sign out**. Before sending the request, **Cancel** or Escape returns to the workspace without signing out. Vectory also asks before leaving unsaved pipeline changes.
+## Ports and network flows
 
-Once the request starts, you can use **Stop waiting**, close the dialog or press Escape. This ends the local wait, not the server operation. A response wait ends after 30 seconds. If sign-out is not confirmed, choose **Check sign-out status** in the dialog or reopen it from your account menu. Checking reads the current session without sending another sign-out.
+| Port | Direction | Purpose |
+| --- | --- | --- |
+| 443 | Browsers → server | Dashboard, API and this Help center, through the TLS proxy |
+| 8443 | Devices → server | Agent enrollment and check-ins (TLS 1.3; mutual TLS after enrollment) |
+| 8080, 8081 | Inside the server host only | Vectory's internal HTTP port and the validator. Never expose them. |
 
-If the original session is still active, **Retry sign out** is a separate choice. If no active session is found, **Go to sign in** checks for unsaved changes before leaving. If the sign-in changed, **Reload workspace** checks for unsaved changes and reads the current account afresh. See [Recover an interrupted sign-out](#/docs/troubleshooting#sign-out-is-not-confirmed) for details.
+Devices only connect out. Nothing on a device listens for Vectory. [Ports and network](ports.md) has the full list, including firewall rules.
 
 ## Choose the right access
 
-- **Viewer:** inspect devices, pipelines, deployments and activity.
-- **Editor:** create, edit and validate configuration drafts.
-- **Operator:** publish and deploy versions, deploy agent settings, and manage operational actions.
-- **Administrator:** manage enrollment, device access, users and instance settings as well as operational work.
+| Role | Can do |
+| --- | --- |
+| **Viewer** | View devices, pipelines, deployments and activity; export the audit log. |
+| **Editor** | Viewer access, plus create, edit, check and organize pipeline drafts. Cannot publish or deploy. |
+| **Operator** | Viewer access, plus publish and deploy, and manage schedules, groups, agent settings, enrollment tokens and device access. Cannot edit drafts. |
+| **Administrator** | Everything, including managing people and recovering device identities. |
 
-Available controls follow your role. The server checks permissions independently of the dashboard.
+Editor and Operator are separate jobs, not levels. The server checks every permission itself; the dashboard only hides controls you can't use. See [Administer Vectory](administer.md#create-workspace-accounts) to add people.
 
-## If a device does not apply
+## Where to next
 
-Open the device's **Activity** tab and read the reported issue. Common causes are an unreachable server, a local pause, a restricted capability, an unavailable file or credential, and a failed Vector health check. Follow the [troubleshooting guide](#/docs/troubleshooting) before retrying.
-
-See [terms and concepts](#/docs/glossary) for unfamiliar labels, or the [official Vector introduction](https://vector.dev/docs/introduction/) for the underlying data pipeline model.
+- **Try it on one machine** with the prebuilt Docker preview: [Quickstart](quickstart.md).
+- **Self-host the developer preview:** [Install the server](install-server.md), then [Connect a device](installation.md) and [Deploy your first pipeline](first-pipeline.md).
+- **Understand the guarantees:** [Security model](security.md).

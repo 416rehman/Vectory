@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   auditActionLabel,
+  auditActions,
+  auditChanges,
   auditDateError,
   auditFilterParams,
   auditHistoryPath,
   auditResourceRoute,
   auditRoute,
+  auditEventLabel,
+  auditFamilies,
+  auditOutcomeLabel,
   defaultAuditQuery,
+  deviceResultsSummary,
+  groupDeviceResults,
   normalizeAuditQuery,
   readAuditQuery,
 } from "./auditModel";
@@ -84,6 +91,13 @@ describe("audit view queries and identities", () => {
     expect(auditActionLabel("configuration.publish")).toBe(
       "Pipeline published",
     );
+    expect(auditActionLabel("deployment.stage_released_early")).toBe(
+      "Next stage released early",
+    );
+    // The stored code says mfa; what the list shows says two-factor.
+    expect(auditActionLabel("user.mfa_reset")).toBe("Two-factor reset");
+    for (const label of Object.values(auditActions))
+      expect(label).not.toMatch(/\bmfa\b/i);
   });
   it("retains server-wide browsing order in permalinks but excludes it from prepared export filters", () => {
     const q = {
@@ -104,10 +118,261 @@ describe("audit view queries and identities", () => {
     );
     expect(auditRoute(null, defaultAuditQuery)).toBe("audit?page=1");
   });
+  it("hides sign-ins by default, keeps the scope in page URLs and lets event filters win", () => {
+    const api = (query: typeof defaultAuditQuery) =>
+      new URL(auditHistoryPath(query), "https://example.test").searchParams;
+    expect(api(defaultAuditQuery).get("scope")).toBe("changes");
+    expect(api({ ...defaultAuditQuery, scope: "security" }).get("scope")).toBe(
+      "security",
+    );
+    expect(api({ ...defaultAuditQuery, scope: "all" }).has("scope")).toBe(
+      false,
+    );
+    // An explicit event filter shows matching events of any kind.
+    expect(api({ ...defaultAuditQuery, action: "login" }).has("scope")).toBe(
+      false,
+    );
+    expect(auditRoute(null, defaultAuditQuery)).not.toContain("scope");
+    const security = { ...defaultAuditQuery, scope: "security" as const };
+    expect(auditRoute(null, security)).toContain("scope=security");
+    expect(readAuditQuery("scope=security")).toEqual(security);
+    expect(readAuditQuery("scope=everything")?.scope).toBe("changes");
+    expect(auditFilterParams(security).get("scope")).toBe("security");
+  });
   it("rejects inverted, nonexistent and malformed days before any API query", () => {
     expect(auditDateError("2026-09-27", "2026-09-26")).toMatch(/end date/);
     expect(auditDateError("2026-02-30", "")).toMatch(/valid start/);
     expect(auditDateError("2024-02-29", "2024-02-29")).toBe("");
     expect(auditDateError("2026-09-01T00:00:00Z", "")).toMatch(/valid/);
+  });
+});
+
+describe("agent update events", () => {
+  const actions = [
+    "agent_update.enable",
+    "agent_update.disable",
+    "agent_update.stop",
+    "agent_update.stop_clear",
+    "agent_release_key.rotate",
+    "agent_release_key.rollover",
+    "agent_release_key.revoke",
+    "agent_release.prepare",
+    "agent_release.sign",
+    "agent_release.signature_upload",
+    "agent_release.withdraw",
+    "agent_release.expire",
+    "agent_update_rollout.create",
+    "agent_update_rollout.pause",
+    "agent_update_rollout.resume",
+    "agent_update_rollout.cancel",
+    "agent_update_rollout.release",
+    "agent_update_rollout.gate",
+    "device.agent_update",
+  ];
+  it("names every event in words, never as its stored code", () => {
+    for (const action of actions) {
+      expect(auditActions[action], action).toBeTruthy();
+      expect(auditActionLabel(action)).not.toContain("_");
+      expect(auditActionLabel(action)).not.toContain(".");
+    }
+    expect(auditActionLabel("agent_update.stop")).toBe(
+      "All agent updates stopped",
+    );
+    expect(auditActionLabel("device.agent_update")).toBe("Device agent update");
+  });
+  it("groups them so a family filter finds each by its dot-delimited prefix", () => {
+    const prefixes = new Set(actions.map((action) => action.split(".")[0]));
+    expect([...prefixes].sort()).toEqual(
+      [
+        "agent_release",
+        "agent_release_key",
+        "agent_update",
+        "agent_update_rollout",
+        "device",
+      ].sort(),
+    );
+    for (const family of [...prefixes].filter((name) => name !== "device"))
+      expect(auditFamilies[family], family).toBeTruthy();
+    // An exact family never swallows a longer name that merely starts with it.
+    expect("agent_release_key.rotate".startsWith("agent_release.")).toBe(false);
+    expect("agent_update_rollout.pause".startsWith("agent_update.")).toBe(
+      false,
+    );
+  });
+  it("links a rollout to its page and nothing else of agent updates", () => {
+    expect(auditResourceRoute("agent_update_rollout", id)).toBe(
+      `agent-updates/${id.toLowerCase()}`,
+    );
+    expect(auditResourceRoute("agent_release", id)).toBeNull();
+    expect(
+      auditResourceRoute("agent_release_key", "05cc6c02351af0cb"),
+    ).toBeNull();
+  });
+  it("shows the result of a device's update as a word, not its state code", () => {
+    expect(auditOutcomeLabel("verified")).toBe("Updated");
+    expect(auditOutcomeLabel("rolled_back")).toBe("Rolled back");
+    expect(auditOutcomeLabel("refused")).toBe("Refused");
+    expect(auditOutcomeLabel("failed")).toBe("Failed");
+  });
+});
+
+describe("what changed", () => {
+  it("pairs before and after values and names recorded ones", () => {
+    expect(
+      auditChanges({
+        previous_state: "written",
+        state: "verified_applied",
+        previous_group_revision: 3,
+        group_revision: 4,
+        version_number: 7,
+        password: "never shown",
+      }),
+    ).toEqual([
+      { label: "State", before: "Applying", after: "Applied" },
+      { label: "Version", after: "v7" },
+    ]);
+    expect(auditChanges({ generation: 2 })).toEqual([
+      { label: "Configuration generation", before: undefined, after: "2" },
+    ]);
+    expect(auditChanges(null)).toEqual([]);
+    expect(auditChanges({ state: { nested: true } })).toEqual([]);
+  });
+});
+
+describe("readable audit rows", () => {
+  const event = (
+    id: string,
+    action: string,
+    outcome = "success",
+    target_name: string | null = null,
+  ) => ({ id, action, outcome, target_name, created_at: null });
+  it("collapses runs of device results and keeps lone ones", () => {
+    const rows = groupDeviceResults([
+      event("1", "deployment.create"),
+      event("2", "device.apply_state", "verified_applied", "edge-nyc-01"),
+      event("3", "device.apply_state", "verified_applied", "edge-nyc-02"),
+      event("4", "device.apply_state", "rolled_back", "edge-fra-01"),
+      event("5", "configuration.publish"),
+      event("6", "device.apply_state", "desired", "edge-fra-01"),
+    ]);
+    expect(rows.map((row) => row.kind)).toEqual([
+      "event",
+      "results",
+      "event",
+      "event",
+    ]);
+    const group = rows[1];
+    expect(group.kind === "results" && group.items.length).toBe(3);
+    expect(
+      deviceResultsSummary(group.kind === "results" ? group.items : []),
+    ).toEqual({
+      title: "3 device results",
+      devices: "edge-nyc-01, edge-nyc-02 and 1 more",
+      outcomes: "2 applied, 1 rolled back",
+      last: null,
+    });
+  });
+  it("counts one device's steps once, by its latest result", () => {
+    const at = (id: string, outcome: string, created_at: string) => ({
+      ...event(id, "device.apply_state", outcome, "web-01"),
+      created_at,
+    });
+    // Newest first, as the audit list shows them, or oldest first.
+    for (const items of [
+      [
+        at("2", "verified_applied", "2026-09-29T10:01:00Z"),
+        at("1", "desired", "2026-09-29T10:00:00Z"),
+      ],
+      [
+        at("1", "desired", "2026-09-29T10:00:00Z"),
+        at("2", "verified_applied", "2026-09-29T10:01:00Z"),
+      ],
+    ])
+      expect(deviceResultsSummary(items)).toEqual({
+        title: "web-01 · applied",
+        devices: "2 results",
+        outcomes: "1 applied",
+        last: "verified_applied",
+      });
+  });
+  it("names a retired identity by the name it had, in words, wherever a badge has no room", () => {
+    const stored = `edge-nyc-01#retired-${id.toLowerCase()}`;
+    const [row] = groupDeviceResults([
+      event("2", "device.apply_state", "verified_applied", stored),
+      event("1", "device.apply_state", "desired", stored),
+    ]);
+    expect(row.kind).toBe("results");
+    expect(
+      deviceResultsSummary(row.kind === "results" ? row.items : []),
+    ).toMatchObject({
+      title: "edge-nyc-01 (retired identity) · applied",
+      devices: "2 results",
+    });
+    const several = deviceResultsSummary([
+      event("3", "device.apply_state", "verified_applied", stored),
+      event("4", "device.apply_state", "verified_applied", "edge-nyc-02"),
+    ]);
+    expect(several.devices).toBe(
+      "edge-nyc-01 (retired identity) and edge-nyc-02",
+    );
+    expect(JSON.stringify(several)).not.toContain("#retired-");
+  });
+  it("reports one device's last state, not a count of every step it took", () => {
+    // A device that waited, applied, was released again and rolled back: the
+    // run reads as its last state; the steps are behind the row's disclosure.
+    const steps = [
+      "desired",
+      "desired",
+      "desired",
+      "desired",
+      "desired",
+      "desired",
+      "verified_applied",
+      "verified_applied",
+      "verified_applied",
+      "verified_applied",
+      "verified_applied",
+      "rolled_back",
+    ].map((outcome, index) => ({
+      ...event(`${index}`, "device.apply_state", outcome, "edge-nyc-02"),
+      created_at: new Date(Date.UTC(2026, 9, 2, 16, index)).toISOString(),
+    }));
+    const [row] = groupDeviceResults([...steps].reverse());
+    expect(row.kind).toBe("results");
+    expect(
+      deviceResultsSummary(row.kind === "results" ? row.items : []),
+    ).toEqual({
+      title: "edge-nyc-02 · rolled back",
+      devices: "12 results",
+      outcomes: "1 rolled back",
+      last: "rolled_back",
+    });
+  });
+  it("counts each device's last state when a run covers several, repeats and all", () => {
+    const at = (id: string, name: string, outcome: string, minute: number) => ({
+      ...event(id, "device.apply_state", outcome, name),
+      created_at: new Date(Date.UTC(2026, 9, 2, 16, minute)).toISOString(),
+    });
+    expect(
+      deviceResultsSummary([
+        at("4", "b", "failed", 3),
+        at("3", "a", "verified_applied", 2),
+        at("2", "b", "desired", 1),
+        at("1", "a", "desired", 0),
+      ]),
+    ).toEqual({
+      title: "4 results for 2 devices",
+      devices: "b and a",
+      outcomes: "1 failed, 1 applied",
+      last: null,
+    });
+  });
+  it("names a refused enrollment", () => {
+    expect(
+      auditEventLabel({ action: "device.enroll", outcome: "failure" }),
+    ).toBe("Enrollment refused");
+    expect(
+      auditEventLabel({ action: "device.enroll", outcome: "success" }),
+    ).toBe("Device enrolled");
   });
 });

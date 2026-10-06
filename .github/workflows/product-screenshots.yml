@@ -1,0 +1,53 @@
+name: product screenshots (synthetic demo)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: 1.94.0
+      VECTORY_PREVIEW_AGENT_TARGETS: linux/amd64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.8"
+          cache: false
+      - run: rustup toolchain install 1.94.0 --profile minimal
+      - run: npm ci
+        working-directory: help-center
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run build
+        working-directory: dashboard
+      - run: cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+      - run: npx playwright install --with-deps chromium
+        working-directory: dashboard
+      - name: Start a fresh, isolated synthetic demo
+        run: node scripts/demo.mjs --agents 4
+      - name: Capture only verified demo screens
+        env:
+          VECTORY_SCREENSHOTS_DIR: ${{ runner.temp }}/product-screenshots
+        run: node scripts/capture-screenshots.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: product-screenshots
+          path: ${{ runner.temp }}/product-screenshots/product-*.png
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop the demo processes started by this job
+        if: always()
+        run: node scripts/demo.mjs --stop
