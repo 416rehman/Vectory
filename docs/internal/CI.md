@@ -18,28 +18,41 @@ Runs on every push and pull request.
 
 ## release-candidate.yml
 
-Runs only when dispatched; [packaging/README.md](../../packaging/README.md#release-candidate-workflow) has the command. Nothing is signed or published.
+Runs when dispatched or called by the stable release workflow; [packaging/README.md](../../packaging/README.md#release-candidate-workflow) has the command. This workflow does not publish a release.
 
 | Job | A green run shows | It does not show |
 | --- | --- | --- |
-| `agents` | The checked-in notices, Pagefind corresponding source and seven native WASM profiles verify against pinned inputs; the five agents build statically; archives, catalog and checksums verify; `.deb` and `.rpm` build with the pinned nfpm; the local preview certificate helper passes its Go unit tests | Native behaviour on each OS or legal clearance |
+| `agents` | The checked-in notices, Pagefind corresponding source and seven native WASM profiles verify against pinned inputs; supported agents build statically; archives, catalog and checksums verify; `.deb` and `.rpm` build with the pinned nfpm; certificate helpers pass their Go unit tests | Native behaviour on each OS or legal clearance |
 | `packages` | The `.deb` and `.rpm` install, run and remove on Debian 12 and AlmaLinux 9 without creating an account or state | Service start under systemd, upgrades, running the arm64 build |
 | `msi` | The MSI installs silently, the agent runs, no service is registered, removal cleans up | Signing, upgrades, service registration |
 | `images` | Both images build, run as UID 10001 and 10002, and refuse to start without their safety settings; their checked-in legal files are readable and byte-identical, inherited Vector notices remain readable, and both have SPDX SBOMs | A vulnerability verdict: the SBOMs are its input |
 | `starters` | The small Linux amd64 preview and server starter bundles contain their exact scripts, Compose files, docs, legal notices, version and internal checksums; the server kit's Compose config uses prebuilt images rather than a source build; temporary command stubs exercise interrupted setup, retained trust and offline restart | That the production server kit has been deployed with a public hostname and trusted certificate; the stub tests establish shell recovery, not cryptography or container health |
-| `preview-smoke` | The preview starter verifies and loads the saved candidate images, starts a loopback-only server and a validator on exactly one internal bridge with no published host port, and serves the dashboard page and exact release NOTICE. The job checks that the manager targets its own validator's private address with matching proxy exclusions, creates a CI-only administrator and synthetic demo-logs pipeline, and requires native Vector validation through the manager with no deferred result. The source-free server kit then starts those images behind its pinned TLS proxy, validates a locally minted CA on port 443, rejects a different CA on the agent listener, creates a synthetic first administrator, restarts with the same trusted certificate and initialized database, and removes its CI volumes. Secret-bearing starter output stays out of CI logs | A device has enrolled or activated; public DNS, production CA trust, other host platforms or long-running operation |
+| `preview-smoke` | The preview starter verifies and loads saved images, requires an isolated validator and actual Vector validation, and creates a synthetic administrator and pipeline. The server kit passes custom TLS, first-admin setup and restart. Automatic mode passes HTTP/2, public-port redirects, wrong-host refusal, verified agent downloads and restart with both original certificate issuers. The actual published 0.1.1 manager upgrades while retaining accounts, sessions, artifacts, deployment state, keys and its original mTLS identity; the backup inventory and SQLite database verify. Secret-bearing output stays private; fixed phase names identify failures | Host service installation or Vector activation by the manager-upgrade fixture; public DNS or public ACME issuance; other host platforms or long-running operation |
 | `sbom` | CycloneDX SBOMs of the Rust, Go and npm dependencies and a license inventory; `packaging/audit-npm.py` finds no high or critical advisory in the dashboard's or the help center's shipped dependencies that `packaging/npm-audit-exceptions.json` does not acknowledge, and keeps both raw audits as `npm-dependency-audit.json` | License clearance; an advisory published after the run; that an acknowledged advisory is harmless beyond the reason recorded for it |
 | `assemble` | One folder with plain LICENSE and NOTICE, pinned Pagefind source and manifest, `SHA256SUMS` and `CANDIDATE.json`, including whether the image's agents are byte-identical to the release agents | Signatures or provenance |
 | `verify` | The uploaded candidate, downloaded again the way a reader of the release page gets it, passes `sha256sum -c SHA256SUMS` and `packaging/verify-release.py` without refreshing the sums; the verifier checks the Pagefind tar against both file manifests and seven native-platform profiles with exact compressed and decoded Help WASM hashes | A reproducible build of every binary from source or anything beyond what `verify-release.py` reads |
 | `attest` | GitHub build provenance for `SHA256SUMS`, only with `attest` and a configured `release` environment | Anything about the candidate's contents |
 
+## release.yml
+
+Runs for version tags and manual dispatch of an exact stable version tag. Historical releases and different existing image bytes are never overwritten.
+
+| Job | A green run shows | It does not show |
+| --- | --- | --- |
+| `identity` | The tag exactly matches the source version and has the expected stable form | Any build or signature |
+| `checks` | The reusable `ci.yml` checks pass on this source commit | Anything beyond the checks described above |
+| `native` | The reusable `platforms.yml` service and browser checks pass on this source commit | Reboots, untested hardware or native OS code signing |
+| `candidate` | The reusable release-candidate workflow builds and verifies the actual agents, packages, images and starter kits on this source commit | Public registry access or release signatures |
+| `publish` | Fresh scans contain no critical or fixable high findings; the tested server and validator bytes are published to GHCR with immutable digests and verified GitHub OIDC Cosign signatures; an anonymous client can read both images; the signed release inventory passes actual offline preparation; uploaded assets are downloaded and checked again before the stable release becomes Latest; the public-site workflow is dispatched | Freedom from vulnerabilities, Windows Authenticode, Apple Developer ID/notarization, host activation, or successful website deployment |
+
 ## public-site.yml
 
-Runs on pushes, pull requests and manual dispatch. The deploy job runs only on `main`; it warns and skips publication when the Cloudflare account and token secrets are absent.
+Runs on pushes, pull requests and manual dispatch. The deploy job runs only on `main` after the advertised stable release and its signing inventory are available. It warns and skips publication when the Cloudflare account and token secrets are absent.
 
 | Job | A green run shows | It does not show |
 | --- | --- | --- |
 | `build` | Node 22 built the landing page, browser-only designer and public Help center into `site/dist`, checked content, metadata, branding assets and local documentation links, exercised import/export, recovery, privacy and responsive layout in Chromium, and uploaded the static files for inspection | That `vectory.ahmadz.ai` is reachable or that a release download has been published; other browsers beyond Chromium |
+| `release-ready` | The advertised stable release is public and contains the required signing inventory, or deployment is explicitly held until those assets exist | Independent signature verification or a deployed website |
 | `deploy` | With Cloudflare credentials configured, the built artifact was uploaded to the `vectory` Pages project; without them, the job warns and skips | That the custom domain is attached and resolving; check the actual deployment result and `/`, `/designer/` and `/help/` before announcing the site |
 
 ## product-screenshots.yml

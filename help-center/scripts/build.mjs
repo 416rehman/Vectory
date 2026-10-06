@@ -1,12 +1,43 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { build } from "astro";
 import { parse, serialize } from "parse5";
 import { prepare, helpRoot, repoRoot, version } from "./prepare.mjs";
 import { checkLinks } from "./check-links.mjs";
+
+async function clearPagefindOutput(helpDirectory, outputDirectory) {
+  const realHelp = await fs.realpath(helpDirectory);
+  const outputStat = await fs.lstat(outputDirectory);
+  const realOutput = await fs.realpath(outputDirectory);
+  if (
+    !outputStat.isDirectory() ||
+    outputStat.isSymbolicLink() ||
+    realOutput !== path.join(realHelp, "dist")
+  )
+    throw new Error("Unexpected Pagefind output directory");
+  const searchOutput = path.resolve(realOutput, "pagefind");
+  if (searchOutput !== path.join(realHelp, "dist", "pagefind"))
+    throw new Error("Unexpected Pagefind output path");
+  let searchStat;
+  try {
+    searchStat = await fs.lstat(searchOutput);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (
+    searchStat &&
+    (!searchStat.isDirectory() ||
+      searchStat.isSymbolicLink() ||
+      (await fs.realpath(searchOutput)) !== searchOutput)
+  )
+    throw new Error("Pagefind output must be an unlinked build directory");
+  await fs.rm(searchOutput, { recursive: true, force: true });
+  return searchOutput;
+}
 
 const prepared = await prepare();
 // Astro's prerender worker resolves external packages from the process cwd.
@@ -123,6 +154,26 @@ await verifySourceRecord(
   path.join(legalInput, sourceManifest.archive.filename),
   sourceManifest.archive,
 );
+// Pagefind's service can return before Tokio's buffered file writes finish.
+// Starlight then kills that service, which can leave search files incomplete.
+// Rebuild with the verified executable: normal CLI shutdown drains its writes.
+// Start fresh because Pagefind otherwise skips existing hashed index files.
+const pagefindOutput = await clearPagefindOutput(helpRoot, output);
+await new Promise((resolve, reject) => {
+  const child = spawn(
+    nativeBinaryPath,
+    ["--site", output, "--output-path", pagefindOutput],
+    { cwd: helpRoot, stdio: "inherit", windowsHide: true },
+  );
+  child.once("error", reject);
+  child.once("close", (code, signal) =>
+    code === 0 && signal === null
+      ? resolve()
+      : reject(
+          new Error(`Pagefind CLI failed: exit ${code}, signal ${signal}`),
+        ),
+  );
+});
 const expectedWasm = new Set(["wasm.en.pagefind", "wasm.unknown.pagefind"]);
 for (const record of profile.wasm) {
   if (!expectedWasm.delete(record.filename))
