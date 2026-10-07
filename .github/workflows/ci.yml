@@ -683,6 +683,7 @@ jobs:
       - run: python packaging/test_verify_release.py
       - run: python packaging/test_native_evidence.py
       - run: python packaging/test_signed_release.py
+      - run: python packaging/test_verify_site_release.py
       - name: Refuse inherited overrides of authenticated server-kit settings
         run: python deploy/test-compose-environment.py
       - name: Reject altered signed offline manifests, archives and dependencies

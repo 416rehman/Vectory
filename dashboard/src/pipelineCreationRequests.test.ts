@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import {
   beginPipelineCreationOperation,
   assertPipelineCreationResult,
@@ -12,6 +14,7 @@ import {
   pipelineCreationOperationAvailable,
   readPipelineCreationOperations,
   subscribePipelineCreationOperations,
+  usePipelineCreationOperations,
   type PipelineCreationOperation,
 } from "./pipelineCreationRequests";
 import { APIError } from "./api";
@@ -98,6 +101,28 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("durable pipeline creation registry", () => {
+  it("does not read browser storage during disabled rendering and keeps default recovery", () => {
+    const operation = beginPipelineCreationOperation(actor, request);
+    const length = vi.spyOn(storage, "length", "get");
+    const keyRead = vi.spyOn(storage, "key");
+    const itemRead = vi.spyOn(storage, "getItem");
+    let observed: ReturnType<typeof usePipelineCreationOperations> | undefined;
+    function Probe({ enabled }: { enabled?: boolean }) {
+      observed = usePipelineCreationOperations(actor, enabled);
+      return null;
+    }
+    renderToString(createElement(Probe, { enabled: false }));
+    expect(observed).toEqual({ operations: [], errors: [] });
+    expect(length).not.toHaveBeenCalled();
+    expect(keyRead).not.toHaveBeenCalled();
+    expect(itemRead).not.toHaveBeenCalled();
+    renderToString(createElement(Probe, {}));
+    expect(observed?.operations).toEqual([operation]);
+    expect(length).toHaveBeenCalled();
+    expect(itemRead).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("never stores credential-shaped metadata or graph data even when called directly", () => {
     for (const unsafe of [
       {

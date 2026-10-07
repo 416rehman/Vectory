@@ -483,16 +483,17 @@ export function subscribePipelineCreationOperations(
     window.removeEventListener("pageshow", refresh);
   };
 }
-export function usePipelineCreationOperations(actor: string) {
+export function usePipelineCreationOperations(actor: string, enabled = true) {
   const [, refresh] = useState(0);
-  useEffect(
-    () =>
-      subscribePipelineCreationOperations(actor, () =>
-        refresh((value) => value + 1),
-      ),
-    [actor],
-  );
-  return readPipelineCreationOperations(actor);
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribePipelineCreationOperations(actor, () =>
+      refresh((value) => value + 1),
+    );
+  }, [actor, enabled]);
+  return enabled
+    ? readPipelineCreationOperations(actor)
+    : { operations: [], errors: [] };
 }
 
 export function pipelineCreationPath(op: PipelineCreationOperation) {

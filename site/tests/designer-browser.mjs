@@ -10,7 +10,11 @@ const root = path.resolve(
   "../..",
 );
 const output = path.join(root, "site/dist");
-const captures = path.join(root, ".local/site-browser");
+const captures = path.join(
+  root,
+  ".local/site-browser",
+  `run-${Date.now()}-${process.pid}`,
+);
 const require = createRequire(path.join(root, "dashboard/package.json"));
 const { chromium, expect } = require("@playwright/test");
 const AxeBuilder = require("@axe-core/playwright").default;
@@ -68,7 +72,15 @@ try {
     )
       disallowedRequests.push(request.url());
   });
-  page.on("dialog", (dialog) => dialog.accept());
+  let dismissNextDialog = false;
+  page.on("dialog", async (dialog) => {
+    if (dismissNextDialog) {
+      dismissNextDialog = false;
+      await dialog.dismiss();
+    } else {
+      await dialog.accept();
+    }
+  });
   await page.addInitScript(() => {
     window.__storageWrites = 0;
     const original = Storage.prototype.setItem;
@@ -114,161 +126,287 @@ try {
   }
 
   async function fillsViewport() {
-    assert(await page.evaluate(() => {
-      const tool = document.querySelector('.standalone-designer').getBoundingClientRect();
-      return tool.left === 0 && Math.abs(tool.right - innerWidth) <= 1 && Math.abs(tool.bottom - innerHeight) <= 1 && document.documentElement.scrollHeight <= innerHeight;
-    }), 'Designer should fill the viewport without a marketing intro or body scrolling');
+    assert(
+      await page.evaluate(() => {
+        const tool = document
+          .querySelector(".standalone-designer")
+          .getBoundingClientRect();
+        return (
+          tool.left === 0 &&
+          Math.abs(tool.right - innerWidth) <= 1 &&
+          Math.abs(tool.bottom - innerHeight) <= 1 &&
+          document.documentElement.scrollHeight <= innerHeight
+        );
+      }),
+      "Designer should fill the viewport without a marketing intro or body scrolling",
+    );
   }
   async function accessible() {
-    const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
-    assert.deepEqual(result.violations.map(({id, nodes}) => ({id, targets: nodes.map(node => node.target)})), [], 'Page has accessibility violations');
+    const result = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+    assert.deepEqual(
+      result.violations.map(({ id, nodes }) => ({
+        id,
+        targets: nodes.map((node) => node.target),
+      })),
+      [],
+      "Page has accessibility violations",
+    );
   }
 
   await page.goto(origin + "/");
-  const toolsMenu = page.locator('.tools-menu');
-  await toolsMenu.locator('summary').click();
-  await expect(toolsMenu.getByRole('link', { name: /Vector configuration designer/ })).toBeVisible();
-  await toolsMenu.locator('summary').press('Escape');
-  await expect(toolsMenu).not.toHaveAttribute('open', '');
-  await expect(page.locator('.hero .button-dark')).toHaveAttribute('href', '#start');
-  const heroImage = await page.locator('.hero-art-sculpture > img').boundingBox();
-  const heroViewportWidth = await page.evaluate(() => document.documentElement.clientWidth);
-  assert(heroImage && Math.abs(heroImage.x) <= 1 && Math.abs(heroImage.width - heroViewportWidth) <= 1, 'Original artwork must span both screen edges');
-  assert(heroImage.y > 0 && heroImage.y < 1000, 'Original artwork must be visible in the desktop hero');
+  const toolsMenu = page.locator(".tools-menu");
+  await toolsMenu.locator("summary").click();
+  await expect(
+    toolsMenu.getByRole("link", { name: /Vector configuration designer/ }),
+  ).toBeVisible();
+  await toolsMenu.locator("summary").press("Escape");
+  await expect(toolsMenu).not.toHaveAttribute("open", "");
+  await expect(page.locator(".hero .button-dark")).toHaveAttribute(
+    "href",
+    "#start",
+  );
+  const heroLayouts = [];
+  for (const [width, height] of [
+    [1265, 714],
+    [1905, 940],
+    [768, 720],
+    [390, 844],
+    [390, 714],
+    [320, 568],
+  ]) {
+    await page.setViewportSize({ width, height });
+    await page.evaluate(async () => {
+      scrollTo(0, 0);
+      await document.fonts.ready;
+      await document.querySelector(".hero-art-sculpture > img").decode();
+    });
+    const geometry = await page.evaluate(() => {
+      const box = (selector) => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          bottom: rect.bottom,
+        };
+      };
+      return {
+        viewport: [innerWidth, innerHeight],
+        image: box(".hero-art-sculpture > img"),
+        copy: box(".hero-copy"),
+        footer: box(".hero-ruler"),
+        masthead: box(".masthead"),
+        pageWidth: document.documentElement.clientWidth,
+      };
+    });
+    assert(
+      Math.abs(geometry.image.x) <= 1 &&
+        Math.abs(geometry.image.width - geometry.pageWidth) <= 1,
+      "Original artwork must span both screen edges",
+    );
+    assert(
+      geometry.image.y >= geometry.masthead.bottom - 1,
+      "Artwork must remain below the navigation",
+    );
+    assert(
+      geometry.image.bottom <= geometry.footer.y + 1,
+      "The entire original artwork must remain above the hero footer",
+    );
+    assert(
+      geometry.footer.bottom <= height + 1,
+      "Artwork and hero footer must fit in the first viewport",
+    );
+    assert(
+      geometry.copy.bottom <= geometry.footer.y,
+      "Copy and actions must fit above the hero footer",
+    );
+    await noOverflow();
+    await accessible();
+    heroLayouts.push(geometry);
+    await page.screenshot({
+      path: path.join(captures, `landing-${width}x${height}.png`),
+    });
+  }
+  await fs.writeFile(
+    path.join(captures, "hero-layouts.json"),
+    JSON.stringify(heroLayouts, null, 2) + "\n",
+    { flag: "wx" },
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const heroImage = await page
+    .locator(".hero-art-sculpture > img")
+    .boundingBox();
+  const heroViewportWidth = await page.evaluate(
+    () => document.documentElement.clientWidth,
+  );
+  assert(
+    heroImage &&
+      Math.abs(heroImage.x) <= 1 &&
+      Math.abs(heroImage.width - heroViewportWidth) <= 1,
+    "Original artwork must span both screen edges",
+  );
+  assert(
+    heroImage.y > 0 && heroImage.y < 1000,
+    "Original artwork must be visible in the desktop hero",
+  );
   await noOverflow();
   await accessible();
-  await page.screenshot({ path: path.join(captures, 'landing-desktop.png') });
-  const sculpture = page.locator('.hero-art-sculpture');
-  const light = page.locator('.hero-art-light');
-  await sculpture.hover({ position: { x: heroImage.width * .922, y: heroImage.height * .147 } });
-  await expect(light).toHaveCSS('opacity', '1');
-  await page.locator('.hero h1').hover();
-  await expect(light).toHaveCSS('opacity', '0');
-  await sculpture.hover({ position: { x: heroImage.width * .153, y: heroImage.height * .692 } });
-  await expect(light).toHaveCSS('opacity', '1');
-  await expect(light).toHaveCSS('mask-image', /radial-gradient/);
-  await page.screenshot({ path: path.join(captures, 'landing-light-reveal.png') });
-  await page.locator('.hero h1').hover();
-  await expect(light).toHaveCSS('opacity', '0');
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await sculpture.hover({ position: { x: heroImage.width * .406, y: heroImage.height * .911 } });
-  await expect(light).toHaveCSS('opacity', '1');
-  await expect(light).toHaveCSS('transition-duration', '0s');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.locator('.hero h1').hover();
+  await page.screenshot({ path: path.join(captures, "landing-desktop.png") });
+  const sculpture = page.locator(".hero-art-sculpture");
+  const light = page.locator(".hero-art-light");
+  await sculpture.hover({
+    position: { x: heroImage.width * 0.922, y: heroImage.height * 0.147 },
+  });
+  await expect(light).toHaveCSS("opacity", "1");
+  await page.locator(".hero h1").hover();
+  await expect(light).toHaveCSS("opacity", "0");
+  await sculpture.hover({
+    position: { x: heroImage.width * 0.153, y: heroImage.height * 0.692 },
+  });
+  await expect(light).toHaveCSS("opacity", "1");
+  await expect(light).toHaveCSS("mask-image", /radial-gradient/);
+  await page.screenshot({
+    path: path.join(captures, "landing-light-reveal.png"),
+  });
+  await page.locator(".hero h1").hover();
+  await expect(light).toHaveCSS("opacity", "0");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await sculpture.hover({
+    position: { x: heroImage.width * 0.406, y: heroImage.height * 0.911 },
+  });
+  await expect(light).toHaveCSS("opacity", "1");
+  await expect(light).toHaveCSS("transition-duration", "0s");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.locator(".hero h1").hover();
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow();
   await accessible();
-  await page.screenshot({ path: path.join(captures, 'landing-mobile.png') });
+  await page.screenshot({ path: path.join(captures, "landing-mobile.png") });
   await page.setViewportSize({ width: 1440, height: 1000 });
 
-  for (const [name, installer] of [["Linux", "install.sh"], ["macOS", "install-desktop.sh"], ["Windows", "install.ps1"]]) {
+  for (const [name, installer] of [
+    ["Linux", "install.sh"],
+    ["macOS", "install-desktop.sh"],
+    ["Windows", "install.ps1"],
+  ]) {
     await page.getByRole("tab", { name, exact: true }).click();
     const panel = page.getByRole("tabpanel", { name, exact: true });
     await expect(panel).toBeVisible();
     await expect(panel.locator("code")).toContainText(installer);
-    await expect(page.locator('[data-install-download]')).toHaveAttribute('href', '/' + installer);
+    await expect(page.locator("[data-install-download]")).toHaveAttribute(
+      "href",
+      "/" + installer,
+    );
     await noOverflow();
   }
   await page.getByRole("tab", { name: "Windows", exact: true }).press("Home");
-  await expect(page.getByRole("tab", { name: "Linux", exact: true })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "Linux", exact: true }).press("ArrowRight");
-  await expect(page.getByRole("tabpanel", { name: "macOS", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "Linux", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page
+    .getByRole("tab", { name: "Linux", exact: true })
+    .press("ArrowRight");
+  await expect(
+    page.getByRole("tabpanel", { name: "macOS", exact: true }),
+  ).toBeVisible();
   await accessible();
   await page.locator("#start").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: path.join(captures, "install-macos-desktop.png") });
+  await page.screenshot({
+    path: path.join(captures, "install-macos-desktop.png"),
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("tab", { name: "Windows", exact: true }).click();
   await noOverflow();
   await accessible();
-  await page.screenshot({ path: path.join(captures, "install-windows-mobile.png") });
+  await page.screenshot({
+    path: path.join(captures, "install-windows-mobile.png"),
+  });
   await page.setViewportSize({ width: 1440, height: 1000 });
 
   await page.goto(origin + "/designer/");
   await expect(
     page.getByRole("button", { name: "Import", exact: true }),
   ).toBeVisible();
+  await expect(page.locator(".editor-page.editor-redesigned")).toBeVisible();
+  await expect(page.locator(".pipeline-save-status")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Save", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Choose devices", exact: true }),
+  ).toHaveCount(0);
   await fillsViewport();
   await accessible();
-  const about = page.locator('.designer-guide');
-  await about.locator('summary').click();
-  await expect(page.getByRole('heading', { name: 'Visualize and generate Vector configurations.' })).toBeVisible();
-  await about.locator('summary').press('Escape');
-  await expect(about).not.toHaveAttribute('open', '');
+  const about = page.locator(".designer-guide");
+  await about.locator("summary").click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Visualize and generate Vector configurations.",
+    }),
+  ).toBeVisible();
+  await about.locator("summary").press("Escape");
+  await expect(about).not.toHaveAttribute("open", "");
   await page.getByRole("button", { name: "Example", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(3);
-  await expect(page.getByRole("status")).toContainText("Synthetic example");
-  const detailsTab = page.getByRole("tab", { name: "Details", exact: true });
-  const codeTab = page.getByRole("tab", { name: "Code", exact: true });
-  const detailsPanel = page.locator("#designer-details-panel");
-  const codePanel = page.locator("#designer-code-panel");
-  await expect(detailsTab).toHaveAttribute(
-    "aria-controls",
-    "designer-details-panel",
+  await expect(page.locator(".designer-status")).toContainText(
+    "Synthetic example",
   );
-  await expect(codeTab).toHaveAttribute("aria-controls", "designer-code-panel");
-  await expect(detailsPanel).toHaveAttribute(
-    "aria-labelledby",
-    "designer-details-tab",
-  );
-  await expect(codePanel).toHaveAttribute(
-    "aria-labelledby",
-    "designer-code-tab",
-  );
-  await expect(detailsPanel).toBeVisible();
-  await expect(codePanel).toBeHidden();
-  await detailsTab.focus();
-  await detailsTab.press("ArrowRight");
-  await expect(codeTab).toBeFocused();
-  await expect(codeTab).toHaveAttribute("aria-selected", "true");
-  await expect(codePanel).toBeVisible();
-  await expect(detailsPanel).toBeHidden();
-  await codeTab.press("Home");
-  await expect(detailsTab).toBeFocused();
-  await detailsTab.press("ArrowLeft");
-  await expect(codeTab).toBeFocused();
-  await codeTab.press("ArrowRight");
-  await expect(detailsTab).toBeFocused();
-  await detailsTab.press("End");
-  await expect(codeTab).toBeFocused();
-  await codeTab.press("Home");
-  await expect(detailsTab).toBeFocused();
-
+  // This is the actual product workspace, including its port gestures, menus,
+  // spotlight controller and inspector. No standalone equivalents are mounted.
   await page
     .getByRole("button", { name: "Add component", exact: true })
-    .first()
     .click();
-  const picker = page.getByRole("dialog", { name: "Add a component" });
-  const categories = picker.getByRole("group", { name: "Component category" });
-  const sources = categories.getByRole("button", {
-    name: "Sources",
+  const picker = page.getByRole("dialog", {
+    name: "Add component",
     exact: true,
   });
-  const transforms = categories.getByRole("button", {
-    name: "Transforms",
-    exact: true,
-  });
-  await expect(sources).toHaveAttribute("aria-pressed", "true");
-  await sources.focus();
-  await sources.press("Tab");
-  await expect(transforms).toBeFocused();
-  await transforms.press("Enter");
-  await expect(transforms).toHaveAttribute("aria-pressed", "true");
-  await expect(sources).toHaveAttribute("aria-pressed", "false");
-  await picker.getByRole("button", { name: "Close component picker" }).click();
+  await expect(picker).toHaveClass(/canvas-component-menu/);
+  await picker
+    .getByRole("textbox", { name: "Search components" })
+    .fill("throttle");
+  await expect(picker.locator(".canvas-component-result")).toHaveCount(1);
+  await picker.getByRole("button", { name: "Close component menu" }).click();
   await page
-    .getByRole("combobox", { name: "Connection style" })
-    .selectOption("orthogonal");
-  await noOverflow();
+    .getByRole("button", { name: "Connection style", exact: true })
+    .click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "Right-angle", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("menuitemradio", { name: "Right-angle", exact: true })
+    .click();
+  await expect(page.locator(".react-flow__edge-path").first()).toHaveAttribute(
+    "data-connection-style",
+    "orthogonal",
+  );
 
   await importSource(fixture);
   await expect(page.locator(".react-flow__node")).toHaveCount(3);
   assert.equal(
     await exported("yaml"),
     fixture,
-    "Untouched source lost formatting, comments or unknown values",
+    "Untouched source lost comments or unknown values",
   );
-  await page.getByRole("tab", { name: "Code", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add component", exact: true })
+    .click();
+  await picker
+    .getByRole("textbox", { name: "Search components" })
+    .fill("throttle");
+  dismissNextDialog = true;
+  await picker.locator(".canvas-component-result").click();
+  await expect(picker).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(3);
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toBeDisabled();
+  await picker.getByRole("button", { name: "Close component menu" }).click();
+  assert.equal(await exported("yaml"), fixture, "Canceled edit changed source");
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await expect(page.locator(".editor-code-view")).toBeVisible();
   await page
     .getByRole("combobox", { name: "Format", exact: true })
     .selectOption("json");
@@ -280,6 +418,95 @@ try {
     .selectOption("toml");
   const convertedToml = await exported("toml");
   assert(convertedToml.includes('future_setting = "kept"'));
+
+  await importSource(fixture.replace("# synthetic browser regression\n", ""));
+  const output = page.locator(
+    '.react-flow__node[data-id="events"] .react-flow__handle[data-handleid="output"]',
+  );
+  const outputBox = await output.boundingBox();
+  await page.mouse.move(
+    outputBox.x + outputBox.width / 2,
+    outputBox.y + outputBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(outputBox.x + 50, outputBox.y + 20, { steps: 3 });
+  await expect(
+    page.locator(
+      '.react-flow__node[data-id="out"] .react-flow__handle[data-handleid="input"]',
+    ),
+  ).toHaveAttribute("data-port-state", "valid");
+  await expect(
+    page.locator(
+      '.react-flow__node[data-id="sample"] .react-flow__handle[data-handleid="input"]',
+    ),
+  ).toHaveAttribute("data-port-state", "invalid");
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(output).toHaveAttribute("data-port-state", "idle");
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+
+  const edge = page.locator(".react-flow__edge").first();
+  const edgePoint = await edge.evaluate((element) => {
+    const path = element.querySelector(".react-flow__edge-path");
+    for (const fraction of [0.2, 0.1, 0.3, 0.4, 0.6, 0.8]) {
+      const point = path.getPointAtLength(path.getTotalLength() * fraction);
+      const screen = new DOMPoint(point.x, point.y).matrixTransform(
+        path.getScreenCTM(),
+      );
+      if (
+        document
+          .elementFromPoint(screen.x, screen.y)
+          ?.closest(".react-flow__edge") === element
+      )
+        return { x: screen.x, y: screen.y };
+    }
+    return null;
+  });
+  assert(
+    edgePoint,
+    "An unobstructed pointer hit must exist for the actual edge",
+  );
+  await page.mouse.move(edgePoint.x, edgePoint.y);
+  await expect(edge).toHaveAttribute("data-connection-highlight", "active");
+  await expect(
+    page.locator('.react-flow__node[data-connection-highlight="endpoint"]'),
+  ).toHaveCount(2);
+  await expect(
+    page.locator('.react-flow__node[data-connection-highlight="dimmed"]'),
+  ).toHaveCount(1);
+  await page.mouse.move(0, 0);
+  await expect(page.locator("[data-connection-highlight]")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Actions for sample", exact: true })
+    .click();
+  await expect(page.locator(".canvas-action-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.locator('.react-flow__node[data-id="sample"]').click();
+  const rate = page
+    .locator(".editor-inspector")
+    .getByRole("textbox", { name: "One in every", exact: true });
+  await expect(rate).toHaveValue("10");
+  await rate.fill("20");
+  await rate.press("Tab");
+  const edited = await exported("yaml");
+  assert(
+    edited.includes("rate: 20"),
+    "Product inspector edit was not exported",
+  );
+  assert(
+    edited.includes("future_setting: kept"),
+    "Graph edit discarded unknown settings",
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(rate).toHaveValue("10");
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(rate).toHaveValue("20");
+  await page
+    .getByRole("button", { name: "Close component settings", exact: true })
+    .click();
+  await noOverflow();
+  await accessible();
+  await page.screenshot({ path: path.join(captures, "designer-desktop.png") });
 
   const largeRoute = JSON.stringify({
     sources: { events: { type: "demo_logs" } },
@@ -297,7 +524,7 @@ try {
   await importSource(largeRoute, "json");
   await expect(
     page.getByRole("heading", {
-      name: "Graph display limit reached.",
+      name: "Configuration preserved.",
       exact: true,
     }),
   ).toBeVisible();
@@ -305,7 +532,38 @@ try {
   assert.equal(
     await exported("json"),
     largeRoute,
-    "Limited graph discarded original source",
+    "Graph omission discarded source",
+  );
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  assert.equal(
+    await exported("json"),
+    largeRoute,
+    "Code discarded large-file source",
+  );
+
+  await importSource(fixture);
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Format", exact: true })
+    .selectOption("json");
+  await page
+    .getByRole("textbox", { name: "Vector configuration code", exact: true })
+    .fill(largeRoute);
+  await page
+    .getByRole("button", { name: "Apply code changes", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Graph", exact: true }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Configuration preserved.",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  assert.equal(
+    await exported("json"),
+    largeRoute,
+    "Code apply discarded bounded source",
   );
 
   const compact = JSON.stringify({
@@ -314,11 +572,11 @@ try {
     custom: Array.from({ length: 38000 }, () => ({ a: { b: { c: 0 } } })),
   });
   await importSource(compact, "json");
-  await page.getByRole("tab", { name: "Code", exact: true }).click();
+  await page.getByRole("button", { name: "Code", exact: true }).click();
   await page
     .getByRole("combobox", { name: "Format", exact: true })
     .selectOption("yaml");
-  await expect(page.getByRole("status")).toContainText(
+  await expect(page.locator(".error-box")).toContainText(
     "exceeds the 1 MiB limit",
   );
   await expect(
@@ -327,82 +585,40 @@ try {
   assert.equal(
     await exported("json"),
     compact,
-    "Failed conversion replaced exportable source",
+    "Failed conversion replaced source",
   );
 
+  // Nested product services remain unavailable locally, even though their
+  // actual editing forms and keyboard controls are shared.
   await importSource(fixture.replace("# synthetic browser regression\n", ""));
   await page
-    .getByRole("combobox", { name: "Connection style" })
-    .selectOption("curved");
-  await expect
-    .poll(() =>
-      page.locator(".react-flow__node").evaluateAll((nodes) =>
-        nodes.every((node) => {
-          const viewport = node.closest(".react-flow").getBoundingClientRect();
-          const rect = node.getBoundingClientRect();
-          return (
-            rect.left >= viewport.left &&
-            rect.right <= viewport.right &&
-            rect.top >= viewport.top &&
-            rect.bottom <= viewport.bottom
-          );
-        }),
-      ),
-    )
-    .toBe(true);
-  await page.locator('.react-flow__node[data-id="sample"]').click();
+    .getByRole("button", { name: "Pipeline settings", exact: true })
+    .click();
+  const settings = page.getByRole("dialog", {
+    name: "Pipeline settings",
+    exact: true,
+  });
+  await settings.getByRole("button", { name: "Tests", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "sample", exact: true }),
-  ).toBeVisible();
-  await page.getByLabel(/^Rate/).fill("20");
-  await page.getByLabel(/^Rate/).press("Tab");
-  const edited = await exported("yaml");
-  assert(edited.includes("rate: 20"), "Schema edit was not exported");
-  assert(
-    edited.includes("future_setting: kept"),
-    "Graph editing discarded unknown settings",
-  );
-  await noOverflow();
-  await page
-    .locator(".standalone-designer")
-    .screenshot({ path: path.join(captures, "designer-desktop.png") });
+    settings.getByRole("button", { name: "Run pipeline tests", exact: true }),
+  ).toBeDisabled();
+  await settings.getByRole("button", { name: /Close/ }).click();
+  const pendingShortcutExport = page.waitForEvent("download");
+  await page.keyboard.press("Control+s");
+  await pendingShortcutExport;
+
   await page.setViewportSize({ width: 390, height: 844 });
   await importSource(convertedToml, "toml");
   await expect(page.locator(".react-flow__node")).toHaveCount(3);
-  await page.locator(".react-flow__controls-fitview").click();
-  await expect
-    .poll(() =>
-      page.locator(".designer-canvas").evaluate((canvas) => {
-        const flow = canvas.querySelector(".react-flow");
-        const canvasRect = canvas.getBoundingClientRect();
-        const flowRect = flow.getBoundingClientRect();
-        const nodes = [...flow.querySelectorAll(".react-flow__node")];
-        return (
-          canvasRect.height >= 430 &&
-          flowRect.height >= 430 &&
-          nodes.length === 3 &&
-          nodes.every((node) => {
-            const rect = node.getBoundingClientRect();
-            return (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              rect.left >= flowRect.left - 1 &&
-              rect.right <= flowRect.right + 1 &&
-              rect.top >= flowRect.top - 1 &&
-              rect.bottom <= flowRect.bottom + 1
-            );
-          })
-        );
-      }),
-    )
-    .toBe(true);
+  await page.getByRole("button", { name: "Fit graph", exact: true }).click();
   await noOverflow();
   await fillsViewport();
-  await page.getByRole('tab', { name: 'Code', exact: true }).click();
-  await expect(page.locator('#designer-code-panel')).toBeVisible();
-  await page.getByRole('button', { name: 'Collapse inspector' }).click();
-  await expect(page.locator('#designer-code-panel')).toBeHidden();
-  await expect(page.locator('.designer-canvas')).toBeVisible();
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await expect(page.locator(".editor-code-view")).toBeVisible();
+  await page.getByRole("button", { name: "Graph", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Pipeline canvas", exact: true }),
+  ).toBeVisible();
   await accessible();
   await page.screenshot({
     path: path.join(captures, "designer-mobile.png"),
@@ -411,7 +627,7 @@ try {
   assert.equal(
     await page.evaluate(() => window.__storageWrites),
     0,
-    "The designer wrote automatic storage",
+    "Local editor wrote automatic storage",
   );
   assert.deepEqual(
     await page.evaluate(() => ({
@@ -423,12 +639,15 @@ try {
   assert.deepEqual(
     disallowedRequests,
     [],
-    "The designer made API or external requests",
+    "Local editor made API or external requests",
   );
   assert.deepEqual(errors, [], "The designer raised page errors");
   await context.close();
   console.log(
     "Designer browser regression passed: import/export, formats, bounded graph, preserved source, privacy, desktop and visible mobile graph.",
+  );
+  console.log(
+    `Hero layout and browser captures: ${path.relative(root, captures)}`,
   );
 } finally {
   await browser?.close();

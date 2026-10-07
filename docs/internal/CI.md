@@ -68,7 +68,7 @@ Runs on pushes, pull requests and manual dispatch. The deploy job runs only on `
 | Job | A green run shows | It does not show |
 | --- | --- | --- |
 | `build` | Node 22 built the landing page, browser-only designer and public Help center into `site/dist`, checked content, metadata, branding assets and local documentation links, exercised import/export, recovery, privacy and responsive layout in Chromium, and uploaded the static files for inspection | That `vectory.ahmadz.ai` is reachable or that a release download has been published; other browsers beyond Chromium |
-| `release-ready` | The advertised stable release is public and contains the required signing inventory, or deployment is explicitly held until those assets exist | Independent signature verification or a deployed website |
+| `release-ready` | The advertised stable release is public; Cosign verifies its exact tagged workflow identity, signed inventory and both immutable GHCR images; authenticated metadata agrees with the annotated release tag and source commit. Deployment is held until required public assets exist | A full download of every payload or a deployed website; the website source may be a later frontend commit than the immutable released binaries |
 | `deploy` | With Cloudflare credentials configured, the built artifact was uploaded to the `vectory` Pages project; without them, the job warns and skips | That the custom domain is attached and resolving; check the actual deployment result and `/`, `/designer/` and `/help/` before announcing the site |
 
 Configure a Cloudflare Browser TTL rule scoped to `vectory.ahmadz.ai` to respect origin

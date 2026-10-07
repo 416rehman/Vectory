@@ -33,24 +33,31 @@ function readStyle() {
   }
 }
 
-export function useConnectionStyle() {
-  const [style, setStyle] = useState<ConnectionStyle>(readStyle);
+export function useConnectionStyle(persist = true) {
+  const [style, setStyle] = useState<ConnectionStyle>(() =>
+    persist ? readStyle() : normalizeConnectionStyle(null),
+  );
   useEffect(() => {
+    if (!persist) return;
     const update = (event: StorageEvent) => {
       if (event.key === STORAGE_KEY || event.key === null)
         setStyle(readStyle());
     };
     window.addEventListener("storage", update);
     return () => window.removeEventListener("storage", update);
-  }, []);
-  const changeStyle = useCallback((value: ConnectionStyle) => {
-    setStyle(value);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, value);
-    } catch {
-      // The current view still works when browser storage is unavailable.
-    }
-  }, []);
+  }, [persist]);
+  const changeStyle = useCallback(
+    (value: ConnectionStyle) => {
+      setStyle(value);
+      if (!persist) return;
+      try {
+        window.localStorage.setItem(STORAGE_KEY, value);
+      } catch {
+        // The current view still works when browser storage is unavailable.
+      }
+    },
+    [persist],
+  );
   return [style, changeStyle] as const;
 }
 

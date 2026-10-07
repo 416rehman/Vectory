@@ -6,6 +6,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
+  type RefObject,
 } from "react";
 import {
   ReactFlow,
@@ -66,16 +68,16 @@ import {
   ClipboardCopy,
 } from "lucide-react";
 import {
-  api,
+  api as serverApi,
   APIError,
   PublishReceiptSchema,
   PublishRequestLookupSchema,
   withRequestDeadline,
-  boundedPost,
+  boundedPost as serverBoundedPost,
   can,
   download,
-  post,
-  put,
+  post as serverPost,
+  put as serverPut,
   when,
   type Config,
   type Configuration,
@@ -88,7 +90,7 @@ import {
 import {
   catalog,
   vectorSchema,
-  toGraph,
+  toGraph as buildGraph,
   outputPorts,
   addConnectedComponent,
   sameConfiguration,
@@ -182,6 +184,7 @@ import {
   readConfigurationFiles,
   sourceLineForPath,
   sourceOffset,
+  MAX_CONFIGURATION_BYTES,
 } from "./configurationSource";
 import { planCodeSave, unappliedStatus } from "./codeSave";
 import ConfigurationCodeEditor from "./ConfigurationCodeEditor";
@@ -283,6 +286,15 @@ import { connectionLineTypes } from "./connectionStyle";
 import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
 import { commandFor, useCommand } from "./commands";
 import { refusal, toast, type Notify } from "./toast";
+import {
+  localEditorDocument,
+  type LocalDesignerDocument,
+} from "./localDesignerDocument";
+import {
+  graphIsTooLarge,
+  renderBoundedConfiguration,
+} from "./standaloneLimits";
+import type { ConfigurationFormat } from "./configurationSource";
 
 const edgeTypes = { pipeline: PipelineEdge };
 // React Flow (MIT) permits hiding its attribution badge; the canvas hides it.
@@ -394,7 +406,7 @@ function ComponentName({
 }
 const nodeTypes = { component: PipelineNode };
 function initialGraph(config: Config, saved?: Graph): Graph {
-  const graph = toGraph(config, saved);
+  const graph = buildGraph(config, saved);
   const defaultGrid = graph.nodes.every(
     (node) =>
       node.position.x ===
@@ -471,6 +483,7 @@ type EditorSnapshot = {
   config: Config;
   graph: Graph;
   variables: VariableDeclaration[];
+  localSource?: LocalDesignerDocument;
 };
 export default function Editor({
   id,
@@ -479,25 +492,57 @@ export default function Editor({
   user,
   notify,
   navigate,
+  local,
 }: {
   id: string;
   initialDeviceId?: string;
   destination?: PipelineDestination;
-  user: User;
+  user?: User;
   notify: Notify;
   navigate: (p: string) => void;
+  /** Local file I/O around the actual product editor, with no server capabilities. */
+  local?: {
+    document: LocalDesignerDocument;
+    header: (name: string) => ReactNode;
+    exportRef: RefObject<((format?: ConfigurationFormat) => void) | null>;
+    onDirtyChange: (dirty: boolean) => void;
+  };
 }) {
-  const [connectionStyle, setConnectionStyle] = useConnectionStyle();
-  const [doc, setDoc] = useState<Configuration | null>(null),
-    [config, setConfig] = useState<Config>({}),
+  const actorId = user?.id || "";
+  const toGraph = (value: Config, saved?: Graph): Graph =>
+    local && graphIsTooLarge(value)
+      ? { nodes: [], edges: [] }
+      : buildGraph(value, saved);
+  const serverCan = (permission: "edit" | "operate" | "admin") =>
+    !local && !!user && can(user, permission);
+  function refuseRemoteOperation(): never {
+    throw Error(
+      "This designer edits local files. Server operations require your own Vectory installation.",
+    );
+  }
+  // Fail closed even if a future command accidentally exposes a server action.
+  const api: typeof serverApi = local ? refuseRemoteOperation : serverApi;
+  const post: typeof serverPost = local ? refuseRemoteOperation : serverPost;
+  const put: typeof serverPut = local ? refuseRemoteOperation : serverPut;
+  const boundedPost: typeof serverBoundedPost = local
+    ? refuseRemoteOperation
+    : serverBoundedPost;
+  const [connectionStyle, setConnectionStyle] = useConnectionStyle(!local);
+  const initialLocalDoc = useMemo(
+    () => (local ? localEditorDocument(local.document) : null),
+    [],
+  );
+  const localSource = useRef(local?.document);
+  const [doc, setDoc] = useState<Configuration | null>(initialLocalDoc),
+    [config, setConfig] = useState<Config>(initialLocalDoc?.config || {}),
     [variables, setVariables] = useState<VariableDeclaration[]>([]),
-    [nodes, setNodes] = useState<any[]>([]),
-    [edges, setEdges] = useState<Edge[]>([]),
+    [nodes, setNodes] = useState<any[]>(initialLocalDoc?.graph.nodes || []),
+    [edges, setEdges] = useState<Edge[]>(initialLocalDoc?.graph.edges || []),
     [selected, setSelected] = useState<string | null>(null),
     [view, setView] = useState("canvas"),
     [autoArrange, setAutoArrange] = useState(true),
-    [format, setFormat] = useState("yaml"),
-    [code, setCode] = useState(""),
+    [format, setFormat] = useState<string>(local?.document.format || "yaml"),
+    [code, setCode] = useState(local?.document.source || ""),
     [canvasPicker, setCanvasPicker] = useState<CanvasPickerLocation | null>(
       null,
     ),
@@ -515,7 +560,7 @@ export default function Editor({
     // Whether this pipeline's Live was switched on or off here; null until
     // someone chooses, when it follows whether a device runs the pipeline.
     [liveChoice, setLiveChoice] = useState<boolean | null>(() =>
-      readLivePreference(user.id, id),
+      local ? null : readLivePreference(actorId, id),
     ),
     [runsSomewhere, setRunsSomewhere] = useState<boolean | null>(null),
     [findOpen, setFindOpen] = useState(false),
@@ -562,7 +607,9 @@ export default function Editor({
     // Why the last requested check could not run. Earlier findings stay.
     [checkError, setCheckError] = useState(""),
     [problemsOpen, setProblemsOpen] = useState(false),
-    [autoCheck, setAutoCheck] = useState(readAutoCheck),
+    [autoCheck, setAutoCheck] = useState(() =>
+      local ? false : readAutoCheck(),
+    ),
     [codeReveal, setCodeReveal] = useState<{
       offset: number;
       nonce: number;
@@ -676,7 +723,10 @@ export default function Editor({
   // The tab names the pipeline, as a device's page names the device.
   useTabTitle(pendingMetadataView?.name || doc?.name || null);
   // The draft's own tests, run each time the publish review opens.
-  const publishTests = usePublishTests(config, publishOpen && !publishedResult);
+  const publishTests = usePublishTests(
+    config,
+    !local && publishOpen && !publishedResult,
+  );
   const publishTestsRef = useRef(publishTests);
   publishTestsRef.current = publishTests;
   // Stable per-node and per-edge callbacks that read the latest handlers, so
@@ -799,11 +849,14 @@ export default function Editor({
   const pipelineCreationRecoveryRef =
     useRef<PipelineCreationRecoveryHandle>(null);
   const staleCopyOpener = useRef<HTMLButtonElement>(null);
-  const pipelineCreationRecovery = usePipelineCreationOperations(user.id);
+  const pipelineCreationRecovery = usePipelineCreationOperations(
+    actorId,
+    !local,
+  );
   const unresolvedPipelineCreation =
     pipelineCreationRecovery.operations.length > 0 ||
     pipelineCreationRecovery.errors.length > 0;
-  const publishRecovery = usePublishOperations(user.id, id);
+  const publishRecovery = usePublishOperations(actorId, id, !local);
   const unresolvedPublish =
     publishRecovery.operations.length > 0 || publishRecovery.errors.length > 0;
   useEffect(() => {
@@ -882,9 +935,9 @@ export default function Editor({
     [],
   );
   latest.current = { doc, config, variables, nodes, edges, dirty };
-  const editable = can(user, "edit") && !!doc && !doc.archived;
+  const editable = (!!local || serverCan("edit")) && !!doc && !doc.archived;
   const checkable =
-    (editable || can(user, "operate")) && !!doc && !doc.archived;
+    !local && (editable || serverCan("operate")) && !!doc && !doc.archived;
   importContext.current = {
     config,
     code,
@@ -928,9 +981,14 @@ export default function Editor({
   // diagnoses the new draft in the background.
   const checkedConfig = useDeferredValue(config),
     checkedVariables = useDeferredValue(variables);
+  const graphOmitted = !!local && graphIsTooLarge(config);
+  const checkedGraphOmitted = !!local && graphIsTooLarge(checkedConfig);
   const graphDiagnosis = useMemo(
-    () => diagnoseConfiguration(checkedConfig),
-    [checkedConfig],
+    () =>
+      checkedGraphOmitted
+        ? { diagnostics: [], locallyValid: false }
+        : diagnoseConfiguration(checkedConfig),
+    [checkedConfig, checkedGraphOmitted],
   );
   const issues = graphDiagnosis.diagnostics
     .filter((item) => item.severity === "error")
@@ -970,8 +1028,9 @@ export default function Editor({
     };
   };
   const connectivity = useMemo(
-    () => pipelineConnectivity(checkedConfig),
-    [checkedConfig],
+    () =>
+      checkedGraphOmitted ? new Map() : pipelineConnectivity(checkedConfig),
+    [checkedConfig, checkedGraphOmitted],
   );
   const customJSONAnalysis = useMemo(
     () => diagnoseJSONValue(customComponentJSON),
@@ -982,8 +1041,8 @@ export default function Editor({
   const customJSONFeedbackId = useId();
   const customJSONErrorId = useId();
   const variableMessages = useMemo(
-    () => variableErrors(checkedConfig, checkedVariables),
-    [checkedConfig, checkedVariables],
+    () => (local ? [] : variableErrors(checkedConfig, checkedVariables)),
+    [checkedConfig, checkedVariables, !!local],
   );
   const errors = [...issues.map((issue) => issue.message), ...variableMessages];
   // Problems: instant local checks plus the last Vector check. Vector's
@@ -1117,22 +1176,26 @@ export default function Editor({
     codeChecked && check?.code === code && !checkStale
       ? " This check reviewed unapplied Code edits. Apply code changes to update the draft."
       : "";
-  const verdict = unseenCheck
-    ? unseenCheck.verdict
-    : checkError
-      ? checkError
-      : checkStale
-        ? pendingFieldCount
-          ? "Apply or discard the field you're editing, then check again."
-          : autoCheck && codeChecked
-            ? "Apply code changes to check automatically."
-            : autoCheck && missingForCheck.length
-              ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
-              : autoCheck
-                ? "Changed since the last check. Checking again when you pause."
-                : "Changed since the last check."
-        : checkVerdict(check?.result || null, problemCounts.errors) +
-          unappliedCheckNotice;
+  const verdict = local
+    ? graphOmitted
+      ? "Graph and local checks are omitted for this large file. The complete configuration remains available in Code and Export."
+      : "Local structural checks only. Validate the exported configuration with your installed Vector binary."
+    : unseenCheck
+      ? unseenCheck.verdict
+      : checkError
+        ? checkError
+        : checkStale
+          ? pendingFieldCount
+            ? "Apply or discard the field you're editing, then check again."
+            : autoCheck && codeChecked
+              ? "Apply code changes to check automatically."
+              : autoCheck && missingForCheck.length
+                ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
+                : autoCheck
+                  ? "Changed since the last check. Checking again when you pause."
+                  : "Changed since the last check."
+          : checkVerdict(check?.result || null, problemCounts.errors) +
+            unappliedCheckNotice;
   const autoCheckAttempt = useRef<{
     config: Config;
     variables: VariableDeclaration[];
@@ -1178,7 +1241,7 @@ export default function Editor({
   }, [autoCheckReady, config, variables]);
   function changeAutoCheck(value: boolean) {
     setAutoCheck(value);
-    writeAutoCheck(value);
+    if (!local) writeAutoCheck(value);
   }
   // Live numbers for the versions devices run, refreshed about once per
   // check-in while the canvas is visible. Until someone chooses, Live is on
@@ -1239,7 +1302,7 @@ export default function Editor({
   function toggleLive() {
     const next = !liveWanted;
     setLiveChoice(next);
-    writeLivePreference(user.id, id, next);
+    writeLivePreference(actorId, id, next);
     if (!next) setTelemetry(null);
   }
   const liveData = liveOn ? (telemetry?.data ?? null) : null;
@@ -1331,6 +1394,15 @@ export default function Editor({
     historyOpen,
   ]);
   useEffect(() => {
+    if (local) {
+      savedState.current = {
+        config: initialLocalDoc!.config,
+        variables: [],
+        nodes: initialLocalDoc!.graph.nodes,
+      };
+      setPublishedVersionStatus("ready");
+      return;
+    }
     let alive = true;
     const controller = new AbortController();
     setError("");
@@ -1363,7 +1435,7 @@ export default function Editor({
         setError("");
         // Offer edits left unsaved in this browser (a crash, closed tab or
         // lost session) unless they match what the server already has.
-        const copies = listRecoveryDrafts(user.id, id).filter((entry) => {
+        const copies = listRecoveryDrafts(actorId, id).filter((entry) => {
           const stored = entry.draft;
           const differs =
             !sameConfiguration(stored.config, result.config) ||
@@ -1374,7 +1446,7 @@ export default function Editor({
             (stored.metadata !== undefined &&
               (stored.metadata.name !== result.name ||
                 stored.metadata.description !== result.description));
-          if (!differs) clearRecoveryDraft(user.id, id, entry.id);
+          if (!differs) clearRecoveryDraft(actorId, id, entry.id);
           return differs;
         });
         setRecoveryCopies(copies);
@@ -1401,6 +1473,7 @@ export default function Editor({
   }, [id, loadAttempt]);
   useEffect(() => {
     if (
+      local ||
       !publishedLookup ||
       publishedLookup.id !== id ||
       publishedLookup.observation !== publicationObservation.current
@@ -1521,6 +1594,14 @@ export default function Editor({
       parentSignal?: AbortSignal,
       note?: string,
     ): Promise<Configuration | null> {
+      if (local) {
+        if (!metadata || !latest.current.doc) return null;
+        const next = { ...latest.current.doc, ...metadata };
+        setDoc(next);
+        latest.current.doc = next;
+        setDirty(true);
+        return next;
+      }
       // Opening the discard dialog suspends queued saves immediately.
       if (discardGate.current) return null;
       // Every entry point, including Pipeline details, must honor a stale
@@ -1612,8 +1693,8 @@ export default function Editor({
           setDirty(!stillSame);
           latest.current.dirty = !stillSame;
           if (stillSame) {
-            const ownRecoveryKey = recoveryDraftId(user.id, id, recoveryCopyId);
-            clearRecoveryDraft(user.id, id, ownRecoveryKey);
+            const ownRecoveryKey = recoveryDraftId(actorId, id, recoveryCopyId);
+            clearRecoveryDraft(actorId, id, ownRecoveryKey);
             if (recoveryKey === ownRecoveryKey) offerNextRecovery(recoveryKey);
           }
           setSaveStatus(stillSame ? "All changes saved" : "Unsaved changes");
@@ -1691,7 +1772,7 @@ export default function Editor({
         if (pendingSave.current === operation) pendingSave.current = null;
       }
     },
-    [editable, id, notify],
+    [editable, id, notify, local],
   );
   // Undo history keeps references: every edit builds new objects and never
   // changes an earlier draft. Edits to one field without a pause of a second
@@ -1702,7 +1783,12 @@ export default function Editor({
     lastEdit.current = coalesce ? { key: coalesce, at: now } : null;
     future.current = [];
     if (coalesces(previous, coalesce, now) && stack.current.length) return;
-    stack.current.push({ config, graph: { nodes, edges }, variables });
+    stack.current.push({
+      config,
+      graph: { nodes, edges },
+      variables,
+      ...(local ? { localSource: localSource.current } : {}),
+    });
     if (stack.current.length > 100) stack.current.shift();
   }
   function replace(
@@ -1711,16 +1797,45 @@ export default function Editor({
     remember = true,
     nextVariables = variables,
     coalesce?: string,
+    nextSource?: LocalDesignerDocument,
   ) {
     if (!editable) return;
     try {
       assertExactNumbers(next);
+      if (local && nextSource) {
+        if (
+          new TextEncoder().encode(nextSource.source).length >
+          MAX_CONFIGURATION_BYTES
+        )
+          throw Error(
+            "The configuration exceeds the 1 MiB limit. Your current file is unchanged.",
+          );
+      } else if (local)
+        renderBoundedConfiguration(next, format as ConfigurationFormat);
     } catch (failure) {
       setError((failure as Error).message);
-      return;
+      return false;
     }
+    if (
+      remember &&
+      local &&
+      !nextSource &&
+      localSource.current?.config === config &&
+      hasSourceComments(
+        localSource.current.source,
+        localSource.current.format,
+      ) &&
+      !(view === "code" && importedCodeDirty.current) &&
+      !confirm(
+        "This graph edit regenerates the configuration and removes YAML or TOML comments. Export the original first if you need those comments. Continue?",
+      )
+    )
+      return false;
     if (remember) rememberDraft(coalesce);
-    let nextGraph = toGraph(next, graph || { nodes, edges });
+    let nextGraph =
+      local && graphIsTooLarge(next)
+        ? { nodes: [], edges: [] }
+        : toGraph(next, graph || { nodes, edges });
     const edgeShape = (items: Edge[]) =>
       JSON.stringify(
         items.map((edge) => [edge.source, edge.target, edge.sourceHandle]),
@@ -1754,6 +1869,17 @@ export default function Editor({
     setEdges(nextGraph.edges);
     setDirty(true);
     setSaveStatus("Unsaved changes");
+    if (local)
+      localSource.current = nextSource || {
+        name: doc?.name || "vector",
+        config: next,
+        source:
+          view === "code" && importedCodeDirty.current
+            ? code
+            : renderBoundedConfiguration(next, format as ConfigurationFormat),
+        format: format as ConfigurationFormat,
+      };
+    return true;
   }
   function undo(redo = false) {
     if (importedCodeDirty.current) {
@@ -1765,11 +1891,33 @@ export default function Editor({
     if (pendingSchemaFields.current.size && !closeSettings()) return;
     const from = redo ? future.current : stack.current,
       to = redo ? stack.current : future.current;
-    const item = from.pop();
+    const item = from.at(-1);
     if (item) {
-      to.push({ config, graph: { nodes, edges }, variables });
+      const previousSource = localSource.current;
+      if (
+        replace(
+          item.config,
+          item.graph,
+          false,
+          item.variables,
+          undefined,
+          item.localSource,
+        ) === false
+      )
+        return;
+      from.pop();
+      to.push({
+        config,
+        graph: { nodes, edges },
+        variables,
+        ...(local ? { localSource: previousSource } : {}),
+      });
       lastEdit.current = null;
-      replace(item.config, item.graph, false, item.variables);
+      if (local && item.localSource) {
+        localSource.current = item.localSource;
+        setFormat(item.localSource.format);
+        setCode(item.localSource.source);
+      }
       // Back to the draft as saved: nothing is unsaved. A save that failed or
       // was not confirmed leaves it unknown what the server holds.
       const saved = savedState.current;
@@ -1974,7 +2122,7 @@ export default function Editor({
         );
         setAutoArrange(false);
       }
-      replace(result.config, nextGraph);
+      if (replace(result.config, nextGraph) === false) return;
       setPickerKind(null);
       setCanvasPicker(null);
       pickerPlacement.current = null;
@@ -2043,13 +2191,16 @@ export default function Editor({
     if (!editable || busy || gesture?.cancelled || !closeSettings()) return;
     try {
       const next = reconnect(config, previous, connection);
-      if (gesture) gesture.applied = true;
       if (!sameConfiguration(config, next)) {
-        replace(next, toGraph(next, { nodes, edges }));
+        if (replace(next, toGraph(next, { nodes, edges })) === false) {
+          if (gesture) gesture.cancelled = true;
+          return;
+        }
         notify("Connection moved. Undo restores its previous endpoints.", {
           tone: "success",
         });
       }
+      if (gesture) gesture.applied = true;
     } catch (failure) {
       notify((failure as Error).message, refusal);
     }
@@ -2338,7 +2489,12 @@ export default function Editor({
       )
     )
       return;
-    replace(ids.reduce((next, id) => removePipelineStep(next, id), config));
+    if (
+      replace(
+        ids.reduce((next, id) => removePipelineStep(next, id), config),
+      ) === false
+    )
+      return;
     if (selected && ids.includes(selected)) setSelected(null);
     requestAnimationFrame(() =>
       graphRef.current?.focus({ preventScroll: true }),
@@ -2354,7 +2510,7 @@ export default function Editor({
       i = 1;
     while (nodes.some((n) => n.id === name)) name = nodeId + "_copy" + i++;
     next[node.data.kind][name] = structuredClone(next[node.data.kind][nodeId]);
-    replace(next);
+    if (replace(next) === false) return;
     setSelected(name);
     requestAnimationFrame(() =>
       graphRef.current
@@ -2428,7 +2584,7 @@ export default function Editor({
           : { ...node, selected: false },
       );
       setAutoArrange(false);
-      replace(pasted.config, graph);
+      if (replace(pasted.config, graph) === false) return;
       setSelected(null);
       notify(
         pasted.ids.size === 1
@@ -2515,7 +2671,7 @@ export default function Editor({
     if (!editable || busy || !removed.length || !closeSettings()) return;
     try {
       const next = disconnect(config, removed);
-      replace(next, toGraph(next, { nodes, edges }));
+      if (replace(next, toGraph(next, { nodes, edges })) === false) return;
       requestAnimationFrame(() =>
         graphRef.current?.focus({ preventScroll: true }),
       );
@@ -2528,7 +2684,15 @@ export default function Editor({
     }
   }
   function stringify(value: Config, f = format) {
-    return stringifyConfiguration(value, f);
+    if (
+      local &&
+      localSource.current?.config === value &&
+      localSource.current.format === f
+    )
+      return localSource.current.source;
+    return local
+      ? renderBoundedConfiguration(value, f as ConfigurationFormat)
+      : stringifyConfiguration(value, f);
   }
   function syncCode(value: Config) {
     try {
@@ -2541,17 +2705,28 @@ export default function Editor({
       );
     }
   }
-  function exportConfiguration() {
+  function exportConfiguration(targetFormat = format as ConfigurationFormat) {
     if (!doc) return;
     try {
+      const source = view === "code" ? code : stringify(config);
+      const content =
+        targetFormat === format
+          ? source
+          : renderBoundedConfiguration(parse(source), targetFormat);
       download(
-        `${doc.name.replace(/[^a-z0-9_-]/gi, "_")}.${format}`,
-        view === "code" ? code : stringify(config),
+        `${doc.name.replace(/[^a-z0-9_-]/gi, "_")}.${targetFormat}`,
+        content,
       );
     } catch (failure) {
       setError((failure as Error).message);
     }
   }
+  if (local) local.exportRef.current = exportConfiguration;
+  useEffect(() => {
+    local?.onDirtyChange(
+      dirty || importedCodeDirty.current || pendingFieldCount > 0,
+    );
+  }, [dirty, code, pendingFieldCount]);
   useEffect(() => {
     if (view === "code" && !importedCodeDirty.current) syncCode(config);
   }, [config, view, format]);
@@ -2610,7 +2785,7 @@ export default function Editor({
       const imported = await readConfigurationFiles(files);
       if (generation !== importGeneration.current) return;
       const parsed = imported.config;
-      const credential = findPlainCredential(parsed);
+      const credential = local ? null : findPlainCredential(parsed);
       const line =
         credential && files.length === 1
           ? sourceLineForPath(imported.text, imported.format, credential.steps)
@@ -2681,9 +2856,37 @@ export default function Editor({
     setSelected(null);
     setCanvasPicker(null);
     setError("");
-    replace(candidate.config);
+    if (
+      replace(
+        candidate.config,
+        undefined,
+        true,
+        variables,
+        undefined,
+        local
+          ? {
+              name: doc?.name || "vector",
+              config: candidate.config,
+              source: candidate.text,
+              format: candidate.format,
+            }
+          : undefined,
+      ) === false
+    )
+      return;
+    if (local)
+      localSource.current = {
+        name: doc?.name || "vector",
+        config: candidate.config,
+        source: candidate.text,
+        format: candidate.format,
+      };
     setFormat(candidate.format);
-    setCode(stringifyConfiguration(candidate.config, candidate.format));
+    setCode(
+      local
+        ? candidate.text
+        : stringifyConfiguration(candidate.config, candidate.format),
+    );
     importedCodeDirty.current = false;
     notify(`Imported ${candidate.name}. You can undo this change.`, {
       tone: "success",
@@ -2698,6 +2901,10 @@ export default function Editor({
   // Check the draft (or unapplied Code edits) with the isolated Vector worker.
   // A check never locks the editor; a newer check or a reload supersedes it.
   async function validate({ auto = false } = {}) {
+    if (local) {
+      setProblemsOpen(true);
+      return;
+    }
     if (checkInFlight.current) return;
     if (pendingSchemaFields.current.size) {
       if (!auto)
@@ -2770,7 +2977,7 @@ export default function Editor({
     if (
       publishActive.current ||
       busy ||
-      !can(user, "operate") ||
+      !serverCan("operate") ||
       unresolvedPublish ||
       publishNotice ||
       doc?.archived
@@ -2818,7 +3025,7 @@ export default function Editor({
         );
       // Over failing tests, only "Publish anyway" gets here. The server runs
       // the tests again and refuses unless the request says so.
-      operation = beginPublishOperation(user.id, id, {
+      operation = beginPublishOperation(actorId, id, {
         revision: saved.revision,
         message,
         ...(stopsPublishing(publishTestsRef.current.view)
@@ -2906,6 +3113,7 @@ export default function Editor({
     }
   }
   async function saveDraftNow(confirmServerDraft = false, note?: string) {
+    if (local) return null;
     if (!editable || busy || explicitSaveInFlight.current) return;
     if (saveNeedsReload.current) {
       setError("The server draft changed. Reload it before saving again.");
@@ -2952,6 +3160,7 @@ export default function Editor({
   // reads the draft as of the last render, so it waits for the applied draft.
   const saveAfterApply = useRef<Config | null>(null);
   function refusePlainCode(candidate: Config) {
+    if (local) return false;
     const credential = findPlainCredential(candidate);
     if (!credential) return false;
     const line = sourceLineForPath(code, format, credential.steps);
@@ -3005,6 +3214,10 @@ export default function Editor({
   }, [config]);
   /** What Save, its menu item and Ctrl/Cmd+S do. */
   function saveNow() {
+    if (local) {
+      exportConfiguration();
+      return;
+    }
     if (view === "code" && importedCodeDirty.current) saveCode();
     else if (hasUnappliedImportFields()) {
       setError(
@@ -3030,7 +3243,7 @@ export default function Editor({
       if (publishedVersion && closeSettings())
         setDeployVersion(publishedVersion);
     },
-    can(user, "operate") &&
+    serverCan("operate") &&
       publishedVersionStatus === "ready" &&
       !!publishedVersion &&
       !busy &&
@@ -3043,7 +3256,7 @@ export default function Editor({
   useCommand(
     commandFor("pipeline.duplicate", id),
     () => void openPipelineAction("duplicate"),
-    can(user, "edit") && !!doc && !busy && !pipelineAction,
+    serverCan("edit") && !!doc && !busy && !pipelineAction,
     commandRefused("Duplicate", idle && !pipelineAction),
   );
   // Ctrl/Cmd+S saves the draft anywhere in the editor. The browser's own
@@ -3160,52 +3373,55 @@ export default function Editor({
   // older copy is offered must not overwrite that copy or leave new edits
   // without a crash backup.
   useEffect(() => {
-    renewRecoveryLease(user.id, id, recoveryCopyId);
+    if (local) return;
+    renewRecoveryLease(actorId, id, recoveryCopyId);
     const timer = window.setInterval(
-      () => renewRecoveryLease(user.id, id, recoveryCopyId),
+      () => renewRecoveryLease(actorId, id, recoveryCopyId),
       5_000,
     );
     // A hard reload destroys the document without running React's cleanup.
     // Release its lease so the same tab can discard that browser copy when it
     // reopens. Keep a page in the back-forward cache protected until it returns.
     const pagehide = (event: PageTransitionEvent) => {
-      if (!event.persisted) clearRecoveryLease(user.id, id, recoveryCopyId);
+      if (!event.persisted) clearRecoveryLease(actorId, id, recoveryCopyId);
     };
-    const pageshow = () => renewRecoveryLease(user.id, id, recoveryCopyId);
+    const pageshow = () => renewRecoveryLease(actorId, id, recoveryCopyId);
     window.addEventListener("pagehide", pagehide);
     window.addEventListener("pageshow", pageshow);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("pagehide", pagehide);
       window.removeEventListener("pageshow", pageshow);
-      clearRecoveryLease(user.id, id, recoveryCopyId);
+      clearRecoveryLease(actorId, id, recoveryCopyId);
     };
-  }, [user.id, id, recoveryCopyId]);
+  }, [actorId, id, recoveryCopyId]);
   useEffect(() => {
+    if (local) return;
     const update = () =>
       setActiveRecoveryCopy(
         !!recoveryKey &&
-          !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
-          recoveryCopyActive(user.id, id, recoveryKey),
+          !ownsRecoveryDraft(actorId, id, recoveryKey, recoveryCopyId) &&
+          recoveryCopyActive(actorId, id, recoveryKey),
       );
     update();
     const timer = window.setInterval(update, 5_000);
     return () => window.clearInterval(timer);
-  }, [user.id, id, recoveryKey, recoveryCopyId]);
+  }, [actorId, id, recoveryKey, recoveryCopyId]);
   /** Write the draft now; false when it could not or must not be kept. */
   function keepEditsForLater() {
+    if (local) return false;
     const current = latest.current;
     if (!current.doc || !editable) return false;
     if (findPlainCredential(current.config)) {
       clearRecoveryDraft(
-        user.id,
+        actorId,
         id,
-        recoveryDraftId(user.id, id, recoveryCopyId),
+        recoveryDraftId(actorId, id, recoveryCopyId),
       );
       return false;
     }
     return storeRecoveryDraft(
-      user.id,
+      actorId,
       id,
       {
         revision: conflictBaseRevision.current ?? current.doc.revision,
@@ -3232,7 +3448,7 @@ export default function Editor({
     );
   }
   useEffect(() => {
-    if (!doc || !editable) return;
+    if (local || !doc || !editable) return;
     if (
       !dirty &&
       !saveNeedsReload.current &&
@@ -3240,9 +3456,9 @@ export default function Editor({
       !pendingMetadata.current
     ) {
       clearRecoveryDraft(
-        user.id,
+        actorId,
         id,
-        recoveryDraftId(user.id, id, recoveryCopyId),
+        recoveryDraftId(actorId, id, recoveryCopyId),
       );
       return;
     }
@@ -3265,7 +3481,7 @@ export default function Editor({
   }
   function currentRecoveryCopy(): RecoveryDraft | null {
     if (!recovery || !recoveryKey) return null;
-    const current = listRecoveryDrafts(user.id, id).find(
+    const current = listRecoveryDrafts(actorId, id).find(
       (entry) => entry.id === recoveryKey,
     );
     if (!current) {
@@ -3329,7 +3545,7 @@ export default function Editor({
     // Keep the original copy unless the restored edit was safely written to
     // this document's own key. A second tab's copy is never overwritten.
     const transferred = storeRecoveryDraft(
-      user.id,
+      actorId,
       id,
       fresh,
       new Date(),
@@ -3338,9 +3554,9 @@ export default function Editor({
     if (
       transferred &&
       recoveryKey &&
-      isLegacyRecoveryDraft(user.id, id, recoveryKey)
+      isLegacyRecoveryDraft(actorId, id, recoveryKey)
     )
-      clearRecoveryDraft(user.id, id, recoveryKey);
+      clearRecoveryDraft(actorId, id, recoveryKey);
     offerNextRecovery(recoveryKey);
     if (!transferred)
       setError(
@@ -3363,7 +3579,7 @@ export default function Editor({
     if (!currentRecoveryCopy()) return;
     if (
       recoveryKey &&
-      ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+      ownsRecoveryDraft(actorId, id, recoveryKey, recoveryCopyId) &&
       restoreBlocked
     ) {
       setError(
@@ -3373,12 +3589,12 @@ export default function Editor({
     }
     const foreign =
       !!recoveryKey &&
-      !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
-      !isLegacyRecoveryDraft(user.id, id, recoveryKey);
+      !ownsRecoveryDraft(actorId, id, recoveryKey, recoveryCopyId) &&
+      !isLegacyRecoveryDraft(actorId, id, recoveryKey);
     if (
       foreign &&
       recoveryKey &&
-      recoveryCopyActive(user.id, id, recoveryKey)
+      recoveryCopyActive(actorId, id, recoveryKey)
     ) {
       setError(
         "This copy is open in another tab. Close that tab before discarding it.",
@@ -3397,14 +3613,14 @@ export default function Editor({
     if (
       foreign &&
       recoveryKey &&
-      recoveryCopyActive(user.id, id, recoveryKey)
+      recoveryCopyActive(actorId, id, recoveryKey)
     ) {
       setError(
         "This copy reopened in another tab. Close that tab before discarding it.",
       );
       return;
     }
-    if (recoveryKey) clearRecoveryDraft(user.id, id, recoveryKey);
+    if (recoveryKey) clearRecoveryDraft(actorId, id, recoveryKey);
     offerNextRecovery(recoveryKey);
   }
   function downloadRecovery() {
@@ -3426,7 +3642,7 @@ export default function Editor({
   function applyTemplate(template: PipelineTemplate) {
     if (!editable || importedCodeDirty.current || !isEmptyPipeline(config))
       return;
-    replace(structuredClone(template.config));
+    if (replace(structuredClone(template.config)) === false) return;
     setTemplateNeeds({ title: template.title, needs: template.needs });
   }
   // Vector's own metrics, exported for local scraping, without touching
@@ -3443,7 +3659,7 @@ export default function Editor({
       });
       return;
     }
-    replace(next);
+    if (replace(next) === false) return;
     const added = Object.entries(next.sinks).find(
       ([sinkId]) => !Object.hasOwn(config.sinks || {}, sinkId),
     )?.[1] as Config | undefined;
@@ -3545,7 +3761,16 @@ export default function Editor({
       setPendingFieldCount(0);
       setCodeAnalysis(null);
       setError("");
-      acceptSavedSnapshot(saved, initialGraph(saved.config, saved.graph));
+      if (local) {
+        localSource.current = local.document;
+        setFormat(local.document.format);
+      }
+      acceptSavedSnapshot(
+        local ? initialLocalDoc! : saved,
+        local
+          ? initialLocalDoc!.graph
+          : initialGraph(saved.config, saved.graph),
+      );
       notify("Unsaved changes discarded.", { tone: "success" });
     } finally {
       discardGate.current = false;
@@ -3639,7 +3864,10 @@ export default function Editor({
     }
   }
   const selectedNode = nodes.find((n) => n.id === selected);
-  const patterns = useMemo(() => patternInputs(config), [config]);
+  const patterns = useMemo(
+    () => (graphOmitted ? [] : patternInputs(config)),
+    [config, graphOmitted],
+  );
   const patternEdgeList = useMemo(() => patternEdges(patterns), [patterns]);
   const component = selectedNode
     ? selectedNode.data.enrichmentTable
@@ -3688,13 +3916,16 @@ export default function Editor({
       // Only the edited step gets a new object, so unchanged steps keep their
       // identity for the canvas, the local checks and the undo history.
       const kind = selectedNode.data.kind;
-      replace(
-        { ...config, [kind]: { ...config[kind], [selectedNode.id]: value } },
-        undefined,
-        true,
-        variables,
-        editedField(selectedNode.id, component, value),
-      );
+      if (
+        replace(
+          { ...config, [kind]: { ...config[kind], [selectedNode.id]: value } },
+          undefined,
+          true,
+          variables,
+          editedField(selectedNode.id, component, value),
+        ) === false
+      )
+        return;
       setError("");
       return;
     }
@@ -3721,13 +3952,16 @@ export default function Editor({
       next = retargetReferences(next, before, after);
       if (selected === before) setSelected(after);
     }
-    replace(
-      next,
-      undefined,
-      true,
-      variables,
-      editedField(table, component, value),
-    );
+    if (
+      replace(
+        next,
+        undefined,
+        true,
+        variables,
+        editedField(table, component, value),
+      ) === false
+    )
+      return;
     setError("");
   }
   function renameSelected(name: string) {
@@ -3740,12 +3974,15 @@ export default function Editor({
     try {
       const next = renameComponent(config, selectedNode.id, name);
       const after = name.trim();
-      replace(next, {
-        nodes: nodes.map((node) =>
-          node.id === selectedNode.id ? { ...node, id: after } : node,
-        ),
-        edges,
-      });
+      if (
+        replace(next, {
+          nodes: nodes.map((node) =>
+            node.id === selectedNode.id ? { ...node, id: after } : node,
+          ),
+          edges,
+        }) === false
+      )
+        return false;
       setSelected(after);
       setError("");
       return true;
@@ -3968,7 +4205,7 @@ export default function Editor({
       setSaveStatus("Unsaved changes");
       invalidateComparison();
       const stored = storeRecoveryDraft(
-        user.id,
+        actorId,
         id,
         {
           revision: latestServer.revision,
@@ -4066,9 +4303,9 @@ export default function Editor({
       pendingMetadata.current = null;
       setPendingMetadataView(null);
       clearRecoveryDraft(
-        user.id,
+        actorId,
         id,
-        recoveryDraftId(user.id, id, recoveryCopyId),
+        recoveryDraftId(actorId, id, recoveryCopyId),
       );
       setRecovery(null);
       setConflictStored(null);
@@ -4264,21 +4501,27 @@ export default function Editor({
       );
       return;
     }
-    replace({
-      ...config,
-      transforms: {
-        ...config.transforms,
-        [problem.component!]: withVrlValue(current, problem.field!, fixed),
-      },
-    });
+    if (
+      replace({
+        ...config,
+        transforms: {
+          ...config.transforms,
+          [problem.component!]: withVrlValue(current, problem.field!, fixed),
+        },
+      }) === false
+    )
+      return;
     notify(`Applied: ${problem.fix!.label}.`, { tone: "success" });
   }
   function saveSampleTests(tests: Config[]) {
     if (!editable || importedCodeDirty.current || !tests.length) return;
-    replace({
-      ...config,
-      tests: [...(Array.isArray(config.tests) ? config.tests : []), ...tests],
-    });
+    if (
+      replace({
+        ...config,
+        tests: [...(Array.isArray(config.tests) ? config.tests : []), ...tests],
+      }) === false
+    )
+      return;
     notify(
       tests.length === 1
         ? `Added pipeline test “${tests[0].name}”. Save to keep it.`
@@ -4308,13 +4551,16 @@ export default function Editor({
         value,
       ]),
     );
-    replace(
-      retargetReferences(
-        next,
-        `${selectedNode.id}.${before}`,
-        `${selectedNode.id}.${after}`,
-      ),
-    );
+    if (
+      replace(
+        retargetReferences(
+          next,
+          `${selectedNode.id}.${before}`,
+          `${selectedNode.id}.${after}`,
+        ),
+      ) === false
+    )
+      return;
     setError("");
   }
   function removeRoute(name: string) {
@@ -4371,7 +4617,7 @@ export default function Editor({
   }, [publishOpen]);
   // Where this pipeline's versions are assigned, read when the review opens.
   useEffect(() => {
-    if (!publishOpen || publishedResult) return;
+    if (local || !publishOpen || publishedResult) return;
     let alive = true;
     const controller = new AbortController();
     setPublishReach(null);
@@ -4405,7 +4651,7 @@ export default function Editor({
       controller.abort();
     };
   }, [publishOpen, publishedResult, id]);
-  const saveIndicator = (
+  const saveIndicator = local ? null : (
     <PipelineSaveStatus
       status={displaySaveStatus}
       publishedVersionNumber={
@@ -4476,12 +4722,12 @@ export default function Editor({
           onPendingChange={schemaPendingChange}
           onRouteRename={renameRoute}
           onRouteRemove={removeRoute}
-          pipelineId={id}
-          userId={user.id}
+          pipelineId={local ? undefined : id}
+          userId={local ? undefined : actorId}
           timezone={
             typeof config.timezone === "string" ? config.timezone : undefined
           }
-          canRunSamples={checkable}
+          canRunSamples={!local && checkable}
           existingTests={Array.isArray(config.tests) ? config.tests : []}
           secretNames={pipelineSecretNames}
           onSaveTests={editable ? saveSampleTests : undefined}
@@ -4510,7 +4756,9 @@ export default function Editor({
       onOpenChange={setProblemsOpen}
       verdict={
         problemCounts.errors && !checkError && !checkStale
-          ? "Fix the errors to publish." + unappliedCheckNotice
+          ? (local
+              ? "Fix the local configuration errors."
+              : "Fix the errors to publish.") + unappliedCheckNotice
           : verdict
       }
       autoCheck={checkable ? autoCheck : undefined}
@@ -4860,69 +5108,73 @@ export default function Editor({
     );
   return (
     <div className="editor-page editor-redesigned">
-      <div className="editor-header">
-        <div className="editor-title">
-          <button
-            className="editor-back"
-            disabled={busy}
-            onClick={() => {
-              if (busy) return;
-              if (historyOpen) setHistoryOpen(false);
-              else navigate(pipelineRoute(undefined, initialDeviceId));
-            }}
-          >
-            <ArrowLeft size={16} aria-hidden="true" />
-            {historyOpen ? "Back to editor" : "Pipelines"}
-          </button>
-          <div className="page-title-row">
-            <h1 aria-label={pendingMetadataView?.name ?? doc.name}>
-              <button
-                type="button"
-                className="editor-details-trigger editor-name-trigger"
-                ref={detailsTitleRef}
-                aria-label={`${editable ? "Edit" : "View"} pipeline details: ${pendingMetadataView?.name ?? doc.name}`}
-                title={
-                  editable ? "Edit pipeline details" : "View pipeline details"
-                }
-                disabled={busy}
-                onClick={(event) => openDetails(event.currentTarget)}
-              >
-                <span>{pendingMetadataView?.name ?? doc.name}</span>
-                {editable && <Pencil size={14} aria-hidden="true" />}
-              </button>
-            </h1>
-            <HelpLink
-              topic="pipelines"
-              section="add-and-connect-components"
-              label="Help for the pipeline editor"
-            />
+      {local ? (
+        local.header(doc.name)
+      ) : (
+        <div className="editor-header">
+          <div className="editor-title">
+            <button
+              className="editor-back"
+              disabled={busy}
+              onClick={() => {
+                if (busy) return;
+                if (historyOpen) setHistoryOpen(false);
+                else navigate(pipelineRoute(undefined, initialDeviceId));
+              }}
+            >
+              <ArrowLeft size={16} aria-hidden="true" />
+              {historyOpen ? "Back to editor" : "Pipelines"}
+            </button>
+            <div className="page-title-row">
+              <h1 aria-label={pendingMetadataView?.name ?? doc.name}>
+                <button
+                  type="button"
+                  className="editor-details-trigger editor-name-trigger"
+                  ref={detailsTitleRef}
+                  aria-label={`${editable ? "Edit" : "View"} pipeline details: ${pendingMetadataView?.name ?? doc.name}`}
+                  title={
+                    editable ? "Edit pipeline details" : "View pipeline details"
+                  }
+                  disabled={busy}
+                  onClick={(event) => openDetails(event.currentTarget)}
+                >
+                  <span>{pendingMetadataView?.name ?? doc.name}</span>
+                  {editable && <Pencil size={14} aria-hidden="true" />}
+                </button>
+              </h1>
+              <HelpLink
+                topic="pipelines"
+                section="add-and-connect-components"
+                label="Help for the pipeline editor"
+              />
+            </div>
+            {((pendingMetadataView?.description ?? doc.description) ||
+              editable) && (
+              <p className="editor-description">
+                <button
+                  type="button"
+                  className={`editor-details-trigger editor-description-trigger${(pendingMetadataView?.description ?? doc.description) ? "" : " editor-description-empty"}`}
+                  aria-label={
+                    editable
+                      ? "Edit pipeline description"
+                      : "View pipeline description"
+                  }
+                  title={
+                    editable
+                      ? "Edit pipeline description"
+                      : "View pipeline description"
+                  }
+                  disabled={busy}
+                  onClick={(event) => openDetails(event.currentTarget)}
+                >
+                  {(pendingMetadataView?.description ?? doc.description) ||
+                    "Add description"}
+                </button>
+              </p>
+            )}
           </div>
-          {((pendingMetadataView?.description ?? doc.description) ||
-            editable) && (
-            <p className="editor-description">
-              <button
-                type="button"
-                className={`editor-details-trigger editor-description-trigger${(pendingMetadataView?.description ?? doc.description) ? "" : " editor-description-empty"}`}
-                aria-label={
-                  editable
-                    ? "Edit pipeline description"
-                    : "View pipeline description"
-                }
-                title={
-                  editable
-                    ? "Edit pipeline description"
-                    : "View pipeline description"
-                }
-                disabled={busy}
-                onClick={(event) => openDetails(event.currentTarget)}
-              >
-                {(pendingMetadataView?.description ?? doc.description) ||
-                  "Add description"}
-              </button>
-            </p>
-          )}
         </div>
-      </div>
+      )}
       <input
         ref={fileRef}
         type="file"
@@ -5027,7 +5279,7 @@ export default function Editor({
             <strong>Archived pipeline.</strong> The draft is read-only.
             Published versions and running deployments remain available.
           </p>
-          {can(user, "edit") && (
+          {serverCan("edit") && (
             <Button
               variant="secondary compact"
               disabled={busy}
@@ -5041,7 +5293,7 @@ export default function Editor({
         !doc.archived &&
         !editable && (
           <p className="editor-readonly">
-            {can(user, "operate")
+            {serverCan("operate")
               ? "You can publish and deploy this draft. An editor or administrator can change its steps."
               : "You have read-only access to this pipeline."}
           </p>
@@ -5053,10 +5305,10 @@ export default function Editor({
           onClear={() => navigate(pipelineRoute(id))}
         />
       )}
-      {can(user, "operate") && !busy && (
+      {serverCan("operate") && !busy && (
         <PublishRecovery
           ref={publishRecoveryRef}
-          user={user}
+          user={user!}
           configurationId={id}
           showRecent={false}
           onRecovered={acceptPublishedVersion}
@@ -5068,10 +5320,10 @@ export default function Editor({
           }}
         />
       )}
-      {can(user, "edit") && !busy && (
+      {serverCan("edit") && !busy && (
         <PipelineCreationRecovery
           ref={pipelineCreationRecoveryRef}
-          user={user}
+          user={user!}
           showRecent={false}
           onRecovered={() => {
             /* Recovery never replaces this editor's draft. */
@@ -5093,7 +5345,7 @@ export default function Editor({
           configuration={doc}
           draft={config}
           hasPendingFields={hasPendingFields}
-          user={user}
+          user={user!}
           onClose={() => setHistoryOpen(false)}
           onRestore={restoreSnapshot}
           onDeploy={setDeployVersion}
@@ -5224,17 +5476,19 @@ export default function Editor({
                       Pipeline details
                     </button>
                   )}
-                  <button onClick={openHistory}>
-                    <History size={16} aria-hidden="true" />
-                    Version history
-                  </button>
+                  {!local && (
+                    <button onClick={openHistory}>
+                      <History size={16} aria-hidden="true" />
+                      Version history
+                    </button>
+                  )}
                   {editable && (
                     <button onClick={() => tool(addMonitoring)}>
                       <Activity size={16} aria-hidden="true" />
                       Add monitoring
                     </button>
                   )}
-                  {can(user, "edit") && (
+                  {serverCan("edit") && (
                     <>
                       <hr className="editor-tools-divider" />
                       <button
@@ -5291,7 +5545,7 @@ export default function Editor({
                     <Download size={16} aria-hidden="true" />
                     Export configuration
                   </button>
-                  {(can(user, "operate") || can(user, "edit")) && (
+                  {(serverCan("operate") || serverCan("edit")) && (
                     <>
                       <hr className="editor-tools-divider" />
                       <p className="editor-tools-heading">
@@ -5299,7 +5553,7 @@ export default function Editor({
                       </p>
                     </>
                   )}
-                  {can(user, "operate") && (
+                  {serverCan("operate") && (
                     <button
                       onClick={() => {
                         const opener =
@@ -5313,7 +5567,7 @@ export default function Editor({
                       Your publish requests
                     </button>
                   )}
-                  {can(user, "edit") && (
+                  {serverCan("edit") && (
                     <button
                       onClick={() => {
                         const opener =
@@ -5332,7 +5586,7 @@ export default function Editor({
                 </div>
               </details>
               {saveIndicator}
-              {!historyOpen && (can(user, "operate") || editable) && (
+              {!local && !historyOpen && (serverCan("operate") || editable) && (
                 <div
                   className="editor-primary-action"
                   role="group"
@@ -5437,7 +5691,7 @@ export default function Editor({
                       </DropdownMenu.Root>
                     </div>
                   )}
-                  {can(user, "operate") && (
+                  {serverCan("operate") && (
                     <Button
                       className="editor-primary-button"
                       icon={
@@ -5557,8 +5811,8 @@ export default function Editor({
               </small>
             )}
             {recoveryKey &&
-              !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
-              !isLegacyRecoveryDraft(user.id, id, recoveryKey) && (
+              !ownsRecoveryDraft(actorId, id, recoveryKey, recoveryCopyId) &&
+              !isLegacyRecoveryDraft(actorId, id, recoveryKey) && (
                 <small>
                   {activeRecoveryCopy
                     ? "This copy may be open in another tab. Restoring makes a separate copy; close the other tab before discarding it."
@@ -5588,14 +5842,14 @@ export default function Editor({
               disabled={
                 activeRecoveryCopy ||
                 (!!recoveryKey &&
-                  ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
+                  ownsRecoveryDraft(actorId, id, recoveryKey, recoveryCopyId) &&
                   restoreBlocked)
               }
               onClick={discardRecovery}
             >
               {recoveryKey &&
-              !ownsRecoveryDraft(user.id, id, recoveryKey, recoveryCopyId) &&
-              !isLegacyRecoveryDraft(user.id, id, recoveryKey)
+              !ownsRecoveryDraft(actorId, id, recoveryKey, recoveryCopyId) &&
+              !isLegacyRecoveryDraft(actorId, id, recoveryKey)
                 ? "Discard copy"
                 : "Discard"}
             </Button>
@@ -5604,14 +5858,24 @@ export default function Editor({
         {publishedVersionStatus === "failed" && (
           <div className="editor-published-status-error" role="status">
             <span>Published version check failed: {publishedVersionError}</span>
-            {!can(user, "operate") && (
+            {!serverCan("operate") && (
               <button type="button" onClick={retryPublishedVersion}>
                 Retry version check
               </button>
             )}
           </div>
         )}
-        {view === "canvas" ? (
+        {view === "canvas" && graphOmitted ? (
+          <div className="designer-graph-omitted">
+            <h2>Configuration preserved.</h2>
+            <p>
+              This file exceeds the graph display limit: 500 components, 2,000
+              connections or output ports, or 128 outputs per component. Open
+              Code to inspect, edit and export the complete source.
+            </p>
+            <Button onClick={() => changeView("code")}>Open Code</Button>
+          </div>
+        ) : view === "canvas" ? (
           <div
             className={`editor-workspace ${inlineSettings ? "editor-workspace-inspecting" : ""}`}
           >
@@ -5819,6 +6083,10 @@ export default function Editor({
                     "onEdgeMouseEnter",
                     (_event, edge) => hoverConnection(edge.id, true),
                   )}
+                  onEdgeMouseMove={stableCanvasHandler(
+                    "onEdgeMouseMove",
+                    (_event, edge) => hoverConnection(edge.id, true),
+                  )}
                   onEdgeMouseLeave={stableCanvasHandler(
                     "onEdgeMouseLeave",
                     (_event, edge) => hoverConnection(edge.id, false),
@@ -5914,6 +6182,7 @@ export default function Editor({
                       connectionCancelled.current = true;
                       if (reconnectGesture.current)
                         reconnectGesture.current.cancelled = true;
+                      setReconnecting(false);
                       setConnectionGesture(null);
                     }}
                   />
@@ -6380,7 +6649,8 @@ export default function Editor({
                   {importedCodeDirty.current
                     ? "Code changes have not been applied to the draft."
                     : "Code matches the current draft."}
-                  {importedCodeDirty.current &&
+                  {!local &&
+                    importedCodeDirty.current &&
                     hasSourceComments(code, format) && (
                       <strong className="editor-code-comments">
                         {" "}
@@ -6407,7 +6677,24 @@ export default function Editor({
                     try {
                       const parsed = parse(code);
                       if (refusePlainCode(parsed)) return;
-                      replace(parsed);
+                      if (
+                        replace(
+                          parsed,
+                          undefined,
+                          true,
+                          variables,
+                          undefined,
+                          local
+                            ? {
+                                name: doc.name,
+                                config: parsed,
+                                source: code,
+                                format: format as ConfigurationFormat,
+                              }
+                            : undefined,
+                        ) === false
+                      )
+                        return;
                       importedCodeDirty.current = false;
                       setError("");
                       notify("Code changes applied to the draft.", {
@@ -6807,7 +7094,7 @@ export default function Editor({
       {pipelineAction && (
         <PipelineActions
           {...pipelineAction}
-          user={user}
+          user={user!}
           onClose={() => setPipelineAction(null)}
           onRecovery={() => {
             setPipelineAction(null);
@@ -6833,10 +7120,10 @@ export default function Editor({
           }}
         />
       )}
-      {deployVersion && can(user, "operate") && (
+      {deployVersion && serverCan("operate") && (
         <TargetDialog
-          key={user.id}
-          userId={user.id}
+          key={actorId}
+          userId={actorId}
           open
           onClose={() => setDeployVersion(null)}
           version={deployVersion}
@@ -6865,7 +7152,7 @@ export default function Editor({
       )}
       {copyDraft && (
         <StaleDraftCopyDialog
-          actorId={user.id}
+          actorId={actorId}
           copy={copyDraft}
           onClose={() => setCopyDraft(null)}
           onReviewRequest={() => {
@@ -6917,6 +7204,8 @@ export default function Editor({
           }}
           editable={editable && !codeUnapplied}
           codeChangesPending={codeUnapplied}
+          canRunTests={!local}
+          local={!!local}
         />
       )}
     </div>

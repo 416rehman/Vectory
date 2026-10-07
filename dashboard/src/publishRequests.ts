@@ -346,14 +346,19 @@ export function subscribePublishOperations(
     window.removeEventListener("pageshow", refresh);
   };
 }
-export function usePublishOperations(actor: string, configurationId: string) {
+export function usePublishOperations(
+  actor: string,
+  configurationId: string,
+  enabled = true,
+) {
   const [, refresh] = useState(0);
-  useEffect(
-    () =>
-      subscribePublishOperations(actor, configurationId, () =>
-        refresh((value) => value + 1),
-      ),
-    [actor, configurationId],
-  );
-  return readPublishOperations(actor, configurationId);
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribePublishOperations(actor, configurationId, () =>
+      refresh((value) => value + 1),
+    );
+  }, [actor, configurationId, enabled]);
+  return enabled
+    ? readPublishOperations(actor, configurationId)
+    : { operations: [], errors: [] };
 }

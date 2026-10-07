@@ -78,6 +78,8 @@ export default function PipelineGlobals({
   onVariablesChange,
   onClose,
   editable,
+  local = false,
+  canRunTests = true,
   codeChangesPending = false,
   initialSection = "general",
   initialTest,
@@ -88,12 +90,16 @@ export default function PipelineGlobals({
   onVariablesChange: (next: VariableDeclaration[]) => void;
   onClose: () => void;
   editable: boolean;
+  local?: boolean;
+  canRunTests?: boolean;
   codeChangesPending?: boolean;
   initialSection?: PipelineSection;
   /** Opens the Tests section on this test (1-based), as a review found it failing. */
   initialTest?: number;
 }) {
-  const [section, setSection] = useState<string>(initialSection),
+  const [section, setSection] = useState<string>(
+      local && initialSection === "variables" ? "general" : initialSection,
+    ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [result, setResult] = useState<PipelineTestRun | null>(null);
@@ -238,6 +244,7 @@ export default function PipelineGlobals({
     onChange(next);
   }
   async function runTests() {
+    if (!canRunTests) return;
     if (codeChangesPending) return;
     if (pending.current.size) {
       setError("Resolve or apply pending field edits before running tests.");
@@ -263,7 +270,11 @@ export default function PipelineGlobals({
       open
       onClose={close}
       title="Pipeline settings"
-      description="Global configuration for this pipeline. Use Save draft to keep your changes."
+      description={
+        local
+          ? "Global configuration for this pipeline. Export configuration to keep your changes."
+          : "Global configuration for this pipeline. Use Save draft to keep your changes."
+      }
       wide
     >
       <div className="pipeline-global-layout">
@@ -271,20 +282,22 @@ export default function PipelineGlobals({
           className="pipeline-global-nav"
           aria-label="Pipeline settings sections"
         >
-          {sections.map((item) => (
-            <button
-              key={item.id}
-              aria-current={item.id === section ? "page" : undefined}
-              onClick={() => {
-                if (discardPending()) {
-                  pending.current.clear();
-                  setSection(item.id);
-                }
-              }}
-            >
-              <TabLabel icon={item.icon}>{item.title}</TabLabel>
-            </button>
-          ))}
+          {sections
+            .filter((item) => !local || item.id !== "variables")
+            .map((item) => (
+              <button
+                key={item.id}
+                aria-current={item.id === section ? "page" : undefined}
+                onClick={() => {
+                  if (discardPending()) {
+                    pending.current.clear();
+                    setSection(item.id);
+                  }
+                }}
+              >
+                <TabLabel icon={item.icon}>{item.title}</TabLabel>
+              </button>
+            ))}
         </nav>
         <div
           className={`pipeline-global-body ${section !== "general" ? "global-specific" : ""}`}
@@ -326,6 +339,7 @@ export default function PipelineGlobals({
                   variant="secondary compact"
                   busy={busy}
                   disabled={
+                    !canRunTests ||
                     codeChangesPending ||
                     !Array.isArray(config.tests) ||
                     config.tests.length === 0
@@ -335,6 +349,12 @@ export default function PipelineGlobals({
                   Run pipeline tests
                 </Button>
               </div>
+              {!canRunTests && (
+                <p className="muted">
+                  Tests stay in the configuration. Run them in your Vectory
+                  server.
+                </p>
+              )}
               {error && <ErrorBox message={error} />}
               {result && (
                 <PipelineTestResults
@@ -347,7 +367,7 @@ export default function PipelineGlobals({
               )}
             </div>
           )}
-          {section === "variables" ? (
+          {section === "variables" && !local ? (
             <PipelineVariables
               config={config}
               variables={variables}
