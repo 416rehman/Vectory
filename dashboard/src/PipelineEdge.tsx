@@ -73,6 +73,9 @@ function PipelineEdge(props: EdgeProps) {
         <EdgeLabelRenderer>
           <span
             className="pipeline-edge-pattern-chip"
+            data-connection-highlight={
+              props.data?.connectionHighlight as string | undefined
+            }
             title={`Wildcard input ${pattern}. Vector resolves it on each device.`}
             style={{
               transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
@@ -104,6 +107,9 @@ function PipelineEdge(props: EdgeProps) {
         <EdgeLabelRenderer>
           <span
             className="pipeline-edge-rate"
+            data-connection-highlight={
+              props.data?.connectionHighlight as string | undefined
+            }
             data-empty={rate === null || undefined}
             aria-hidden="true"
             style={{

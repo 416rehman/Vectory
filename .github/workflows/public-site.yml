@@ -40,11 +40,13 @@ jobs:
         run: node site/scripts/build.mjs
       - name: Test public content and documentation links
         run: node --test site/tests/site.test.mjs
-      - name: Install the test browser
-        run: npx playwright install --with-deps chromium
+      - name: Install the test browsers
+        run: npx playwright install --with-deps chromium firefox
         working-directory: dashboard
       - name: Check the standalone designer in a browser
         run: node site/tests/designer-browser.mjs
+      - name: Check source flow paths in Chromium and Firefox
+        run: node site/tests/flow-path-browser.mjs
       - name: Verify deployable entry points
         run: |
           test -s site/dist/index.html

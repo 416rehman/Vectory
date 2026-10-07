@@ -146,6 +146,7 @@ import PublishReview from "./PublishReview";
 import { stopsPublishing, usePublishTests } from "./publishTests";
 import { deviceReach, reachLabel } from "./publishReviewModel";
 import { pipelineConnectivity } from "./pipelineConnectivity";
+import { downstreamFlowPath } from "./pipelineFlowPath";
 import SelectedDevice, { pipelineRoute } from "./SelectedDevice";
 import type {
   PipelineDestination,
@@ -3904,6 +3905,19 @@ export default function Editor({
     [config, graphOmitted],
   );
   const patternEdgeList = useMemo(() => patternEdges(patterns), [patterns]);
+  const flowSource =
+    highlightEnabled &&
+    selectedNode?.data.kind === "sources" &&
+    (!selectedNode.data.enrichmentTable || selectedNode.data.implicitSource)
+      ? selectedNode.id
+      : undefined;
+  const sourceFlowPath = useMemo(
+    () =>
+      flowSource
+        ? downstreamFlowPath(flowSource, nodes, edges, patterns)
+        : null,
+    [flowSource, nodes, edges, patterns],
+  );
   const component = selectedNode
     ? selectedNode.data.enrichmentTable
       ? config.enrichment_tables?.[selectedNode.data.enrichmentTable]
@@ -4961,7 +4975,11 @@ export default function Editor({
         )
         ? "endpoint"
         : "dimmed"
-      : undefined;
+      : sourceFlowPath
+        ? sourceFlowPath.nodes.has(node.id)
+          ? "endpoint"
+          : "dimmed"
+        : undefined;
     const problem = nodeProblemData(node),
       ports = validPorts.get(node.id),
       outputs = ports?.outputs || [],
@@ -5030,7 +5048,11 @@ export default function Editor({
       ? highlightedConnection.id === edge.id
         ? "active"
         : "dimmed"
-      : undefined;
+      : sourceFlowPath
+        ? sourceFlowPath.edges.has(edge.id)
+          ? "active"
+          : "dimmed"
+        : undefined;
     const category = nodeKinds.get(edge.source) || "transforms";
     const rate = liveOn
       ? edgeRate(liveData, edge.source, edge.sourceHandle || "output")
@@ -5067,13 +5089,21 @@ export default function Editor({
   });
   // Wildcard inputs draw a dashed, read-only line to each output they match.
   const currentPatternEdges = patternEdgeList.map((edge) => {
+    const highlight = highlightedConnection
+      ? "dimmed"
+      : sourceFlowPath
+        ? sourceFlowPath.nodes.has(edge.source) &&
+          sourceFlowPath.nodes.has(edge.target)
+          ? "active"
+          : "dimmed"
+        : undefined;
     const category = nodeKinds.get(edge.source) || "transforms";
     const rate = liveOn
       ? edgeRate(liveData, edge.source, edge.sourceHandle)
       : undefined;
     return cachedFlowObject(
       `pattern:${edge.id}`,
-      [edge, category, connectionStyle, rate],
+      [edge, highlight, category, connectionStyle, rate],
       () => ({
         id: edge.id,
         source: edge.source,
@@ -5088,6 +5118,7 @@ export default function Editor({
         reconnectable: false,
         ariaLabel: `Wildcard input ${edge.pattern}: ${edge.source}${edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
         domAttributes: {
+          "data-connection-highlight": highlight,
           "data-pipeline-category": category,
         } as Edge["domAttributes"],
         data: {
@@ -5096,6 +5127,7 @@ export default function Editor({
           pattern: edge.pattern,
           patternMore: edge.more,
           liveRate: rate,
+          connectionHighlight: highlight,
         },
       }),
     );
@@ -5923,6 +5955,7 @@ export default function Editor({
                 role="region"
                 aria-label="Pipeline canvas"
                 data-highlighted-connection={highlightedConnection?.id}
+                data-flow-source={flowSource}
                 onKeyDownCapture={graphKeyDown}
                 onPointerLeave={() => setHoveredConnection(null)}
                 onPointerDownCapture={(event) => {
@@ -6249,6 +6282,24 @@ export default function Editor({
                       >
                         <Blocks size={18} aria-hidden="true" />
                         <span>Add component</span>
+                      </button>
+                    </Panel>
+                  )}
+                  {flowSource && !highlightedConnection && (
+                    <Panel
+                      position="top-left"
+                      className="editor-flow-path-status"
+                    >
+                      <span role="status">
+                        Showing downstream paths from{" "}
+                        <strong>{flowSource}</strong>
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Clear flow path"
+                        onClick={dismissInspector}
+                      >
+                        <X size={14} aria-hidden="true" />
                       </button>
                     </Panel>
                   )}

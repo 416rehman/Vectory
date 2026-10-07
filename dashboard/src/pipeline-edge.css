@@ -133,6 +133,55 @@
   opacity: 0.25;
 }
 .editor-graph
+  :is(
+    .pipeline-edge-pattern-chip,
+    .pipeline-edge-rate
+  )[data-connection-highlight="dimmed"] {
+  opacity: 0.25;
+}
+.editor-flow-path-status {
+  margin-top: calc(var(--space-4) + var(--control-lg) + var(--space-3));
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - 32px);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-muted);
+  box-shadow: var(--shadow-xs);
+  font-size: var(--text-xs);
+}
+.editor-flow-path-status > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.editor-flow-path-status strong {
+  color: var(--text);
+}
+.editor-flow-path-status button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.editor-flow-path-status button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.editor-flow-path-status button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.editor-graph
   .react-flow__node[data-connection-highlight="dimmed"]
   .pipeline-node {
   --pipeline-node-tone: var(--muted);
@@ -188,6 +237,11 @@
 @media (prefers-contrast: more), (forced-colors: active) {
   .editor-graph .react-flow__node[data-connection-highlight="dimmed"],
   .editor-graph .react-flow__edge[data-connection-highlight="dimmed"],
+  .editor-graph
+    :is(
+      .pipeline-edge-pattern-chip,
+      .pipeline-edge-rate
+    )[data-connection-highlight="dimmed"],
   .editor-graph .pipeline-edge-actions[data-connection-highlight="dimmed"] {
     opacity: 1;
   }
