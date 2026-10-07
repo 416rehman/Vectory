@@ -71,6 +71,12 @@ Runs on pushes, pull requests and manual dispatch. The deploy job runs only on `
 | `release-ready` | The advertised stable release is public and contains the required signing inventory, or deployment is explicitly held until those assets exist | Independent signature verification or a deployed website |
 | `deploy` | With Cloudflare credentials configured, the built artifact was uploaded to the `vectory` Pages project; without them, the job warns and skips | That the custom domain is attached and resolving; check the actual deployment result and `/`, `/designer/` and `/help/` before announcing the site |
 
+Configure a Cloudflare Browser TTL rule scoped to `vectory.ahmadz.ai` to respect origin
+`Cache-Control`. The default four-hour Browser TTL can override a lower origin max-age;
+the media response was observed changing from 3,600 to 14,400 seconds. After deployment,
+check that media max-age, installer `no-store` and HTML revalidation directives match
+the built artifact.
+
 ## product-screenshots.yml
 
 Runs only when dispatched. The job starts with fresh local state and uploads images for human review; it does not replace tracked screenshots or publish anything.
@@ -81,7 +87,16 @@ Runs only when dispatched. The job starts with fresh local state and uploads ima
 
 ## platforms.yml
 
-Runs when dispatched (`gh workflow run platforms.yml --ref <branch>`) and when the workflow or a script it runs changes, not on every push. A newer run cancels the Linux and browser jobs it replaces; a Windows or macOS job that is under way finishes and the newest one waits for its turn, because those proofs take longer than changes come. Each job keeps its evidence as the `platforms-<job>` artifact: one JSON file per phase (the checks in order, how long each took, what it observed) and the logs. The scripts are in `tests/platform/`; `node --test tests/platform/lib.test.mjs`, an early step of each service job, unit-tests the parsers they rely on against the text the tools print.
+Runs when dispatched (`gh workflow run platforms.yml --ref <branch>`), when a branch changes a
+listed workflow or helper, and when the signed release calls it. Tag pushes do not start a
+second standalone run. Each job's concurrency group includes the caller workflow and Git ref,
+so release calls and standalone runs have separate groups. Within a group, a newer run cancels
+Linux and browser jobs; Windows and macOS jobs finish before the next run starts.
+
+Each job keeps its evidence as the `platforms-<job>` artifact: one JSON file per phase (the checks
+in order, how long each took, what it observed) and the logs. The scripts are in `tests/platform/`;
+`node --test tests/platform/lib.test.mjs`, an early step of each service job, tests the parsers
+against the text the tools print.
 
 | Job | Runs | A green run shows | It does not show |
 | --- | --- | --- | --- |

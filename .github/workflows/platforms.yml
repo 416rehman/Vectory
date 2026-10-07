@@ -11,6 +11,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: ["**"]
     paths:
       - ".github/workflows/platforms.yml"
       - "tests/platform/**"
@@ -49,7 +50,7 @@ jobs:
   linux-service:
     runs-on: ubuntu-24.04
     concurrency:
-      group: platforms-linux-${{ github.ref }}
+      group: platforms-linux-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
     timeout-minutes: 210
     env:
@@ -253,7 +254,7 @@ jobs:
   windows:
     runs-on: windows-2025
     concurrency:
-      group: platforms-windows-${{ github.ref }}
+      group: platforms-windows-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
     timeout-minutes: 240
     defaults:
@@ -599,7 +600,7 @@ jobs:
   macos:
     runs-on: macos-15
     concurrency:
-      group: platforms-macos-${{ github.ref }}
+      group: platforms-macos-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
     timeout-minutes: 240
     env:
@@ -804,7 +805,7 @@ jobs:
   browsers:
     runs-on: ubuntu-24.04
     concurrency:
-      group: platforms-browsers-${{ github.ref }}
+      group: platforms-browsers-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
     timeout-minutes: 60
     env:
