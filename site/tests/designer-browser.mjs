@@ -63,7 +63,12 @@ try {
     viewport: { width: 1440, height: 1000 },
     acceptDownloads: true,
   });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin,
+  });
   const page = await context.newPage();
+  let downloadCount = 0;
+  page.on("download", () => downloadCount++);
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("request", (request) => {
     if (
@@ -106,15 +111,33 @@ try {
     await expect(dialog).not.toBeVisible();
   }
   async function exported(format) {
+    await page.getByRole("button", { name: "Export", exact: true }).click();
     const pending = page.waitForEvent("download");
     await page
-      .getByRole("button", {
-        name: `Export ${format.toUpperCase()}`,
+      .getByRole("menuitem", {
+        name: `Download ${format.toUpperCase()}`,
         exact: true,
       })
       .click();
     const download = await pending;
     return fs.readFile(await download.path(), "utf8");
+  }
+  async function copied(format, expected) {
+    await page.getByRole("button", { name: "Export", exact: true }).click();
+    await page
+      .getByRole("menuitem", {
+        name: `Copy ${format.toUpperCase()}`,
+        exact: true,
+      })
+      .click();
+    await expect
+      // Windows clipboard text uses native CRLF line endings.
+      .poll(() =>
+        page.evaluate(async () =>
+          (await navigator.clipboard.readText()).replace(/\r\n/g, "\n"),
+        ),
+      )
+      .toBe(expected.replace(/\r\n/g, "\n"));
   }
   async function noOverflow() {
     assert(
@@ -159,7 +182,7 @@ try {
   const toolsMenu = page.locator(".tools-menu");
   await toolsMenu.locator("summary").click();
   await expect(
-    toolsMenu.getByRole("link", { name: /Vector configuration designer/ }),
+    toolsMenu.getByRole("link", { name: /Vector config builder/ }),
   ).toBeVisible();
   await toolsMenu.locator("summary").press("Escape");
   await expect(toolsMenu).not.toHaveAttribute("open", "");
@@ -351,9 +374,36 @@ try {
   await expect(about).not.toHaveAttribute("open", "");
   await page.getByRole("button", { name: "Example", exact: true }).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(3);
-  await expect(page.locator(".designer-status")).toContainText(
-    "Synthetic example",
+  await expect(page.locator(".designer-file-name")).toHaveText(
+    "synthetic-example",
   );
+  await expect(page.locator(".designer-status")).toHaveCount(0);
+  await expect(
+    page
+      .locator(".editor-toolbar")
+      .getByRole("button", { name: "Export", exact: true }),
+  ).toHaveCount(1);
+  for (const name of ["New", "Import", "Example"]) {
+    await expect(
+      page
+        .locator(".editor-toolbar")
+        .getByRole("button", { name, exact: true }),
+    ).toHaveCount(1);
+  }
+  const exportButton = page.getByRole("button", {
+    name: "Export",
+    exact: true,
+  });
+  await exportButton.press("ArrowDown");
+  const exportMenu = page.getByRole("menu", {
+    name: "Export",
+    exact: true,
+  });
+  await expect(exportMenu).toBeVisible();
+  await accessible();
+  await exportMenu.press("Escape");
+  await expect(exportMenu).not.toBeVisible();
+  await expect(exportButton).toBeFocused();
   // This is the actual product workspace, including its port gestures, menus,
   // spotlight controller and inspector. No standalone equivalents are mounted.
   await page
@@ -390,6 +440,7 @@ try {
     fixture,
     "Untouched source lost comments or unknown values",
   );
+  await copied("yaml", fixture);
   await page
     .getByRole("button", { name: "Add component", exact: true })
     .click();
@@ -410,13 +461,16 @@ try {
   await page
     .getByRole("combobox", { name: "Format", exact: true })
     .selectOption("json");
-  const converted = JSON.parse(await exported("json"));
+  const convertedJson = await exported("json");
+  const converted = JSON.parse(convertedJson);
+  await copied("json", convertedJson);
   assert.equal(converted.custom.future_setting, "kept");
   assert.deepEqual(converted.sinks.out.inputs, ["sample"]);
   await page
     .getByRole("combobox", { name: "Format", exact: true })
     .selectOption("toml");
   const convertedToml = await exported("toml");
+  await copied("toml", convertedToml);
   assert(convertedToml.includes('future_setting = "kept"'));
 
   await importSource(fixture.replace("# synthetic browser regression\n", ""));
@@ -486,6 +540,37 @@ try {
     .locator(".editor-inspector")
     .getByRole("textbox", { name: "One in every", exact: true });
   await expect(rate).toHaveValue("10");
+  await rate.fill("-");
+  await expect(rate).toHaveAttribute("aria-invalid", "true");
+  const downloadsBeforePending = downloadCount;
+  const clipboardBeforePending = await page.evaluate(() =>
+    navigator.clipboard.readText(),
+  );
+  for (const action of ["Copy YAML", "Download YAML"]) {
+    await page.getByRole("button", { name: "Export", exact: true }).click();
+    await page.getByRole("menuitem", { name: action, exact: true }).click();
+    await expect(
+      page
+        .getByText(
+          "Apply or discard unfinished field changes before exporting.",
+          { exact: true },
+        )
+        .last(),
+    ).toBeVisible();
+  }
+  await expect(rate).toHaveValue("-");
+  assert.equal(
+    downloadCount,
+    downloadsBeforePending,
+    "An unfinished field exported older values",
+  );
+  assert.equal(
+    await page.evaluate(() => navigator.clipboard.readText()),
+    clipboardBeforePending,
+    "An unfinished field copied older values",
+  );
+  await rate.fill("10");
+  await expect(rate).toHaveAttribute("aria-invalid", "false");
   await rate.fill("20");
   await rate.press("Tab");
   const edited = await exported("yaml");

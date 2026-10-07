@@ -102,4 +102,4 @@ On macOS use `bash vectory-install.sh status`, `bash vectory-install.sh stop` an
 
 For native Linux, use `sudo /opt/vectory-server/0.2.1/start.sh status`, `stop` or `start`. Back up its complete `/var/lib/vectory-server` and `/etc/vectory-server` directories while services are stopped, retaining file ownership and private permissions. See [native server installation](install-server.md#install-without-docker-on-linux).
 
-If you only want to create or visualize a Vector configuration, try the [standalone designer](https://vectory.ahmadz.ai/designer/). It runs in your browser without an account or server installation.
+If you only want to create or visualize a Vector configuration, try the [Vector config builder and visualizer](https://vectory.ahmadz.ai/designer/). It runs in your browser without an account or server installation.

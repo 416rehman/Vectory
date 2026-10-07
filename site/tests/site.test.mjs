@@ -337,8 +337,23 @@ test("public pages have valid search metadata and usable branding assets", async
   assert.equal(preview.readUInt32BE(20), 630);
   assert.match(designer, /connect-src 'none'/);
   assert.match(designer, /Create a Vector configuration from an empty canvas/);
-  assert.match(designer, /<h1>Vector configuration designer<\/h1>/);
+  assert.match(designer, /<h1>Vector config builder<\/h1>/);
   assert.match(designer, /<summary>About this tool<\/summary>/);
   assert.match(designer, /Visualize and generate Vector configurations/);
   assert.match(designer, /name="twitter:card" content="summary_large_image"/);
+  const designerGraph = JSON.parse(designer.match(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/)?.[1])["@graph"];
+  const designerPage = designerGraph.find((node) => node["@type"] === "WebPage");
+  const designerApp = designerGraph.find((node) => node["@type"] === "WebApplication");
+  const designerBreadcrumbs = designerGraph.find((node) => node["@type"] === "BreadcrumbList");
+  assert.equal(designerPage.url, "https://vectory.ahmadz.ai/designer/");
+  assert.equal(designerApp.url, designerPage.url);
+  assert.equal(designerPage.mainEntity["@id"], designerApp["@id"]);
+  assert.equal(designerPage.breadcrumb["@id"], designerBreadcrumbs["@id"]);
+  assert.equal(designerBreadcrumbs.itemListElement.at(-1).item, designerPage.url);
+  assert.equal(designerApp.isAccessibleForFree, true);
+  assert.equal(designerApp.offers.price, "0");
+  for (const [attribute, key] of [["name", "description"], ["property", "og:description"], ["name", "twitter:description"]]) {
+    const tag = designer.match(new RegExp(`<meta\\b[^>]*\\b${attribute}="${key}"[^>]*>`))?.[0];
+    assert.equal(tag?.match(/content="([^"]+)"/)?.[1], designerPage.description);
+  }
 });

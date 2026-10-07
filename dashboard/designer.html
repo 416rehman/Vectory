@@ -11,7 +11,7 @@
     />
     <meta
       name="description"
-      content="Visualize Vector configs or generate a pipeline. Import YAML, JSON or TOML, edit sources and transforms, then export. Free, private and browser-based."
+      content="Free Vector config builder and visualizer. Create or import YAML, JSON and TOML, connect sources, transforms and sinks, and export. No account or uploads."
     />
     <link rel="canonical" href="https://vectory.ahmadz.ai/designer/" />
     <link rel="icon" href="/designer/favicon.svg" type="image/svg+xml" />
@@ -19,16 +19,16 @@
     <link rel="apple-touch-icon" href="/favicons/icon-180.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <title>
-      Vector configuration visualizer and pipeline designer | Vectory
+      Vector Config Builder &amp; Visualizer | Vectory
     </title>
     <meta property="og:type" content="website" />
     <meta
       property="og:title"
-      content="Vector configuration visualizer and pipeline designer | Vectory"
+      content="Vector Config Builder &amp; Visualizer | Vectory"
     />
     <meta
       property="og:description"
-      content="Create or import a Vector configuration, inspect its event flow, and export your work. Runs locally in your browser."
+      content="Free Vector config builder and visualizer. Create or import YAML, JSON and TOML, connect sources, transforms and sinks, and export. No account or uploads."
     />
     <meta property="og:url" content="https://vectory.ahmadz.ai/designer/" />
     <meta property="og:site_name" content="Vectory" />
@@ -45,11 +45,11 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="Vector configuration visualizer and pipeline designer | Vectory"
+      content="Vector Config Builder &amp; Visualizer | Vectory"
     />
     <meta
       name="twitter:description"
-      content="Create or import YAML, JSON or TOML, edit a Vector pipeline visually, and export it. Free, with no account or installation."
+      content="Free Vector config builder and visualizer. Create or import YAML, JSON and TOML, connect sources, transforms and sinks, and export. No account or uploads."
     />
     <meta
       name="twitter:image"
@@ -62,28 +62,52 @@
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "@id": "https://vectory.ahmadz.ai/designer/#application",
-        "name": "Vectory Vector configuration designer",
-        "url": "https://vectory.ahmadz.ai/designer/",
-        "description": "Create, import, visualize and edit Vector configurations in YAML, JSON or TOML, then export them. Configuration stays in the browser.",
-        "applicationCategory": "DeveloperApplication",
-        "operatingSystem": "Any operating system with a modern browser",
-        "browserRequirements": "Requires JavaScript",
-        "isAccessibleForFree": true,
-        "featureList": [
-          "Visualize Vector YAML, JSON and TOML configurations",
-          "Generate Vector pipelines from sources, transforms and sinks",
-          "Import and edit existing configuration files",
-          "Export configuration locally without an account"
-        ],
-        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-        "license": "https://www.apache.org/licenses/LICENSE-2.0",
-        "publisher": {
-          "@type": "Organization",
-          "name": "Vectory",
-          "url": "https://vectory.ahmadz.ai/"
-        }
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "@id": "https://vectory.ahmadz.ai/designer/#webpage",
+            "name": "Vector Config Builder & Visualizer | Vectory",
+            "url": "https://vectory.ahmadz.ai/designer/",
+            "description": "Free Vector config builder and visualizer. Create or import YAML, JSON and TOML, connect sources, transforms and sinks, and export. No account or uploads.",
+            "inLanguage": "en",
+            "isPartOf": { "@id": "https://vectory.ahmadz.ai/#website" },
+            "mainEntity": { "@id": "https://vectory.ahmadz.ai/designer/#application" },
+            "breadcrumb": { "@id": "https://vectory.ahmadz.ai/designer/#breadcrumbs" }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://vectory.ahmadz.ai/designer/#application",
+            "name": "Vectory Vector config builder and visualizer",
+            "url": "https://vectory.ahmadz.ai/designer/",
+            "description": "Create, import, visualize and edit Vector configurations in YAML, JSON or TOML, then export them. Configuration stays in the browser.",
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "Any operating system with a modern browser",
+            "browserRequirements": "Requires JavaScript",
+            "isAccessibleForFree": true,
+            "featureList": [
+              "Build Vector pipelines from sources, transforms and sinks",
+              "Visualize existing Vector YAML, JSON and TOML configurations",
+              "Edit configuration on the canvas or in the code editor",
+              "Export YAML, JSON or TOML locally without an account"
+            ],
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "license": "https://www.apache.org/licenses/LICENSE-2.0",
+            "publisher": {
+              "@type": "Organization",
+              "@id": "https://vectory.ahmadz.ai/#organization",
+              "name": "Vectory",
+              "url": "https://vectory.ahmadz.ai/"
+            }
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://vectory.ahmadz.ai/designer/#breadcrumbs",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Vectory", "item": "https://vectory.ahmadz.ai/" },
+              { "@type": "ListItem", "position": 2, "name": "Vector config builder", "item": "https://vectory.ahmadz.ai/designer/" }
+            ]
+          }
+        ]
       }
     </script>
   </head>
@@ -98,8 +122,8 @@
         />Vectory</a
       >
       <div class="designer-page-title">
-        <h1>Vector configuration designer</h1>
-        <span>Create, import, visualize and export</span>
+        <h1>Vector config builder</h1>
+        <span>Visualize and export YAML, JSON or TOML</span>
       </div>
       <nav aria-label="Site navigation">
         <a href="/help/pipelines/">Docs</a><a href="/#start">Install Vectory</a>
@@ -111,15 +135,17 @@
         <summary>About this tool</summary>
         <div class="designer-guide-content">
           <section class="designer-intro" aria-labelledby="designer-title">
-            <p class="designer-kicker">The open Vector canvas</p>
+            <p class="designer-kicker">Free Vector config builder and visualizer</p>
             <h2 id="designer-title">
               Visualize and generate Vector configurations.
             </h2>
             <p>
               Create a Vector configuration from an empty canvas, or import
-              YAML, JSON, or TOML and see how sources, transforms, and
-              destinations connect. Edit a component, draw a connection, then
-              export the configuration when you are ready.
+              YAML, JSON, or TOML and see how sources, transforms, and sinks
+              connect. Vector collects, transforms and routes observability
+              data such as logs and metrics. This visual pipeline builder helps
+              you edit its configuration and generate a file for your own
+              Vector installation.
             </p>
             <p class="designer-intro-note">
               This tool works entirely in your browser. It does not upload or
@@ -128,7 +154,7 @@
             </p>
           </section>
           <section class="designer-explainer" aria-labelledby="designer-how">
-            <h2 id="designer-how">From a file to a flow you can understand.</h2>
+            <h2 id="designer-how">Build a pipeline or visualize an existing config.</h2>
             <div>
               <p>
                 <strong>Start or import.</strong> Begin with a blank
@@ -136,8 +162,9 @@
                 or choose a local file up to 1 MiB.
               </p>
               <p>
-                <strong>Trace and edit.</strong> Inspect the components and
-                connections that make up your pipeline. The code view keeps
+                <strong>Trace and edit.</strong> Add sources, transforms and
+                sinks, connect their inputs and outputs, and inspect the event
+                flow. Switch between the graph and code editor. The code view keeps
                 every supported unknown setting available for direct editing.
               </p>
               <p>
@@ -157,10 +184,20 @@
                 <h3>Can I use an existing Vector configuration?</h3>
                 <p>
                   Yes. Import a local YAML, JSON or TOML file, or paste its
-                  code. Sources, transforms and destinations appear on the
+                  code. Sources, transforms and sinks appear on the
                   canvas. Unknown settings stay in the configuration. Exporting
-                  without editing preserves the original text, including
+                  in the same format without editing preserves the original text, including
                   comments.
+                </p>
+              </article>
+              <article>
+                <h3>Can I generate YAML, JSON or TOML for Vector?</h3>
+                <p>
+                  Yes. Build your configuration visually or edit it in the code
+                  view, then choose YAML, JSON or TOML when exporting. You can
+                  also import an existing file and export it in another
+                  supported format. TOML export is available when it can
+                  preserve all configuration values.
                 </p>
               </article>
               <article>
@@ -180,7 +217,7 @@
                   Vector binary before using it. See the
                   <a href="https://vector.dev/docs/reference/configuration/"
                     >Vector configuration reference</a
-                  >.
+                  > and the <a href="/help/pipelines/">Vectory pipeline guide</a>.
                 </p>
               </article>
             </div>

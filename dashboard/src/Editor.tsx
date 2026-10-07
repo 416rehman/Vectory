@@ -503,8 +503,14 @@ export default function Editor({
   /** Local file I/O around the actual product editor, with no server capabilities. */
   local?: {
     document: LocalDesignerDocument;
-    header: (name: string) => ReactNode;
-    exportRef: RefObject<((format?: ConfigurationFormat) => void) | null>;
+    toolbar: (name: string) => ReactNode;
+    exportRef: RefObject<
+      | ((
+          format?: ConfigurationFormat,
+          output?: "download" | "clipboard",
+        ) => void)
+      | null
+    >;
     onDirtyChange: (dirty: boolean) => void;
   };
 }) {
@@ -2705,18 +2711,47 @@ export default function Editor({
       );
     }
   }
-  function exportConfiguration(targetFormat = format as ConfigurationFormat) {
+  function exportConfiguration(
+    targetFormat = format as ConfigurationFormat,
+    output: "download" | "clipboard" = "download",
+  ) {
     if (!doc) return;
+    if (local && pendingFieldCount > 0) {
+      notify("Apply or discard unfinished field changes before exporting.", {
+        tone: "error",
+      });
+      return;
+    }
     try {
       const source = view === "code" ? code : stringify(config);
       const content =
         targetFormat === format
           ? source
           : renderBoundedConfiguration(parse(source), targetFormat);
-      download(
-        `${doc.name.replace(/[^a-z0-9_-]/gi, "_")}.${targetFormat}`,
-        content,
-      );
+      if (output === "clipboard") {
+        if (!navigator.clipboard?.writeText) {
+          notify(
+            "Clipboard access is unavailable. Download the configuration instead.",
+            { tone: "error" },
+          );
+          return;
+        }
+        void navigator.clipboard.writeText(content).then(
+          () =>
+            notify(`${targetFormat.toUpperCase()} copied.`, {
+              tone: "success",
+            }),
+          () =>
+            notify("Could not copy. Download the configuration instead.", {
+              tone: "error",
+            }),
+        );
+      } else {
+        download(
+          `${doc.name.replace(/[^a-z0-9_-]/gi, "_")}.${targetFormat}`,
+          content,
+        );
+      }
     } catch (failure) {
       setError((failure as Error).message);
     }
@@ -5108,9 +5143,7 @@ export default function Editor({
     );
   return (
     <div className="editor-page editor-redesigned">
-      {local ? (
-        local.header(doc.name)
-      ) : (
+      {!local && (
         <div className="editor-header">
           <div className="editor-title">
             <button
@@ -5405,6 +5438,7 @@ export default function Editor({
             ))}
           </nav>
           <div className="editor-toolbar-actions">
+            {local?.toolbar(doc.name)}
             <div className="editor-toolbar-secondary">
               {editable && (dirty || hasPendingFields) && (
                 <Button
@@ -5541,10 +5575,12 @@ export default function Editor({
                       </button>
                     </>
                   )}
-                  <button onClick={() => tool(exportConfiguration)}>
-                    <Download size={16} aria-hidden="true" />
-                    Export configuration
-                  </button>
+                  {!local && (
+                    <button onClick={() => tool(exportConfiguration)}>
+                      <Download size={16} aria-hidden="true" />
+                      Export configuration
+                    </button>
+                  )}
                   {(serverCan("operate") || serverCan("edit")) && (
                     <>
                       <hr className="editor-tools-divider" />

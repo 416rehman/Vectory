@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  ChevronDown,
+  Copy,
   Download,
   FilePlus2,
   FolderOpen,
@@ -38,9 +41,6 @@ function Designer() {
     sequence: 0,
     document: emptyDocument(),
   }));
-  const [notice, setNotice] = useState(
-    "No configuration is uploaded or automatically saved.",
-  );
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importFormat, setImportFormat] = useState<ConfigurationFormat>("yaml");
@@ -48,9 +48,13 @@ function Designer() {
   const [importError, setImportError] = useState("");
   const importDialog = useRef<HTMLDialogElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const exportRef = useRef<((format?: ConfigurationFormat) => void) | null>(
-    null,
-  );
+  const exportRef = useRef<
+    | ((
+        format?: ConfigurationFormat,
+        output?: "download" | "clipboard",
+      ) => void)
+    | null
+  >(null);
   const dirty = useRef(false);
   const onDirtyChange = useCallback((value: boolean) => {
     dirty.current = value;
@@ -107,11 +111,12 @@ function Designer() {
       dirty.current = false;
       setImportOpen(false);
       setImportError("");
-      setNotice(
-        graphIsTooLarge(config)
-          ? "Configuration preserved. Graph display limits exceeded; use Code and Export for the complete file."
-          : "Configuration loaded locally. Export to keep your work.",
-      );
+      if (graphIsTooLarge(config)) {
+        notifyToast(
+          "Configuration preserved. Graph display limits exceeded; use Code and Export for the complete file.",
+          { tone: "info" },
+        );
+      }
       return true;
     } catch (error) {
       setImportError(
@@ -140,7 +145,7 @@ function Designer() {
       );
     }
   }
-  const header = (name: string) => (
+  const toolbar = (name: string) => (
     <div className="designer-file-toolbar">
       <span className="designer-file-name" title={name}>
         {name}
@@ -156,9 +161,6 @@ function Designer() {
               document: emptyDocument(),
             }));
             dirty.current = false;
-            setNotice(
-              "New local configuration. Nothing is uploaded or automatically saved.",
-            );
           }}
         >
           New
@@ -177,42 +179,71 @@ function Designer() {
           variant="ghost compact"
           icon={LayoutTemplate}
           onClick={() => {
-            if (
-              load(
-                stringifyConfiguration(starter, "yaml"),
-                "yaml",
-                "synthetic-example",
-              )
-            )
-              setNotice(
-                "Synthetic example. This is sample configuration, not a connected fleet.",
-              );
+            load(
+              stringifyConfiguration(starter, "yaml"),
+              "yaml",
+              "synthetic-example",
+            );
           }}
         >
           Example
         </Button>
-        <div
-          className="designer-export-actions"
-          role="group"
-          aria-label="Export configuration"
-        >
-          {(["yaml", "json", "toml"] as ConfigurationFormat[]).map((format) => (
-            <Button
-              key={format}
-              variant="secondary compact"
-              icon={Download}
-              onClick={() => exportRef.current?.(format)}
-            >
-              Export {format.toUpperCase()}
+        <DropdownMenu.Root modal={false}>
+          <DropdownMenu.Trigger asChild>
+            <Button variant="secondary compact" icon={Download}>
+              Export <ChevronDown size={14} aria-hidden="true" />
             </Button>
-          ))}
-        </div>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              className="editor-save-menu designer-export-menu"
+              align="end"
+              sideOffset={6}
+              collisionPadding={12}
+              aria-label="Export configuration"
+              loop
+              onEscapeKeyDown={(event) => event.stopPropagation()}
+            >
+              <DropdownMenu.Label className="designer-export-label">
+                Download file
+              </DropdownMenu.Label>
+              {(["yaml", "json", "toml"] as ConfigurationFormat[]).map(
+                (format) => (
+                  <DropdownMenu.Item
+                    key={format}
+                    className="editor-save-menu-item"
+                    onSelect={() => exportRef.current?.(format)}
+                  >
+                    <Download size={16} aria-hidden="true" />
+                    Download {format.toUpperCase()}
+                  </DropdownMenu.Item>
+                ),
+              )}
+              <DropdownMenu.Separator className="designer-export-separator" />
+              <DropdownMenu.Label className="designer-export-label">
+                Copy code
+              </DropdownMenu.Label>
+              {(["yaml", "json", "toml"] as ConfigurationFormat[]).map(
+                (format) => (
+                  <DropdownMenu.Item
+                    key={format}
+                    className="editor-save-menu-item"
+                    onSelect={() => exportRef.current?.(format, "clipboard")}
+                  >
+                    <Copy size={16} aria-hidden="true" />
+                    Copy {format.toUpperCase()}
+                  </DropdownMenu.Item>
+                ),
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
     </div>
   );
   const local = useMemo(
-    () => ({ document: loaded.document, header, exportRef, onDirtyChange }),
-    [loaded, header, onDirtyChange],
+    () => ({ document: loaded.document, toolbar, exportRef, onDirtyChange }),
+    [loaded, toolbar, onDirtyChange],
   );
   return (
     <section
@@ -226,10 +257,6 @@ function Designer() {
         notify={notifyToast}
         navigate={() => {}}
       />
-      <div className="designer-status" role="status" aria-live="polite">
-        <span>{notice}</span>
-        <span>Local files only</span>
-      </div>
       <ToastViewport />
       <dialog
         ref={importDialog}

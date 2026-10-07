@@ -174,9 +174,11 @@ h2, h3, p { overflow-wrap: break-word; }
 .setup-command code { display: block; max-width: 100%; padding-top: 11px; color: #fff; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .setup-command code:focus-visible { outline-color: var(--lime); }
 .copy-feedback { display: block; min-height: 15px; margin-top: 6px; color: var(--lime); font-size: 11px; }
-.install-platforms { display: inline-flex; gap: 3px; padding: 4px; margin-bottom: 14px; border: 1px solid rgb(32 33 34 / 40%); }
-.install-platforms button { padding: 9px 15px; border: 0; color: var(--ink); background: transparent; font-size: 13px; font-weight: 600; cursor: pointer; }
+.install-platforms { display: flex; width: 100%; gap: 3px; padding: 4px; margin-bottom: 14px; border: 1px solid rgb(32 33 34 / 40%); }
+.install-platforms button { display: inline-flex; flex: 1; min-width: 0; align-items: center; justify-content: center; gap: 6px; padding: 9px 10px; border: 0; color: var(--ink); background: transparent; white-space: nowrap; font-size: 13px; font-weight: 600; cursor: pointer; }
+.install-platform-icon { flex: none; width: 16px; height: 16px; fill: currentColor; }
 .install-platforms button[aria-selected="true"] { color: #fff; background: var(--ink); }
+@media (max-width: 520px) { .install-platforms button { gap: 5px; padding-inline: 8px; font-size: 12px; } .install-platform-icon { width: 14px; height: 14px; } }
 [data-install-panel] { width: 100%; min-width: 0; }
 .install-choice p.platform-note { min-height: 0; margin: -6px 0 21px; font-size: 12px; line-height: 1.5; }
 .agent-setup-steps { border-color: #55595a; }

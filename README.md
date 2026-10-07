@@ -94,7 +94,7 @@ Then open **Devices → Add device**. Copy the command for Linux, macOS or Windo
 - [Compatibility](docs/user/compatibility.md): platforms and actual test coverage.
 - [Security model](docs/user/security.md): roles, host permissions and signatures.
 
-Want to inspect a configuration first? The [standalone Vector designer](https://vectory.ahmadz.ai/designer/) creates, imports, visualizes and exports YAML, JSON and TOML in your browser without an account.
+Want to inspect a configuration first? The [Vector config builder and visualizer](https://vectory.ahmadz.ai/designer/) creates, imports, visualizes and exports YAML, JSON and TOML in your browser without an account.
 
 The [0.2.1 release](https://github.com/416rehman/Vectory/releases/tag/v0.2.1) supplies prebuilt agents, server kits, image archives, checksums, Sigstore bundles, SBOMs and dependency scan results. Container images are available from GHCR by immutable digest. Release verification uses GitHub OIDC and Cosign; native OS trust prompts and the agent's runtime update signatures are separate mechanisms.
 
