@@ -24,7 +24,7 @@
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { min-width: 320px; margin: 0; -webkit-font-smoothing: antialiased; }
+body { min-width: 0; margin: 0; -webkit-font-smoothing: antialiased; }
 img { display: block; max-width: 100%; height: auto; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { font: inherit; }
@@ -171,7 +171,7 @@ h2, h3, p { overflow-wrap: break-word; }
 .setup-command > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 9px; border-bottom: 1px solid #55595a; color: #c9cecd; font-size: 11px; }
 .copy-command { padding: 4px 0 4px 8px; border: 0; color: var(--lime); background: transparent; cursor: pointer; font-size: 12px; font-weight: 700; }
 .copy-command:hover { color: #fff; }
-.setup-command code { display: block; overflow-x: auto; padding-top: 11px; color: #fff; white-space: pre; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.setup-command code { display: block; max-width: 100%; padding-top: 11px; color: #fff; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .setup-command code:focus-visible { outline-color: var(--lime); }
 .copy-feedback { display: block; min-height: 15px; margin-top: 6px; color: var(--lime); font-size: 11px; }
 .install-platforms { display: inline-flex; gap: 3px; padding: 4px; margin-bottom: 14px; border: 1px solid rgb(32 33 34 / 40%); }
@@ -299,7 +299,7 @@ h2, h3, p { overflow-wrap: break-word; }
   .hero-actions { gap: 10px; margin-top: 16px; }
   .hero .button { min-height: 44px; }
   .hero .quiet-link { font-size: 12px; }
-  .hero-art { margin-top: 8px; padding-bottom: 44px; }
+  .hero-art { margin-top: 4px; padding-bottom: 44px; }
   .hero-ruler span { min-height: 42px; }
 }
 .browser-tool { padding-block: 86px; border-top: 1px solid var(--line); background: var(--lavender); }
